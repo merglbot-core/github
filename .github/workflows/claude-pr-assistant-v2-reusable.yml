@@ -718,7 +718,7 @@ jobs:
             REVIEW_BODY="$(cat <<EOF
 🤖 **Claude Assistant Suggestions**
 
-I generated changes for this PR ($LINES_CHANGED lines modified).
+I generated changes for this PR (${LINES_CHANGED} lines modified).
 
 ⚠️ **Note:** The changes couldn't be converted to inline suggestions (possibly new files or complex edits).
 
