@@ -690,7 +690,7 @@ jobs:
             # If we have a patch but no inline comments (e.g., new files),
             # create a review with a body comment explaining the changes
             # Count all added/removed lines (excluding diff metadata)
-            LINES_CHANGED=$(grep -E '^[+-][^+-]' patch.diff | wc -l)
+            LINES_CHANGED=$(grep -E '^[+-][^+-]' patch.diff | wc -l | awk '{print $1}')
             
             # Filter for meaningful content changes (additions and deletions):
             # Exclude whitespace-only and comment-only lines for BOTH '+' and '-'
@@ -721,7 +721,7 @@ jobs:
             if ! jq -n --arg lines "$LINES_CHANGED" \
               '{
                 event: "COMMENT",
-                body: "🤖 **Claude Assistant Suggestions**\n\nI generated changes for this PR (" + $lines + " lines modified).\n\n⚠️ **Note:** The changes couldn'\''t be converted to inline suggestions (possibly new files or complex edits).\n\n**Next steps:**\n- Review the full diff in the '\''Files changed'\'' tab\n- Check the workflow artifacts for detailed patch files\n- Apply changes manually if appropriate\n\nFor questions, please check the workflow run details."
+                body: "🤖 **Claude Assistant Suggestions**\n\nI generated changes for this PR (" + $lines + " lines modified).\n\n⚠️ **Note:** The changes couldn't be converted to inline suggestions (possibly new files or complex edits).\n\n**Next steps:**\n- Review the full diff in the 'Files changed' tab\n- Check the workflow artifacts for detailed patch files\n- Apply changes manually if appropriate\n\nFor questions, please check the workflow run details."
               }' > review.json; then
               echo "⚠️ Failed to generate review JSON" >&2
               exit 1
@@ -731,9 +731,6 @@ jobs:
               echo "⚠️ Generated review.json is not valid JSON" >&2
               exit 1
             fi
-              exit 1
-            fi
-            
             if ! gh api repos/$OWNER_REPO/pulls/$PR/reviews --input review.json; then
               echo "❌ Failed to post review via GitHub API" >&2
               exit 1
