@@ -184,7 +184,7 @@ jobs:
           def flush():
               if current_file and new_start is not None and content:
                   body = "".join(content)
-                  count = new_count if new_count is not None else max(1, body.count("\n"))
+                  count = new_count if new_count is not None else max(1, len(body.splitlines()))
                   end = new_start + count - 1
                   comments.append({
                       "path": current_file,
