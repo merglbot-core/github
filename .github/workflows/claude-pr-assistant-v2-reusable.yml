@@ -572,7 +572,6 @@ jobs:
             echo "No changes to commit after applying patch."
           fi
           
-
       - name: Comment summary (apply mode)
         if: always() && steps.parse.outputs.run_mode == 'apply'
         env:
