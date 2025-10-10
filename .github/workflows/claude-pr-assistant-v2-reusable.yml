@@ -607,6 +607,9 @@ jobs:
           BODY=$(cat <<'EOF'
 ## 🤖 Claude Assistant - Apply Mode Complete
 
+HAS_CHANGES="${HAS_CHANGES:-false}"
+COMMIT_SUMMARY="${COMMIT_SUMMARY:-}"
+
 **Status:** STATUS_PLACEHOLDER
 
 CHANGES_PLACEHOLDER
