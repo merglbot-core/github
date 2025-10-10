@@ -676,10 +676,11 @@ jobs:
             echo "✅ Posted $COMMENTS_COUNT review suggestions."
           elif [ -s patch.diff ]; then
             # If we have a patch but no inline comments (e.g., new files),
-            # Check if any actual content lines changed
-            if ! [[ "$LINES_CHANGED" =~ ^[0-9]+$ ]]; then
-              echo "❌ Failed to calculate changed lines count: '$LINES_CHANGED' is not a number" >&2
-              exit 1
+            # Check if any actual content lines changed (excluding whitespace-only and comment changes)
+            MEANINGFUL_CHANGES=$(grep -E '^[+-][^+-]' patch.diff | grep -v -E '^\+\s*$|^\+\s*#|^\+\s*//|^\+\s*/\*|^\+\s*\*' | wc -l)
+            if [ "$MEANINGFUL_CHANGES" -eq 0 ]; then
+              echo "⚠️ Patch exists but no meaningful content lines changed (possibly metadata, whitespace, or comments only), skipping review"
+              exit 0
             elif [ "$LINES_CHANGED" -eq 0 ]; then
               echo "⚠️ Patch exists but no content lines changed (possibly metadata only), skipping review"
             # Check if any actual content lines changed
