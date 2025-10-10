@@ -551,6 +551,7 @@ jobs:
 
       - name: Apply patch and push (apply mode)
         if: steps.parse.outputs.run_mode == 'apply' && steps.validate.outputs.total_lines != ''
+        id: apply_commit
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
@@ -559,8 +560,14 @@ jobs:
           if ! git diff --cached --quiet; then
             git --no-pager config user.name "claude-assistant[bot][${{ github.repository }}]"
             git --no-pager config user.email "claude-assistant[bot]@users.noreply.github.com"
-            git --no-pager commit -m "Apply Claude Assistant patch for PR #${{ steps.parse.outputs.pr_number }}"
+            COMMIT_MSG="Apply Claude Assistant patch for PR #${{ steps.parse.outputs.pr_number }}"
+            git --no-pager commit -m "$COMMIT_MSG"
   
+            # Capture commit summary for reporting
+            SUMMARY=$(git --no-pager log -1 --format='%s' 2>/dev/null || echo "Applied changes")
+            echo "commit_summary=$SUMMARY" >> "$GITHUB_OUTPUT"
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            
             echo "Pushing changes to remote..."
             if ! git --no-pager push; then
               echo "❌ Failed to push changes. Checking remote status..." >&2
@@ -571,6 +578,7 @@ jobs:
             echo "✅ Successfully pushed changes"
           else
             echo "No changes to commit after applying patch."
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
           fi
           
       - name: Comment summary (apply mode)
@@ -581,19 +589,36 @@ jobs:
           set -euo pipefail
           PR=${{ steps.parse.outputs.pr_number }}
           STATUS="${{ job.status }}"
-    
-              BODY=$(cat <<EOF
-              ## 🤖 Claude Assistant - Apply Mode Complete
-    
-              **Status:** ${STATUS}
-    
-              $([ -n "$SUMMARY" ] && echo "**Changes:** ${SUMMARY}" || echo "No changes were applied.")
-    
-              $([ "$STATUS" = "success" ] && echo "✅ Successfully applied changes." || echo "❌ Failed to apply changes.")
-              EOF
-              )
+          HAS_CHANGES="${{ steps.apply_commit.outputs.has_changes }}"
+          COMMIT_SUMMARY="${{ steps.apply_commit.outputs.commit_summary }}"
+          
+          # Build comment body with safe substitution
+          BODY=$(cat <<'EOF'
+## 🤖 Claude Assistant - Apply Mode Complete
 
+**Status:** STATUS_PLACEHOLDER
 
+CHANGES_PLACEHOLDER
+
+RESULT_PLACEHOLDER
+EOF
+)
+          
+          # Safe substitutions
+          BODY="${BODY//STATUS_PLACEHOLDER/$STATUS}"
+          
+          if [ "$HAS_CHANGES" = "true" ] && [ -n "$COMMIT_SUMMARY" ]; then
+            BODY="${BODY//CHANGES_PLACEHOLDER/**Changes:** $COMMIT_SUMMARY}"
+          else
+            BODY="${BODY//CHANGES_PLACEHOLDER/No changes were applied.}"
+          fi
+          
+          if [ "$STATUS" = "success" ]; then
+            BODY="${BODY//RESULT_PLACEHOLDER/✅ Successfully applied changes.}"
+          else
+            BODY="${BODY//RESULT_PLACEHOLDER/❌ Failed to apply changes.}"
+          fi
+          
           gh pr comment "$PR" --body "$BODY"
       - name: Create GitHub review suggestions (apply-suggestions)
         if: steps.parse.outputs.run_mode == 'apply-suggestions' && steps.validate.outputs.total_lines != ''
