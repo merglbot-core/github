@@ -454,13 +454,13 @@ jobs:
           # Prepare JSON payload with system and request prompts
           PAYLOAD=$(jq -n \
             --arg model "$MODEL" \
-            --argjson temp "$TEMP" \
+            --arg temp "$TEMP" \
             --arg sys "$SYS" \
             --arg req "$REQ" \
             '{
               "model": $model,
               "max_tokens": 4096,
-              "temperature": $temp,
+              "temperature": ($temp | tonumber),
               "messages": [
                 {
                   "role": "system",
