@@ -530,10 +530,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          
-          if [ ! -s patch.diff ]; then 
-            echo "Empty patch – nothing to apply."
-            exit 0
+          git --no-pager add -A
+    
+          # Check if there are changes to commit
+          if ! git diff --cached --quiet; then
+            git --no-pager config user.name "claude-assistant[bot]"
+            git --no-pager config user.email "claude-assistant[bot]@users.noreply.github.com"
+            git --no-pager commit -m "Apply Claude Assistant patch for PR #${{ steps.parse.outputs.pr_number }}"
+            git --no-pager push || { echo "❌ Failed to push changes" >&2; exit 1; }
+          else
+            echo "No changes to commit after applying patch."
           fi
           
           git --no-pager apply --whitespace=fix patch.diff
