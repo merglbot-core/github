@@ -532,13 +532,13 @@ jobs:
           TOTAL=$(grep -E '^[+-]' patch.diff | grep -Ev '^\+\+\+|^---' | wc -l | awk '{print $1}')
           if [ "$TOTAL" -gt "$MAX" ]; then
             echo "❌ Patch exceeds max changed lines ($TOTAL > $MAX)" >&2
-    
-              echo "--- Verifying patch ---"
-              git --no-pager apply --stat patch.diff
-              git --no-pager apply --check patch.diff
-              echo "--- Applying patch ---"
-    
+            exit 1
           fi
+          
+          echo "--- Verifying patch ---"
+          git --no-pager apply --stat patch.diff
+          git --no-pager apply --check patch.diff
+          echo "--- Applying patch ---"
           
           echo "total_lines=$TOTAL" >> "$GITHUB_OUTPUT"
 
