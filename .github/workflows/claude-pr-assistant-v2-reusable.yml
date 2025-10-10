@@ -451,6 +451,28 @@ jobs:
             exit 0
           fi
           
+          # Prepare JSON payload with system and request prompts
+          PAYLOAD=$(jq -n \
+            --arg model "$MODEL" \
+            --argjson temp "$TEMP" \
+            --arg sys "$SYS" \
+            --arg req "$REQ" \
+            '{
+              "model": $model,
+              "max_tokens": 4096,
+              "temperature": $temp,
+              "messages": [
+                {
+                  "role": "system",
+                  "content": $sys
+                },
+                {
+                  "role": "user",
+                  "content": $req
+                }
+              ]
+            }')
+
           RESP=$(curl -s https://api.anthropic.com/v1/messages \
             -H "content-type: application/json" \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
