@@ -535,6 +535,7 @@ jobs:
           git --no-pager apply --stat patch.diff
           git --no-pager apply --check patch.diff
           echo "--- Applying patch ---"
+          git --no-pager apply patch.diff
           
           echo "total_lines=$TOTAL" >> "$GITHUB_OUTPUT"
 
