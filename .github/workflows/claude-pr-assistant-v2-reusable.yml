@@ -703,12 +703,7 @@ I generated changes for this PR (${LINES_CHANGED} lines modified).
 
 For questions, please check the workflow run details."
 
-            cat > review.json <<EOF
-{
-  "event": "COMMENT",
-  "body": "$(echo "$REVIEW_BODY" | jq -Rs .)"
-}
-EOF
+            jq -n --arg body "$REVIEW_BODY" '{event: "COMMENT", body: $body}' > review.json
             # Validate that review.json is valid JSON
             if ! jq empty review.json; then
               echo "⚠️ Generated review.json is not valid JSON" >&2
