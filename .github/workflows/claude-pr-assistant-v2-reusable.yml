@@ -328,7 +328,30 @@ jobs:
           }
           EOF
 
-          PAYLOAD=$(printf "$PAYLOAD_TEMPLATE" "$MODEL" "$TEMP" "$COMMENT_JSON" "$DIFF_JSON")
+          PAYLOAD=$(jq -n \
+            --arg model "$MODEL" \
+            --arg temp "$TEMP" \
+            --arg comment "$COMMENT_JSON" \
+            --arg diff "$DIFF_JSON" \
+            '{
+              "model": $model,
+              "max_tokens": 4096,
+              "temperature": ($temp | tonumber),
+              "messages": [
+                {
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "You are a helpful code reviewer.\nRules: no secrets in logs, least-privilege IAM, safe shell patterns, no destructive infra changes.\n\nUser request:\n"
+                    },
+                    {
+                      "type": "text",
+                      "text": $comment
+                    },
+                    {
+                      "type": "text",
+                      "text": "\n\nPR Diff:\n
 
           RESP=$(curl -s https://api.anthropic.com/v1/messages \
             -H "content-type: application/json" \
