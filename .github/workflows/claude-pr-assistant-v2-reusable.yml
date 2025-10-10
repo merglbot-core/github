@@ -589,9 +589,12 @@ jobs:
           BODY=$(cat <<'EOF'
           ## 🤖 Claude Assistant - Apply Mode Complete
 
-          **Status**: STATUS_PLACEHOLDER
 
+          EOF
           )
+
+          # Replace STATUS_PLACEHOLDER with the actual status value
+          BODY="${BODY//STATUS_PLACEHOLDER/$STATUS}"
 
           gh pr comment "$PR" --body "$BODY"
       - name: Create GitHub review suggestions (apply-suggestions)
