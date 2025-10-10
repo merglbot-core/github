@@ -660,7 +660,7 @@ jobs:
             exit 1
           fi
           # Validate formats: owner/repo and PR number
-          if ! [[ "$OWNER_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+          if ! [[ "$OWNER_REPO" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9_-][A-Za-z0-9._-]*$ ]]; then
             echo "❌ Invalid OWNER_REPO format: '$OWNER_REPO'" >&2
             exit 1
           fi
@@ -692,15 +692,18 @@ jobs:
             # Count all added/removed lines (excluding diff metadata)
             LINES_CHANGED=$(grep -E '^[+-][^+-]' patch.diff | wc -l)
             
-            # Filter for meaningful content changes:
-            # Exclude whitespace-only and common comment formats from added/removed content
-            grep -E '^[+-][^+-]' patch.diff | \
-            grep -v -E '^[+-]\s*$' | \
-            grep -v -E '^[+-]\s*#' | \
-            grep -v -E '^[+-]\s*//' | \
-            grep -v -E '^[+-]\s*/\*' | \
-            grep -v -E '^[+-]\s*\*' | \
-            grep -v -E '^[+-]\s*<!--' > filtered2.diff
+            # Filter for meaningful content changes (additions and deletions):
+            # Exclude whitespace-only and comment-only lines for BOTH '+' and '-'
+            MEANINGFUL_CHANGES=$(grep -E '^[+-][^+-]' patch.diff \
+              | grep -v -E '^[+-]\s*$' \
+              | grep -v -E '^[+-]\s*#' \
+              | grep -v -E '^[+-]\s*//' \
+              | grep -v -E '^[+-]\s*/\*' \
+              | grep -v -E '^[+-]\s*\*' \
+              | grep -v -E '^[+-]\s*<!--' \
+              | wc -l | awk '{print $1}')
+            
+            # Validate numeric result and skip non-substantive changes
             if ! [[ "$LINES_CHANGED" =~ ^[0-9]+$ ]]; then
               echo "❌ Failed to calculate changed lines count: '$LINES_CHANGED' is not a number" >&2
               exit 1
@@ -714,30 +717,27 @@ jobs:
               exit 0
             fi
             
-            # Generate review with helpful next steps for the user
-            REVIEW_BODY="$(cat <<EOF
-🤖 **Claude Assistant Suggestions**
-
-I generated changes for this PR (${LINES_CHANGED} lines modified).
-
-⚠️ **Note:** The changes couldn't be converted to inline suggestions (possibly new files or complex edits).
-
-**Next steps:**
-- Review the full diff in the 'Files changed' tab
-- Check the workflow artifacts for detailed patch files
-- Apply changes manually if appropriate
-
-For questions, please check the workflow run details.
-EOF
-)"
-            if ! jq -n --arg body "$REVIEW_BODY" \
+            # Generate review with helpful next steps for the user (use jq to avoid YAML/heredoc pitfalls)
+            if ! jq -n --arg lines "$LINES_CHANGED" \
               '{
                 event: "COMMENT",
-                if ! jq -n --arg body "$REVIEW_BODY" \
+                body: "🤖 **Claude Assistant Suggestions**\n\nI generated changes for this PR (" + $lines + " lines modified).\n\n⚠️ **Note:** The changes couldn'\''t be converted to inline suggestions (possibly new files or complex edits).\n\n**Next steps:**\n- Review the full diff in the '\''Files changed'\'' tab\n- Check the workflow artifacts for detailed patch files\n- Apply changes manually if appropriate\n\nFor questions, please check the workflow run details."
+              }' > review.json; then
+              echo "⚠️ Failed to generate review JSON" >&2
+              exit 1
+            fi
+            # Validate that review.json is valid JSON
+            if ! jq empty review.json; then
+              echo "⚠️ Generated review.json is not valid JSON" >&2
+              exit 1
+            fi
               exit 1
             fi
             
-            gh api repos/$OWNER_REPO/pulls/$PR/reviews --input review.json
+            if ! gh api repos/$OWNER_REPO/pulls/$PR/reviews --input review.json; then
+              echo "❌ Failed to post review via GitHub API" >&2
+              exit 1
+            fi
             echo "✅ Posted review comment with $LINES_CHANGED lines changed (no inline suggestions available)."
           else
             echo "No changes to suggest."
