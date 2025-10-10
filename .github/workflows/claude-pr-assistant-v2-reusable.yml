@@ -557,12 +557,10 @@ jobs:
         run: |
           set -euo pipefail
           git --no-pager add -A
-    git config user.name "claude-assistant[bot]"
-    git config user.email "claude-assistant[bot]@users.noreply.github.com"
           if ! git diff --cached --quiet; then
             git --no-pager config user.name "claude-assistant[bot][${{ github.repository }}]"
+            git --no-pager config user.email "claude-assistant[bot]@users.noreply.github.com"
             git --no-pager commit -m "Apply Claude Assistant patch for PR #${{ steps.parse.outputs.pr_number }}"
-            git --no-pager commit -m "Apply Claude Assistant patch for PR #${{ steps.parse.outputs.pr_number }}" \
   
             echo "Pushing changes to remote..."
             if ! git --no-pager push; then
