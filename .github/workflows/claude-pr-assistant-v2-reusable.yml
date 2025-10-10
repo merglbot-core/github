@@ -690,7 +690,7 @@ jobs:
             # If we have a patch but no inline comments (e.g., new files),
             # create a review with a body comment explaining the changes
             # Count all added/removed lines (excluding diff metadata)
-            LINES_CHANGED=$(grep -E '^[+-][^+-]' patch.diff | wc -l | awk '{print $1}')
+            LINES_CHANGED=$(grep -E '^[+-][^+-]' patch.diff | wc -l)
             
             # Filter for meaningful content changes:
             # Exclude whitespace-only and comment lines from added/removed content
