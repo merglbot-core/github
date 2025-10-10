@@ -590,7 +590,6 @@ jobs:
           ## 🤖 Claude Assistant - Apply Mode Complete
 
           EOF
-          EOF
           )
 
           # Replace STATUS_PLACEHOLDER with the actual status value
