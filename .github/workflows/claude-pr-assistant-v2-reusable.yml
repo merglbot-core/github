@@ -455,11 +455,10 @@ jobs:
             -H "content-type: application/json" \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: 2023-06-01" \
-            -d "$(jq -n --arg sys "$SYS" --arg req "$REQ" --arg model "$MODEL" --arg temp "$TEMP" \
-              '{model:$model,max_tokens:8192,temperature:($temp|tonumber),system:$sys,messages:[{role:"user",content:$req}]}')")
-          
-          echo "$RESP" | jq -r '.content[0].text // ""' > patch_raw.txt
-          
+              # Extract changed paths
+              CHANGED_PATHS=$(grep -E '^(\+\+\+|---) ' patch.diff \
+                | sed -E 's/^(---|\+\+\+) [ab]\///;s/\t.*//' \
+                | sort -u)
           # Strip markdown code fences if present
           awk 'BEGIN{in=1} /^```/{in=!in; next} {if(in) print}' patch_raw.txt > patch.diff || true
 
