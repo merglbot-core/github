@@ -1,0 +1,53 @@
+# Test File for Claude PR Assistant Demo
+
+## Purpose
+This file demonstrates the Claude PR Assistant v2 workflow capabilities.
+
+## Intentional Issues for AI Detection
+
+### Security Issue
+```bash
+# BAD: Hardcoded secret
+export API_KEY="sk-test-1234567890abcdef"
+export DATABASE_PASSWORD="admin123"
+```
+
+### Logic Error
+```python
+def calculate_discount(price, discount_rate):
+    # Missing validation
+    return price * discount_rate  # Should be price * (1 - discount_rate)
+```
+
+### Best Practice Violation
+```yaml
+# GitHub Actions without pinned versions
+- uses: actions/checkout
+  # Should be actions/checkout@v4
+```
+
+### Missing Error Handling
+```javascript
+async function fetchData(url) {
+    const response = await fetch(url);
+    return response.json(); // No error handling
+}
+```
+
+## Expected AI Feedback
+The Claude Assistant should detect:
+1. Hardcoded secrets (security risk)
+2. Logic error in discount calculation
+3. Unpinned action versions
+4. Missing error handling
+
+## Test Scenarios
+
+### Scenario A: Suggest Mode
+Run workflow with `run_mode: suggest` to get AI review comments.
+
+### Scenario B: Apply-Suggestions Mode
+Run with `run_mode: apply-suggestions` to get GitHub review suggestions.
+
+### Scenario C: Apply Mode
+Run with `run_mode: apply` and `confirm: apply` to auto-fix issues (requires review).
