@@ -737,10 +737,10 @@ EOF
               }' > review.json; then
               echo "⚠️ Failed to generate review JSON" >&2
               exit 1
-            fi
-            # Validate that review.json is valid JSON
-            if ! jq empty review.json; then
-              echo "⚠️ Generated review.json is not valid JSON" >&2
+                  body: $body
+                }' > review.json 2>jq_error.txt; then
+                echo "❌ Failed to generate review JSON: $(cat jq_error.txt)" >&2
+                exit 1
               exit 1
             fi
             
