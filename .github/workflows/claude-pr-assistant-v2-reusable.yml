@@ -646,15 +646,15 @@ jobs:
           COMMIT_SUMMARY="${{ steps.apply_commit.outputs.commit_summary }}"
           
           # Build comment body with safe substitution
-          BODY=$(cat <<'EOF'
-          ## 🤖 Claude Assistant - Apply Mode Complete
-          
-          Status: STATUS_PLACEHOLDER
-          
-          CHANGES_PLACEHOLDER
-          
-          RESULT_PLACEHOLDER
-          EOF
+          BODY=$(cat <<-'EOF'
+          	## 🤖 Claude Assistant - Apply Mode Complete
+          	
+          	Status: STATUS_PLACEHOLDER
+          	
+          	CHANGES_PLACEHOLDER
+          	
+          	RESULT_PLACEHOLDER
+          	EOF
           )
           
           # Safe substitutions
