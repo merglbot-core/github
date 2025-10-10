@@ -583,18 +583,11 @@ echo "$RESP" | jq -r '.content[0].text // empty' > patch_raw.txt
           STATUS="${{ job.status }}"
           SUMMARY=$(git --no-pager log -1 --pretty=oneline 2>/dev/null || true)
           
-          BODY=$(cat <<EOF
+          BODY=$(cat <<'EOF'
           ## 🤖 Claude Assistant - Apply Mode Complete
 
-          **Status**: $STATUS
+          **Status**: STATUS_PLACEHOLDER
 
-          **Commit Summary**:
-          ```
-          $SUMMARY
-          ```
-
-          Changes have been applied and pushed to the PR branch.
-EOF
           )
 
           gh pr comment "$PR" --body "$BODY"
