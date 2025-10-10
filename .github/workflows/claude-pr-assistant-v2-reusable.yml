@@ -299,40 +299,8 @@ jobs:
             exit 0
           fi
     
-          read -r -d '' PAYLOAD_TEMPLATE <<EOF
-          {
-            "model": "%s",
-            "max_tokens": 4096,
-            "temperature": %s,
-            "messages": [
-              {
-                "role": "user",
-                "content": [
-                  {
-                    "type": "text",
-                    "text": "You are a helpful code reviewer.\\nRules: no secrets in logs, least-privilege IAM, safe shell patterns, no destructive infra changes.\\n\\nUser request:\\n"
-                  },
-                  {
-                    "type": "text",
-                    "text": %s
-                  },
-                  {
-                    "type": "text",
-                    "text": "\\n\\nPR Diff:\\n\`\`\`\\n"
-                  },
-                  {
-                    "type": "text",
-                    "text": %s
-                  },
-                  {
-                    "type": "text",
-                    "text": "\\n\`\`\`"
-                  }
-                ]
-              }
-            ]
-          }
-          EOF
+          # Remove the heredoc template as it's not actually used
+          # The actual PAYLOAD is constructed below with jq
 
           PAYLOAD=$(jq -n \
             --arg model "$MODEL" \
@@ -357,7 +325,20 @@ jobs:
                     },
                     {
                       "type": "text",
-                      "text": "\n\nPR Diff:\n
+                      "text": "\n\nPR Diff:\n```\n"
+                    },
+                    {
+                      "type": "text",
+                      "text": $diff
+                    },
+                    {
+                      "type": "text",
+                      "text": "\n```"
+                    }
+                  ]
+                }
+              ]
+            }')
 
           RESP=$(curl -s https://api.anthropic.com/v1/messages \
             -H "content-type: application/json" \
@@ -633,16 +614,16 @@ jobs:
           COMMIT_SUMMARY="${{ steps.apply_commit.outputs.commit_summary }}"
           
           # Build comment body with safe substitution
-          BODY=$(cat <<'EOF'
-## 🤖 Claude Assistant - Apply Mode Complete
+          BODY=$(cat <<-'EOF'
+          ## 🤖 Claude Assistant - Apply Mode Complete
 
-Status: STATUS_PLACEHOLDER
+          Status: STATUS_PLACEHOLDER
 
-CHANGES_PLACEHOLDER
+          CHANGES_PLACEHOLDER
 
-RESULT_PLACEHOLDER
-EOF
-)
+          RESULT_PLACEHOLDER
+          EOF
+          )
           
           # Safe substitutions
           BODY="${BODY//STATUS_PLACEHOLDER/$STATUS}"
