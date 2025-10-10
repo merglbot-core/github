@@ -733,14 +733,7 @@ EOF
             if ! jq -n --arg body "$REVIEW_BODY" \
               '{
                 event: "COMMENT",
-                body: $body
-              }' > review.json; then
-              echo "⚠️ Failed to generate review JSON" >&2
-              exit 1
-                  body: $body
-                }' > review.json 2>jq_error.txt; then
-                echo "❌ Failed to generate review JSON: $(cat jq_error.txt)" >&2
-                exit 1
+                if ! jq -n --arg body "$REVIEW_BODY" \
               exit 1
             fi
             
