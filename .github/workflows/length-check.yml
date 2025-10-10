@@ -1,0 +1,21 @@
+name: PR Text Length Check (central)
+
+on:
+  workflow_call:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title/body length
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          max_title=100
+          max_body=4000
+          [ ${#TITLE} -le $max_title ] || { echo "❌ PR title too long (${#TITLE} > $max_title)"; exit 1; }
+          body_len=$(printf "%s" "$BODY" | wc -c)
+          [ $body_len -le $max_body ] || { echo "❌ PR body too long ($body_len > $max_body)"; exit 1; }
+          echo "✅ PR text length OK"
