@@ -581,16 +581,18 @@ jobs:
           set -euo pipefail
           PR=${{ steps.parse.outputs.pr_number }}
           STATUS="${{ job.status }}"
-          SUMMARY=$(git --no-pager log -1 --pretty=oneline 2>/dev/null || true)
-          
-          BODY=$(cat <<'EOF'
-          ## 🤖 Claude Assistant - Apply Mode Complete
+    
+              BODY=$(cat <<EOF
+              ## 🤖 Claude Assistant - Apply Mode Complete
+    
+              **Status:** ${STATUS}
+    
+              $([ -n "$SUMMARY" ] && echo "**Changes:** ${SUMMARY}" || echo "No changes were applied.")
+    
+              $([ "$STATUS" = "success" ] && echo "✅ Successfully applied changes." || echo "❌ Failed to apply changes.")
+              EOF
+              )
 
-          EOF
-          )
-
-          # Replace STATUS_PLACEHOLDER with the actual status value
-          BODY="${BODY//STATUS_PLACEHOLDER/$STATUS}"
 
           gh pr comment "$PR" --body "$BODY"
       - name: Create GitHub review suggestions (apply-suggestions)
