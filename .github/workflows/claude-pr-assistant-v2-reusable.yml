@@ -484,10 +484,6 @@ jobs:
   
           # Strip markdown code fences if present
           awk 'BEGIN{in=1} /^```/{in=!in; next} {if(in) print}' patch_raw.txt > patch.diff || true
-          # Extract changed paths
-          CHANGED_PATHS=$(grep -E '^(\+\+\+|---) ' patch.diff \
-            | sed -E 's/^(---|\+\+\+) [ab]\///;s/\t.*//' \
-            | sort -u)
 
       - name: Validate allowlist and limits
         if: steps.parse.outputs.run_mode != 'suggest'
