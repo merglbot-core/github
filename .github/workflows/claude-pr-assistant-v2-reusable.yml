@@ -557,8 +557,8 @@ jobs:
         run: |
           set -euo pipefail
           git --no-pager add -A
-    
-          # Check if there are changes to commit
+    git config user.name "claude-assistant[bot]"
+    git config user.email "claude-assistant[bot]@users.noreply.github.com"
           if ! git diff --cached --quiet; then
             git --no-pager config user.name "claude-assistant[bot][${{ github.repository }}]"
             git --no-pager config user.email "claude-assistant+${{ github.repository_owner }}@users.noreply.github.com"
