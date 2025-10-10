@@ -577,11 +577,20 @@ jobs:
           SUMMARY=$(git --no-pager log -1 --pretty=oneline 2>/dev/null || true)
           
           BODY=$(cat <<EOF
-AI apply workflow finished with status: $STATUS
+          ## 🤖 Claude Assistant - Apply Mode Complete
 
-Commit summary:
+          **Status**: $STATUS
 
-      # =================== APPLY-SUGGESTIONS MODE ===================
+          **Commit Summary**:
+          \`\`\`
+          $SUMMARY
+          \`\`\`
+
+          Changes have been applied and pushed to the PR branch.
+          EOF
+          )
+
+          gh pr comment "$PR" --body "$BODY"
       - name: Create GitHub review suggestions (apply-suggestions)
         if: steps.parse.outputs.run_mode == 'apply-suggestions' && steps.validate.outputs.total_lines != ''
         id: suggest_apply
