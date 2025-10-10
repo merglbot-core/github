@@ -636,7 +636,7 @@ jobs:
           BODY=$(cat <<'EOF'
 ## 🤖 Claude Assistant - Apply Mode Complete
 
-**Status:** STATUS_PLACEHOLDER
+Status: STATUS_PLACEHOLDER
 
 CHANGES_PLACEHOLDER
 
