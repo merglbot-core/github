@@ -569,7 +569,6 @@ jobs:
             fi
             echo "✅ Successfully pushed changes"
           else
-          else
             echo "No changes to commit after applying patch."
           fi
           
