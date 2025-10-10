@@ -654,12 +654,8 @@ jobs:
           
           python3 "$RUNNER_TEMP/patch_to_review.py" < patch.diff > comments.json
           
-          # Check if we have any comments to post
-          if [ -s comments.json ]; then
-            COMMENTS_COUNT=$(jq '. | length' comments.json)
-          else
-            COMMENTS_COUNT=0
-          fi
+          # Get the number of comments to post
+          COMMENTS_COUNT=$(jq '. | length' comments.json)
           
           if [ "$COMMENTS_COUNT" -gt 0 ]; then
             # If we have inline comments, create review with those comments
