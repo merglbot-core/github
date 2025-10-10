@@ -589,7 +589,7 @@ jobs:
           BODY=$(cat <<'EOF'
           ## 🤖 Claude Assistant - Apply Mode Complete
 
-
+          EOF
           EOF
           )
 
