@@ -575,14 +575,10 @@ jobs:
           STATUS="${{ job.status }}"
           SUMMARY=$(git --no-pager log -1 --pretty=oneline 2>/dev/null || true)
           
-          gh pr comment "$PR" --body "AI apply workflow finished with status: $STATUS
+          BODY=$(cat <<EOF
+AI apply workflow finished with status: $STATUS
 
-          Commit summary:
-          \`\`\`
-          $SUMMARY
-          \`\`\`
-
-          If unexpected, revert using PR history."
+Commit summary:
 
       # =================== APPLY-SUGGESTIONS MODE ===================
       - name: Create GitHub review suggestions (apply-suggestions)
