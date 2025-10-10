@@ -656,7 +656,7 @@ jobs:
           
           # Get the number of comments to post
           COMMENTS_COUNT=$(jq '. | length' comments.json)
-          
+          COMMENTS_COUNT=$(jq 'if type == "array" then length else 0 end' comments.json)
           if [ "$COMMENTS_COUNT" -gt 0 ]; then
             # If we have inline comments, create review with those comments
             jq '{event:"COMMENT", comments: .}' comments.json > review.json
