@@ -733,7 +733,7 @@ I generated changes for this PR ($LINES_CHANGED lines modified).
 For questions, please check the workflow run details.
 EOF
 )"
-            if ! jq -n --arg lines "$LINES_CHANGED" --arg body "$REVIEW_BODY" \
+            if ! jq -n --arg body "$REVIEW_BODY" \
               '{
                 event: "COMMENT",
                 body: $body
