@@ -511,7 +511,15 @@ jobs:
             | sort -u)
           
           # Block critical paths
-          DENY_RE='(^\.github/workflows/|\.lock$|\.(png|jpg|gif|svg|ico|pdf|zip)$|(^|/)\.env$|\.pem$|\.key$|\.crt$|\.p12$|\.pfx$|\.der$|\.csr$|\.gpg$|\.asc$)'
+          # Break down complex regex into readable components
+          WORKFLOW_RE='^\.github/workflows/'
+          LOCK_RE='\.lock$'
+          IMAGE_RE='\.(png|jpg|gif|svg|ico)$'
+          DOC_RE='\.(pdf|zip)$'
+          ENV_RE='(^|/)\.env$'
+          CERT_RE='\.(pem|key|crt|p12|pfx|der|csr|gpg|asc)$'
+          # Combine all components into one regex
+          DENY_RE="(${WORKFLOW_RE}|${LOCK_RE}|${IMAGE_RE}|${DOC_RE}|${ENV_RE}|${CERT_RE})"
           BLOCKED=$(echo "$CHANGED_PATHS" | grep -i -E "$DENY_RE" || true)
           if [ -n "$BLOCKED" ]; then
             echo "❌ Patch touches blocked paths:" >&2
