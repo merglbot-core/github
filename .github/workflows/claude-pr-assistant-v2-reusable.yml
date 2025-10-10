@@ -413,12 +413,15 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
+          # Named constants for diff limits
+          MAX_DIFF_LINES=8000
+          MAX_DIFF_CHARS=350000
           MODEL='${{ steps.cfg.outputs.model }}'
           TEMP='${{ steps.cfg.outputs.temperature }}'
           PROMPT=$(cat '${{ steps.parse.outputs.prompt_file }}')
           
           escape_for_prompt() { sed -e 's/[`$\\]/\\&/g'; }
-          DIFF=$(head -n 8000 pr_diff.txt | escape_for_prompt | head -c 350000)
+          DIFF=$(head -n "$MAX_DIFF_LINES" pr_diff.txt | escape_for_prompt | head -c "$MAX_DIFF_CHARS")
           ALLOWED=$(cat allowed.txt)
           MAX=$(cat max.txt)
           
