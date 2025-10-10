@@ -654,9 +654,18 @@ jobs:
           
           python3 "$RUNNER_TEMP/patch_to_review.py" < patch.diff > comments.json
           
-          # Get the number of comments to post
-          COMMENTS_COUNT=$(jq '. | length' comments.json)
-          COMMENTS_COUNT=$(jq 'if type == "array" then length else 0 end' comments.json)
+          # Validate required variables before proceeding
+          if [ -z "$OWNER_REPO" ] || [ -z "$PR" ]; then
+            echo "❌ Missing required variables: OWNER_REPO or PR" >&2
+            exit 1
+          fi
+          
+          # Calculate number of comments (handle both array and non-array cases)
+          if ! COMMENTS_COUNT=$(jq 'if type == "array" then length else 0 end' comments.json 2>/dev/null); then
+            echo "⚠️ Failed to parse comments.json, skipping review posting"
+            exit 0
+          fi
+          
           if [ "$COMMENTS_COUNT" -gt 0 ]; then
             # If we have inline comments, create review with those comments
             jq '{event:"COMMENT", comments: .}' comments.json > review.json
@@ -666,13 +675,25 @@ jobs:
             # If we have a patch but no inline comments (e.g., new files),
             # create a review with a body comment explaining the changes
             LINES_CHANGED=$(grep -E '^[+-][^+-]' patch.diff | wc -l)
-            jq -n --arg lines "$LINES_CHANGED" \
+            
+            # Check if any actual content lines changed
+            if [ "$LINES_CHANGED" -eq 0 ]; then
+              echo "⚠️ Patch exists but no content lines changed (possibly metadata only), skipping review"
+              exit 0
+            fi
+            
+            # Generate review with helpful next steps for the user
+            if ! jq -n --arg lines "$LINES_CHANGED" \
               '{
                 event: "COMMENT",
-                body: "🤖 **Claude Assistant Suggestions**\n\nI generated changes for this PR (" + $lines + " lines modified).\n\nThe changes couldn't be converted to inline suggestions (possibly new files or complex edits).\nPlease review the full diff carefully."
-              }' > review.json
+                body: "🤖 **Claude Assistant Suggestions**\n\nI generated changes for this PR (" + $lines + " lines modified).\n\n⚠️ **Note:** The changes couldn'\''t be converted to inline suggestions (possibly new files or complex edits).\n\n**Next steps:**\n- Review the full diff in the '\''Files changed'\'' tab\n- Check the workflow artifacts for detailed patch files\n- Apply changes manually if appropriate\n\nFor questions, please check the workflow run details."
+              }' > review.json; then
+              echo "⚠️ Failed to generate review JSON" >&2
+              exit 1
+            fi
+            
             gh api repos/$OWNER_REPO/pulls/$PR/reviews --input review.json
-            echo "✅ Posted review comment (no inline suggestions available)."
+            echo "✅ Posted review comment with $LINES_CHANGED lines changed (no inline suggestions available)."
           else
             echo "No changes to suggest."
           fi
