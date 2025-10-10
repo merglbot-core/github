@@ -665,7 +665,7 @@ jobs:
           elif [ -s patch.diff ]; then
             # If we have a patch but no inline comments (e.g., new files),
             # create a review with a body comment explaining the changes
-            LINES_CHANGED=$(grep -E '^[+-]' patch.diff | grep -Ev '^\+\+\+|^---' | wc -l)
+            LINES_CHANGED=$(grep -E '^[+-][^+-]' patch.diff | wc -l)
             jq -n --arg lines "$LINES_CHANGED" \
               '{
                 event: "COMMENT",
