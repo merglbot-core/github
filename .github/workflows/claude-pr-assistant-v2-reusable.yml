@@ -700,7 +700,7 @@ jobs:
             grep -v -E '^\+\s*//' | \
             grep -v -E '^\+\s*/\*' | \
             grep -v -E '^\+\s*\*' > filtered2.diff
-            # 4. Count remaining lines as meaningful changes
+            # Count remaining lines as meaningful changes
             MEANINGFUL_CHANGES=$(wc -l < filtered2.diff | awk '{print $1}')
             
             # Validate numeric result and skip non-substantive changes
