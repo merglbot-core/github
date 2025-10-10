@@ -697,7 +697,7 @@ jobs:
             grep -E '^[+-][^+-]' patch.diff | \
             grep -v -E '^[+-]\s*$|^[+-]\s*#|^[+-]\s*//|^[+-]\s*/\*|^[+-]\s*\*' > filtered2.diff
             # Count remaining lines as meaningful changes
-            MEANINGFUL_CHANGES=$(wc -l < filtered2.diff | awk '{print $1}')
+            MEANINGFUL_CHANGES=$(wc -l < filtered2.diff)
             
             # Validate numeric result and skip non-substantive changes
             if ! [[ "$LINES_CHANGED" =~ ^[0-9]+$ ]]; then
