@@ -695,11 +695,11 @@ jobs:
             # Filter for meaningful content changes:
             # Exclude whitespace-only and comment lines from added/removed content
             grep -E '^[+-][^+-]' patch.diff | \
-            grep -v -E '^\+\s*$' | \
-            grep -v -E '^\+\s*#' | \
-            grep -v -E '^\+\s*//' | \
-            grep -v -E '^\+\s*/\*' | \
-            grep -v -E '^\+\s*\*' > filtered2.diff
+            grep -v -E '^[+-]\s*$' | \
+            grep -v -E '^[+-]\s*#' | \
+            grep -v -E '^[+-]\s*//' | \
+            grep -v -E '^[+-]\s*/\*' | \
+            grep -v -E '^[+-]\s*\*' > filtered2.diff
             # Count remaining lines as meaningful changes
             MEANINGFUL_CHANGES=$(wc -l < filtered2.diff | awk '{print $1}')
             
