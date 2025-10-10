@@ -282,8 +282,8 @@ jobs:
           # Escape for JSON
           escape_json() { jq -R -s '.' ; }
           COMMENT_JSON=$(printf "%s" "$COMMENT" | head -c 20000 | escape_json)
-          DIFF_CONTENT=$(head -n 8000 pr_diff.txt | head -c 350000)
-          DIFF_JSON=$(printf "%s" "$DIFF_CONTENT" | escape_json)
+          DIFF_CONTENT=$(head -n 8000 pr_diff.txt)
+          DIFF_JSON=$(printf "%s" "$DIFF_CONTENT" | escape_json | head -c 350000)
 
           if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
             printf "LLM not configured; posting diff summary only." > claude_response.txt
