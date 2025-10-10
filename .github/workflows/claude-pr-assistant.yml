@@ -3,6 +3,10 @@ name: Claude PR Assistant (v2)
 on:
   workflow_call:
     inputs:
+      pr_number:
+        description: 'PR number (optional, for manual wrapper triggers)'
+        type: number
+        required: false
       trigger_labels:
         type: string
         required: false
