@@ -479,6 +479,9 @@ jobs:
             -H "anthropic-version: 2023-06-01" \
             -d "$PAYLOAD")
   
+          # Extract patch content from LLM response
+          echo "$RESP" | jq -r '.content[0].text // .content // empty' > patch_raw.txt
+  
           # Strip markdown code fences if present
           awk 'BEGIN{in=1} /^```/{in=!in; next} {if(in) print}' patch_raw.txt > patch.diff || true
           # Extract changed paths
