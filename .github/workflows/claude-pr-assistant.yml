@@ -5,7 +5,7 @@ on:
     inputs:
       pr_number:
         description: 'PR number (optional, for manual wrapper triggers)'
-        type: number
+        type: string
         required: false
       trigger_labels:
         type: string
@@ -43,7 +43,7 @@ on:
     inputs:
       pr_number:
         description: 'PR number (required for manual trigger)'
-        type: number
+        type: string
         required: true
       model:
         description: 'AI model'
