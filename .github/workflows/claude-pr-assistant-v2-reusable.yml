@@ -501,8 +501,6 @@ jobs:
                 echo "Empty patch – nothing to process."
                 echo "total_lines=0" >> "$GITHUB_OUTPUT"
                 exit 0
-            echo "Empty patch – nothing to process."
-            exit 0
           fi
           
           # Extract changed paths
