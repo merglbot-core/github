@@ -707,11 +707,13 @@ jobs:
             if ! [[ "$LINES_CHANGED" =~ ^[0-9]+$ ]]; then
               echo "❌ Failed to calculate changed lines count: '$LINES_CHANGED' is not a number" >&2
               exit 1
-            elif [ "$MEANINGFUL_CHANGES" -eq 0 ]; then
+            fi
+            if ! [[ "$MEANINGFUL_CHANGES" =~ ^[0-9]+$ ]]; then
+              echo "❌ Failed to calculate meaningful changes count: '$MEANINGFUL_CHANGES' is not a number" >&2
+              exit 1
+            fi
+            if [ "$MEANINGFUL_CHANGES" -eq 0 ]; then
               echo "⚠️ Patch exists but no meaningful content lines changed (possibly metadata, whitespace, or comments only), skipping review"
-              exit 0
-            elif [ "$LINES_CHANGED" -eq 0 ]; then
-              echo "⚠️ Patch exists but no content lines changed (possibly metadata only), skipping review"
               exit 0
             fi
             
@@ -747,9 +749,6 @@ EOF
             
             gh api repos/$OWNER_REPO/pulls/$PR/reviews --input review.json
             echo "✅ Posted review comment with $LINES_CHANGED lines changed (no inline suggestions available)."
-          else
-            echo "No changes to suggest."
-          fi
           else
             echo "No changes to suggest."
           fi
