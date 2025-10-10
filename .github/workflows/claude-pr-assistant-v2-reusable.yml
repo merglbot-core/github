@@ -176,6 +176,9 @@ jobs:
           # Python: unified-diff → GitHub review suggestions
           cat > "$RUNNER_TEMP/patch_to_review.py" <<'PY'
           import re, json, sys
+          # Named constants
+          MAX_REVIEW_COMMENTS = 30  # GitHub API limit for review comments
+          
           patch = sys.stdin.read().splitlines()
           comments = []
           current_file = None
@@ -221,7 +224,7 @@ jobs:
           if content:
               flush()
 
-          comments = comments[:30]  # GitHub API limit
+          comments = comments[:MAX_REVIEW_COMMENTS]
           json.dump(comments, sys.stdout)
           PY
 
@@ -277,15 +280,18 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
-          COMMENT_CHAR_LIMIT=20000
+          # Named constants for input size limits
+          MAX_COMMENT_CHARS=20000
+          MAX_DIFF_LINES=8000
+          
           COMMENT=$(cat '${{ steps.parse.outputs.prompt_file }}')
           MODEL='${{ steps.cfg.outputs.model }}'
           TEMP='${{ steps.cfg.outputs.temperature }}'
     
           # Escape for JSON
-          COMMENT_SAFE=$(printf "%s" "$COMMENT" | head -c "$COMMENT_CHAR_LIMIT")
+          COMMENT_SAFE=$(printf "%s" "$COMMENT" | head -c "$MAX_COMMENT_CHARS")
           COMMENT_JSON=$(printf "%s" "$COMMENT_SAFE" | jq -R -s '.')
-          DIFF_CONTENT=$(head -n 8000 pr_diff.txt)
+          DIFF_CONTENT=$(head -n "$MAX_DIFF_LINES" pr_diff.txt)
           DIFF_JSON=$(printf "%s" "$DIFF_CONTENT" | jq -R -s '.')
 
           if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
