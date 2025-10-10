@@ -498,9 +498,10 @@ jobs:
           ALLOWED=$(cat allowed.txt); [ -z "$ALLOWED" ] && ALLOWED='**'
           ALLOWED_REGEX=$(allowlist_to_regex "$ALLOWED")
           MAX=$(cat max.txt); [ -z "$MAX" ] && MAX=800
-                echo "Empty patch – nothing to process."
-                echo "total_lines=0" >> "$GITHUB_OUTPUT"
-                exit 0
+          if [ ! -s patch.diff ]; then
+            echo "Empty patch – nothing to process."
+            echo "total_lines=0" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           
           # Extract changed paths
