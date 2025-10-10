@@ -34,6 +34,45 @@ on:
     secrets:
       ANTHROPIC_API_KEY:
         required: false
+  
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number (required for manual trigger)'
+        type: number
+        required: true
+      model:
+        description: 'AI model'
+        type: choice
+        required: false
+        default: 'claude-3-5-sonnet-20241022'
+        options:
+          - claude-3-5-sonnet-20241022
+          - claude-3-opus-20240229
+          - claude-3-sonnet-20240229
+      temperature:
+        description: 'Temperature (0.0-1.0, lower = more conservative)'
+        type: number
+        required: false
+        default: 0.2
+      mode:
+        description: 'Review mode'
+        type: choice
+        required: false
+        default: 'suggest'
+        options:
+          - suggest
+          - apply-suggestions
+      max_output_chars:
+        description: 'Max output length'
+        type: number
+        required: false
+        default: 4000
+      max_diff_lines:
+        description: 'Max diff lines to analyze'
+        type: number
+        required: false
+        default: 8000
 
 permissions:
   contents: read
@@ -44,12 +83,20 @@ jobs:
   ai_review:
     runs-on: ubuntu-latest
     concurrency:
-      group: claude-pr-v2-${{ github.event.pull_request.number || github.run_id }}
+      group: claude-pr-v2-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
       cancel-in-progress: true
+    
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+    
     steps:
-      - name: Ensure pull_request context
-        if: ${{ github.event_name != 'pull_request' }}
-        run: echo "Only pull_request supported"; exit 0
+      - name: Validate PR context
+        run: |
+          if [ -z "$PR_NUMBER" ]; then
+            echo "❌ PR number missing. Use workflow_dispatch with pr_number input or trigger from PR event."
+            exit 1
+          fi
+          echo "✅ Processing PR #$PR_NUMBER"
 
       - uses: actions/checkout@v4
         with:
@@ -57,6 +104,7 @@ jobs:
 
       - name: Label gates
         id: gates
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
@@ -69,8 +117,8 @@ jobs:
             core.setOutput('run', (hasTrig && !hasSkip) ? 'true':'false');
 
       - name: Stop if gated off
-        if: steps.gates.outputs.run != 'true'
-        run: echo "Gated off"; exit 0
+        if: github.event_name == 'pull_request' && steps.gates.outputs.run != 'true'
+        run: echo "Gated off by labels"; exit 0
 
       - name: Fetch PR diff (truncated)
         id: diff
@@ -78,15 +126,26 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh pr diff "${{ github.event.pull_request.number }}" --patch > pr.diff || true
+          gh pr diff "$PR_NUMBER" --patch > pr.diff || true
           head -n "${{ inputs.max_diff_lines }}" pr.diff > pr.trunc.diff || true
 
+      - name: Fetch PR metadata
+        id: pr_info
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PR_TITLE=$(gh pr view "$PR_NUMBER" --json title -q .title)
+          PR_BODY=$(gh pr view "$PR_NUMBER" --json body -q .body)
+          echo "title=$PR_TITLE" >> $GITHUB_OUTPUT
+          echo "body=$PR_BODY" >> $GITHUB_OUTPUT
+      
       - name: Build prompt
         run: |
           set -euo pipefail
           mkdir -p .tmp
-          printf "%s" "${{ github.event.pull_request.title }}" | head -c 300 > .tmp/title.txt
-          printf "%s" "${{ github.event.pull_request.body }}"  | head -c 2000 > .tmp/body.txt
+          printf "%s" "${{ steps.pr_info.outputs.title }}" | head -c 300 > .tmp/title.txt
+          printf "%s" "${{ steps.pr_info.outputs.body }}"  | head -c 2000 > .tmp/body.txt
           {
             echo "You are a helpful, cautious code reviewer."
             echo "Rules: no secrets; least-privilege; safe shell; no destructive infra."
@@ -118,10 +177,10 @@ jobs:
           echo "$resp" | jq -r '.content[0].text // ""' | head -c "${{ inputs.max_output_chars }}" > .tmp/review.md
 
       - name: Create/update comment (idempotent)
-        if: ${{ inputs.mode == 'suggest' }}
+        if: ${{ inputs.mode == 'suggest' || github.event.inputs.mode == 'suggest' }}
         uses: peter-evans/create-or-update-comment@v4
         with:
-          issue-number: ${{ github.event.pull_request.number }}
+          issue-number: ${{ env.PR_NUMBER }}
           body-path: .tmp/review.md
           edit-mode: replace
           reactions: hooray
