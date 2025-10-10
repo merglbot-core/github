@@ -702,8 +702,9 @@ For questions, please check the workflow run details."
   "body": "$(echo "$REVIEW_BODY" | jq -Rs .)"
 }
 EOF
-            if [ $? -ne 0 ]; then
-              echo "⚠️ Failed to generate review JSON" >&2
+            # Validate that review.json is valid JSON
+            if ! jq empty review.json; then
+              echo "⚠️ Generated review.json is not valid JSON" >&2
               exit 1
             fi
             
