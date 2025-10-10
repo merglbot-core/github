@@ -278,37 +278,61 @@ jobs:
           COMMENT=$(cat '${{ steps.parse.outputs.prompt_file }}')
           MODEL='${{ steps.cfg.outputs.model }}'
           TEMP='${{ steps.cfg.outputs.temperature }}'
-          
-          # Escape for JSON (prevent injection)
-          escape_for_prompt() { sed -e 's/[`$\\]/\\&/g'; }
-          COMMENT_ESC=$(printf "%s" "$COMMENT" | escape_for_prompt | head -c 20000)
-          DIFF_ESC=$(head -n 8000 pr_diff.txt | escape_for_prompt | head -c 350000)
-          
+    
+          # Escape for JSON
+          escape_json() { jq -R -s '.' ; }
+          COMMENT_JSON=$(printf "%s" "$COMMENT" | head -c 20000 | escape_json)
+          DIFF_CONTENT=$(head -n 8000 pr_diff.txt | head -c 350000)
+          DIFF_JSON=$(printf "%s" "$DIFF_CONTENT" | escape_json)
+
           if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
             printf "LLM not configured; posting diff summary only." > claude_response.txt
             exit 0
           fi
-          
-          read -r -d '' PROMPT <<EOF || true
-          You are a helpful code reviewer.
-          Rules: no secrets in logs, least-privilege IAM, safe shell patterns, no destructive infra changes.
-          
-          User request:
-          $COMMENT_ESC
-          
-          PR Diff:
-          \`\`\`
-          $DIFF_ESC
-          \`\`\`
+    
+          read -r -d '' PAYLOAD_TEMPLATE <<EOF
+          {
+            "model": "%s",
+            "max_tokens": 4096,
+            "temperature": %s,
+            "messages": [
+              {
+                "role": "user",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "You are a helpful code reviewer.\\nRules: no secrets in logs, least-privilege IAM, safe shell patterns, no destructive infra changes.\\n\\nUser request:\\n"
+                  },
+                  {
+                    "type": "text",
+                    "text": %s
+                  },
+                  {
+                    "type": "text",
+                    "text": "\\n\\nPR Diff:\\n\`\`\`\\n"
+                  },
+                  {
+                    "type": "text",
+                    "text": %s
+                  },
+                  {
+                    "type": "text",
+                    "text": "\\n\`\`\`"
+                  }
+                ]
+              }
+            ]
+          }
           EOF
-          
+
+          PAYLOAD=$(printf "$PAYLOAD_TEMPLATE" "$MODEL" "$TEMP" "$COMMENT_JSON" "$DIFF_JSON")
+
           RESP=$(curl -s https://api.anthropic.com/v1/messages \
             -H "content-type: application/json" \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: 2023-06-01" \
-            -d "$(jq -n --arg prompt "$PROMPT" --arg model "$MODEL" --arg temp "$TEMP" \
-              '{model:$model,max_tokens:4096,temperature:($temp|tonumber),messages:[{role:"user",content:$prompt}]}')")
-          
+            -d "$PAYLOAD")
+    
           printf "%s" "$RESP" > claude_api_suggest.json
           echo "$RESP" | jq -r '.content[0].text // ""' > claude_response.txt
 
