@@ -718,10 +718,25 @@ jobs:
             fi
             
             # Generate review with helpful next steps for the user
-            if ! jq -n --arg lines "$LINES_CHANGED" \
+            REVIEW_BODY="$(cat <<EOF
+🤖 **Claude Assistant Suggestions**
+
+I generated changes for this PR ($LINES_CHANGED lines modified).
+
+⚠️ **Note:** The changes couldn't be converted to inline suggestions (possibly new files or complex edits).
+
+**Next steps:**
+- Review the full diff in the 'Files changed' tab
+- Check the workflow artifacts for detailed patch files
+- Apply changes manually if appropriate
+
+For questions, please check the workflow run details.
+EOF
+)"
+            if ! jq -n --arg lines "$LINES_CHANGED" --arg body "$REVIEW_BODY" \
               '{
                 event: "COMMENT",
-                body: "🤖 **Claude Assistant Suggestions**\n\nI generated changes for this PR (" + $lines + " lines modified).\n\n⚠️ **Note:** The changes couldn'\''t be converted to inline suggestions (possibly new files or complex edits).\n\n**Next steps:**\n- Review the full diff in the '\''Files changed'\'' tab\n- Check the workflow artifacts for detailed patch files\n- Apply changes manually if appropriate\n\nFor questions, please check the workflow run details."
+                body: $body
               }' > review.json; then
               echo "⚠️ Failed to generate review JSON" >&2
               exit 1
