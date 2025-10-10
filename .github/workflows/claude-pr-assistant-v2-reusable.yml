@@ -558,9 +558,17 @@ jobs:
           # Check if there are changes to commit
           if ! git diff --cached --quiet; then
             git --no-pager config user.name "claude-assistant[bot]"
-            git --no-pager config user.email "claude-assistant[bot]@users.noreply.github.com"
             git --no-pager commit -m "Apply Claude Assistant patch for PR #${{ steps.parse.outputs.pr_number }}"
-            git --no-pager push || { echo "❌ Failed to push changes" >&2; exit 1; }
+  
+            echo "Pushing changes to remote..."
+            if ! git --no-pager push; then
+              echo "❌ Failed to push changes. Checking remote status..." >&2
+              git --no-pager status
+              git --no-pager log --oneline -5
+              exit 1
+            fi
+            echo "✅ Successfully pushed changes"
+          else
           else
             echo "No changes to commit after applying patch."
           fi
