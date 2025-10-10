@@ -275,13 +275,14 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
+          COMMENT_CHAR_LIMIT=20000
           COMMENT=$(cat '${{ steps.parse.outputs.prompt_file }}')
           MODEL='${{ steps.cfg.outputs.model }}'
           TEMP='${{ steps.cfg.outputs.temperature }}'
     
           # Escape for JSON
           # Safely truncate and escape for JSON
-          COMMENT_SAFE=$(printf "%s" "$COMMENT" | head -c 20000)
+          COMMENT_SAFE=$(printf "%s" "$COMMENT" | head -c "$COMMENT_CHAR_LIMIT")
           COMMENT_JSON=$(printf "%s" "$COMMENT_SAFE" | jq -R -s '.')
           DIFF_CONTENT=$(head -n 8000 pr_diff.txt)
           DIFF_JSON=$(printf "%s" "$DIFF_CONTENT" | jq -R -s '.')
