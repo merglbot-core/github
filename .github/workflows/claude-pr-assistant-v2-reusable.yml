@@ -118,6 +118,8 @@ jobs:
     name: Claude PR Review
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      ANTHROPIC_API_VERSION: "2023-06-01"  # Centralized version, can be updated
 
     steps:
       - name: Checkout repository
@@ -331,7 +333,7 @@ jobs:
           RESP=$(curl -s https://api.anthropic.com/v1/messages \
             -H "content-type: application/json" \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: 2023-06-01" \
+            -H "anthropic-version: ${ANTHROPIC_API_VERSION:-2023-06-01}" \
             -d "$PAYLOAD")
     
           printf "%s" "$RESP" > claude_api_suggest.json
@@ -477,10 +479,10 @@ jobs:
           RESP=$(curl -s https://api.anthropic.com/v1/messages \
             -H "content-type: application/json" \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: 2023-06-01" \
+            -H "anthropic-version: ${ANTHROPIC_API_VERSION:-2023-06-01}" \
             -d "$PAYLOAD")
-# Extract patch content from LLM response
-echo "$RESP" | jq -r '.content[0].text // empty' > patch_raw.txt
+          
+          # Extract patch content from LLM response
           echo "$RESP" | jq -r '.content[0].text // .content // empty' > patch_raw.txt
   
           # Strip markdown code fences if present
@@ -557,9 +559,9 @@ echo "$RESP" | jq -r '.content[0].text // empty' > patch_raw.txt
     
           # Check if there are changes to commit
           if ! git diff --cached --quiet; then
-            git --no-pager config user.name "claude-assistant[bot]"
-            git --no-pager config user.email "claude-assistant[bot]@users.noreply.github.com"
-            git --no-pager commit -m "Apply Claude Assistant patch for PR #${{ steps.parse.outputs.pr_number }}"
+            git --no-pager config user.name "claude-assistant[bot][${{ github.repository }}]"
+            git --no-pager config user.email "claude-assistant+${{ github.repository_owner }}@users.noreply.github.com"
+            git --no-pager commit -m "Apply Claude Assistant patch for PR #${{ steps.parse.outputs.pr_number }}" \
   
             echo "Pushing changes to remote..."
             if ! git --no-pager push; then
