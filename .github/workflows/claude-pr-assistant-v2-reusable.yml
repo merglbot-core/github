@@ -669,7 +669,7 @@ jobs:
             jq -n --arg lines "$LINES_CHANGED" \
               '{
                 event: "COMMENT",
-                body: "🤖 **Claude Assistant Suggestions**\n\nI generated changes for this PR (" + $lines + " lines modified).\n\nThe changes couldn\'t be converted to inline suggestions (possibly new files or complex edits).\nPlease review the full diff carefully."
+                body: "🤖 **Claude Assistant Suggestions**\n\nI generated changes for this PR (" + $lines + " lines modified).\n\nThe changes couldn't be converted to inline suggestions (possibly new files or complex edits).\nPlease review the full diff carefully."
               }' > review.json
             gh api repos/$OWNER_REPO/pulls/$PR/reviews --input review.json
             echo "✅ Posted review comment (no inline suggestions available)."
