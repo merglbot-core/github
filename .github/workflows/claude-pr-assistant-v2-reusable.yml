@@ -480,8 +480,8 @@ jobs:
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: 2023-06-01" \
             -d "$PAYLOAD")
-
-          # Extract patch content from LLM response
+# Extract patch content from LLM response
+echo "$RESP" | jq -r '.content[0].text // empty' > patch_raw.txt
           echo "$RESP" | jq -r '.content[0].text // .content // empty' > patch_raw.txt
   
           # Strip markdown code fences if present
