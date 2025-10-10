@@ -659,10 +659,22 @@ jobs:
             echo "❌ Missing required variables: OWNER_REPO or PR" >&2
             exit 1
           fi
+          # Validate formats: owner/repo and PR number
+          if ! [[ "$OWNER_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+            echo "❌ Invalid OWNER_REPO format: '$OWNER_REPO'" >&2
+            exit 1
+          fi
+          if ! [[ "$PR" =~ ^[0-9]+$ ]]; then
+            echo "❌ Invalid PR number: '$PR'" >&2
+            exit 1
+          fi
           
           # Calculate number of comments (handle both array and non-array cases)
           if [ ! -f comments.json ]; then
             echo "⚠️ comments.json file not found, no comments to process"
+            COMMENTS_COUNT=0
+          elif [ ! -s comments.json ]; then
+            echo "⚠️ comments.json file is empty, no comments to process"
             COMMENTS_COUNT=0
           elif ! COMMENTS_COUNT=$(jq 'if type == "array" then length else 0 end' comments.json 2>/dev/null); then
             echo "❌ Failed to parse comments.json, this indicates a workflow error" >&2
@@ -676,34 +688,32 @@ jobs:
             echo "✅ Posted $COMMENTS_COUNT review suggestions."
           elif [ -s patch.diff ]; then
             # If we have a patch but no inline comments (e.g., new files),
-            # Check if any actual content lines changed (excluding whitespace-only and comment changes)
-            MEANINGFUL_CHANGES=$(grep -E '^[+-][^+-]' patch.diff | grep -v -E '^\+\s*$|^\+\s*#|^\+\s*//|^\+\s*/\*|^\+\s*\*' | wc -l)
-            if [ "$MEANINGFUL_CHANGES" -eq 0 ]; then
+            # create a review with a body comment explaining the changes
+            LINES_CHANGED=$(grep -E '^[+-][^+-]' patch.diff | wc -l | awk '{print $1}')
+            # Check meaningful content changes (ignore whitespace/comments)
+            MEANINGFUL_CHANGES=$(grep -E '^[+-][^+-]' patch.diff | grep -v -E '^\+\s*$|^\+\s*#|^\+\s*//|^\+\s*/\*|^\+\s*\*' | wc -l | awk '{print $1}')
+            
+            # Validate numeric result and skip non-substantive changes
+            if ! [[ "$LINES_CHANGED" =~ ^[0-9]+$ ]]; then
+              echo "❌ Failed to calculate changed lines count: '$LINES_CHANGED' is not a number" >&2
+              exit 1
+            elif [ "$MEANINGFUL_CHANGES" -eq 0 ]; then
               echo "⚠️ Patch exists but no meaningful content lines changed (possibly metadata, whitespace, or comments only), skipping review"
               exit 0
             elif [ "$LINES_CHANGED" -eq 0 ]; then
-              echo "⚠️ Patch exists but no content lines changed (possibly metadata only), skipping review"
-            # Check if any actual content lines changed
-            if [ "$LINES_CHANGED" -eq 0 ]; then
               echo "⚠️ Patch exists but no content lines changed (possibly metadata only), skipping review"
               exit 0
             fi
             
             # Generate review with helpful next steps for the user
-            REVIEW_BODY="🤖 **Claude Assistant Suggestions**
-
-I generated changes for this PR (${LINES_CHANGED} lines modified).
-
-⚠️ **Note:** The changes couldn't be converted to inline suggestions (possibly new files or complex edits).
-
-**Next steps:**
-- Review the full diff in the 'Files changed' tab
-- Check the workflow artifacts for detailed patch files
-- Apply changes manually if appropriate
-
-For questions, please check the workflow run details."
-
-            jq -n --arg body "$REVIEW_BODY" '{event: "COMMENT", body: $body}' > review.json
+            if ! jq -n --arg lines "$LINES_CHANGED" \
+              '{
+                event: "COMMENT",
+                body: "🤖 **Claude Assistant Suggestions**\n\nI generated changes for this PR (" + $lines + " lines modified).\n\n⚠️ **Note:** The changes couldn'\''t be converted to inline suggestions (possibly new files or complex edits).\n\n**Next steps:**\n- Review the full diff in the '\''Files changed'\'' tab\n- Check the workflow artifacts for detailed patch files\n- Apply changes manually if appropriate\n\nFor questions, please check the workflow run details."
+              }' > review.json; then
+              echo "⚠️ Failed to generate review JSON" >&2
+              exit 1
+            fi
             # Validate that review.json is valid JSON
             if ! jq empty review.json; then
               echo "⚠️ Generated review.json is not valid JSON" >&2
@@ -712,6 +722,9 @@ For questions, please check the workflow run details."
             
             gh api repos/$OWNER_REPO/pulls/$PR/reviews --input review.json
             echo "✅ Posted review comment with $LINES_CHANGED lines changed (no inline suggestions available)."
+          else
+            echo "No changes to suggest."
+          fi
           else
             echo "No changes to suggest."
           fi
