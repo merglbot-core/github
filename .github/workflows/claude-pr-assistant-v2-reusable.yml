@@ -478,7 +478,10 @@ jobs:
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: 2023-06-01" \
             -d "$PAYLOAD")
-  
+
+          # Save response to file
+          echo "$RESP" | jq -r '.content[0].text // ""' > patch_raw.txt
+
           # Extract patch content from LLM response
           echo "$RESP" | jq -r '.content[0].text // .content // empty' > patch_raw.txt
   
