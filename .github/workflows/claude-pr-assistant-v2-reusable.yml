@@ -693,13 +693,14 @@ jobs:
             LINES_CHANGED=$(grep -E '^[+-][^+-]' patch.diff | wc -l)
             
             # Filter for meaningful content changes:
-            # Exclude whitespace-only and comment lines from added/removed content
+            # Exclude whitespace-only and common comment formats from added/removed content
             grep -E '^[+-][^+-]' patch.diff | \
-            grep -v -E '^[+-]\s*$|^[+-]\s*#|^[+-]\s*//|^[+-]\s*/\*|^[+-]\s*\*' > filtered2.diff
-            # Count remaining lines as meaningful changes
-            MEANINGFUL_CHANGES=$(wc -l < filtered2.diff)
-            
-            # Validate numeric result and skip non-substantive changes
+            grep -v -E '^[+-]\s*$' | \
+            grep -v -E '^[+-]\s*#' | \
+            grep -v -E '^[+-]\s*//' | \
+            grep -v -E '^[+-]\s*/\*' | \
+            grep -v -E '^[+-]\s*\*' | \
+            grep -v -E '^[+-]\s*<!--' > filtered2.diff
             if ! [[ "$LINES_CHANGED" =~ ^[0-9]+$ ]]; then
               echo "❌ Failed to calculate changed lines count: '$LINES_CHANGED' is not a number" >&2
               exit 1
