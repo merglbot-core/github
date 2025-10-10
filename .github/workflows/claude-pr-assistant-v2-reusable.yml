@@ -281,7 +281,6 @@ jobs:
           TEMP='${{ steps.cfg.outputs.temperature }}'
     
           # Escape for JSON
-          # Safely truncate and escape for JSON
           COMMENT_SAFE=$(printf "%s" "$COMMENT" | head -c "$COMMENT_CHAR_LIMIT")
           COMMENT_JSON=$(printf "%s" "$COMMENT_SAFE" | jq -R -s '.')
           DIFF_CONTENT=$(head -n 8000 pr_diff.txt)
