@@ -628,19 +628,29 @@ jobs:
           
           # Build comment body with safe substitution
           BODY=$(cat <<'EOF'
-## 🤖 Claude Assistant - Apply Mode Complete
+# Create a temporary file for safer substitutions
+TEMP_BODY=$(mktemp)
+cat "$BODY" > "$TEMP_BODY"
 
-HAS_CHANGES="${HAS_CHANGES:-false}"
-COMMIT_SUMMARY="${COMMIT_SUMMARY:-}"
+# Perform substitutions one by one with proper escaping
+sed -i "s/STATUS_PLACEHOLDER/$(echo "$STATUS" | sed 's/[\/&]/\\&/g')/g" "$TEMP_BODY"
 
-**Status:** STATUS_PLACEHOLDER
+if [ "$HAS_CHANGES" = "true" ] && [ -n "$COMMIT_SUMMARY" ]; then
+  CHANGES_TEXT="**Changes:** $(echo "$COMMIT_SUMMARY" | sed 's/[\/&]/\\&/g')"
+else
+  CHANGES_TEXT="No changes were applied."
+fi
+sed -i "s/CHANGES_PLACEHOLDER/$CHANGES_TEXT/g" "$TEMP_BODY"
 
-CHANGES_PLACEHOLDER
+if [ "$STATUS" = "success" ]; then
+  RESULT_TEXT="✅ Successfully applied changes."
+else
+  RESULT_TEXT="❌ Failed to apply changes."
+fi
+sed -i "s/RESULT_PLACEHOLDER/$RESULT_TEXT/g" "$TEMP_BODY"
 
-RESULT_PLACEHOLDER
-EOF
-)
-          
+BODY=$(cat "$TEMP_BODY")
+rm "$TEMP_BODY"
           # Safe substitutions
           BODY="${BODY//STATUS_PLACEHOLDER/$STATUS}"
           
