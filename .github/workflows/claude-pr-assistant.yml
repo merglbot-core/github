@@ -141,8 +141,16 @@ jobs:
           set -euo pipefail
           PR_TITLE=$(gh pr view "$PR_NUMBER" --json title -q .title)
           PR_BODY=$(gh pr view "$PR_NUMBER" --json body -q .body)
-          echo "title=$PR_TITLE" >> $GITHUB_OUTPUT
-          echo "body=$PR_BODY" >> $GITHUB_OUTPUT
+          
+          # GitHub Actions multiline string syntax
+          {
+            echo "title<<EOF"
+            echo "$PR_TITLE"
+            echo "EOF"
+            echo "body<<EOF"
+            echo "$PR_BODY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       
       - name: Build prompt
         run: |
