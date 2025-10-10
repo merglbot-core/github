@@ -689,9 +689,21 @@ jobs:
           elif [ -s patch.diff ]; then
             # If we have a patch but no inline comments (e.g., new files),
             # create a review with a body comment explaining the changes
+            # Count all added/removed lines (excluding diff metadata)
             LINES_CHANGED=$(grep -E '^[+-][^+-]' patch.diff | wc -l | awk '{print $1}')
-            # Check meaningful content changes (ignore whitespace/comments)
-            MEANINGFUL_CHANGES=$(grep -E '^[+-][^+-]' patch.diff | grep -v -E '^\+\s*$|^\+\s*#|^\+\s*//|^\+\s*/\*|^\+\s*\*' | wc -l | awk '{print $1}')
+            
+            # Filter for meaningful content changes:
+            # 1. Select added/removed lines (excluding diff metadata)
+            grep -E '^[+-][^+-]' patch.diff > filtered.diff
+            # 2. Exclude whitespace-only additions
+            grep -v -E '^\+\s*$' filtered.diff > filtered1.diff
+            # 3. Exclude added lines that are comments (Python, shell, C/C++, JavaScript, etc.)
+            grep -v -E '^\+\s*#' filtered1.diff | \
+            grep -v -E '^\+\s*//' | \
+            grep -v -E '^\+\s*/\*' | \
+            grep -v -E '^\+\s*\*' > filtered2.diff
+            # 4. Count remaining lines as meaningful changes
+            MEANINGFUL_CHANGES=$(wc -l < filtered2.diff | awk '{print $1}')
             
             # Validate numeric result and skip non-substantive changes
             if ! [[ "$LINES_CHANGED" =~ ^[0-9]+$ ]]; then
