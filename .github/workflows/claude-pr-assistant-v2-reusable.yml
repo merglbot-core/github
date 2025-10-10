@@ -693,12 +693,10 @@ jobs:
             LINES_CHANGED=$(grep -E '^[+-][^+-]' patch.diff | wc -l | awk '{print $1}')
             
             # Filter for meaningful content changes:
-            # 1. Select added/removed lines (excluding diff metadata)
-            grep -E '^[+-][^+-]' patch.diff > filtered.diff
-            # 2. Exclude whitespace-only additions
-            grep -v -E '^\+\s*$' filtered.diff > filtered1.diff
-            # 3. Exclude added lines that are comments (Python, shell, C/C++, JavaScript, etc.)
-            grep -v -E '^\+\s*#' filtered1.diff | \
+            # Exclude whitespace-only and comment lines from added/removed content
+            grep -E '^[+-][^+-]' patch.diff | \
+            grep -v -E '^\+\s*$' | \
+            grep -v -E '^\+\s*#' | \
             grep -v -E '^\+\s*//' | \
             grep -v -E '^\+\s*/\*' | \
             grep -v -E '^\+\s*\*' > filtered2.diff
