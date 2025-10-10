@@ -299,40 +299,9 @@ jobs:
             exit 0
           fi
     
-          read -r -d '' PAYLOAD_TEMPLATE <<EOF
-          {
-            "model": "%s",
-            "max_tokens": 4096,
-            "temperature": %s,
-            "messages": [
-              {
-                "role": "user",
-                "content": [
-                  {
-                    "type": "text",
-                    "text": "You are a helpful code reviewer.\\nRules: no secrets in logs, least-privilege IAM, safe shell patterns, no destructive infra changes.\\n\\nUser request:\\n"
-                  },
-                  {
-                    "type": "text",
-                    "text": %s
-                  },
-                  {
-                    "type": "text",
-                    "text": "\\n\\nPR Diff:\\n\`\`\`\\n"
-                  },
-                  {
-                    "type": "text",
-                    "text": %s
-                  },
-                  {
-                    "type": "text",
-                    "text": "\\n\`\`\`"
-                  }
-                ]
-              }
-            ]
-          }
-          EOF
+          # Note: The read -r -d '' heredoc always returns exit code 1, which causes failure with set -e
+          # Since the PAYLOAD_TEMPLATE is not actually used (the real payload is built with jq below),
+          # we can safely remove this heredoc
 
           PAYLOAD=$(jq -n \
             --arg model "$MODEL" \
