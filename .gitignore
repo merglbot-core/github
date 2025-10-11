@@ -18,6 +18,30 @@ out/
 .env.test
 .env.*.local
 
+# Secrets & Credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*-key.json
+*-credentials.json
+service-account*.json
+gcp-key*.json
+id_rsa*
+id_ed25519*
+*.crt
+*.cer
+
+# Infrastructure (IaC)
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraformrc
+terraform.tfvars
+.pulumi/
+cdk.out/
+.cdk.staging/
+
 # Logs
 *.log
 npm-debug.log*
@@ -35,6 +59,18 @@ yarn-error.log*
 # Testing
 coverage/
 .nyc_output/
+
+# Modern tooling
+.pnpm-store/
+.yarn/
+!.yarn/releases
+!.yarn/plugins
+.nx/cache/
+bun.lockb
+
+# Docker (only overrides/local)
+docker-compose.override.yml
+*.dockerfile.local
 
 # Misc
 .turbo/
