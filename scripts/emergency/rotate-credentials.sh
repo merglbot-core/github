@@ -32,11 +32,22 @@ function rotate_gcp_secret() {
         return
     fi
     
-    # Get latest enabled version
-    current_version=$(gcloud secrets versions list "$secret_name" \
+    # Validate secret name format (prevent command injection)
+    if ! [[ "$secret_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        echo -e "${RED}  ❌ Invalid secret name format. Only alphanumeric characters, hyphens and underscores allowed.${NC}"
+        log_incident "ERROR: Invalid secret name format attempted: $secret_name"
+        return 1
+    fi
+    
+    # Get latest enabled version with proper error handling
+    if ! current_version=$(gcloud secrets versions list "$secret_name" \
         --filter="state:ENABLED" \
         --limit=1 \
-        --format="value(name)" 2>&1)
+        --format="value(name)" 2>&1); then
+        echo -e "${RED}  ❌ Failed to list versions for secret: $secret_name${NC}"
+        log_incident "ERROR: Failed to list versions for secret: $secret_name"
+        return 1
+    fi
     
     # Check if we found an enabled version
     if [ -z "$current_version" ]; then

@@ -70,7 +70,13 @@ if [ -n "$yaml_files" ]; then
     # Process each file with proper quoting
     while IFS= read -r f; do
         if [ -f "$f" ]; then
-            if ! python3 -c "import yaml; yaml.safe_load(open('$f', 'r', encoding='utf-8'))" 2>/dev/null; then
+            # Use python with safe argument passing (not via string interpolation)
+            if ! python3 - "$f" <<'PY' 2>/dev/null
+import yaml, sys
+with open(sys.argv[1], 'r', encoding='utf-8') as file:
+    yaml.safe_load(file)
+PY
+            then
                 log_error "YAML invalid: $f"
             else
                 echo "  ✓ $f"
