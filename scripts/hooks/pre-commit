@@ -105,12 +105,7 @@ if [ $FOUND_SECRETS -eq 1 ]; then
     if [[ "$override_confirmation" != "COMMIT ANYWAY" ]]; then
         echo "Commit aborted."
         exit 1
-    read -p "Override and commit anyway? (DANGEROUS) (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-    echo -e "${YELLOW}⚠️  Proceeding with potential secrets - ensure you know what you're doing!${NC}"
+            fi
 fi
 
 echo -e "${GREEN}✅ Pre-commit checks completed${NC}"
