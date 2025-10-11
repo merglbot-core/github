@@ -35,16 +35,12 @@ SECRET_PATTERNS=(
 
 # Check for secrets in file names
 echo "Checking file names for potential secrets..."
+POTENTIAL_SECRET_FILES=0
 for file in $STAGED_FILES; do
     if echo "$file" | grep -qE '\.(pem|key|p12|pfx|env|tfvars)$'; then
         if ! echo "$file" | grep -qE '\.(example|template)'; then
-            echo -e "${RED}❌ SECURITY WARNING: Attempting to commit potential secret file: $file${NC}"
-            echo "If this is intentional, ensure the file contains no actual secrets."
-            read -p "Continue anyway? (y/N) " -n 1 -r
-            echo
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                exit 1
-            fi
+            echo -e "${RED}❌ SECURITY WARNING: Potential secret file: $file${NC}"
+            ((POTENTIAL_SECRET_FILES++))
         fi
     fi
 done
@@ -80,6 +76,7 @@ fi
 
 # Check for large files
 echo "Checking for large files..."
+LARGE_FILES=0
 for file in $STAGED_FILES; do
     if [ -f "$file" ]; then
         size=$(wc -c < "$file" 2>/dev/null)
@@ -89,25 +86,41 @@ for file in $STAGED_FILES; do
         fi
         if [ "$size" -gt 10485760 ]; then # 10MB
             echo -e "${YELLOW}⚠️  Large file detected: $file ($(($size / 1048576))MB)${NC}"
-            read -p "Continue with large file? (y/N) " -n 1 -r
-            echo
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                exit 1
-            fi
+            ((LARGE_FILES++))
         fi
     fi
 done
 
-if [ $FOUND_SECRETS -eq 1 ]; then
-    echo -e "${RED}❌ Security check failed! Potential secrets detected.${NC}"
+# Consolidated override check for all warnings/errors
+if [ $FOUND_SECRETS -eq 1 ] || [ $POTENTIAL_SECRET_FILES -gt 0 ] || [ $LARGE_FILES -gt 0 ]; then
     echo ""
-    echo "To proceed anyway, you must acknowledge the risk."
-    read -p "Type 'COMMIT ANYWAY' to override (or press Enter to abort): " override_confirmation
+    echo -e "${YELLOW}════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}          SECURITY CHECK SUMMARY            ${NC}"
+    echo -e "${YELLOW}════════════════════════════════════════════${NC}"
+    
+    if [ $FOUND_SECRETS -eq 1 ]; then
+        echo -e "${RED}❌ Potential secrets detected in file contents${NC}"
+    fi
+    if [ $POTENTIAL_SECRET_FILES -gt 0 ]; then
+        echo -e "${YELLOW}⚠️  $POTENTIAL_SECRET_FILES file(s) with secret-like names${NC}"
+    fi
+    if [ $LARGE_FILES -gt 0 ]; then
+        echo -e "${YELLOW}⚠️  $LARGE_FILES large file(s) (>10MB)${NC}"
+    fi
+    
+    echo ""
+    echo -e "${RED}To proceed with these warnings, you must acknowledge the risks.${NC}"
+    echo "Review the warnings above and ensure no actual secrets are being committed."
+    echo ""
+    read -p "Type 'COMMIT ANYWAY' to override all warnings (or press Enter to abort): " override_confirmation
+    
     if [[ "$override_confirmation" != "COMMIT ANYWAY" ]]; then
-        echo "Commit aborted. Please remove secrets and try again."
+        echo ""
+        echo -e "${GREEN}✅ Commit aborted. Please address the issues and try again.${NC}"
         exit 1
     fi
-    echo -e "${YELLOW}⚠️  Proceeding with potential secrets - ensure you know what you're doing!${NC}"
+    
+    echo -e "${YELLOW}⚠️  Proceeding with warnings - ensure you know what you're doing!${NC}"
 fi
 
 echo -e "${GREEN}✅ Pre-commit checks completed${NC}"

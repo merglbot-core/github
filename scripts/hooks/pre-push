@@ -67,7 +67,8 @@ log_success() {
 echo -e "${BLUE}[1/5] Validating YAML files...${NC}"
 yaml_files=$(echo "$files" | grep -E '\.(ya?ml)$' || true)
 if [ -n "$yaml_files" ]; then
-    for f in $yaml_files; do
+    # Process each file with proper quoting
+    while IFS= read -r f; do
         if [ -f "$f" ]; then
             if ! python3 -c "import yaml; yaml.safe_load(open('$f', 'r', encoding='utf-8'))" 2>/dev/null; then
                 log_error "YAML invalid: $f"
@@ -75,7 +76,7 @@ if [ -n "$yaml_files" ]; then
                 echo "  ✓ $f"
             fi
         fi
-    done
+    done <<< "$yaml_files"
 else
     echo "  No YAML files to validate"
 fi
@@ -84,7 +85,8 @@ fi
 echo -e "${BLUE}[2/5] Validating shell scripts...${NC}"
 shell_files=$(echo "$files" | grep -E '\.(sh|bash)$' || true)
 if [ -n "$shell_files" ]; then
-    for f in $shell_files; do
+    # Process each file with proper quoting
+    while IFS= read -r f; do
         if [ -f "$f" ]; then
             if ! bash -n "$f" 2>/dev/null; then
                 log_error "Shell syntax error: $f"
@@ -92,7 +94,7 @@ if [ -n "$shell_files" ]; then
                 echo "  ✓ $f"
             fi
         fi
-    done
+    done <<< "$shell_files"
 else
     echo "  No shell scripts to validate"
 fi
@@ -102,7 +104,8 @@ echo -e "${BLUE}[3/5] Validating GitHub Actions workflows...${NC}"
 workflow_files=$(echo "$files" | grep '^.github/workflows/.*\.yml$' || true)
 if [ -n "$workflow_files" ]; then
     if command -v actionlint >/dev/null 2>&1; then
-        for f in $workflow_files; do
+        # Process each file with proper quoting
+        while IFS= read -r f; do
             if [ -f "$f" ]; then
                 if ! actionlint -color never "$f" 2>&1 | head -20; then
                     log_warning "Workflow issues found in $f"
@@ -110,7 +113,7 @@ if [ -n "$workflow_files" ]; then
                     echo "  ✓ $f"
                 fi
             fi
-        done
+        done <<< "$workflow_files"
     else
         log_warning "actionlint not installed. Install with: brew install actionlint"
     fi
@@ -150,7 +153,8 @@ fi
 # 5. File Size Check
 echo -e "${BLUE}[5/5] Checking file sizes...${NC}"
 large_files=0
-for f in $files; do
+# Process each file with proper quoting
+while IFS= read -r f; do
     if [ -f "$f" ]; then
         size=$(wc -c < "$f" 2>/dev/null || echo "0")
         if [ "$size" -gt 10485760 ]; then # 10MB
@@ -158,7 +162,7 @@ for f in $files; do
             ((large_files++))
         fi
     fi
-done
+done <<< "$files"
 if [ $large_files -eq 0 ]; then
     echo "  No large files detected"
 fi
