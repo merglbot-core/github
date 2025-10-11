@@ -100,11 +100,11 @@ done
 
 if [ $FOUND_SECRETS -eq 1 ]; then
     echo -e "${RED}❌ Security check failed! Potential secrets detected.${NC}"
-    echo "Options:"
-    echo "  1. Remove the secrets and try again"
-    echo "  2. Add the files to .gitignore"
-    echo "  3. Use environment variables instead"
-    echo ""
+            echo ""
+            read -p "To override, type 'COMMIT ANYWAY': " override_confirmation
+            if [[ "$override_confirmation" != "COMMIT ANYWAY" ]]; then
+                echo "Commit aborted."
+                exit 1
     read -p "Override and commit anyway? (DANGEROUS) (y/N) " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
