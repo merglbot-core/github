@@ -139,9 +139,9 @@ jobs:
     
     steps:
       - name: Notify Slack
-        if: vars.SLACK_WEBHOOK_URL != ''
+        if: secrets.SLACK_WEBHOOK_URL != ''
         run: |
-          curl -X POST ${{ vars.SLACK_WEBHOOK_URL }} \
+          curl -X POST ${{ secrets.SLACK_WEBHOOK_URL }} \
             -H 'Content-Type: application/json' \
             -d '{
               "text": "🚀 New Release: v${{ needs.release.outputs.version }}",
