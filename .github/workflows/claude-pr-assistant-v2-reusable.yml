@@ -660,7 +660,7 @@ jobs:
             exit 1
           fi
           # Validate formats: owner/repo and PR number
-          if ! [[ "$OWNER_REPO" =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_-][A-Za-z0-9_-]*$ ]]; then
+          if ! [[ "$OWNER_REPO" =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$ ]]; then
             echo "❌ Invalid OWNER_REPO format: '$OWNER_REPO'" >&2
             exit 1
           fi
