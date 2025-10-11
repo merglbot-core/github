@@ -721,7 +721,7 @@ jobs:
             if ! jq -n --arg lines "$LINES_CHANGED" \
               '{
                 event: "COMMENT",
-                body: "🤖 **Claude Assistant Suggestions**\n\nI generated changes for this PR (" + $lines + " lines modified).\n\n⚠️ **Note:** The changes could not be converted to inline suggestions (possibly new files or complex edits).\n\n**Next steps:**\n- Review the full diff in the Files changed tab\n- Check the workflow artifacts for detailed patch files\n- Apply changes manually if appropriate\n\nFor questions, please check the workflow run details."
+                body: "🤖 **Claude Assistant Suggestions**\n\nI generated changes for this PR (" + $lines + " lines modified).\n\n⚠️ **Note:** The changes could not be converted to inline suggestions (possibly new files or complex edits).\n\n**Next steps:**\n- Review the full diff in the `Files changed` tab\n- Check the workflow artifacts for detailed patch files\n- Apply changes manually if appropriate\n\nFor questions, please check the workflow run details."
               }' > review.json; then
               echo "⚠️ Failed to generate review JSON" >&2
               exit 1
