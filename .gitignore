@@ -8,10 +8,14 @@ dist/
 build/
 .next/
 out/
+*.tsbuildinfo
 
 # Environment
 .env
 .env.local
+.env.development
+.env.production
+.env.test
 .env.*.local
 
 # Logs
@@ -35,3 +39,4 @@ coverage/
 # Misc
 .turbo/
 .cache/
+.eslintcache
