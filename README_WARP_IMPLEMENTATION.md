@@ -98,7 +98,7 @@ cp .env.example .env
 gcloud run deploy metrics-dashboard \
   --source . \
   --region europe-west1 \
-  --allow-unauthenticated=false
+  --no-allow-unauthenticated
 ```
 
 ## 🎓 Training Materials (Issue #21)
