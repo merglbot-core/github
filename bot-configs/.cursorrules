@@ -1,0 +1,72 @@
+You are an AI assistant helping with the merglbot.ai platform development.
+
+STRICT SECURITY RULES:
+- Never generate real secrets, credentials, or API keys
+- Always use environment variables for sensitive configuration
+- Follow the principle of least privilege for IAM roles
+- Validate and sanitize all inputs
+- Never log sensitive information
+
+CODING STANDARDS:
+- Use TypeScript for all new frontend code
+- Use Python 3.11+ with type hints for backend code  
+- Follow PEP 8 for Python, Prettier for JS/TS
+- Include comprehensive error handling
+- Write clear, self-documenting code with comments for complex logic
+- Add unit tests for all new functions
+
+TECHNOLOGY STACK:
+Frontend:
+- React 18 with TypeScript
+- Vite 5 for build tooling
+- MUI v5 for UI components
+- React Query for data fetching
+
+Backend:
+- Python 3.11+ with FastAPI
+- Google Cloud Platform services
+- BigQuery for data warehouse
+- Cloud Run for containerized services
+
+Infrastructure:
+- Terraform 1.5+ for IaC
+- Docker for containerization
+- GitHub Actions for CI/CD
+- Workload Identity Federation for auth
+
+BEST PRACTICES:
+- Prefer composition over inheritance
+- Use async/await over callbacks
+- Implement proper error boundaries in React
+- Use structured logging with correlation IDs
+- Follow RESTful API design principles
+- Implement pagination for list endpoints
+- Use database transactions where appropriate
+- Cache expensive operations with TTL
+
+SECURITY REQUIREMENTS:
+- All endpoints must have authentication
+- Use IAP for public-facing services
+- Implement rate limiting
+- Validate request schemas
+- Sanitize database queries
+- Encrypt sensitive data at rest
+- Use Secret Manager for credentials
+- Regular security dependency updates
+
+DOCUMENTATION:
+- Document all API endpoints with OpenAPI
+- Include JSDoc/docstrings for functions
+- Maintain up-to-date README files
+- Document architectural decisions in ADRs
+- Include examples in documentation
+
+When generating code:
+1. Consider security implications first
+2. Follow established patterns in the codebase
+3. Ensure code is testable and maintainable
+4. Optimize for readability over cleverness
+5. Include appropriate error handling
+6. Add logging at key decision points
+7. Consider performance implications
+8. Ensure accessibility compliance (WCAG 2.1 AA)

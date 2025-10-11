@@ -1,0 +1,83 @@
+# GitHub Copilot Configuration Template
+# Based on WARP_BOT_DRIVEN_DEVELOPMENT.md and WARP_AI_TOOLS.md
+
+# Organization-level settings for GitHub Copilot
+# Apply at: https://github.com/organizations/YOUR_ORG/settings/copilot
+
+copilot_settings:
+  # Tier selection
+  tier: "Business"  # Options: "Business" or "Enterprise"
+  
+  # Security policies
+  policies:
+    # MUST: Block suggestions matching public code
+    block_public_code: true
+    
+    # MUST: Don't contribute our code to training data
+    allow_copilot_to_use_code_snippets: false
+    
+    # MUST: Zero retention policy
+    data_retention: "No retention"
+    
+    # Advanced security
+    secret_scanning: true
+    
+    # Code quality settings
+    suggestion_length: "medium"  # short, medium, long
+    temperature: 0.2  # Lower = more conservative suggestions
+    
+  # Repository access control
+  allowed_repos:
+    - "merglbot-core/*"
+    - "merglbot-public/*"
+    - "merglbot-denatura/*"
+    - "merglbot-shared/*"
+  
+  # Excluded file patterns
+  exclude_patterns:
+    - "**/.env*"
+    - "**/secrets/**"
+    - "**/credentials/**"
+    - "**/*.tfvars"
+    - "**/service-account*.json"
+    - "**/*.pem"
+    - "**/*.key"
+    
+# IDE-specific settings (VSCode)
+vscode_settings:
+  "github.copilot.enable": {
+    "*": true,
+    "yaml": true,
+    "plaintext": false,
+    "markdown": true,
+    "terraform": true,
+    "dockerfile": true
+  },
+  "github.copilot.advanced": {
+    "secretScanning": true,
+    "length": "medium",
+    "temperature": 0.2,
+    "topP": 0.95,
+    "stopSequences": ["password:", "secret:", "api_key:", "token:"]
+  }
+
+# IntelliJ/JetBrains settings
+intellij_settings:
+  copilot:
+    enabled: true
+    inline_suggestions: true
+    multiline_suggestions: true
+    excluded_files:
+      - "*.env"
+      - "*.tfvars"
+      - "secrets.yml"
+    
+# Review requirements
+code_review:
+  required: true
+  ai_disclosure: true  # Must disclose AI assistance in PR
+  security_review_for:
+    - "terraform/**"
+    - "**/*iam*"
+    - "**/*policy*"
+    - "**/*secret*"

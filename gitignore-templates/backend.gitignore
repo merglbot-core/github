@@ -1,0 +1,191 @@
+# Backend Project Gitignore Template
+# Generated from WARP_GITIGNORE_SECURITY.md standards
+
+# ============================================
+# SECURITY CRITICAL - NEVER COMMIT
+# ============================================
+
+# Secrets and credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+.env*
+!.env.example
+!.env.template
+secrets/
+credentials/
+private/
+config/secrets/
+
+# API keys and tokens
+.npmrc
+.pypirc
+auth.json
+tokens.json
+*.token
+*.secret
+api_keys.json
+config.json
+!config.example.json
+
+# Cloud provider configs
+.aws/
+.gcp/
+.azure/
+gcp-key*.json
+service-account*.json
+terraform.tfvars
+*.tfvars
+!terraform.tfvars.example
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+*.sql
+!migrations/*.sql
+!schema/*.sql
+database.yml
+database.json
+!database.example.yml
+
+# ============================================
+# PYTHON SPECIFIC
+# ============================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.virtualenv/
+virtualenv/
+
+# Testing
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# ============================================
+# NODE.JS SPECIFIC (if using Node backend)
+# ============================================
+
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/
+.yarn/
+
+# ============================================
+# JAVA/KOTLIN SPECIFIC
+# ============================================
+
+*.class
+*.jar
+*.war
+*.ear
+*.iml
+target/
+.gradle/
+gradle-app.setting
+.gradletasknamecache
+
+# ============================================
+# GO SPECIFIC
+# ============================================
+
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+
+# Go modules
+vendor/
+
+# ============================================
+# GENERAL
+# ============================================
+
+# IDE & Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+*~
+.DS_Store
+Thumbs.db
+.project
+.classpath
+.settings/
+
+# Logs
+*.log
+logs/
+log/
+
+# Temporary files
+*.tmp
+*.temp
+*.cache
+tmp/
+temp/
+
+# OS generated
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Instance-specific
+instance/
+local_settings.py
+config/local.py
