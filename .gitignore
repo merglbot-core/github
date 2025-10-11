@@ -1,0 +1,19 @@
+# macOS
+.DS_Store
+._*
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+
+# Backup workflows
+.github/workflows/*.bak
+.github/workflows/*.backup*
+*-FIXED.yml
+
+# Temporary
+*.tmp
