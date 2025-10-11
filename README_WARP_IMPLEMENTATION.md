@@ -94,7 +94,7 @@ git clone https://github.com/merglbot-core/dashboard-template
 cp .env.example .env
 # Edit .env with your settings
 
-# Deploy
+# Deploy (with IAP authentication required)
 gcloud run deploy metrics-dashboard \
   --source . \
   --region europe-west1 \

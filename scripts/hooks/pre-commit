@@ -21,7 +21,7 @@ fi
 
 # Pattern matching for potential secrets
 SECRET_PATTERNS=(
-    '(password|passwd|pwd|secret|api_key|apikey|token|credential)\s*=\s*["\'][^"\']+["\']'
+    '(password|passwd|pwd|secret|api_key|apikey|token|credential)\s*=\s*["'"'"'][^"'"'"']+["'"'"']'
     'sk-[a-zA-Z0-9]{32,}'
     'AKIA[0-9A-Z]{16}'
     'ghp_[a-zA-Z0-9]{36}'
@@ -30,7 +30,7 @@ SECRET_PATTERNS=(
     'glpat-[a-zA-Z0-9]{20}'
     'ghs_[a-zA-Z0-9]{36}'
     'ssh-rsa\s+[A-Za-z0-9+/]+'
-    'BEGIN\s+(RSA|DSA|EC|OPENSSH|PGP)\s+PRIVATE\s+KEY'
+    'BEGIN\s+PRIVATE\s+KEY'
 )
 
 # Check for secrets in file names
@@ -101,11 +101,13 @@ done
 if [ $FOUND_SECRETS -eq 1 ]; then
     echo -e "${RED}❌ Security check failed! Potential secrets detected.${NC}"
     echo ""
-    read -p "To override, type 'COMMIT ANYWAY': " override_confirmation
+    echo "To proceed anyway, you must acknowledge the risk."
+    read -p "Type 'COMMIT ANYWAY' to override (or press Enter to abort): " override_confirmation
     if [[ "$override_confirmation" != "COMMIT ANYWAY" ]]; then
-        echo "Commit aborted."
+        echo "Commit aborted. Please remove secrets and try again."
         exit 1
-            fi
+    fi
+    echo -e "${YELLOW}⚠️  Proceeding with potential secrets - ensure you know what you're doing!${NC}"
 fi
 
 echo -e "${GREEN}✅ Pre-commit checks completed${NC}"

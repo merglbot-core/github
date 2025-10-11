@@ -32,20 +32,47 @@ function rotate_gcp_secret() {
         return
     fi
     
-    # Disable current version
-    current_version=$(gcloud secrets versions list "$secret_name" --limit=1 --format="value(name)" | head -1)
-    if gcloud secrets versions disable "$current_version" --secret="$secret_name" 2>/dev/null; then
-        echo -e "${GREEN}  ✅ Disabled current version${NC}"
+    # Get latest enabled version
+    current_version=$(gcloud secrets versions list "$secret_name" \
+        --filter="state:ENABLED" \
+        --limit=1 \
+        --format="value(name)" 2>&1)
+    
+    # Check if we found an enabled version
+    if [ -z "$current_version" ]; then
+        echo -e "${YELLOW}  ⚠️  No enabled version found for $secret_name${NC}"
+        log_incident "Warning: No enabled version found for secret: $secret_name"
     else
-        echo -e "${RED}  ❌ Failed to disable current version${NC}"
+        # Attempt to disable the current version
+        if gcloud secrets versions disable "$current_version" --secret="$secret_name"; then
+            echo -e "${GREEN}  ✅ Disabled version $current_version${NC}"
+            log_incident "Disabled version $current_version of secret: $secret_name"
+        else
+            echo -e "${RED}  ❌ Failed to disable version $current_version${NC}"
+            log_incident "ERROR: Failed to disable version $current_version of secret: $secret_name"
+            return 1
+        fi
     fi
     
-    # Generate new secret value
-    NEW_SECRET=$(openssl rand -base64 32)
-    echo "$NEW_SECRET" | gcloud secrets versions add "$secret_name" --data-file=-
+    # Generate new secret value securely (never echo the value)
+    # Use a temporary file with restricted permissions
+    TEMP_SECRET_FILE=$(mktemp -t rotate_secret.XXXXXX)
+    chmod 600 "$TEMP_SECRET_FILE"
+    openssl rand -base64 32 > "$TEMP_SECRET_FILE"
     
-    echo -e "${GREEN}  ✅ Added new version${NC}"
-    log_incident "Rotated GCP secret: $secret_name"
+    # Add new version from file (avoids exposing in process list)
+    if gcloud secrets versions add "$secret_name" --data-file="$TEMP_SECRET_FILE"; then
+        echo -e "${GREEN}  ✅ Added new version${NC}"
+        log_incident "Successfully added new version to secret: $secret_name"
+    else
+        echo -e "${RED}  ❌ Failed to add new version${NC}"
+        log_incident "ERROR: Failed to add new version to secret: $secret_name"
+        rm -f "$TEMP_SECRET_FILE"
+        return 1
+    fi
+    
+    # Securely remove temporary file
+    shred -u "$TEMP_SECRET_FILE" 2>/dev/null || rm -f "$TEMP_SECRET_FILE"
 }
 
 function rotate_github_token() {

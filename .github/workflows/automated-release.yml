@@ -54,8 +54,8 @@ jobs:
           if [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
           else
-            # Use semantic-release to determine next version (robust JSON parsing)
-            VERSION=$(npx semantic-release --dry-run --no-ci --stdout | jq -r '.nextRelease.version // empty')
+            # Use semantic-release to determine next version (dry run without --stdout flag)
+            VERSION=$(npx semantic-release --dry-run --no-ci 2>&1 | grep -oP 'next release version is \K[0-9]+\.[0-9]+\.[0-9]+' || echo "")
             if [ -z "$VERSION" ]; then
               echo "No release needed"
               echo "skip=true" >> $GITHUB_OUTPUT
@@ -84,8 +84,8 @@ jobs:
           ## 🚀 What's Changed
           EOF
 
-          # Append commits without shell expansion
-          echo "${COMMITS}" >> CHANGELOG_TEMP.md
+          # Append commits without shell expansion (prevent injection)
+          printf '%s\n' "${COMMITS}" >> CHANGELOG_TEMP.md
 
           cat >> CHANGELOG_TEMP.md << EOF
 
@@ -143,9 +143,15 @@ jobs:
     
     steps:
       - name: Notify Slack
-        if: secrets.SLACK_WEBHOOK_URL != ''
+        if: ${{ vars.SLACK_NOTIFICATIONS_ENABLED == 'true' }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          curl -X POST ${{ secrets.SLACK_WEBHOOK_URL }} \
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "Slack webhook URL not configured, skipping notification"
+            exit 0
+          fi
+          curl -X POST "$SLACK_WEBHOOK_URL" \
             -H 'Content-Type: application/json' \
             -d '{
               "text": "🚀 New Release: v${{ needs.release.outputs.version }}",
