@@ -107,7 +107,10 @@ if [ -n "$workflow_files" ]; then
         # Process each file with proper quoting
         while IFS= read -r f; do
             if [ -f "$f" ]; then
-                if ! actionlint -color never "$f" 2>&1 | head -20; then
+                output="$(actionlint -color never "$f" 2>&1)"
+                status=$?
+                if [ $status -ne 0 ]; then
+                    echo "$output" | head -20
                     log_warning "Workflow issues found in $f"
                 else
                     echo "  ✓ $f"
