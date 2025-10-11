@@ -110,15 +110,15 @@ jobs:
       
       - name: Create GitHub Release
         if: steps.version.outputs.skip != 'true'
-        uses: actions/create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: v${{ steps.version.outputs.version }}
-          release_name: Release v${{ steps.version.outputs.version }}
-          body: ${{ steps.changelog.outputs.changelog }}
-          draft: false
-          prerelease: false
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            --title "Release v${{ steps.version.outputs.version }}" \
+            --notes "${{ steps.changelog.outputs.changelog }}" \
+            --verify-tag \
+            --latest
+          # If you want to support draft/prerelease, add --draft or --prerelease flags as needed
       
       - name: Update GITHUB_STEP_SUMMARY
         if: always()
