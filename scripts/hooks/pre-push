@@ -132,7 +132,7 @@ if command -v gitleaks >/dev/null 2>&1; then
     git rev-list "$range" > "$TEMP_COMMITS" 2>/dev/null || true
     
     if [ -s "$TEMP_COMMITS" ]; then
-        if ! gitleaks detect --source . --log-opts="$range" --verbose --no-banner 2>&1 | grep -v "no leaks found" | head -20; then
+        if gitleaks detect --source . --log-opts="$range" --verbose --no-banner 2>&1 | grep -v "no leaks found" | head -20; then
             log_error "Potential secrets detected!"
             rm -f "$TEMP_COMMITS"
             
