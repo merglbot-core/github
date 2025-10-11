@@ -33,7 +33,8 @@ function rotate_gcp_secret() {
     fi
     
     # Disable current version
-    if gcloud secrets versions list "$secret_name" --limit=1 --format="value(name)" | head -1 | xargs -I {} gcloud secrets versions disable {} --secret="$secret_name" 2>/dev/null; then
+    current_version=$(gcloud secrets versions list "$secret_name" --limit=1 --format="value(name)" | head -1)
+    if gcloud secrets versions disable "$current_version" --secret="$secret_name" 2>/dev/null; then
         echo -e "${GREEN}  ✅ Disabled current version${NC}"
     else
         echo -e "${RED}  ❌ Failed to disable current version${NC}"
