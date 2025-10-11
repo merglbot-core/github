@@ -82,9 +82,13 @@ jobs:
           # Release v${{ steps.version.outputs.version }}
           
           ## 🚀 What's Changed
-          
-          ${COMMITS}
-          
+          EOF
+
+          # Append commits without shell expansion
+          echo "${COMMITS}" >> CHANGELOG_TEMP.md
+
+          cat >> CHANGELOG_TEMP.md << EOF
+
           ## 📊 Statistics
           - Commits: $(git rev-list ${PREV_TAG:+${PREV_TAG}..}HEAD --count)
           - Contributors: $(git log ${PREV_TAG:+${PREV_TAG}..}HEAD --format="%aN" | sort -u | wc -l)
