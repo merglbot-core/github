@@ -14,8 +14,9 @@ const apiClient = axios.create({
 // Add request interceptor for authentication and CSRF protection
 apiClient.interceptors.request.use(
   (config) => {
-    // Add auth token if available
-    const token = localStorage.getItem('auth_token');
+    // Add auth token if available (using sessionStorage for better security)
+    // In production, this should be handled via httpOnly cookies
+    const token = sessionStorage.getItem('auth_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -41,7 +42,7 @@ apiClient.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401 && window.location.pathname !== '/login') {
       // Handle unauthorized access, but avoid redirect loop
-      localStorage.removeItem('auth_token');
+      sessionStorage.removeItem('auth_token');
       window.location.href = '/login';
     }
     return Promise.reject(error);
@@ -67,6 +68,11 @@ const metricsService = {
 
   // Bot metrics
   async getBotMetrics(period = '30d') {
+    // Validate period parameter
+    if (!VALID_PERIODS.includes(period)) {
+      throw new Error(`Invalid period: ${period}. Valid periods are: ${VALID_PERIODS.join(', ')}`);
+    }
+    
     const response = await apiClient.get(API_ENDPOINTS.METRICS_BOTS, {
       params: { period }
     });
@@ -81,6 +87,11 @@ const metricsService = {
 
   // Deployment metrics
   async getDeploymentMetrics(period = '7d') {
+    // Validate period parameter
+    if (!VALID_PERIODS.includes(period)) {
+      throw new Error(`Invalid period: ${period}. Valid periods are: ${VALID_PERIODS.join(', ')}`);
+    }
+    
     const response = await apiClient.get(API_ENDPOINTS.METRICS_DEPLOYMENTS, {
       params: { period }
     });
@@ -103,6 +114,11 @@ const metricsService = {
 
   // Get rollback history
   async getRollbackHistory(period = '30d') {
+    // Validate period parameter
+    if (!VALID_PERIODS.includes(period)) {
+      throw new Error(`Invalid period: ${period}. Valid periods are: ${VALID_PERIODS.join(', ')}`);
+    }
+    
     const response = await apiClient.get(API_ENDPOINTS.ROLLBACKS, {
       params: { period }
     });
@@ -111,6 +127,11 @@ const metricsService = {
 
   // Get security incidents
   async getSecurityIncidents(period = '30d') {
+    // Validate period parameter
+    if (!VALID_PERIODS.includes(period)) {
+      throw new Error(`Invalid period: ${period}. Valid periods are: ${VALID_PERIODS.join(', ')}`);
+    }
+    
     const response = await apiClient.get(API_ENDPOINTS.SECURITY_INCIDENTS, {
       params: { period }
     });

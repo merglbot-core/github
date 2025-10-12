@@ -30,8 +30,10 @@ function Login() {
 
       // Mock authentication - replace with actual API call
       if (email && password) {
-        // Store a mock token (in production, this would come from the server)
-        localStorage.setItem('auth_token', 'mock_token_' + Date.now());
+        // In production, auth tokens should be handled via httpOnly cookies
+        // For development only, use sessionStorage (more secure than localStorage)
+        // This is temporary - production will use IAP authentication
+        sessionStorage.setItem('auth_token', 'mock_token_' + Date.now());
         navigate('/dashboard');
       } else {
         setError('Please enter email and password');

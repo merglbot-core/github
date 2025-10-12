@@ -28,7 +28,14 @@ function useMetrics(options = {}) {
   });
 
   const isLoading = queries.some(query => query.isLoading);
-  const error = queries.find(query => query.error)?.error;
+  // Aggregate all errors instead of just the first one
+  const errors = queries
+    .filter(query => query.error)
+    .map((query, index) => ({
+      metric: ['releases', 'bots', 'security', 'deployments'][index],
+      error: query.error
+    }));
+  const error = errors.length > 0 ? errors : null;
 
   return {
     releaseMetrics: queries[0].data,
@@ -37,6 +44,7 @@ function useMetrics(options = {}) {
     deploymentMetrics: queries[3].data,
     isLoading,
     error,
+    errors, // Expose individual errors array
     refetchAll: () => queries.forEach(query => query.refetch()),
   };
 }

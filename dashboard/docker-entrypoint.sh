@@ -12,8 +12,10 @@ fi
 
 echo "Configuring nginx with API_URL: ${API_URL}"
 
-# Create nginx config from template with environment variable substitution
-envsubst '${API_URL}' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
+# Use the nginx.conf as template and substitute environment variables
+# The original nginx.conf acts as template
+cp /etc/nginx/nginx.conf /tmp/nginx.conf.template
+envsubst '${API_URL}' < /tmp/nginx.conf.template > /etc/nginx/nginx.conf
 
 echo "Starting nginx..."
 exec nginx -g 'daemon off;'

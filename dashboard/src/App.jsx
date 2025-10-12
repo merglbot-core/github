@@ -12,22 +12,35 @@ import NotFound from './components/NotFound/NotFound';
 import ErrorBoundary from './components/ErrorBoundary/ErrorBoundary';
 
 function App() {
+  // Check if the current route is the login page
+  const isLoginRoute = window.location.pathname === '/login';
+  
   return (
     <ErrorBoundary>
-      <Layout>
-        <Container maxWidth={false} sx={{ mt: 4, mb: 4 }}>
-          <Routes>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/releases" element={<ReleaseMetrics />} />
-            <Route path="/bots" element={<BotMetrics />} />
-            <Route path="/security" element={<SecurityMonitoring />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </Container>
-      </Layout>
+      <Routes>
+        {/* Login route without Layout */}
+        <Route path="/login" element={<Login />} />
+        
+        {/* All other routes with Layout */}
+        <Route
+          path="/*"
+          element={
+            <Layout>
+              <Container maxWidth={false} sx={{ mt: 4, mb: 4 }}>
+                <Routes>
+                  <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                  <Route path="/dashboard" element={<Dashboard />} />
+                  <Route path="/releases" element={<ReleaseMetrics />} />
+                  <Route path="/bots" element={<BotMetrics />} />
+                  <Route path="/security" element={<SecurityMonitoring />} />
+                  <Route path="/settings" element={<Settings />} />
+                  <Route path="*" element={<NotFound />} />
+                </Routes>
+              </Container>
+            </Layout>
+          }
+        />
+      </Routes>
     </ErrorBoundary>
   );
 }
