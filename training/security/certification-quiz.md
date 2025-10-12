@@ -23,7 +23,7 @@
 
 **Q2. What should you do FIRST if you accidentally commit a secret to git?**
 - [ ] A) Delete the file and push again
-- [ ] B) Rotate the secret immediately
+- [ ] B) Audit logs for unauthorized access
 - [ ] C) Hope no one notices
 - [ ] D) Create a PR to remove it
 
