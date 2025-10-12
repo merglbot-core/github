@@ -1,0 +1,34 @@
+github:
+  enterprise: "merglbot"
+  orgs:
+    - "merglbot-core"
+    - "merglbot-public"
+    - "Merglevsky-cz"
+  pricing:
+    copilot_usd_per_seat: 19
+    enterprise_cloud_usd_per_seat: 0
+
+gcp:
+  billing_account_id: "XXXX-XXXX-XXXX"
+  billing_export:
+    project_id: "mb-seed"
+    dataset: "billing_export"
+    table_pattern: "gcp_billing_export_v1_*"
+  projects:
+    core:
+      - "mb-seed"
+      - "mb-portal-stg"
+      - "mb-portal-prd"
+      - "mb-artifacts-prd"
+    public:
+      - "mb-website-stg"
+      - "mb-website-prd"
+    clients:
+      denatura:
+        - "denatura-btf-stg"
+        - "denatura-btf-prd"
+        - "denatura-aaas-stg"
+        - "denatura-aaas-prd"
+
+alerts:
+  slack_webhook_env: "SLACK_WEBHOOK_URL"

@@ -54,12 +54,25 @@ jobs:
           if [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
           else
-            # Use semantic-release to determine next version (robust JSON parsing)
-            if ! command -v jq &> /dev/null; then
-              echo "jq not found, installing..."
-              apt-get update && apt-get install -y jq
+            # jq is already available in GitHub Actions Ubuntu runners
+            # Parse semantic-release output more robustly with JSON output when available
+            RELEASE_OUTPUT=$(npx semantic-release --dry-run --no-ci 2>&1 || true)
+            
+            # First try to extract from JSON output if available
+            VERSION=$(echo "$RELEASE_OUTPUT" | grep -o '{"nextRelease":{[^}]*}}' | jq -r '.nextRelease.version' 2>/dev/null || echo '')
+            
+            # Fallback to text parsing with more flexible patterns
+            if [ -z "$VERSION" ]; then
+              # Try various patterns that semantic-release might output
+              VERSION=$(echo "$RELEASE_OUTPUT" | grep -E 'next release version|new version|would publish|Release version' | \
+                        grep -oE '([0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9\.]+)?(\+[a-zA-Z0-9\.]+)?)' | head -1 || echo '')
             fi
-            VERSION=$(npx semantic-release --dry-run --no-ci --stdout | jq -r '.nextRelease.version // empty')
+            
+            # Final fallback: check for version in the format "Found version x.y.z"
+            if [ -z "$VERSION" ]; then
+              VERSION=$(echo "$RELEASE_OUTPUT" | grep -oE 'version[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+)' | \
+                        grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo '')
+            fi
             if [ -z "$VERSION" ]; then
               echo "No release needed"
               echo "skip=true" >> $GITHUB_OUTPUT

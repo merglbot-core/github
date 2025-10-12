@@ -38,6 +38,21 @@ This repository contains the comprehensive implementation of WARP (Work Architec
 The following items require manual intervention:
 
 #### 1. Pre-commit Hook Installation
+
+##### Option A: Using pre-commit framework (Recommended)
+```bash
+# Install pre-commit framework
+pip install pre-commit
+
+# Create .pre-commit-config.yaml (see template below)
+# Install hooks
+pre-commit install
+
+# Run against all files (initial check)
+pre-commit run --all-files
+```
+
+##### Option B: Manual installation
 ```bash
 # Install pre-commit hook in each repository
 cp scripts/hooks/pre-commit .git/hooks/
@@ -45,6 +60,29 @@ chmod +x .git/hooks/pre-commit
 
 # Or use symbolic link
 ln -s ../../scripts/hooks/pre-commit .git/hooks/pre-commit
+```
+
+##### Template .pre-commit-config.yaml:
+```yaml
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.0
+    hooks:
+      - id: gitleaks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+  - repo: local
+    hooks:
+      - id: validate-bot-configs
+        name: Validate bot configurations
+        entry: python scripts/security/validate_bot_configs.py
+        language: python
+        files: '\.github/.*\.ya?ml$'
 ```
 
 #### 2. GitHub Organization Settings
@@ -161,8 +199,22 @@ cp gitignore-templates/infrastructure.gitignore /path/to/project/.gitignore
 
 ### 3. Setup pre-commit hooks
 ```bash
-# Install gitleaks
+# Install gitleaks (choose based on your platform)
+# macOS:
 brew install gitleaks
+
+# Linux (snap):
+sudo snap install gitleaks
+
+# Linux (manual):
+# Download from https://github.com/gitleaks/gitleaks/releases
+# chmod +x gitleaks
+# sudo mv gitleaks /usr/local/bin/
+
+# Windows (scoop):
+scoop install gitleaks
+
+# Or download directly from: https://github.com/gitleaks/gitleaks/releases
 
 # Copy pre-commit hook
 cp scripts/hooks/pre-commit /path/to/project/.git/hooks/

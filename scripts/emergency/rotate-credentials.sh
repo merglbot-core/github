@@ -34,8 +34,9 @@ function rotate_gcp_secret() {
     
     # Validate secret name format (prevent command injection)
     if ! [[ "$secret_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-        echo -e "${RED}  ❌ Invalid secret name format. Only alphanumeric characters, hyphens and underscores allowed.${NC}"
-        log_incident "ERROR: Invalid secret name format attempted: $secret_name"
+        echo -e "${RED}  ❌ Invalid secret name format. Only alphanumeric characters, hyphens, and underscores allowed.${NC}"
+        # Log incident without revealing potentially sensitive input
+        log_incident "ERROR: Invalid secret name format attempted (input sanitized)"
         return 1
     fi
     
@@ -43,7 +44,7 @@ function rotate_gcp_secret() {
     if ! current_version=$(gcloud secrets versions list "$secret_name" \
         --filter="state:ENABLED" \
         --limit=1 \
-        --format="value(name)" 2>&1); then
+        --format="value(name)"); then
         echo -e "${RED}  ❌ Failed to list versions for secret: $secret_name${NC}"
         log_incident "ERROR: Failed to list versions for secret: $secret_name"
         return 1
@@ -66,8 +67,10 @@ function rotate_gcp_secret() {
     fi
     
     # Generate new secret value securely (never echo the value)
-    # Use a temporary file with restricted permissions
-    TEMP_SECRET_FILE=$(mktemp -t rotate_secret.XXXXXX)
+    # Create a secure temporary directory with restricted permissions
+    SECURE_DIR=$(mktemp -d -t rotate_secret_dir.XXXXXX) || { echo -e "${RED}  ❌ Failed to create temporary directory${NC}"; log_incident "ERROR: Failed to create temporary directory"; return 1; }
+    chmod 700 "$SECURE_DIR"
+    TEMP_SECRET_FILE="${SECURE_DIR}/secret.tmp"
     chmod 600 "$TEMP_SECRET_FILE"
     openssl rand -base64 32 > "$TEMP_SECRET_FILE"
     
@@ -78,12 +81,13 @@ function rotate_gcp_secret() {
     else
         echo -e "${RED}  ❌ Failed to add new version${NC}"
         log_incident "ERROR: Failed to add new version to secret: $secret_name"
-        rm -f "$TEMP_SECRET_FILE"
+        rm -rf "$SECURE_DIR"
         return 1
     fi
     
-    # Securely remove temporary file
+    # Securely remove temporary directory and files
     shred -u "$TEMP_SECRET_FILE" 2>/dev/null || rm -f "$TEMP_SECRET_FILE"
+    rm -rf "$SECURE_DIR"
 }
 
 function rotate_github_token() {
