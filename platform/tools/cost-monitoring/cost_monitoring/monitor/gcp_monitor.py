@@ -32,7 +32,8 @@ def query_month_costs_by_service(
         SUM(cost) AS cost_usd,
         SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)) AS credits_usd
     FROM `{table_fqn}`
-    WHERE usage_start_time >= TIMESTAMP_TRUNC(CURRENT_TIMESTAMP(), MONTH)
+    WHERE usage_start_time >= TIMESTAMP_TRUNC(TIMESTAMP(@month_start), MONTH)
+      AND usage_start_time < TIMESTAMP_ADD(TIMESTAMP_TRUNC(TIMESTAMP(@month_start), MONTH), INTERVAL 1 MONTH)
       AND project.id IN UNNEST(@project_ids)
     GROUP BY 1, 2 
     ORDER BY 1, 3 DESC
