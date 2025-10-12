@@ -253,9 +253,9 @@ function Dashboard() {
                 { service: 'aaas-api', version: 'v1.8.5', status: 'success', time: '4 hours ago' },
                 { service: 'portal', version: 'v3.1.0', status: 'success', time: '6 hours ago' },
                 { service: 'admin', version: 'v2.0.3', status: 'rollback', time: '8 hours ago' },
-              ].map((deployment) => (
+              ].map((deployment, idx) => (
                 <Box
-                  key={`${deployment.service}-${deployment.version}-${deployment.time}`}
+                  key={idx}
                   sx={{
                     display: 'flex',
                     justifyContent: 'space-between',
