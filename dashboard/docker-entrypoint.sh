@@ -54,4 +54,5 @@ envsubst '${API_URL}' < /etc/nginx/nginx.conf > /tmp/nginx.conf
 mv /tmp/nginx.conf /etc/nginx/nginx.conf
 
 echo "Starting nginx..."
-exec nginx -g 'daemon off;'
+# Drop privileges to dashboard user before starting nginx
+exec su-exec dashboard nginx -g 'daemon off;'
