@@ -192,7 +192,11 @@ def audit_repositories(repos: List[str]) -> Dict[str, Any]:
         print(f"Checking {repo}...")
         
         # Clone or use existing repo
-        repo_path = f"/tmp/audit/{Path(repo).name}"
+        import tempfile
+
+        # Create a secure temporary directory
+        temp_dir = tempfile.mkdtemp(prefix="audit-")
+        repo_path = f"{temp_dir}/{Path(repo).name}"
         
         if not Path(repo_path).exists():
             # Clone the repository
