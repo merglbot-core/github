@@ -52,6 +52,9 @@ All video tutorials are available on our internal training platform:
 - [Bot Tools Live Demo](https://training.merglbot.ai/bots) (Production)
 - [Release Process End-to-End](https://training.merglbot.ai/release) (Production)
 - [Staging Environment](https://training-staging.merglbot.ai) (For internal testing)
+- [Security Standards Walkthrough](https://training.merglbot.ai/security) (30 min)
+- [Bot Tools Live Demo](https://training.merglbot.ai/bots) (45 min)
+- [Release Process End-to-End](https://training.merglbot.ai/release) (40 min)
 
 ## 📋 Quick Reference Cards
 
