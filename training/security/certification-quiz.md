@@ -23,7 +23,7 @@
 
 **Q2. What should you do FIRST if you accidentally commit a secret to git?**
 - [ ] A) Delete the file and push again
-- [ ] B) Audit logs for unauthorized access
+- [ ] B) Audit logs for unauthorized access (before rotation destroys evidence)
 - [ ] C) Hope no one notices
 - [ ] D) Create a PR to remove it
 
@@ -174,9 +174,11 @@
 
 ---
 
-**Q19. True or False: You should force-push to remove secrets from git history.**
-- [ ] True
-- [ ] False
+**Q19. When is force-push acceptable for removing secrets from git history?**
+- [ ] A) Never, under any circumstances
+- [ ] B) Only on feature branches after team coordination and audit
+- [ ] C) Anytime you need to remove a secret
+- [ ] D) Only with --force-with-lease flag
 
 
 ---
@@ -216,10 +218,19 @@ Upon passing:
 
 ## 📝 Submit Your Quiz
 
+**Recommended (Automated):**
+1. Complete and submit your answers using the official training portal:
+   [https://training.merglbot.ai/submit-quiz/security](https://training.merglbot.ai/submit-quiz/security)
+2. Your results will be automatically graded and recorded.
+3. A certificate will be issued via email upon passing.
+
+**Alternative (Manual - Legacy):**
 1. Record your answers
 2. Submit to: training@merglbot.ai
 3. Subject: "Security Certification Quiz - [Your Name]"
 4. Include: Employee ID and date completed
+
+*Note: Manual submission may take 1-2 business days for grading. Automated portal provides instant results.*
 
 ---
 

@@ -3,7 +3,7 @@
 Restricted: Internal use only. Do not share externally.
 
 Q1: A, C
-Q2: B
+Q2: B (Audit logs FIRST before rotation destroys evidence; see training/security/01-gitignore-security.md lines 275-281)
 Q3: C
 Q4: True
 Q5: B
@@ -20,5 +20,5 @@ Q15: B
 Q16: B
 Q17: B
 Q18: B
-Q19: True (ONLY on specific branch; NEVER use --all)
+Q19: B (Only on feature branches after team coordination and audit; NEVER use --all flag)
 Q20: D

@@ -230,10 +230,10 @@ git secrets --add 'projects/[0-9]+/serviceAccounts/[^"]*'
 
 ```bash
 # Try to commit a secret (should fail)
-# IMPORTANT: Use obviously fake format to prevent copy-paste accidents
-echo "# EXAMPLE - DO NOT USE REAL SECRETS EVEN IN TESTS" > test.txt
+# IMPORTANT: Use obviously invalid format to prevent copy-paste accidents
+echo "# EXAMPLE - NEVER USE REAL SECRETS" > test.txt
 echo "# The following line would be blocked by git-secrets:" >> test.txt
-echo "ANTHROPIC_API_KEY=sk-ant-FAKE-KEY-FOR-TRAINING-ONLY-12345" >> test.txt
+echo "ANTHROPIC_API_KEY=FAKE_KEY_XXXXXXXX_TRAINING_ONLY" >> test.txt
 git add test.txt
 git commit -m "test"
 
@@ -283,7 +283,28 @@ gcloud logging read "resource.type=service_account AND \
 
 echo "Audit logs saved. Review for unauthorized access patterns."
 
-# 2. ROTATE THE SECRET IMMEDIATELY
+# Create mandatory incident response script
+cat > incident-response.sh << 'EOF'
+#!/bin/bash
+set -euo pipefail
+
+echo "🚨 Secret Leak Incident Response"
+echo "================================"
+
+# Step 1: MANDATORY AUDIT
+read -p "Have you saved audit logs? (yes/no): " audit
+if [ "$audit" != "yes" ]; then
+  echo "❌ STOP: Audit logs first!"
+  exit 1
+fi
+
+# Step 2: Rotate
+read -p "Secret name to rotate: " secret_name
+gcloud secrets versions disable latest --secret="$secret_name"
+EOF
+chmod +x incident-response.sh
+
+# 2. ROTATE THE SECRET (after audit)
 # GCP Secret Manager
 gcloud secrets versions disable latest --secret="leaked-secret-name"
 gcloud secrets versions add "leaked-secret-name" --data-file=new_secret.txt
@@ -296,6 +317,19 @@ gcloud secrets versions add "leaked-secret-name" --data-file=new_secret.txt
 # First, install git-filter-repo if you haven't:
 # python3 -m pip install git-filter-repo
 
+# ONLY use this as a last resort for removing secrets:
+git filter-repo --path path/to/secret/file --invert-paths
+
+# 4. Force push (DANGEROUS - coordinate with team)
+# Follow this coordination checklist:
+# a) Post in #security: "Force push needed on branch <name> due to secret leak"
+# b) Wait for team ACK (minimum 2 people)
+# c) Verify no one has pending work on the branch:
+gh api repos/merglbot-core/platform/branches/<branch>/protection || echo "No protection"
+# d) Execute force push (branch-specific only):
+git push origin <your-branch-name> --force
+# e) Notify team when complete
+# ⚠️ NEVER use --all flag (overwrites all branches catastrophically)
 # To replace the secret content within a file (safer):
 echo 'SECRET_VALUE' > secret.txt
 git filter-repo --replace-text secret.txt
