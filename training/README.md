@@ -86,7 +86,7 @@ Print-friendly cheat sheets for daily use:
 - **Requirements:** Complete bot track + submit 3 reviewed PRs
 - **Practical Exam:** Live coding session with AI assistance
 - **Validity:** 12 months
-- **Recertification:** Annual
+- **Recertification:** Every two years
 
 ### Release Manager Certification
 - **Requirements:** Complete release track + shadow 2 releases
