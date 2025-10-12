@@ -34,17 +34,22 @@ export function getCsrfToken() {
 }
 
 /**
- * Sanitize HTML to prevent XSS attacks
- * This function escapes HTML entities to prevent script injection
- * @param {string} html - HTML string to sanitize
- * @returns {string} - Sanitized HTML string with escaped entities
+ * Escape text content to prevent XSS attacks
+ * WARNING: This only escapes text. Do NOT use the output with innerHTML.
+ * For HTML sanitization, use a library like DOMPurify.
+ * @param {string} text - Text to escape
+ * @returns {string} - Escaped text safe for textContent only
  */
-export function sanitizeHtml(html) {
-  if (!html) return '';
+export function escapeText(text) {
+  if (!text) return '';
   
-  // Create a text node which automatically escapes HTML entities
-  const div = document.createElement('div');
-  const textNode = document.createTextNode(html);
+  return text
+    .replace(/&/g, '&')
+    .replace(/</g, '<')
+    .replace(/>/g, '>')
+    .replace(/"/g, '"')
+    .replace(/'/g, ''');
+}
   div.appendChild(textNode);
   
   // Return escaped HTML - safe to use with innerHTML if needed
