@@ -133,14 +133,7 @@ fi
 # 4. Secret Detection
 echo -e "${BLUE}[4/5] Scanning for secrets...${NC}"
 if command -v gitleaks >/dev/null 2>&1; then
-    # Create temporary file for commits
-    TEMP_COMMITS=$(mktemp -t commits.XXXXXX)
-    # Ensure cleanup on exit
-    trap 'rm -f "$TEMP_COMMITS"' EXIT
-
-    git rev-list "$range" > "$TEMP_COMMITS" 2>/dev/null || true
-
-    if [ -s "$TEMP_COMMITS" ]; then
+    if git rev-list "$range" >/dev/null 2>&1; then
         if gitleaks detect --source . --log-opts="$range" --verbose --no-banner 2>&1 | grep -v "no leaks found" | head -20; then
             log_error "Potential secrets detected!"
         
