@@ -12,9 +12,6 @@ import NotFound from './components/NotFound/NotFound';
 import ErrorBoundary from './components/ErrorBoundary/ErrorBoundary';
 
 function App() {
-  // Check if the current route is the login page
-  const isLoginRoute = window.location.pathname === '/login';
-  
   return (
     <ErrorBoundary>
       <Routes>

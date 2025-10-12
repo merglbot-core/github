@@ -41,19 +41,27 @@ export function getCsrfToken() {
  * @returns {string} - Escaped text safe for textContent only
  */
 export function escapeText(text) {
-  if (!text) return '';
+  if (typeof text !== 'string' || !text) return '';
   
   return text
-    .replace(/&/g, '&')
-    .replace(/</g, '<')
-    .replace(/>/g, '>')
-    .replace(/"/g, '"')
-    .replace(/'/g, ''');
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
-  div.appendChild(textNode);
+
+/**
+ * Sanitize HTML to prevent XSS attacks
+ * This function uses the browser's text node escaping
+ * @param {string} html - HTML string to sanitize
+ * @returns {string} - Sanitized HTML string with escaped entities
+ */
+export function sanitizeHtml(html) {
+  if (typeof html !== 'string' || !html) return '';
   
-  // Return escaped HTML - safe to use with innerHTML if needed
-  // This converts <script> to &lt;script&gt; etc.
+  const div = document.createElement('div');
+  div.textContent = html;
   return div.innerHTML;
 }
 
@@ -125,6 +133,7 @@ export function secureDownload(blob, filename) {
 
 export default {
   getCsrfToken,
+  escapeText,
   sanitizeHtml,
   isValidRedirectUrl,
   secureDownload
