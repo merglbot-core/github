@@ -220,7 +220,9 @@ git secrets --add 'projects/[0-9]+/serviceAccounts/[^"]*'
 
 ```bash
 # Try to commit a secret (should fail)
-echo "ANTHROPIC_API_KEY=sk-ant-test123" > test.txt
+echo "# EXAMPLE - DO NOT USE REAL SECRETS EVEN IN TESTS" > test.txt
+echo "# The following line would be blocked by git-secrets:" >> test.txt
+echo "ANTHROPIC_API_KEY=sk-ant-FAKE-KEY-FOR-TRAINING-ONLY" >> test.txt
 git add test.txt
 git commit -m "test"
 
