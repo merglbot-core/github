@@ -35,7 +35,8 @@ function rotate_gcp_secret() {
     # Validate secret name format (prevent command injection)
     if ! [[ "$secret_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
         echo -e "${RED}  ❌ Invalid secret name format. Only alphanumeric characters, hyphens, and underscores allowed.${NC}"
-        log_incident "ERROR: Invalid secret name format attempted: $secret_name"
+        # Log incident without revealing potentially sensitive input
+        log_incident "ERROR: Invalid secret name format attempted (input sanitized)"
         return 1
     fi
     
@@ -43,7 +44,7 @@ function rotate_gcp_secret() {
     if ! current_version=$(gcloud secrets versions list "$secret_name" \
         --filter="state:ENABLED" \
         --limit=1 \
-        --format="value(name)" 2>&1); then
+        --format="value(name)"); then
         echo -e "${RED}  ❌ Failed to list versions for secret: $secret_name${NC}"
         log_incident "ERROR: Failed to list versions for secret: $secret_name"
         return 1
@@ -66,8 +67,9 @@ function rotate_gcp_secret() {
     fi
     
     # Generate new secret value securely (never echo the value)
-    # Use a temporary file with restricted permissions
-    TEMP_SECRET_FILE=$(mktemp -t rotate_secret.XXXXXX)
+    # Use a temporary file in a secure location with restricted permissions
+    SECURE_DIR="${TMPDIR:-/dev/shm}"
+    TEMP_SECRET_FILE=$(mktemp -p "$SECURE_DIR" rotate_secret.XXXXXX)
     chmod 600 "$TEMP_SECRET_FILE"
     openssl rand -base64 32 > "$TEMP_SECRET_FILE"
     

@@ -9,6 +9,8 @@ import datetime as dt
 from pathlib import Path
 import logging
 
+from ..alerting.thresholds import format_alert_message
+
 logger = logging.getLogger(__name__)
 
 
@@ -126,14 +128,12 @@ def write_markdown(path: str, data: Dict[str, Any]) -> None:
             if high_alerts:
                 f.write("### 🔴 High Priority\n\n")
                 for alert in high_alerts:
-                    from ..alerting.thresholds import format_alert_message
                     f.write(f"- {format_alert_message(alert)}\n")
                 f.write("\n")
             
             if medium_alerts:
                 f.write("### 🟡 Medium Priority\n\n")
                 for alert in medium_alerts[:10]:  # Limit to 10
-                    from ..alerting.thresholds import format_alert_message
                     f.write(f"- {format_alert_message(alert)}\n")
                 if len(medium_alerts) > 10:
                     f.write(f"- ... and {len(medium_alerts) - 10} more\n")

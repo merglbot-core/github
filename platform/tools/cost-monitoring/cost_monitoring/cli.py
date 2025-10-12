@@ -15,6 +15,14 @@ from rich.panel import Panel
 import yaml
 import logging
 
+# Import all local modules at module level
+from .monitor.github_monitor import collect_github
+from .monitor.gcp_monitor import collect_gcp
+from .alerting.thresholds import evaluate_all_thresholds, format_alert_message
+from .alerting.notifiers import send_cost_report_to_slack
+from .report.writers import write_all_reports
+from github import Github
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -60,7 +68,6 @@ def generate(month, config, thresholds, outdir, formats, dry_run, soft_fail):
         # 3. Collect GitHub data
         console.print("\n[bold]Collecting GitHub data...[/bold]")
         try:
-            from .monitor.github_monitor import collect_github
             github_data = collect_github(
                 config_data["github"]["enterprise"],
                 config_data["github"]["orgs"],
@@ -86,7 +93,6 @@ def generate(month, config, thresholds, outdir, formats, dry_run, soft_fail):
         # 4. Collect GCP data
         console.print("\n[bold]Collecting GCP data...[/bold]")
         try:
-            from .monitor.gcp_monitor import collect_gcp
             gcp_data = collect_gcp(config_data["gcp"], month)
             console.print("✅ GCP data collected successfully")
             
@@ -104,7 +110,6 @@ def generate(month, config, thresholds, outdir, formats, dry_run, soft_fail):
         
         # 5. Evaluate thresholds
         console.print("\n[bold]Evaluating thresholds...[/bold]")
-        from .alerting.thresholds import evaluate_all_thresholds
         threshold_result = evaluate_all_thresholds(github_data, gcp_data, threshold_data)
         
         if threshold_result["threshold_exceeded"]:
@@ -125,7 +130,6 @@ def generate(month, config, thresholds, outdir, formats, dry_run, soft_fail):
         }
         
         # Write reports
-        from .report.writers import write_all_reports
         report_paths = write_all_reports(outdir, combined_data, month)
         
         console.print("[green]✅ Reports generated:[/green]")
@@ -137,7 +141,6 @@ def generate(month, config, thresholds, outdir, formats, dry_run, soft_fail):
             console.print("\n[bold]Sending notifications...[/bold]")
             
             # Send Slack notification
-            from .alerting.notifiers import send_cost_report_to_slack
             if send_cost_report_to_slack(github_data, gcp_data, threshold_result["alerts"], month):
                 console.print("[green]✅ Slack notification sent[/green]")
             else:
@@ -334,15 +337,16 @@ Status: {"⚠️ THRESHOLDS EXCEEDED" if threshold_result['threshold_exceeded'] 
 def create_github_issue_for_alerts(alerts: list, month: str, data: Dict[str, Any]) -> bool:
     """Create GitHub issue for threshold alerts."""
     try:
-        from github import Github
-        
         token = os.environ.get("GITHUB_TOKEN")
         if not token:
             logger.warning("GITHUB_TOKEN not set, skipping issue creation")
             return False
         
-        # Get repository from environment or default
-        repo_name = os.environ.get("GITHUB_REPOSITORY", "merglbot-core/github")
+        # Get repository from environment
+        repo_name = os.environ.get("GITHUB_REPOSITORY")
+        if not repo_name:
+            logger.warning("GITHUB_REPOSITORY not set, skipping issue creation")
+            return False
         
         g = Github(token)
         repo = g.get_repo(repo_name)
@@ -360,7 +364,6 @@ def create_github_issue_for_alerts(alerts: list, month: str, data: Dict[str, Any
 """
         
         # Add alert details
-        from .alerting.thresholds import format_alert_message
         for alert in alerts[:20]:  # Limit to 20 in issue
             body += f"- {format_alert_message(alert)}\n"
         

@@ -9,6 +9,8 @@ from typing import Dict, Any, List, Optional
 import logging
 from datetime import datetime
 
+from ..alerting.thresholds import format_alert_message
+
 logger = logging.getLogger(__name__)
 
 
@@ -145,7 +147,6 @@ def format_slack_cost_report(
         
         # Show top 5 alerts
         for alert in alerts[:5]:
-            from ..alerting.thresholds import format_alert_message
             alert_text = format_alert_message(alert)
             blocks.append({
                 "type": "section",
