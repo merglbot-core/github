@@ -12,6 +12,20 @@ const fs = require('fs');
 const path = require('path');
 
 // Configuration
+// Sanitize git references to prevent command injection
+function sanitizeGitRef(ref) {
+  if (!ref) return null;
+  // Allow only safe characters for git refs
+  if (!/^[a-zA-Z0-9._\/-]+$/.test(ref)) {
+    throw new Error(`Invalid git reference: ${ref}`);
+  }
+  // Prevent directory traversal
+  if (ref.includes('..')) {
+    throw new Error(`Invalid git reference (directory traversal): ${ref}`);
+  }
+  return ref;
+}
+
 const COMMIT_TYPES = {
   feat: { title: '✨ Features', priority: 1 },
   fix: { title: '🐛 Bug Fixes', priority: 2 },
@@ -38,9 +52,9 @@ function parseArgs() {
 
   args.forEach(arg => {
     if (arg.startsWith('--from=')) {
-      options.from = arg.split('=')[1];
+      options.from = sanitizeGitRef(arg.split('=')[1]);
     } else if (arg.startsWith('--to=')) {
-      options.to = arg.split('=')[1];
+      options.to = sanitizeGitRef(arg.split('=')[1]);
     } else if (arg.startsWith('--output=')) {
       options.output = arg.split('=')[1];
     } else if (arg.startsWith('--format=')) {
@@ -51,10 +65,22 @@ function parseArgs() {
   // If no 'from' specified, get the last tag
   if (!options.from) {
     try {
-      options.from = execSync('git describe --tags --abbrev=0', { encoding: 'utf-8' }).trim();
+      options.from = execSync('git describe --tags --abbrev=0', { 
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'] // Suppress stderr
+      }).trim();
+      options.from = sanitizeGitRef(options.from);
     } catch (e) {
       console.log('No previous tag found, using first commit');
-      options.from = execSync('git rev-list --max-parents=0 HEAD', { encoding: 'utf-8' }).trim();
+      try {
+        options.from = execSync('git rev-list --max-parents=0 HEAD', { 
+          encoding: 'utf-8' 
+        }).trim();
+        options.from = sanitizeGitRef(options.from);
+      } catch (e2) {
+        console.error('Failed to get initial commit:', e2.message);
+        options.from = null;
+      }
     }
   }
 
@@ -64,17 +90,31 @@ function parseArgs() {
 // Get commits between two refs
 function getCommits(from, to) {
   const range = from ? `${from}..${to}` : to;
-  const format = '%H|%s|%b|%an|%ae|%ad';
+  // Use unique separator to handle special characters in commit messages
+  const fieldSeparator = '<--GIT-FIELD-->';
+  const format = ['%H', '%s', '%b', '%an', '%ae', '%ad'].join(fieldSeparator);
   
   try {
-    const output = execSync(`git log ${range} --format="${format}" --no-merges`, { encoding: 'utf-8' });
-    return output.trim().split('\n').filter(line => line).map(line => {
-      const [hash, subject, body, author, email, date] = line.split('|');
-      return { hash, subject, body, author, email, date };
+    // Use null byte as commit separator for reliable parsing
+    const output = execSync(`git log ${range} --format="${format}%x00" --no-merges`, { 
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024 // 10MB buffer for large histories
+    });
+    
+    return output.trim().split('\x00').filter(commit => commit).map(commit => {
+      const [hash, subject, body, author, email, date] = commit.split(fieldSeparator);
+      return { 
+        hash: hash || '', 
+        subject: subject || '', 
+        body: body || '', 
+        author: author || '', 
+        email: email || '', 
+        date: date || '' 
+      };
     });
   } catch (e) {
     console.error('Error fetching commits:', e.message);
-    return [];
+    process.exit(1); // Fail fast on critical errors
   }
 }
 
@@ -207,8 +247,11 @@ function getRepoStats(from, to) {
     const diffStat = execSync(`git diff ${range} --shortstat`, { encoding: 'utf-8' }).trim();
     const match = diffStat.match(/(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/);
     
-    // Get unique contributors
-    const contributors = execSync(`git log ${range} --format="%an" | sort -u | wc -l`, { encoding: 'utf-8' }).trim();
+    // Get unique contributors (using execSync with shell: true for pipeline)
+    const contributors = execSync(`git log ${range} --format="%an" | sort -u | wc -l`, { 
+      encoding: 'utf-8',
+      shell: true
+    }).trim();
     
     return {
       filesChanged: match ? parseInt(match[1], 10) : 0,
