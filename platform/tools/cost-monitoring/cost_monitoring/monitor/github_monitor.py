@@ -109,17 +109,17 @@ def collect_github(
     # Collect org member counts
     org_members = []
     total_unique_members = set()
+        org_members = []
+        # Note: Proper unique member counting would require fetching actual member IDs
+        # and tracking them across orgs, which may have privacy implications.
+        # For now, we'll use the sum as an upper bound estimate
     
-    for org in orgs:
-        member_count = list_org_members_count(org)
-        org_members.append({
-            "org": org,
-            "members": member_count
-        })
-        # For unique count estimation (simplified)
-        total_unique_members.add(org)
-    
-    # Try to get enterprise-level Copilot data
+        for org in orgs:
+            member_count = list_org_members_count(org)
+            org_members.append({
+                "org": org,
+                "members": member_count
+            })
     cop = get_copilot_enterprise(enterprise)
     
     if not cop or "seats" not in cop:
