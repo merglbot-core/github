@@ -1,0 +1,58 @@
+# Cursor Configuration Template
+# Based on WARP_BOT_DRIVEN_DEVELOPMENT.md and WARP_AI_TOOLS.md
+
+rules:
+  - Always use environment variables for configuration, never hardcode values
+  - Follow existing code style and patterns in the repository
+  - Include comprehensive error handling and input validation
+  - Add descriptive comments for complex logic
+  - Never generate or suggest actual secrets or credentials
+  - Use TypeScript for new frontend files
+  - Use Python 3.11+ with type hints for backend files
+  - Follow PEP 8 (Python) / Prettier (JS/TS) formatting
+  - Prefer explicit over implicit implementations
+  - Security-first: validate inputs, sanitize outputs
+  - Write unit tests for all new functions
+  - Update documentation when changing APIs
+
+context:
+  - Stack: Python 3.11, FastAPI, React 18, TypeScript
+  - Infrastructure: Terraform 1.5+, Google Cloud Platform
+  - CI/CD: GitHub Actions with OIDC/WIF
+  - Database: BigQuery, PostgreSQL
+  - Container: Docker, Cloud Run
+  - Testing: pytest, Jest, React Testing Library
+  
+ignore:
+  - node_modules/
+  - .env*
+  - secrets/
+  - credentials/
+  - *.tfvars
+  - *.pem
+  - *.key
+  - service-account*.json
+  - terraform.tfstate*
+  
+preferences:
+  language: typescript  # Default for new files
+  framework: react      # For frontend components
+  testing: jest        # For test files
+  documentation: jsdoc  # For documentation
+  
+security:
+  never_generate:
+    - API keys
+    - Passwords
+    - Tokens
+    - Connection strings
+    - Private keys
+    - Certificates
+  
+  always_use:
+    - Environment variables
+    - Secret Manager references
+    - IAM roles (not keys)
+    - Parameterized queries
+    - Input validation
+    - Output encoding

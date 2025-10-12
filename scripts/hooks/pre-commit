@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# Pre-commit hook for secret scanning
+# Based on WARP_GITIGNORE_SECURITY.md standards
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+echo -e "${GREEN}🔍 Running pre-commit security checks...${NC}"
+
+# Check for potential secrets in staged files
+STAGED_FILES=$(git diff --cached --name-only)
+
+if [ -z "$STAGED_FILES" ]; then
+    echo "No files staged for commit"
+    exit 0
+fi
+
+# Pattern matching for potential secrets
+SECRET_PATTERNS=(
+    '(password|passwd|pwd|secret|api_key|apikey|token|credential)\s*=\s*["'"'"'][^"'"'"']+["'"'"']'
+    'sk-[a-zA-Z0-9]{32,}'
+    'AKIA[0-9A-Z]{16}'
+    'ghp_[a-zA-Z0-9]{36}'
+    'gho_[a-zA-Z0-9]{36}'
+    'github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}'
+    'glpat-[a-zA-Z0-9]{20}'
+    'ghs_[a-zA-Z0-9]{36}'
+    'ssh-rsa\s+[A-Za-z0-9+/]+'
+    'BEGIN\s+PRIVATE\s+KEY'
+)
+
+# Check for secrets in file names
+echo "Checking file names for potential secrets..."
+POTENTIAL_SECRET_FILES=0
+for file in $STAGED_FILES; do
+    if echo "$file" | grep -qE '\.(pem|key|p12|pfx|env|tfvars)$'; then
+        if ! echo "$file" | grep -qE '\.(example|template)'; then
+            echo -e "${RED}❌ SECURITY WARNING: Potential secret file: $file${NC}"
+            ((POTENTIAL_SECRET_FILES++))
+        fi
+    fi
+done
+
+# Check for secret patterns in file content
+echo "Scanning file contents for potential secrets..."
+FOUND_SECRETS=0
+
+for pattern in "${SECRET_PATTERNS[@]}"; do
+    for file in $STAGED_FILES; do
+        if [ -f "$file" ]; then
+            if git diff --cached "$file" | grep -qE "$pattern"; then
+                echo -e "${RED}❌ Potential secret detected in $file${NC}"
+                echo "Pattern matched: $pattern"
+                FOUND_SECRETS=1
+            fi
+        fi
+    done
+done
+
+# Run gitleaks if available
+if command -v gitleaks >/dev/null 2>&1; then
+    echo "Running gitleaks..."
+    if ! gitleaks protect --staged --verbose; then
+        echo -e "${RED}❌ Gitleaks detected potential secrets${NC}"
+        FOUND_SECRETS=1
+    else
+        echo -e "${GREEN}✅ Gitleaks check passed${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠️  Gitleaks not installed. Install with: brew install gitleaks${NC}"
+fi
+
+# Check for large files
+echo "Checking for large files..."
+LARGE_FILES=0
+for file in $STAGED_FILES; do
+    if [ -f "$file" ]; then
+        size=$(wc -c < "$file" 2>/dev/null)
+        if [ -z "$size" ] || ! [ "$size" -eq "$size" ] 2>/dev/null; then
+            echo -e "${YELLOW}⚠️  Could not determine size of $file. Skipping large file check for this file.${NC}"
+            continue
+        fi
+        if [ "$size" -gt 10485760 ]; then # 10MB
+            echo -e "${YELLOW}⚠️  Large file detected: $file ($(($size / 1048576))MB)${NC}"
+            ((LARGE_FILES++))
+        fi
+    fi
+done
+
+# Consolidated override check for all warnings/errors
+if [ $FOUND_SECRETS -eq 1 ] || [ $POTENTIAL_SECRET_FILES -gt 0 ] || [ $LARGE_FILES -gt 0 ]; then
+    echo ""
+    echo -e "${YELLOW}════════════════════════════════════════════${NC}"
+    echo -e "${YELLOW}          SECURITY CHECK SUMMARY            ${NC}"
+    echo -e "${YELLOW}════════════════════════════════════════════${NC}"
+    
+    if [ $FOUND_SECRETS -eq 1 ]; then
+        echo -e "${RED}❌ Potential secrets detected in file contents${NC}"
+    fi
+    if [ $POTENTIAL_SECRET_FILES -gt 0 ]; then
+        echo -e "${YELLOW}⚠️  $POTENTIAL_SECRET_FILES file(s) with secret-like names${NC}"
+    fi
+    if [ $LARGE_FILES -gt 0 ]; then
+        echo -e "${YELLOW}⚠️  $LARGE_FILES large file(s) (>10MB)${NC}"
+    fi
+    
+    echo ""
+    echo -e "${RED}To proceed with these warnings, you must acknowledge the risks.${NC}"
+    echo "Review the warnings above and ensure no actual secrets are being committed."
+    echo ""
+    read -p "Type 'COMMIT ANYWAY' to override all warnings (or press Enter to abort): " override_confirmation
+    
+    if [[ "$override_confirmation" != "COMMIT ANYWAY" ]]; then
+        echo ""
+        echo -e "${GREEN}✅ Commit aborted. Please address the issues and try again.${NC}"
+        exit 1
+    fi
+    
+    echo -e "${YELLOW}⚠️  Proceeding with warnings - ensure you know what you're doing!${NC}"
+fi
+
+echo -e "${GREEN}✅ Pre-commit checks completed${NC}"
+exit 0

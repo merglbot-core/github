@@ -1,0 +1,135 @@
+# Frontend Project Gitignore Template
+# Generated from WARP_GITIGNORE_SECURITY.md standards
+
+# ============================================
+# SECURITY CRITICAL - NEVER COMMIT
+# ============================================
+
+# Secrets and credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+.env*
+!.env.example
+!.env.template
+secrets/
+credentials/
+private/
+
+# API keys and tokens
+.npmrc
+.pypirc
+auth.json
+tokens.json
+*.token
+*.secret
+
+# Cloud provider configs
+.aws/
+.gcp/
+.azure/
+gcp-key*.json
+service-account*.json
+terraform.tfvars
+*.tfvars
+!terraform.tfvars.example
+
+# ============================================
+# FRONTEND SPECIFIC
+# ============================================
+
+# Dependencies
+node_modules/
+bower_components/
+jspm_packages/
+
+# Build outputs
+dist/
+build/
+.next/
+.nuxt/
+.vuepress/dist
+.gatsby-cache/
+.cache/
+.parcel-cache/
+out/
+.output/
+
+# Framework specific
+.svelte-kit/
+.sveltekit/
+.solid/
+.vite/
+
+# Testing
+coverage/
+.coverage
+*.lcov
+.nyc_output/
+test-results/
+junit.xml
+e2e/reports/
+playwright-report/
+
+# Development
+*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE & Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+*~
+.DS_Store
+Thumbs.db
+.project
+.classpath
+.settings/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+logs/
+
+# Package managers
+.npm/
+.yarn/
+.pnp.*
+.pnpm-store/
+
+# Temporary files
+*.tmp
+*.temp
+*.cache
+tmp/
+temp/
+
+# OS generated
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Optional - TypeScript
+*.tsbuildinfo
+
+# Optional - Storybook
+storybook-static/
+
+# Optional - Docusaurus
+.docusaurus/

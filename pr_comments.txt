@@ -1,0 +1,1272 @@
+author:	gemini-code-assist
+association:	contributor
+edited:	false
+status:	none
+--
+## Summary of Changes
+
+Hello @milhul6, I'm Gemini Code Assist[^1]! I'm currently reviewing this pull request and will post my feedback shortly. In the meantime, here's a summary to help you and other reviewers quickly get up to speed!
+
+This pull request significantly advances the Merglbot organization's operational standards by implementing a robust set of WARP (Work Architecture, Rules & Practices) guidelines. It introduces critical security measures, such as enhanced gitignore templates and pre-commit secret scanning, alongside structured configurations for AI development tools like GitHub Copilot and Cursor. Furthermore, it establishes an automated release workflow to streamline deployments and includes comprehensive documentation to guide the adoption of these new standards across the organization.
+
+### Highlights
+
+* **Enhanced Security Standards**: Introduced comprehensive .gitignore templates for frontend, backend, and infrastructure projects, along with a pre-commit hook for secret scanning and an emergency credential rotation script.
+* **Bot Configuration & AI Governance**: Added configuration files for GitHub Copilot and Cursor AI, defining rules, context, security policies, and coding standards to guide AI-assisted development.
+* **Automated Release Management**: Implemented an automated release workflow using GitHub Actions for semantic versioning, changelog generation, and GitHub Release creation.
+* **Documentation & Training**: Provided a detailed README_WARP_IMPLEMENTATION.md guide covering setup, usage, and future steps for dashboard deployment, team training, and quarterly audits.
+* **Partial Resolution of Key Initiatives**: Made progress on issues related to a central release dashboard, team training, and quarterly security audit automation, outlining manual steps required for their full deployment.
+
+
+
+<details>
+<summary><b>Ignored Files</b></summary>
+
+*   **Ignored by pattern:** `.github/workflows/**` (1)
+    *   .github/workflows/automated-release.yml
+</details>
+
+
+
+<details>
+<summary><b>Using Gemini Code Assist</b></summary>
+<br>
+
+The full guide for Gemini Code Assist can be found on our [documentation page](https://developers.google.com/gemini-code-assist/docs/review-github-code), here are some quick tips.
+
+<b>Invoking Gemini</b>
+
+You can request assistance from Gemini at any point by creating a comment using either `/gemini <command>` or `@gemini-code-assist <command>`. Below is a summary of the supported commands on the current page.
+
+Feature | Command | Description
+--- | --- | ---
+Code Review | `/gemini review` | Performs a code review for the current pull request in its current state.
+Pull Request Summary | `/gemini summary` | Provides a summary of the current pull request in its current state.
+Comment | @gemini-code-assist | Responds in comments when explicitly tagged, both in pull request comments and review comments.
+Help | `/gemini help` | Displays a list of available commands.
+
+<b>Customization</b>
+
+To customize Gemini Code Assist for GitHub experience, repository maintainers can create a configuration file and/or provide a custom code review style guide (such as PEP-8 for Python) by creating and adding files to a `.gemini/` folder in the base of the repository. Detailed instructions can be found [here](https://developers.google.com/gemini-code-assist/docs/customize-gemini-behavior-github).
+
+<b>Limitations & Feedback</b>
+
+Gemini Code Assist may make mistakes. Please leave feedback on any instances where its feedback is incorrect or counter productive. You can react with :thumbsup: and :thumbsdown: on @gemini-code-assist comments. If you're interested in giving your feedback about your experience with Gemini Code Assist for Github and other Google products, sign up [here](https://google.qualtrics.com/jfe/form/SV_2cyuGuTWsEw84yG).
+
+<b>You can also get AI-powered code generation, chat, as well as code reviews directly in the IDE at no cost with the [Gemini Code Assist IDE Extension](https://cloud.google.com/products/gemini/code-assist).</b>
+</details>
+
+
+
+
+[^1]: Review the [Privacy Notices](https://policies.google.com/privacy), [Generative AI Prohibited Use Policy](https://policies.google.com/terms/generative-ai/use-policy), [Terms of Service](https://policies.google.com/terms), and learn how to configure Gemini Code Assist in GitHub [here](https://developers.google.com/gemini-code-assist/docs/customize-gemini-behavior-github). Gemini can make mistakes, so double check it and [use code with caution](https://support.google.com/legal/answer/13505487).
+
+--
+author:	codiumai-pr-agent-free
+association:	contributor
+edited:	true
+status:	none
+--
+## PR Compliance Guide 🔍
+
+
+<!-- https://github.com/merglbot-core/github/commit/b56d7c4f34dd976f5e82c19be6a2384abb1aa8c3 -->
+#### (Compliance updated until commit https://github.com/merglbot-core/github/commit/b56d7c4f34dd976f5e82c19be6a2384abb1aa8c3)
+Below is a summary of compliance checks for this PR:<br>
+<table><tbody><tr><td colspan='2'><strong>Security Compliance</strong></td></tr>
+<tr><td rowspan=2>⚪</td>
+<td><details><summary><strong>Secret exposure risk
+</strong></summary><br>
+
+<b>Description:</b> The script generates a new secret using openssl and outputs it directly to the command <br>line with echo, which could expose the secret in command history, logs, or to other <br>processes.<br> <strong><a href='https://github.com/merglbot-core/github/pull/24/files#diff-3bc4a170d714543c7c35be719daf29087a90a0a343b090d507e3cc9b10adcd3eR44-R45'>rotate-credentials.sh [44-45]</a></strong><br>
+
+<details open><summary>Referred Code</summary>
+
+```shell
+NEW_SECRET=$(openssl rand -base64 32)
+echo "$NEW_SECRET" | gcloud secrets versions add "$secret_name" --data-file=-
+```
+
+</details></details></td></tr>
+<tr><td><details><summary><strong>Secret handling vulnerability</strong></summary><br>
+
+<b>Description:</b> The workflow is checking if a secret exists using string comparison in a conditional, <br>which could potentially expose the secret's existence or structure in logs or error <br>messages.<br> <strong><a href='https://github.com/merglbot-core/github/pull/24/files#diff-c22c638874a55e79b484b69854297da43d12af91dbc6f3e5db8e7188d9544f68R142-R143'>automated-release.yml [142-143]</a></strong><br>
+
+<details open><summary>Referred Code</summary>
+
+```yaml
+if: secrets.SLACK_WEBHOOK_URL != ''
+run: |
+```
+
+</details></details></td></tr>
+<tr><td colspan='2'><strong>Ticket Compliance</strong></td></tr>
+<tr><td>🟡</td>
+<td>
+<details>
+<summary>🎫 <a href=https://github.com/merglbot-core/github/issues/19>#19</a></summary>
+<table width='100%'><tbody>
+<tr><td rowspan=7>🟢</td>
+<td>Create GitHub Actions workflow for automated releases</td></tr>
+<tr><td>Implement semantic-release configuration</td></tr>
+<tr><td>Add version bumping automation</td></tr>
+<tr><td>Setup artifact building and publishing</td></tr>
+<tr><td>Create scripts for changelog generation</td></tr>
+<tr><td>Implement commit parsing for changelog sections</td></tr>
+<tr><td>Add release notes templates</td></tr>
+<tr><td rowspan=3>🔴</td>
+<td>Create RELEASE_CHECKLIST.md template</td></tr>
+<tr><td>Setup rollback procedures and scripts</td></tr>
+<tr><td>Implement release metrics dashboard</td></tr>
+<tr><td rowspan=1>⚪</td>
+<td></td></tr>
+</tbody></table>
+</details>
+</td></tr>
+<tr><td>🟡</td>
+<td>
+<details>
+<summary>🎫 <a href=https://github.com/merglbot-core/github/issues/20>#20</a></summary>
+<table width='100%'><tbody>
+<tr><td rowspan=1>🟢</td>
+<td></td></tr>
+<tr><td rowspan=1>🔴</td>
+<td></td></tr>
+<tr><td rowspan=13>⚪</td>
+<td>Setup monitoring data pipeline (BigQuery/Cloud Logging)</td></tr>
+<tr><td>Create dashboard frontend (React/MUI based on existing stack)</td></tr>
+<tr><td>Implement API endpoints for metrics collection</td></tr>
+<tr><td>Add authentication via IAP</td></tr>
+<tr><td>Track current version per service</td></tr>
+<tr><td>Create release frequency graphs</td></tr>
+<tr><td>Implement rollback rate visualization</td></tr>
+<tr><td>Add MTTR trending</td></tr>
+<tr><td>Create lead time analytics</td></tr>
+<tr><td>Track bot metrics (acceptance rate, bug introduction rate, etc.)</td></tr>
+<tr><td>Implement security incident tracking</td></tr>
+<tr><td>Create quarterly review automation</td></tr>
+<tr><td>Setup real-time status monitoring</td></tr>
+</tbody></table>
+</details>
+</td></tr>
+<tr><td>🟡</td>
+<td>
+<details>
+<summary>🎫 <a href=https://github.com/merglbot-core/github/issues/21>#21</a></summary>
+<table width='100%'><tbody>
+<tr><td rowspan=1>🟢</td>
+<td></td></tr>
+<tr><td rowspan=1>🔴</td>
+<td></td></tr>
+<tr><td rowspan=5>⚪</td>
+<td>Create training materials for all three standards</td></tr>
+<tr><td>Conduct team workshops</td></tr>
+<tr><td>Organize documentation repository</td></tr>
+<tr><td>Update onboarding checklist</td></tr>
+<tr><td>Establish certification process</td></tr>
+</tbody></table>
+</details>
+</td></tr>
+<tr><td colspan='2'><strong>Codebase Duplication Compliance</strong></td></tr>
+<tr><td>⚪</td><td><details><summary><strong>Codebase context is not defined </strong></summary>
+
+
+Follow the <a href='https://qodo-merge-docs.qodo.ai/core-abilities/rag_context_enrichment/'>guide</a> to enable codebase context checks.
+
+</details></td></tr>
+<tr><td colspan='2'><strong>Custom Compliance</strong></td></tr>
+<tr><td>⚪</td><td><details><summary><strong>No custom compliance provided</strong></summary>
+
+
+Follow the <a href='https://qodo-merge-docs.qodo.ai/tools/compliance/'>guide</a> to enable custom compliance check.
+
+</details></td></tr>
+
+<tr><td align="center" colspan="2">
+
+- [ ] Update <!-- /compliance --update_compliance=true -->
+
+</td></tr></tbody></table>
+<details><summary>Compliance status legend</summary>
+🟢 - Fully Compliant<br>
+🟡 - Partial Compliant<br>
+🔴 - Not Compliant<br>
+⚪ - Requires Further Human Verification<br>
+🏷️ - Compliance label<br>
+</details>
+
+___
+
+#### Previous compliance checks
+
+<details>
+<summary>Compliance check up to commit <a href='https://github.com/merglbot-core/github/commit/3e174c9fdb0d9a1d42bea36e4eae85158ba4bc24'>3e174c9</a></summary><br>
+<table><tbody><tr><td colspan='2'><strong>Security Compliance</strong></td></tr>
+<tr><td rowspan=2>⚪</td>
+<td><details><summary><strong>Secret exposure risk
+</strong></summary><br>
+
+<b>Description:</b> The script generates a new secret using openssl and outputs it to the command line, which <br>could expose the secret in shell history or logs.<br> <strong><a href='https://github.com/merglbot-core/github/pull/24/files#diff-3bc4a170d714543c7c35be719daf29087a90a0a343b090d507e3cc9b10adcd3eR43-R43'>rotate-credentials.sh [43-43]</a></strong><br>
+
+<details open><summary>Referred Code</summary>
+
+```shell
+NEW_SECRET=$(openssl rand -base64 32)
+echo "$NEW_SECRET" | gcloud secrets versions add "$secret_name" --data-file=-
+```
+
+</details></details></td></tr>
+<tr><td><details><summary><strong>Data leakage risk
+</strong></summary><br>
+
+<b>Description:</b> The workflow posts potentially sensitive release information to Slack using a webhook URL <br>without validating or sanitizing the content, which could lead to data leakage.<br> <strong><a href='https://github.com/merglbot-core/github/pull/24/files#diff-c22c638874a55e79b484b69854297da43d12af91dbc6f3e5db8e7188d9544f68R142-R167'>automated-release.yml [142-167]</a></strong><br>
+
+<details open><summary>Referred Code</summary>
+
+```yaml
+if: vars.SLACK_WEBHOOK_URL != ''
+run: |
+  curl -X POST ${{ vars.SLACK_WEBHOOK_URL }} \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "text": "🚀 New Release: v${{ needs.release.outputs.version }}",
+      "attachments": [{
+        "color": "good",
+        "fields": [
+          {
+            "title": "Version",
+            "value": "v${{ needs.release.outputs.version }}",
+            "short": true
+          },
+          {
+            "title": "Repository",
+            "value": "${{ github.repository }}",
+            "short": true
+          },
+          {
+            "title": "Release URL",
+
+
+ ... (clipped 5 lines)
+```
+
+</details></details></td></tr>
+<tr><td colspan='2'><strong>Ticket Compliance</strong></td></tr>
+<tr><td>🟡</td>
+<td>
+<details>
+<summary>🎫 <a href=https://github.com/merglbot-core/github/issues/19>#19</a></summary>
+<table width='100%'><tbody>
+<tr><td rowspan=5>🟢</td>
+<td>Create GitHub Actions workflow for automated releases</td></tr>
+<tr><td>Implement semantic-release configuration</td></tr>
+<tr><td>Add version bumping automation</td></tr>
+<tr><td>Implement changelog generation scripts</td></tr>
+<tr><td>Create release communication templates</td></tr>
+<tr><td rowspan=2>🔴</td>
+<td>Setup rollback procedures and scripts</td></tr>
+<tr><td>Implement release metrics dashboard</td></tr>
+<tr><td rowspan=1>⚪</td>
+<td>Setup artifact building and publishing</td></tr>
+</tbody></table>
+</details>
+</td></tr>
+<tr><td>🟡</td>
+<td>
+<details>
+<summary>🎫 <a href=https://github.com/merglbot-core/github/issues/20>#20</a></summary>
+<table width='100%'><tbody>
+<tr><td rowspan=1>🟢</td>
+<td>Implement Slack integration for critical metrics</td></tr>
+<tr><td rowspan=9>🔴</td>
+<td>Setup monitoring data pipeline</td></tr>
+<tr><td>Implement API endpoints for metrics collection</td></tr>
+<tr><td>Add authentication via IAP</td></tr>
+<tr><td>Implement current version tracking per service</td></tr>
+<tr><td>Implement release frequency graphs</td></tr>
+<tr><td>Implement rollback rate visualization</td></tr>
+<tr><td>Implement MTTR trending</td></tr>
+<tr><td>Implement lead time analytics</td></tr>
+<tr><td>Implement email reports for stakeholders</td></tr>
+<tr><td rowspan=1>⚪</td>
+<td>Create dashboard frontend</td></tr>
+</tbody></table>
+</details>
+</td></tr>
+<tr><td>🟡</td>
+<td>
+<details>
+<summary>🎫 <a href=https://github.com/merglbot-core/github/issues/21>#21</a></summary>
+<table width='100%'><tbody>
+<tr><td rowspan=2>🟢</td>
+<td>Create training materials for all three standards</td></tr>
+<tr><td>Organize documentation repository</td></tr>
+<tr><td rowspan=2>🔴</td>
+<td>Update onboarding checklist</td></tr>
+<tr><td>Establish certification process</td></tr>
+<tr><td rowspan=1>⚪</td>
+<td>Conduct team workshops</td></tr>
+</tbody></table>
+</details>
+</td></tr>
+<tr><td colspan='2'><strong>Codebase Duplication Compliance</strong></td></tr>
+<tr><td>⚪</td><td><details><summary><strong>Codebase context is not defined </strong></summary>
+
+
+Follow the <a href='https://qodo-merge-docs.qodo.ai/core-abilities/rag_context_enrichment/'>guide</a> to enable codebase context checks.
+
+</details></td></tr>
+<tr><td colspan='2'><strong>Custom Compliance</strong></td></tr>
+<tr><td>⚪</td><td><details><summary><strong>No custom compliance provided</strong></summary>
+
+
+Follow the <a href='https://qodo-merge-docs.qodo.ai/tools/compliance/'>guide</a> to enable custom compliance check.
+
+</details></td></tr>
+
+<tr><td align="center" colspan="2">
+
+ <!-- /compliance --update_compliance=true -->
+
+</td></tr></tbody></table>
+</details>
+
+
+<details>
+<summary>Compliance check up to commit <a href='https://github.com/merglbot-core/github/commit/662b35f9a0bff705aab59528e205180ed43ef944'>662b35f</a></summary><br>
+<table><tbody><tr><td colspan='2'><strong>Security Compliance</strong></td></tr>
+<tr><td rowspan=1>⚪</td>
+<td><details><summary><strong>Sensitive information exposure
+</strong></summary><br>
+
+<b>Description:</b> Hardcoded secret names in the rotate-credentials.sh script could expose sensitive <br>information about the organization's secret structure and naming conventions.<br> <strong><a href='https://github.com/merglbot-core/github/pull/24/files#diff-3bc4a170d714543c7c35be719daf29087a90a0a343b090d507e3cc9b10adcd3eR113-R116'>rotate-credentials.sh [113-116]</a></strong><br>
+
+<details open><summary>Referred Code</summary>
+
+```shell
+    "runtime--btf-api--prod--api-key"
+    "runtime--aaas-api--prod--api-key"
+    "runtime--portal--prod--session-key"
+)
+```
+
+</details></details></td></tr>
+<tr><td colspan='2'><strong>Ticket Compliance</strong></td></tr>
+<tr><td>🟡</td>
+<td>
+<details>
+<summary>🎫 <a href=https://github.com/merglbot-core/github/issues/19>#19</a></summary>
+<table width='100%'><tbody>
+<tr><td rowspan=6>🟢</td>
+<td>Create GitHub Actions workflow for automated releases</td></tr>
+<tr><td>Implement semantic-release configuration</td></tr>
+<tr><td>Add version bumping automation</td></tr>
+<tr><td>Create scripts for changelog generation</td></tr>
+<tr><td>Implement commit parsing for changelog sections</td></tr>
+<tr><td>Add release notes templates</td></tr>
+<tr><td rowspan=4>🔴</td>
+<td>Setup artifact building and publishing</td></tr>
+<tr><td>Create RELEASE_CHECKLIST.md template</td></tr>
+<tr><td>Setup rollback procedures and scripts</td></tr>
+<tr><td>Implement release metrics dashboard</td></tr>
+<tr><td rowspan=1>⚪</td>
+<td>Verify if the automated-release.yml workflow properly handles artifacts</td></tr>
+</tbody></table>
+</details>
+</td></tr>
+<tr><td>🟡</td>
+<td>
+<details>
+<summary>🎫 <a href=https://github.com/merglbot-core/github/issues/20>#20</a></summary>
+<table width='100%'><tbody>
+<tr><td rowspan=12>🔴</td>
+<td>Setup monitoring data pipeline</td></tr>
+<tr><td>Create dashboard frontend</td></tr>
+<tr><td>Implement API endpoints for metrics collection</td></tr>
+<tr><td>Add authentication via IAP</td></tr>
+<tr><td>Implement current version tracking per service</td></tr>
+<tr><td>Create release frequency graphs</td></tr>
+<tr><td>Implement rollback rate visualization</td></tr>
+<tr><td>Add MTTR trending</td></tr>
+<tr><td>Create lead time analytics</td></tr>
+<tr><td>Implement bot metrics tracking</td></tr>
+<tr><td>Create security monitoring features</td></tr>
+<tr><td>Implement alerting and notifications</td></tr>
+</tbody></table>
+</details>
+</td></tr>
+<tr><td>🟡</td>
+<td>
+<details>
+<summary>🎫 <a href=https://github.com/merglbot-core/github/issues/21>#21</a></summary>
+<table width='100%'><tbody>
+<tr><td rowspan=2>🟢</td>
+<td>Create training materials for all three standards</td></tr>
+<tr><td>Organize documentation repository</td></tr>
+<tr><td rowspan=3>🔴</td>
+<td>Conduct team workshops</td></tr>
+<tr><td>Update onboarding checklist</td></tr>
+<tr><td>Establish certification process</td></tr>
+<tr><td rowspan=1>⚪</td>
+<td>Verify if the documentation in README_WARP_IMPLEMENTATION.md is sufficient for training</td></tr>
+</tbody></table>
+</details>
+</td></tr>
+<tr><td colspan='2'><strong>Codebase Duplication Compliance</strong></td></tr>
+<tr><td>⚪</td><td><details><summary><strong>Codebase context is not defined </strong></summary>
+
+
+Follow the <a href='https://qodo-merge-docs.qodo.ai/core-abilities/rag_context_enrichment/'>guide</a> to enable codebase context checks.
+
+</details></td></tr>
+<tr><td colspan='2'><strong>Custom Compliance</strong></td></tr>
+<tr><td>⚪</td><td><details><summary><strong>No custom compliance provided</strong></summary>
+
+
+Follow the <a href='https://qodo-merge-docs.qodo.ai/tools/compliance/'>guide</a> to enable custom compliance check.
+
+</details></td></tr>
+
+<tr><td align="center" colspan="2">
+
+ <!-- /compliance --update_compliance=true -->
+
+</td></tr></tbody></table>
+</details>
+--
+author:	gemini-code-assist
+association:	contributor
+edited:	false
+status:	commented
+--
+## Code Review
+
+This pull request introduces a comprehensive set of WARP standards, which is an excellent initiative for improving security, consistency, and automation across the organization. The new documentation, gitignore templates, bot configurations, and scripts are well-structured and thorough. My review identifies a few important issues: a critical logic flaw in the emergency credential rotation script, an incorrect command in the documentation, and several medium-severity formatting issues related to missing newlines at the end of files.
+--
+author:	codiumai-pr-agent-free
+association:	contributor
+edited:	true
+status:	none
+--
+## PR Code Suggestions ✨
+<!-- 890be78 -->
+
+Latest suggestions up to 890be78
+<table><thead><tr><td><strong>Category</strong></td><td align=left><strong>Suggestion&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; </strong></td><td align=center><strong>Impact</strong></td></tr><tbody><tr><td rowspan=1>Possible issue</td>
+<td>
+
+
+
+<details><summary>Fix conflicting confirmation prompts</summary>
+
+___
+
+**Remove the redundant second confirmation prompt from the pre-commit hook's <br>secret detection override logic to fix the conflicting and confusing user <br>interaction.**
+
+[scripts/hooks/pre-commit [101-114]](https://github.com/merglbot-core/github/pull/24/files#diff-d8176a66cbc7acb2b94872353b0ba7d0be8b6786151ee89f14fd2d28506b48dbR101-R114)
+
+```diff
+ if [ $FOUND_SECRETS -eq 1 ]; then
+     echo -e "${RED}❌ Security check failed! Potential secrets detected.${NC}"
+-            echo ""
+-            read -p "To override, type 'COMMIT ANYWAY': " override_confirmation
+-            if [[ "$override_confirmation" != "COMMIT ANYWAY" ]]; then
+-                echo "Commit aborted."
+-                exit 1
+-    read -p "Override and commit anyway? (DANGEROUS) (y/N) " -n 1 -r
+-    echo
+-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
++    echo ""
++    read -p "To override, type 'COMMIT ANYWAY': " override_confirmation
++    if [[ "$override_confirmation" != "COMMIT ANYWAY" ]]; then
++        echo "Commit aborted."
+         exit 1
+     fi
+     echo -e "${YELLOW}⚠️  Proceeding with potential secrets - ensure you know what you're doing!${NC}"
+ fi
+```
+
+
+- [ ] **Apply / Chat** <!-- /improve --apply_suggestion=0 -->
+
+
+<details><summary>Suggestion importance[1-10]: 6</summary>
+
+__
+
+Why: The suggestion correctly identifies redundant and conflicting confirmation prompts in the pre-commit hook, which improves the script's logic and usability.
+
+
+</details></details></td><td align=center>Low
+
+</td></tr><tr><td rowspan=1>Incremental <sup><a href='https://qodo-merge-docs.qodo.ai/core-abilities/incremental_update/'>[*]</a></sup></td>
+<td>
+
+
+
+<details><summary>Ensure command availability</summary>
+
+___
+
+**To improve workflow robustness, add a step to verify that <code>jq</code> is installed on the <br>runner, and install it if it is missing.**
+
+[.github/workflows/automated-release.yml [57-58]](https://github.com/merglbot-core/github/pull/24/files#diff-c22c638874a55e79b484b69854297da43d12af91dbc6f3e5db8e7188d9544f68R57-R58)
+
+```diff
+ # Use semantic-release to determine next version (robust JSON parsing)
++if ! command -v jq &> /dev/null; then
++  echo "jq not found, installing..."
++  apt-get update && apt-get install -y jq
++fi
+ VERSION=$(npx semantic-release --dry-run --no-ci --stdout | jq -r '.nextRelease.version // empty')
+```
+
+
+- [ ] **Apply / Chat** <!-- /improve --apply_suggestion=1 -->
+
+
+<details><summary>Suggestion importance[1-10]: 3</summary>
+
+__
+
+Why: The suggestion correctly points out a potential dependency issue with `jq`, but its impact is low as `jq` is pre-installed on `ubuntu-latest` runners, making the check redundant in the current configuration.
+
+
+</details></details></td><td align=center>Low
+
+</td></tr>
+<tr><td align="center" colspan="2">
+
+- [ ] More <!-- /improve --more_suggestions=true -->
+
+</td><td></td></tr></tbody></table>
+
+___
+
+#### Previous suggestions
+<details><summary>✅ Suggestions up to commit 662b35f</summary>
+<br><table><thead><tr><td><strong>Category</strong></td><td align=left><strong>Suggestion&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; </strong></td><td align=center><strong>Impact</strong></td></tr><tbody><tr><td rowspan=1>High-level</td>
+<td>
+
+
+
+<details><summary>Adopt a scalable distribution strategy</summary>
+
+___
+
+**The current manual copy-paste method for distributing files is unscalable and <br>difficult to maintain. This should be replaced with modern, scalable solutions <br>like reusable GitHub workflows and the <code>pre-commit</code> framework.**
+
+
+### Examples:
+
+
+
+<details>
+<summary>
+<a href="https://github.com/merglbot-core/github/pull/24/files#diff-16de3b567a93e062679283208e4897a322b098cecb8b87a7878a6c2f58ae0584R142-R187">README_WARP_IMPLEMENTATION.md [142-187]</a>
+</summary>
+
+
+
+```markdown
+## 🚀 Quick Start
+
+### 1. Clone this repository
+```bash
+git clone https://github.com/merglbot-core/github.git
+cd github
+```
+
+### 2. Install gitignore templates
+```bash
+
+ ... (clipped 36 lines)
+```
+</details>
+
+
+
+<details>
+<summary>
+<a href="https://github.com/merglbot-core/github/pull/24/files#diff-c22c638874a55e79b484b69854297da43d12af91dbc6f3e5db8e7188d9544f68R1-R167">.github/workflows/automated-release.yml [1-167]</a>
+</summary>
+
+
+
+```yaml
+name: Automated Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - '.github/workflows/docs-*.yml'
+  workflow_dispatch:
+
+ ... (clipped 157 lines)
+```
+</details>
+
+
+
+
+### Solution Walkthrough:
+
+
+
+#### Before:
+```yaml
+# In README_WARP_IMPLEMENTATION.md
+
+## Quick Start
+
+### 2. Install gitignore templates
+```bash
+cp gitignore-templates/frontend.gitignore /path/to/project/.gitignore
+```
+
+### 3. Setup pre-commit hooks
+```bash
+cp scripts/hooks/pre-commit /path/to/project/.git/hooks/
+chmod +x /path/to/project/.git/hooks/pre-commit
+```
+
+### 5. Setup release automation
+```bash
+cp .github/workflows/automated-release.yml /path/to/project/.github/workflows/
+```
+
+```
+
+
+
+#### After:
+```yaml
+# In consumer repo's .github/workflows/release.yml
+jobs:
+  call-release-workflow:
+    uses: merglbot-core/github/.github/workflows/automated-release.yml@main
+    secrets: inherit
+
+# In consumer repo's .pre-commit-config.yaml
+repos:
+-   repo: https://github.com/merglbot-core/github
+    rev: <tag_or_sha> # Pin to a version
+    hooks:
+    -   id: secret-scan # Assuming the hook is defined in the central repo
+
+# For boilerplate like .cursorbot, use a GitHub Repository Template
+# or a scaffolding tool like Cookiecutter.
+
+```
+
+
+
+
+<details><summary>Suggestion importance[1-10]: 10</summary>
+
+__
+
+Why: The suggestion identifies a critical architectural flaw in the distribution strategy, which relies on manual file copying and undermines the PR's goal of creating centralized, maintainable standards.
+
+
+</details></details></td><td align=center>High
+
+</td></tr><tr><td rowspan=2>Possible issue</td>
+<td>
+
+
+
+<details><summary>✅ <s>Improve GCP secret rotation logic</s></summary>
+
+___
+
+<details><summary><b>Suggestion Impact:</b></summary>The commit partially implements the suggestion by improving the secret rotation logic. It extracts the current version into a variable before disabling it, which is a step toward the more robust error handling suggested. However, it doesn't implement the full suggestion which included checking for empty version and adding more detailed error handling.
+
+code diff:
+
+```diff
+-    if gcloud secrets versions list "$secret_name" --limit=1 --format="value(name)" | head -1 | xargs -I {} gcloud secrets versions disable {} --secret="$secret_name" 2>/dev/null; then
++    current_version=$(gcloud secrets versions list "$secret_name" --limit=1 --format="value(name)" | head -1)
++    if gcloud secrets versions disable "$current_version" --secret="$secret_name" 2>/dev/null; then
+```
+
+</details>
+
+
+___
+
+**Improve the GCP secret rotation script to handle cases where no enabled secret <br>version is found, making the process more robust and preventing errors.**
+
+[scripts/emergency/rotate-credentials.sh [35-40]](https://github.com/merglbot-core/github/pull/24/files#diff-3bc4a170d714543c7c35be719daf29087a90a0a343b090d507e3cc9b10adcd3eR35-R40)
+
+```diff
++# Get the latest enabled version
++LATEST_VERSION=$(gcloud secrets versions list "$secret_name" --filter="state=ENABLED" --sort-by=~createTime --limit=1 --format="value(name)")
++
++if [ -z "$LATEST_VERSION" ]; then
++    echo -e "${YELLOW}  ⚠️ No enabled version found for secret '$secret_name'. Skipping disable step.${NC}"
+ # Disable current version
+-if gcloud secrets versions list "$secret_name" --limit=1 --format="value(name)" | head -1 | xargs -I {} gcloud secrets versions disable {} --secret="$secret_name" 2>/dev/null; then
+-    echo -e "${GREEN}  ✅ Disabled current version${NC}"
++elif gcloud secrets versions disable "$LATEST_VERSION" --secret="$secret_name" >/dev/null 2>&1; then
++    echo -e "${GREEN}  ✅ Disabled current version ($LATEST_VERSION)${NC}"
+ else
+-    echo -e "${RED}  ❌ Failed to disable current version${NC}"
++    echo -e "${RED}  ❌ Failed to disable current version ($LATEST_VERSION). Aborting rotation for this secret.${NC}"
++    return 1
+ fi
+```
+
+
+`[Suggestion processed]`
+
+
+<details><summary>Suggestion importance[1-10]: 8</summary>
+
+__
+
+Why: The suggestion correctly identifies and fixes a significant flaw in the secret rotation logic by adding robust error handling for cases where no active secret version exists, preventing script failure.
+
+</details></details></td><td align=center>Medium
+
+</td></tr><tr><td>
+
+
+
+<details><summary>✅ <s>Prevent shell expansion in changelog</s></summary>
+
+___
+
+<details><summary><b>Suggestion Impact:</b></summary>The commit implemented the exact suggestion by splitting the heredoc, ending the first EOF, using echo to append the commits without shell expansion, and then starting a new heredoc for the rest of the content
+
+code diff:
+
+```diff
+@@ -82,9 +82,13 @@
+           # Release v${{ steps.version.outputs.version }}
+           
+           ## 🚀 What's Changed
+-          
+-          ${COMMITS}
+-          
++          EOF
++
++          # Append commits without shell expansion
++          echo "${COMMITS}" >> CHANGELOG_TEMP.md
++
++          cat >> CHANGELOG_TEMP.md << EOF
++
+```
+
+</details>
+
+
+___
+
+**To prevent potential shell injection from commit messages in the changelog, <br>modify the generation script to handle the <code>${COMMITS}</code> variable as a literal <br>string.**
+
+[.github/workflows/automated-release.yml [81-94]](https://github.com/merglbot-core/github/pull/24/files#diff-c22c638874a55e79b484b69854297da43d12af91dbc6f3e5db8e7188d9544f68R81-R94)
+
+```diff
+ cat > CHANGELOG_TEMP.md << EOF
+ # Release v${{ steps.version.outputs.version }}
+ 
+ ## 🚀 What's Changed
++EOF
+ 
+-${COMMITS}
++# Append commits without shell expansion
++echo "${COMMITS}" >> CHANGELOG_TEMP.md
++
++cat >> CHANGELOG_TEMP.md << EOF
+ 
+ ## 📊 Statistics
+ - Commits: $(git rev-list ${PREV_TAG:+${PREV_TAG}..}HEAD --count)
+ - Contributors: $(git log ${PREV_TAG:+${PREV_TAG}..}HEAD --format="%aN" | sort -u | wc -l)
+ - Files changed: $(git diff ${PREV_TAG:+${PREV_TAG}..}HEAD --stat | tail -1)
+ 
+ **Full Changelog**: ${PREV_TAG:+${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...v${{ steps.version.outputs.version }}}
+ EOF
+```
+
+
+`[Suggestion processed]`
+
+
+<details><summary>Suggestion importance[1-10]: 7</summary>
+
+__
+
+Why: The suggestion correctly identifies a potential shell injection vulnerability in the changelog generation, but the proposed fix using `echo "${COMMITS}"` is also vulnerable and does not fully resolve the issue.
+
+</details></details></td><td align=center>Medium
+
+</td></tr><tr><td rowspan=1>Security</td>
+<td>
+
+
+
+<details><summary>✅ <s>Strengthen the secret detection override</s></summary>
+
+___
+
+<details><summary><b>Suggestion Impact:</b></summary>The commit partially implements the suggestion by adding the 'COMMIT ANYWAY' confirmation phrase requirement, but it doesn't fully replace the original y/N prompt as suggested. The implementation is incomplete as it keeps both confirmation methods.
+
+code diff:
+
+```diff
++            echo ""
++            read -p "To override, type 'COMMIT ANYWAY': " override_confirmation
++            if [[ "$override_confirmation" != "COMMIT ANYWAY" ]]; then
++                echo "Commit aborted."
++                exit 1
+```
+
+</details>
+
+
+___
+
+**Strengthen the pre-commit hook's secret detection override mechanism by <br>requiring a specific confirmation phrase instead of a simple 'y'.**
+
+[scripts/hooks/pre-commit [97-110]](https://github.com/merglbot-core/github/pull/24/files#diff-d8176a66cbc7acb2b94872353b0ba7d0be8b6786151ee89f14fd2d28506b48dbR97-R110)
+
+```diff
+ if [ $FOUND_SECRETS -eq 1 ]; then
+     echo -e "${RED}❌ Security check failed! Potential secrets detected.${NC}"
+     echo "Options:"
+     echo "  1. Remove the secrets and try again"
+     echo "  2. Add the files to .gitignore"
+     echo "  3. Use environment variables instead"
+     echo ""
+-    read -p "Override and commit anyway? (DANGEROUS) (y/N) " -n 1 -r
+-    echo
+-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
++    read -p "To override, type 'COMMIT ANYWAY': " override_confirmation
++    if [[ "$override_confirmation" != "COMMIT ANYWAY" ]]; then
++        echo "Commit aborted."
+         exit 1
+     fi
+     echo -e "${YELLOW}⚠️  Proceeding with potential secrets - ensure you know what you're doing!${NC}"
+ fi
+```
+
+
+`[Suggestion processed]`
+
+
+<details><summary>Suggestion importance[1-10]: 8</summary>
+
+__
+
+Why: This suggestion significantly improves the security of the pre-commit hook by replacing a simple 'y/n' confirmation with a deliberate string match, reducing the risk of accidentally committing secrets.
+
+</details></details></td><td align=center>Medium
+
+</td></tr>
+<tr><td align="center" colspan="2">
+
+ <!-- /improve_multi --more_suggestions=true -->
+
+</td><td></td></tr></tbody></table>
+
+</details>
+
+--
+author:	copilot-pull-request-reviewer
+association:	contributor
+edited:	false
+status:	commented
+--
+## Pull Request Overview
+
+This PR implements comprehensive WARP standards for security, bot development, and release management to address issues #17-22. It provides a complete security-first development framework with automated workflows, bot configurations, and emergency response tools.
+
+### Key Changes:
+- Security templates and automated secret scanning with pre-commit hooks
+- Bot configuration templates for GitHub Copilot and Cursor AI with security policies
+- Automated semantic release workflow with GitHub Actions
+
+### Reviewed Changes
+
+Copilot reviewed 10 out of 10 changed files in this pull request and generated 5 comments.
+
+<details>
+<summary>Show a summary per file</summary>
+
+| File | Description |
+| ---- | ----------- |
+| scripts/hooks/pre-commit | Secret scanning pre-commit hook with pattern matching and gitleaks integration |
+| scripts/emergency/rotate-credentials.sh | Emergency credential rotation tool with interactive menu and incident logging |
+| gitignore-templates/*.gitignore | Security-hardened gitignore templates for frontend, backend, and infrastructure projects |
+| bot-configs/*.yml | GitHub Copilot and Cursor AI configuration templates with security-first policies |
+| .github/workflows/automated-release.yml | Semantic versioning workflow with changelog generation and release automation |
+| README_WARP_IMPLEMENTATION.md | Comprehensive implementation guide with setup instructions and status tracking |
+</details>
+
+
+
+
+
+
+---
+
+<sub>**Tip:** Customize your code reviews with copilot-instructions.md. <a href="/merglbot-core/github/new/main/.github?filename=copilot-instructions.md" class="Link--inTextBlock" target="_blank" rel="noopener noreferrer">Create the file</a> or <a href="https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot" class="Link--inTextBlock" target="_blank" rel="noopener noreferrer">learn how to get started</a>.</sub>
+--
+author:	github-actions
+association:	none
+edited:	false
+status:	none
+--
+## 🤖 Claude Assistant
+
+# Code Review - Automated Release & WARP Implementation
+
+## Sumář
+PR přidává automatizovaný release workflow, WARP dokumentaci a bezpečnostní šablony. Obsahuje **kritické bezpečnostní problémy** v release workflow (deprecated action, chybějící validace vstupů) a v rotation skriptu (shell injection rizika). Dokumentace je kvalitní, ale workflow vyžaduje významné úpravy před nasazením. Architektura odpovídá WARP standardům, ale implementace má bezpečnostní mezery.
+
+---
+
+## Findings
+
+### 🔴 CRITICAL: Deprecated GitHub Action
+**Soubor:** `.github/workflows/automated-release.yml:111`
+```yaml
+- name: Create GitHub Release
+  uses: actions/create-release@v1  # DEPRECATED!
+```
+**Problém:** Action `actions/create-release@v1` je deprecated a nebude fungovat.
+
+**Doporučení:**
+```yaml
+- name: Create GitHub Release
+  uses: softprops/action-gh-release@v1
+  with:
+    tag_name: v${{ steps.version.outputs.version }}
+    name: Release v${{ steps.version.outputs.version }}
+    body: ${{ steps.changelog.outputs.changelog }}
+    draft: false
+    prerelease: false
+```
+
+---
+
+### 🔴 CRITICAL: Shell Injection Risk in Changelog Generation
+**Soubor:** `.github/workflows/automated-release.yml:70-92`
+```bash
+COMMITS=$(git log --pretty=format:"* %s (%h)" --no-merges)
+cat > CHANGELOG_TEMP.md << EOF
+${COMMITS}  # Unescaped variable expansion
+EOF
+```
+**Problém:** Commit messages mohou obsahovat speciální znaky, které způsobí shell injection nebo broken heredoc.
+
+**Doporučení:**
+```bash
+# Use safer approach with proper quoting
+git log --pretty=format:"* %s (%h)" --no-merges > commits.txt
+{
+  echo 'changelog<<EOF'
+  echo "# Release v${{ steps.version.outputs.version }}"
+  echo ""
+  echo "## 🚀 What's Changed"
+  echo ""
+  cat commits.txt
+  echo 'EOF'
+} >> $GITHUB_OUTPUT
+rm commits.txt
+```
+
+---
+
+### 🟠 HIGH: Missing Input Validation
+**Soubor:** `.github/workflows/automated-release.yml:52-53`
+```yaml
+if [ -n "${{ inputs.version }}" ]; then
+  VERSION="${{ inputs.version }}"  # No validation!
+```
+**Problém:** User input není validován - může obsahovat shell metacharacters nebo neplatný formát verze.
+
+**Doporučení:**
+```bash
+if [ -n "${{ inputs.version }}" ]; then
+  VERSION="${{ inputs.version }}"
+  # Validate semantic version format
+  if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$'; then
+    echo "❌ Invalid version format. Expected: X.Y.Z or X.Y.Z-suffix"
+    exit 1
+  fi
+fi
+```
+
+---
+
+### 🟠 HIGH: Slack Webhook URL Exposure
+**Soubor:** `.github/workflows/automated-release.yml:140-142`
+```yaml
+if: vars.SLACK_WEBHOOK_URL != ''
+run: |
+  curl -X POST ${{ vars.SLACK_WEBHOOK_URL }} \  # URL visible in logs!
+```
+**Problém:** Webhook URL bude viditelná v workflow logs. Měla by být v secrets, ne vars.
+
+**Doporučení:**
+```yaml
+- name: Notify Slack
+  if: secrets.SLACK_WEBHOOK_URL != ''
+  env:
+    WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+  run: |
+    curl -X POST "$WEBHOOK_URL" \
+      -H 'Content-Type: application/json' \
+      -d '{...}'
+```
+
+---
+
+### 🟠 HIGH: Command Injection in Rotation Script
+**Soubor:** `scripts/emergency/rotate-credentials.sh:33-35`
+```bash
+function rotate_gcp_secret() {
+    local secret_name="$1"  # User input
+    gcloud secrets versions list "$secret_name"  # Needs validation
+```
+**Problém:** `secret_name` není validován - může obsahovat shell metacharacters.
+
+**Doporučení:**
+```bash
+function rotate_gcp_secret() {
+    local secret_name="$1"
+    
+    # Validate secret name format (alphanumeric, hyphens, underscores only)
+    if ! [[ "$secret_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        echo -e "${RED}❌ Invalid secret name format${NC}"
+        return 1
+    fi
+    
+    # Rest of function...
+}
+```
+
+---
+
+### 🟡 MEDIUM: Missing Error Handling in Pre-commit Hook
+**Soubor:** `scripts/hooks/pre-commit:54-62`
+```bash
+for pattern in "${SECRET_PATTERNS[@]}"; do
+    for file in $STAGED_FILES; do
+        if [ -f "$file" ]; then
+            if git diff --cached "$file" | grep -qE "$pattern"; then
+                # No check if grep fails
+```
+**Problém:** Chybí error handling pro `git diff` a `grep` failures.
+
+**Doporučení:**
+```bash
+for pattern in "${SECRET_PATTERNS[@]}"; do
+    for file in $STAGED_FILES; do
+        if [ -f "$file" ]; then
+            if ! git diff --cached "$file" > /tmp/diff_$$.txt 2>&1; then
+                echo -e "${YELLOW}⚠️  Could not diff $file, skipping${NC}"
+                continue
+            fi
+            if grep -qE "$pattern" /tmp/diff_$$.txt 2>/dev/null; then
+                echo -e "${RED}❌ Potential secret detected in $file${NC}"
+                FOUND_SECRETS=1
+            fi
+            rm -f /tmp/diff_$$.txt
+        fi
+    done
+done
+```
+
+---
+
+### 🟡 MEDIUM: Hardcoded Secret Names
+**Soubor:** `scripts/emergency/rotate-credentials.sh:110-114`
+```bash
+SECRETS=(
+    "runtime--btf-api--prod--api-key"
+    "runtime--aaas-api--prod--api-key"
+    "runtime--portal--prod--session-key"
+)
+```
+**Problém:** Hardcoded secret names v kódu - měly by být v config souboru nebo environment variables.
+
+**Doporučení:**
+```bash
+# Load from config file
+SECRETS_CONFIG="${SECRETS_CONFIG:-./secrets-config.txt}"
+if [ -f "$SECRETS_CONFIG" ]; then
+    mapfile -t SECRETS < "$SECRETS_CONFIG"
+else
+    echo -e "${RED}❌ Secrets config not found: $SECRETS_CONFIG${NC}"
+    exit 1
+fi
+```
+
+---
+
+### 🟡 MEDIUM: Missing Concurrency Protection
+**Soubor:** `.github/workflows/automated-release.yml:133-165`
+```yaml
+notify:
+  needs: release
+  # No concurrency control for notify job
+```
+**Problém:** Notify job nemá concurrency protection - může běžet vícekrát paralelně.
+
+**Doporučení:**
+```yaml
+notify:
+  needs: release
+  if: needs.release.outputs.version != ''
+  runs-on: ubuntu-latest
+  concurrency:
+    group: notify-${{ github.ref }}
+    cancel-in-progress: false
+```
+
+---
+
+### 🔵 LOW: Incomplete .gitignore Templates
+**Soubor:** `gitignore-templates/backend.gitignore:44-52`
+```gitignore
+# Database
+*.db
+*.sqlite
+*.sqlite3
+*.sql  # This might be too broad
+!migrations/*.sql
+!schema/*.sql
+```
+**Problém:** `*.sql` může blokovat legitimní SQL soubory (queries, views, etc.).
+
+**Doporučení:**
+```gitignore
+# Database - be more specific
+*.db
+*.sqlite
+*.sqlite3
+dump.sql
+backup*.sql
+*_dump.sql
+!migrations/*.sql
+!schema/*.sql
+!queries/*.sql
+```
+
+---
+
+### 🔵 LOW: Missing Timeout Configuration
+**Soubor:** `.github/workflows/automated-release.yml:27-29`
+```yaml
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # No timeout-minutes specified
+```
+**Problém:** Chybí timeout - job může běžet neomezeně dlouho.
+
+**Doporučení:**
+```yaml
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+```
+
+---
+
+### ✅ POSITIVE: Excellent Documentation Structure
+**Soubor:** `README_WARP_IMPLEMENTATION.md`
+
+Dokumentace je velmi kvalitní:
+- Jasná struktura s checklisty
+- Konkrétní příklady setup příkazů
+- Odkazy na související dokumenty
+- Metriky a očekávané výsledky
+
+---
+
+### ✅ POSITIVE: Comprehensive Security Patterns
+**Soubor:** `scripts/hooks/pre-commit:23-32`
+
+Pre-commit hook má dobré pokrytí secret patterns:
+- API keys (OpenAI, AWS, GitHub)
+- SSH keys
+- Private keys
+- Tokens
+
+---
+
+## Závěr
+
+**🔴 CHANGES NEEDED**
+
+PR obsahuje užitečnou funkcionalitu a kvalitní dokumentaci, ale **nelze schválit** kvůli kritickým bezpečnostním problémům:
+
+1. **Deprecated GitHub Action** - musí být nahrazena
+2. **Shell injection rizika** - v changelog generování i rotation skriptu
+3. **Chybějící input validace** - v workflow i bash skriptech
+4. **Webhook URL exposure** - musí být přesunuta do secrets
+
+**Požadované změny před merge:**
+- [ ] Nahradit `actions/create-release@v1` za `softprops/action-gh-release@v1`
+- [ ] Opravit shell injection v changelog generování
+- [ ] Přidat validaci všech user inputs
+- [ ] Přesunout `SLACK_WEBHOOK_URL` z vars do secrets
+- [ ] Přidat input validaci do rotation skriptu
+- [ ] Přidat timeout do workflow jobs
+
+**Doporučené vylepšení (neblokující):**
+- Přidat error handling do pre-commit hooku
+- Externalizovat hardcoded secret names
+- Zpřesnit .gitignore patterns pro SQL soubory
+- Přidat concurrency control do notify jobu
+
+Po opravě kritických issues bude PR připraveno k merge.
+
+---
+*AI-generated suggestions. Please review before applying.*
+
+--
+author:	copilot-pull-request-reviewer
+association:	contributor
+edited:	false
+status:	commented
+--
+## Pull Request Overview
+
+Copilot reviewed 10 out of 10 changed files in this pull request and generated 2 comments.
+
+
+
+
+
+---
+
+<sub>**Tip:** Customize your code reviews with copilot-instructions.md. <a href="/merglbot-core/github/new/main/.github?filename=copilot-instructions.md" class="Link--inTextBlock" target="_blank" rel="noopener noreferrer">Create the file</a> or <a href="https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot" class="Link--inTextBlock" target="_blank" rel="noopener noreferrer">learn how to get started</a>.</sub>
+--
+author:	copilot-pull-request-reviewer
+association:	contributor
+edited:	false
+status:	commented
+--
+## Pull Request Overview
+
+Copilot reviewed 10 out of 10 changed files in this pull request and generated 2 comments.
+
+
+
+
+
+---
+
+<sub>**Tip:** Customize your code reviews with copilot-instructions.md. <a href="/merglbot-core/github/new/main/.github?filename=copilot-instructions.md" class="Link--inTextBlock" target="_blank" rel="noopener noreferrer">Create the file</a> or <a href="https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot" class="Link--inTextBlock" target="_blank" rel="noopener noreferrer">learn how to get started</a>.</sub>
+--
