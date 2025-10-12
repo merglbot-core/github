@@ -21,7 +21,7 @@ jobs:
           base_sha="${{ github.event.pull_request.base.sha }}"
           git diff --name-only "$base_sha"...HEAD -- '*.md' > changed_md.txt || true
           echo "Changed MD files:"; cat changed_md.txt || true
-          count=$(wc -l < changed_md.txt || echo 0)
+          count=$(wc -l < changed_md.txt 2>/dev/null || echo "0")
           echo "count=$count" >> "$GITHUB_OUTPUT"
 
       - name: Fail on dangerous --force --all pattern
@@ -30,13 +30,20 @@ jobs:
         run: |
           set -euo pipefail
           fail=0
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            if grep -nEi "git\s+push[^\n]*((--force(-with-lease)?|--force-with-lease)[^\n]*--all|--all[^\n]*(--force(-with-lease)?|--force-with-lease))" "$f" | grep -viE "never|do not|nepoužívej|nepouzivej|nepoužij"; then
-              echo "❌ Dangerous pattern found in $f (git push --force --all). Use branch-only force push and include warnings."
-              fail=1
-            fi
-          done < changed_md.txt
+          # Use numeric comparison and quoted variables
+          count=$(wc -l < changed_md.txt 2>/dev/null || echo 0)
+          if [ "$count" -gt 0 ]; then
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              # Quote variable to prevent command injection
+              # Detect multiple dangerous patterns including short flags (-f)
+              if grep -nEi 'git\s+push.*(--all.*--force|--force.*--all|--all.*-f\b|-f\b.*--all)' "$f" | \
+                 grep -viE 'never|do not|nepoužívej|nepouzivej|nepoužij'; then
+                echo "❌ Dangerous pattern found in $f (git push with --force + --all). Use branch-only force push and include warnings."
+                fail=1
+              fi
+            done < changed_md.txt
+          fi
           if [ "$fail" -ne 0 ]; then
             echo "::error title=Unsafe git command detected::Found 'git push --force --all' in changed Markdown files."
             exit 1

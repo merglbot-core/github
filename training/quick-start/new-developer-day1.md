@@ -35,14 +35,21 @@ You should have received:
 
 ```bash
 # macOS - using Homebrew
-brew install git gh node@20 python@3.11 terraform@1.6 gcloud
+brew install git gh node@20 python@3.11 gcloud
+
+# Install tfenv for version management (recommended)
+brew install tfenv
 
 # Verify installations
 git --version
 node --version
 python3 --version
-terraform --version
 gcloud --version
+
+# Install specific Terraform version (pinned for consistency)
+tfenv install 1.6.6
+tfenv use 1.6.6
+terraform --version  # Should show 1.6.6
 ```
 
 ### 1.2 Configure Git
@@ -245,6 +252,13 @@ git diff
 ### 4.4 Commit Your Changes
 
 ```bash
+# Verify git-secrets is installed first
+if ! command -v git-secrets &>/dev/null; then
+  echo "⚠️  WARNING: git-secrets not installed!"
+  echo "Run: brew install git-secrets"
+  exit 1
+fi
+
 # Stage changes
 git add docs/CONTRIBUTORS.md
 
@@ -255,7 +269,10 @@ if git commit -m "docs: Add my first contribution to CONTRIBUTORS
 - Updated documentation structure"; then
   echo "✅ Commit successful"
 else
-  echo "❌ Commit blocked - check pre-commit hooks (e.g., git-secrets)"
+  echo "❌ Commit failed. Possible reasons:"
+  echo "  - Pre-commit hook blocked (check git-secrets output above)"
+  echo "  - Nothing to commit"
+  echo "  - Commit message format invalid"
   exit 1
 fi
 ```
