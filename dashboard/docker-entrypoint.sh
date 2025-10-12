@@ -6,8 +6,8 @@ set -e
 
 # Basic URL validation
 # Improved URL validation: scheme, domain/localhost/IPv4, optional port/path
-if ! echo "$API_URL" | grep -Eq '^https?://((localhost)|([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})|([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,})(:[0-9]{1,5})?(/.*)?$'; then
-  echo "Error: Invalid API_URL format: ${API_URL}"
+# Relaxed URL validation: scheme, any valid hostname (single-label or domain), optional port, optional path
+if ! echo "$API_URL" | grep -Eq '^https?://[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*(:[0-9]{1,5})?(/[a-zA-Z0-9/_-]*)?$'; then
   echo "Error: Invalid API_URL format: ${API_URL}"
   exit 1
 fi
