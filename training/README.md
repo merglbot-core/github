@@ -80,7 +80,7 @@ Print-friendly cheat sheets for daily use:
 - **Requirements:** Complete all security modules
 - **Exam:** 20 questions (80% pass rate required)
 - **Validity:** 6 months
-- **Recertification:** Annual
+- **Recertification:** Every 6 months
 
 ### Bot Interaction Certification  
 - **Requirements:** Complete bot track + submit 3 reviewed PRs
