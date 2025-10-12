@@ -179,8 +179,3 @@ def collect_github(
         },
         "total_monthly_cost_usd": cop_cost + ec_cost
     }
-
-
-def __init__():
-    """Module initialization."""
-    pass
