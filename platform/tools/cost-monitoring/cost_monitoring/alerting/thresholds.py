@@ -154,9 +154,14 @@ def evaluate_all_thresholds(
     
     all_alerts = github_alerts + gcp_alerts
     
+    # Ensure all alerts have a severity
+    for alert in all_alerts:
+        if "severity" not in alert:
+            alert["severity"] = "low"
+    
     # Sort by severity
     severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-    all_alerts.sort(key=lambda x: severity_order.get(x.get("severity", "low"), 3))
+    all_alerts.sort(key=lambda x: severity_order.get(x.get("severity"), 3))
     
     threshold_exceeded = len(all_alerts) > 0
     
