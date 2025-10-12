@@ -351,7 +351,7 @@ def create_github_issue_for_alerts(alerts: list, month: str, data: Dict[str, Any
         
         # Validate repo_name format (should be owner/repo)
         if not repo_name or "/" not in repo_name or not all(part for part in repo_name.split("/", 1)):
-            logger.error(f"Invalid repository name format: {repo_name}")
+            logger.error("Invalid repository name format for GITHUB_REPOSITORY environment variable")
             return False
         
         g = Github(token)
