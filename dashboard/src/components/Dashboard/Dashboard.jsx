@@ -261,7 +261,7 @@ function Dashboard() {
                 { service: 'admin', version: 'v2.0.3', status: 'rollback', time: '8 hours ago' },
               ].map((deployment, idx) => (
                 <Box
-                  key={idx}
+                  key={`${deployment.service}-${deployment.time}`}
                   sx={{
                     display: 'flex',
                     justifyContent: 'space-between',
