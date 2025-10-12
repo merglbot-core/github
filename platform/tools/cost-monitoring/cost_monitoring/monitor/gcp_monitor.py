@@ -222,8 +222,3 @@ def collect_gcp(
             "project_costs": [],
             "total_cost_usd": 0
         }
-
-
-def __init__():
-    """Module initialization."""
-    pass
