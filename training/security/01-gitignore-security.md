@@ -270,10 +270,10 @@ gcloud secrets versions add "leaked-secret-name" --data-file=new_secret.txt
 # GitHub Token
 # Go to https://github.com/settings/tokens and revoke
 
-# 2. Remove from git history
-git filter-branch --force --index-filter \
-  "git rm --cached --ignore-unmatch path/to/secret/file" \
-  --prune-empty --tag-name-filter cat -- --all
+# 2. Remove from git history (using a modern, safe tool)
+# First, install git-filter-repo: pip3 install git-filter-repo
+git-filter-repo --path path/to/secret/file --invert-paths
+# This command safely removes the specified file from all commits.
 
 # 3. Force push (if no one pulled yet)
 git push origin <your-branch-name> --force
