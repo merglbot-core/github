@@ -37,11 +37,22 @@ function Login() {
         // - Automatic token refresh and session management
         // - Protection against XSS, CSRF, and session hijacking
         // - Integration with Google Workspace SSO
-        // 
-        // SessionStorage is used here only for local development mock
-        // and is NOT exposed to production environments
-        sessionStorage.setItem('auth_token', 'mock_token_' + Date.now());
-        navigate('/dashboard');
+
+        // Check if we're in development environment
+        const isDevelopment = 
+          (import.meta?.env?.MODE === 'development') ||
+          window.location.hostname === 'localhost' ||
+          window.location.hostname === '127.0.0.1';
+
+        if (isDevelopment) {
+          // SessionStorage is used here only for local development mock
+          sessionStorage.setItem('auth_token', 'mock_token_' + Date.now());
+          navigate('/dashboard');
+        } else {
+          // In production, this should never execute as auth is handled by IAP
+          console.error('Mock authentication attempted in production environment');
+          setError('Authentication not available. Please use SSO.');
+        }
       } else {
         setError('Please enter email and password');
       }
