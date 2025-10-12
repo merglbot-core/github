@@ -276,7 +276,7 @@ git filter-branch --force --index-filter \
   --prune-empty --tag-name-filter cat -- --all
 
 # 3. Force push (if no one pulled yet)
-git push origin --force --all
+git push origin <your-branch-name> --force
 git push origin --force --tags
 ```
 
