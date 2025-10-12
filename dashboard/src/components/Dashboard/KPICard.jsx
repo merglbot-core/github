@@ -13,7 +13,7 @@ import {
   TrendingFlat
 } from '@mui/icons-material';
 
-function KPICard({ title, value, change, trend, icon, color = 'primary', subtitle }) {
+function KPICard({ title, value, change, trend, icon, color = 'primary', subtitle, higherIsBetter = true }) {
   const getTrendIcon = () => {
     switch (trend) {
       case 'up':
