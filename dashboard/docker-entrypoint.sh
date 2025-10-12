@@ -32,7 +32,7 @@ validate_url() {
   
   # Accept localhost, 127.0.0.1, proper domains, IPv4 addresses and single-label hostnames
   # Relaxed to support single-label hostnames (e.g., http://api-server)
-  if echo "$url" | grep -Eq '^https?://[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*(:[0-9]{1,5})?(/[a-zA-Z0-9/_-]*)?$'; then
+  if echo "$url" | grep -Eq '^https?://((([a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*)|((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)))(:[0-9]{1,5})?(/[a-zA-Z0-9/_-]*)?$'; then
     return 0
   fi
   
