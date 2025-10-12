@@ -89,7 +89,7 @@ const metricsService = {
 
   // Get service versions
   async getServiceVersions() {
-    const response = await apiClient.get('/services/versions');
+    const response = await apiClient.get(API_ENDPOINTS.SERVICES_VERSIONS);
     return response.data;
   },
 
