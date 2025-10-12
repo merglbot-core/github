@@ -168,6 +168,11 @@ def validate_copilot_config(file_path: Path) -> Dict[str, Any]:
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
+            
+        if data is None:
+            result["valid"] = False
+            result["issues"].append("Empty YAML file")
+            return result
     except yaml.YAMLError as e:
         result["valid"] = False
         result["issues"].append(f"Invalid YAML: {e}")
