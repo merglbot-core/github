@@ -71,7 +71,7 @@ class ErrorBoundary extends React.Component {
               We encountered an unexpected error. The error has been logged and
               we'll look into it.
             </Typography>
-            {process.env.NODE_ENV === 'development' && this.state.error && (
+            {import.meta.env.DEV && this.state.error && (
               <Paper
                 variant="outlined"
                 sx={{
