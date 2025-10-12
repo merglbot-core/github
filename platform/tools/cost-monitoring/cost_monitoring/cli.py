@@ -75,7 +75,11 @@ def generate(month, config, thresholds, outdir, formats, dry_run, soft_fail):
             logger.error(f"Failed to collect GitHub data: {e}")
             github_data = {
                 "error": str(e),
-                "total_monthly_cost_usd": 0
+                "total_monthly_cost_usd": 0,
+                "copilot": {"seats_assigned": 0, "monthly_cost_usd": 0},
+                "enterprise_cloud": {"seats": 0, "monthly_cost_usd": 0},
+                "total_members": 0,
+                "org_members": []
             }
             console.print(f"[red]❌ GitHub collection failed: {e}[/red]")
         
