@@ -195,8 +195,3 @@ def send_cost_report_to_slack(
         formatted["text"],
         formatted["blocks"]
     )
-
-
-def __init__():
-    """Module initialization."""
-    pass
