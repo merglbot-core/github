@@ -116,7 +116,7 @@ def validate_cursorbot(file_path: Path) -> Dict[str, Any]:
         return result
     
     try:
-        with open(file_path, "r") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except json.JSONDecodeError as e:
         result["valid"] = False
