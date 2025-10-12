@@ -119,7 +119,7 @@ const metricsService = {
 
   // Get bot effectiveness
   async getBotEffectiveness() {
-    const response = await apiClient.get('/bots/effectiveness');
+    const response = await apiClient.get(API_ENDPOINTS.BOTS_EFFECTIVENESS);
     return response.data;
   },
 
