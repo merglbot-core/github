@@ -1,0 +1,5 @@
+# CODEOWNERS: enforce review on sensitive training answer key
+# Format: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+# Owners must be teams in this org. Adjust team slugs if different.
+
+/training/security/certification-quiz-answers.md  @merglbot-core/platform-security @merglbot-core/platform
