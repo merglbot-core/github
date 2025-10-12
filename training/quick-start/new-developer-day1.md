@@ -303,7 +303,13 @@ If you prefer Cursor:
 # Try: "How do I list all git branches?"
 ```
 
-**Important:** Never share secrets with AI tools!
+**⚠️ CRITICAL - AI Tool Safety:**
+- ✅ SAFE: Code logic, function names, architecture questions
+- ✅ SAFE: Secret NAMES (e.g., "ANTHROPIC_API_KEY")
+- ❌ NEVER: Secret VALUES, API keys, tokens
+- ❌ NEVER: Customer data, PII, internal URLs
+- ❌ NEVER: Full .env files or credentials.json content
+- ❌ NEVER: Production database connection strings
 
 ---
 

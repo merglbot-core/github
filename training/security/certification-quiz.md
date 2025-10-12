@@ -196,7 +196,7 @@
 - [ ] True
 - [ ] False
 
-**Answer:** True (if no one has pulled yet; otherwise coordinate with team)
+**Answer:** True (ONLY on specific branch with team coordination; NEVER use --all flag)
 
 ---
 

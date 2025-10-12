@@ -9,33 +9,33 @@ Welcome to the merglbot.ai Team Training Hub! This directory contains comprehens
 ### 1. Security Standards Track
 **Duration:** 2 hours | **Level:** Required for All
 
-- **Module 1.1:** [WARP Gitignore Security](./security/01-gitignore-security.md)
-- **Module 1.2:** [Secret Management Best Practices](./security/02-secret-management.md)
-- **Module 1.3:** [IAM & Access Control](./security/03-iam-access-control.md)
-- **Module 1.4:** [Security Incident Response](./security/04-incident-response.md)
+- **Module 1.1:** [WARP Gitignore Security](./security/01-gitignore-security.md) ✅
+- **Module 1.2:** Secret Management Best Practices (WIP - Coming Soon)
+- **Module 1.3:** IAM & Access Control (WIP - Coming Soon)
+- **Module 1.4:** Security Incident Response (WIP - Coming Soon)
 
-**Certification:** [Security Quiz](./security/certification-quiz.md)
+**Certification:** [Security Quiz](./security/certification-quiz.md) ✅
 
-### 2. Bot-Driven Development Track
+### 2. Bot-Driven Development Track (Work in Progress)
 **Duration:** 3 hours | **Level:** Required for Developers
 
-- **Module 2.1:** [AI Coding Assistants Overview](./bots/01-ai-assistants-overview.md)
-- **Module 2.2:** [GitHub Copilot Best Practices](./bots/02-copilot-best-practices.md)
-- **Module 2.3:** [Cursor IDE Workshop](./bots/03-cursor-workshop.md)
-- **Module 2.4:** [Code Review with AI](./bots/04-ai-code-review.md)
-- **Module 2.5:** [Safety & Compliance](./bots/05-safety-compliance.md)
+- **Module 2.1:** AI Coding Assistants Overview (WIP - Coming Soon)
+- **Module 2.2:** GitHub Copilot Best Practices (WIP - Coming Soon)
+- **Module 2.3:** Cursor IDE Workshop (WIP - Coming Soon)
+- **Module 2.4:** Code Review with AI (WIP - Coming Soon)
+- **Module 2.5:** Safety & Compliance (WIP - Coming Soon)
 
-**Certification:** [Bot Interaction Certification](./bots/certification-practical.md)
+**Certification:** Bot Interaction Certification (WIP - Coming Soon)
 
-### 3. Release Management Track
+### 3. Release Management Track (Work in Progress)
 **Duration:** 2 hours | **Level:** Required for Platform Team
 
-- **Module 3.1:** [Release Process Overview](./release/01-process-overview.md)
-- **Module 3.2:** [Cloud Run Deployment](./release/02-cloud-run-deployment.md)
-- **Module 3.3:** [Rollback Procedures](./release/03-rollback-procedures.md)
-- **Module 3.4:** [Monitoring & Observability](./release/04-monitoring-observability.md)
+- **Module 3.1:** Release Process Overview (WIP - Coming Soon)
+- **Module 3.2:** Cloud Run Deployment (WIP - Coming Soon)
+- **Module 3.3:** Rollback Procedures (WIP - Coming Soon)
+- **Module 3.4:** Monitoring & Observability (WIP - Coming Soon)
 
-**Certification:** [Release Manager Certification](./release/certification-exam.md)
+**Certification:** Release Manager Certification (WIP - Coming Soon)
 
 ## 🚀 Quick Start Guides
 

@@ -220,9 +220,10 @@ git secrets --add 'projects/[0-9]+/serviceAccounts/[^"]*'
 
 ```bash
 # Try to commit a secret (should fail)
+# IMPORTANT: Use obviously fake format to prevent copy-paste accidents
 echo "# EXAMPLE - DO NOT USE REAL SECRETS EVEN IN TESTS" > test.txt
 echo "# The following line would be blocked by git-secrets:" >> test.txt
-echo "ANTHROPIC_API_KEY=sk-ant-FAKE-KEY-FOR-TRAINING-ONLY" >> test.txt
+echo "ANTHROPIC_API_KEY=sk-ant-FAKE-KEY-FOR-TRAINING-ONLY-12345" >> test.txt
 git add test.txt
 git commit -m "test"
 
@@ -264,7 +265,15 @@ trufflehog git file://. --only-verified
 ### Immediate Actions (First 5 Minutes)
 
 ```bash
-# 1. ROTATE THE SECRET IMMEDIATELY
+# 1. AUDIT FIRST (before rotation destroys evidence)
+# Check logs for unauthorized access BEFORE rotating
+gcloud logging read "resource.type=service_account AND \
+  protoPayload.authenticationInfo.principalEmail=leaked-sa@project.iam.gserviceaccount.com" \
+  --limit=100 --format=json > audit-$(date +%s).json
+
+echo "Audit logs saved. Review for unauthorized access patterns."
+
+# 2. ROTATE THE SECRET IMMEDIATELY
 # GCP Secret Manager
 gcloud secrets versions disable latest --secret="leaked-secret-name"
 gcloud secrets versions add "leaked-secret-name" --data-file=new_secret.txt
@@ -272,19 +281,19 @@ gcloud secrets versions add "leaked-secret-name" --data-file=new_secret.txt
 # GitHub Token
 # Go to https://github.com/settings/tokens and revoke
 
-# 2. Remove from git history using a modern tool
-# WARNING: This rewrites git history! Coordinate with your team first
+# 3. Remove from git history (LAST RESORT)
+# WARNING: This rewrites git history! Coordinate with your team first.
 # First, install git-filter-repo if you haven't:
 # python3 -m pip install git-filter-repo
+
 # ONLY use this as a last resort for removing secrets:
 git filter-repo --path path/to/secret/file --invert-paths
-git filter-repo --path path/to/secret/file --invert-paths
-# Example:
-# git filter-repo --path .env --invert-paths
 
-# 3. Force push (coordinate with your team!)
-git push origin --force --all
-git push origin --force --tags
+# 4. Force push (DANGEROUS - coordinate with team)
+# WARNING: This is a destructive action. Coordinate with your team.
+# Force push the rewritten branch. Repeat for all affected branches.
+git push origin <your-branch-name> --force
+# Do NOT use --all flag (overwrites all branches)
 ```
 
 ### Full Incident Response Checklist
