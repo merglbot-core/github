@@ -217,10 +217,16 @@ def audit_repositories(repos: List[str]) -> Dict[str, Any]:
 
         # Create a secure temporary directory and ensure cleanup
         with tempfile.TemporaryDirectory(prefix="audit-") as temp_dir:
-            # Sanitize repo name for path
-            repo_name = Path(repo).name
-            if ".." in repo_name or "/" in repo_name:
-                print(f"ERROR: Invalid repository name: {repo}")
+            # Sanitize repo name for path - extract only the repo name after the slash
+            # For 'owner/repo', we want just 'repo'
+            if '/' in repo:
+                repo_name = repo.split('/')[-1]
+            else:
+                repo_name = repo
+            
+            # Additional validation after extraction
+            if not repo_name or ".." in repo_name or "/" in repo_name or "\\" in repo_name:
+                print(f"ERROR: Invalid repository name after extraction: {repo_name} from {repo}")
                 results["details"].append({
                     "repo": repo,
                     "has_gitignore": False,
@@ -230,6 +236,12 @@ def audit_repositories(repos: List[str]) -> Dict[str, Any]:
                 results["non_compliant_repos"] += 1
                 results["total_issues"] += 1
                 continue
+            
+            # Final sanitization - remove any remaining special characters
+            import re
+            repo_name = re.sub(r'[^a-zA-Z0-9_.-]', '', repo_name)
+            if not repo_name:
+                repo_name = "repo_" + str(abs(hash(repo)) % 100000)
                 
             repo_path = Path(temp_dir) / repo_name
             

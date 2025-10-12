@@ -245,10 +245,16 @@ def main():
         demo_path = Path("bot-configs")
         demo_path.mkdir(exist_ok=True)
         
-        gitignore_path = demo_path / f"{repo.replace('/', '_')}.gitignore"
+        # Create a subdirectory for each repo to match the gitignore location
+        repo_dir = demo_path / repo.replace('/', '_')
+        repo_dir.mkdir(exist_ok=True)
         
-        if fix_gitignore(str(demo_path), info):
+        # Fix the gitignore in the repo directory
+        if fix_gitignore(str(repo_dir), info):
             fixed_count += 1
+            
+            # The .gitignore file is created at repo_dir/.gitignore
+            gitignore_path = repo_dir / ".gitignore"
             
             if not args.dry_run:
                 # Stage changes

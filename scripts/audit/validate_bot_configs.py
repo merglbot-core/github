@@ -142,11 +142,39 @@ def validate_cursorbot(file_path: Path) -> Dict[str, Any]:
     
     # Check for security rules
     if "rules" in data:
-        rules_str = str(data["rules"]).lower()
-        security_count = sum(1 for rule in REQUIRED_SECURITY_RULES
-                           if f" {rule.lower()} " in f" {rules_str} ")
+        # Handle different data structures properly
+        if isinstance(data["rules"], dict):
+            # If rules is a dict with categories
+            all_rules = []
+            for category, rules_list in data["rules"].items():
+                if isinstance(rules_list, list):
+                    all_rules.extend([str(r).lower() for r in rules_list])
+                else:
+                    all_rules.append(str(rules_list).lower())
+            rules_combined = " ".join(all_rules)
+        elif isinstance(data["rules"], list):
+            # If rules is a flat list
+            rules_combined = " ".join([str(r).lower() for r in data["rules"]])
+        else:
+            # Fallback to string representation
+            rules_combined = str(data["rules"]).lower()
+        
+        # Count how many required security rules are present
+        security_count = 0
+        for rule in REQUIRED_SECURITY_RULES:
+            # Check if all words from the rule appear in the combined rules
+            rule_words = rule.lower().split()
+            if len(rule_words) == 1:
+                # Single word rule - check for exact match as a separate word
+                if rule_words[0] in rules_combined.split():
+                    security_count += 1
+            else:
+                # Multi-word rule - check if all words are present
+                if all(word in rules_combined for word in rule_words):
+                    security_count += 1
+        
         if security_count < 2:
-            result["warnings"].append("Insufficient security rules in configuration")
+            result["warnings"].append(f"Insufficient security rules in configuration (found {security_count}/6 required)")
     
     return result
 
