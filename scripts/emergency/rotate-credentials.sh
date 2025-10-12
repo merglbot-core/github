@@ -33,8 +33,8 @@ function rotate_gcp_secret() {
     fi
     
     # Validate secret name format (prevent command injection)
-    if ! [[ "$secret_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-        echo -e "${RED}  ❌ Invalid secret name format. Only alphanumeric characters, hyphens and underscores allowed.${NC}"
+    if ! [[ "$secret_name" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+        echo -e "${RED}  ❌ Invalid secret name format. Only alphanumeric characters, hyphens, underscores, and periods allowed.${NC}"
         log_incident "ERROR: Invalid secret name format attempted: $secret_name"
         return 1
     fi
