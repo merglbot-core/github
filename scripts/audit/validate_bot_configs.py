@@ -166,7 +166,7 @@ def validate_copilot_config(file_path: Path) -> Dict[str, Any]:
         return result
     
     try:
-        with open(file_path, "r") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
     except yaml.YAMLError as e:
         result["valid"] = False
