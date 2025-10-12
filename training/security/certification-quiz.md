@@ -18,7 +18,6 @@
 - [ ] C) `terraform.tfstate`
 - [ ] D) `README.md`
 
-**Answer:** A, C
 
 ---
 
@@ -28,7 +27,6 @@
 - [ ] C) Hope no one notices
 - [ ] D) Create a PR to remove it
 
-**Answer:** B
 
 ---
 
@@ -38,7 +36,6 @@
 - [ ] C) 2-5 minutes
 - [ ] D) Instantly
 
-**Answer:** C
 
 ---
 
@@ -46,7 +43,6 @@
 - [ ] True
 - [ ] False
 
-**Answer:** True (if they contain only placeholder values, no real secrets)
 
 ---
 
@@ -56,7 +52,6 @@
 - [ ] C) TruffleHog
 - [ ] D) All of the above
 
-**Answer:** B
 
 ---
 
@@ -68,7 +63,6 @@
 - [ ] C) GCP Secret Manager
 - [ ] D) Both B and C
 
-**Answer:** D
 
 ---
 
@@ -78,7 +72,6 @@
 - [ ] C) `SECRET_NAME`
 - [ ] D) No convention needed
 
-**Answer:** B
 
 ---
 
@@ -88,7 +81,6 @@
 - [ ] C) Every year
 - [ ] D) Only when compromised
 
-**Answer:** B
 
 ---
 
@@ -96,7 +88,6 @@
 - [ ] True
 - [ ] False
 
-**Answer:** True
 
 ---
 
@@ -106,7 +97,6 @@
 - [ ] C) All projects in the organization
 - [ ] D) Depends on IAM permissions
 
-**Answer:** D
 
 ---
 
@@ -118,7 +108,6 @@
 - [ ] C) Everyone gets the same permissions
 - [ ] D) No one gets any permissions
 
-**Answer:** B
 
 ---
 
@@ -128,7 +117,6 @@
 - [ ] C) Custom role with minimal permissions
 - [ ] D) roles/viewer
 
-**Answer:** C
 
 ---
 
@@ -136,7 +124,6 @@
 - [ ] True
 - [ ] False
 
-**Answer:** True
 
 ---
 
@@ -146,7 +133,6 @@
 - [ ] C) Use session cookies
 - [ ] D) No verification needed
 
-**Answer:** A
 
 ---
 
@@ -156,7 +142,6 @@
 - [ ] C) A database connection method
 - [ ] D) A secret encryption algorithm
 
-**Answer:** B
 
 ---
 
@@ -168,7 +153,6 @@
 - [ ] C) Call your manager
 - [ ] D) Delete all logs
 
-**Answer:** B
 
 ---
 
@@ -178,7 +162,6 @@
 - [ ] C) #random
 - [ ] D) Don't notify anyone
 
-**Answer:** B
 
 ---
 
@@ -188,7 +171,6 @@
 - [ ] C) 1 week
 - [ ] D) 1 month
 
-**Answer:** B
 
 ---
 
@@ -196,7 +178,6 @@
 - [ ] True
 - [ ] False
 
-**Answer:** True (ONLY on specific branch with team coordination; NEVER use --all flag)
 
 ---
 
@@ -206,7 +187,6 @@
 - [ ] C) Secret is properly stored
 - [ ] D) All of the above
 
-**Answer:** D
 
 ---
 

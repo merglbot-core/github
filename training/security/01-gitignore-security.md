@@ -148,8 +148,13 @@ docker-compose.override.yml
 # Step 1: Navigate to your project
 cd ~/projects/my-merglbot-project
 
-# Step 2: Download template
-curl -o .gitignore https://raw.githubusercontent.com/merglbot-core/github/main/.gitignore.template
+# Step 2: Use local vetted template (safer than remote curl)
+# Choose the template closest to your stack and inspect before use
+# Options in this repo:
+#  - gitignore-templates/frontend.gitignore
+#  - gitignore-templates/backend.gitignore
+#  - gitignore-templates/infrastructure.gitignore
+cp /path/to/merglbot-core/github/gitignore-templates/frontend.gitignore .gitignore
 
 # Step 3: Verify sensitive files are ignored
 git status
@@ -158,6 +163,8 @@ git status
 git add .gitignore
 git commit -m "chore: Add comprehensive .gitignore for security"
 ```
+
+Security note: Avoid piping remote content directly into your repo (e.g., curl | bash). Always review templates locally before applying.
 
 **Expected Output:** No `.env`, `*.key`, or `terraform.tfstate` files should appear in `git status`
 
