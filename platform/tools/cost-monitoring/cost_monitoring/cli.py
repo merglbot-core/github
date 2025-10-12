@@ -14,6 +14,7 @@ from rich.table import Table
 from rich.panel import Panel
 import yaml
 import logging
+from github import Github
 
 # Import all local modules at module level
 from .monitor.github_monitor import collect_github
@@ -336,8 +337,6 @@ Status: {"⚠️ THRESHOLDS EXCEEDED" if threshold_result['threshold_exceeded'] 
 def create_github_issue_for_alerts(alerts: list, month: str, data: Dict[str, Any]) -> bool:
     """Create GitHub issue for threshold alerts."""
     try:
-        from github import Github
-        
         token = os.environ.get("GITHUB_TOKEN")
         if not token:
             logger.warning("GITHUB_TOKEN not set, skipping issue creation")
