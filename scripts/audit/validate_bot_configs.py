@@ -174,7 +174,7 @@ def validate_copilot_config(file_path: Path) -> Dict[str, Any]:
         return result
     
     # Determine schema based on path
-    if "copilot-config.yml" in str(file_path):
+    if file_path.name == "copilot-config.yml":
         schema = BOT_SCHEMAS["copilot-config.yml"]
     else:
         schema = BOT_SCHEMAS[".github/copilot/config.yml"]
