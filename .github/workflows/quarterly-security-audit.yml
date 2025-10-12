@@ -106,15 +106,15 @@ jobs:
           name: gitignore-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/gitignore-audit.json
           
-      - name: Create issues for violations
-        if: inputs.create_issues != false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python3 scripts/audit/create_issues.py \
-            --report reports/gitignore-audit.json \
-            --type gitignore \
-            --audit-id "${{ needs.prepare.outputs.audit_id }}"
+#       - name: Create issues for violations
+#         if: inputs.create_issues != false
+#         env:
+#           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#         run: |
+#           python3 scripts/audit/create_issues.py \
+#             --report reports/gitignore-audit.json \
+#             --type gitignore \
+#             --audit-id "${{ needs.prepare.outputs.audit_id }}"
 
   secret-scanning:
     name: Secret Scanning
