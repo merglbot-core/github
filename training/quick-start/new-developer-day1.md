@@ -175,11 +175,11 @@ merglbot-core/platform/
 │   ├── portal/          # Main user portal
 │   └── admin/           # Admin dashboard
 ├── services/            # Backend services
-│   ├── btf/            # BTF service
-│   └── aaas/           # AaaS service
+│   ├── btf/             # BTF service
+│   └── aaas/            # AaaS service
 ├── packages/            # Shared libraries
 ├── docs/                # Documentation
-└── .github/            # CI/CD workflows
+└── .github/             # CI/CD workflows
 ```
 
 ### 3.2 Key Concepts
