@@ -31,8 +31,8 @@ function useMetrics(options = {}) {
   // Aggregate all errors instead of just the first one
   const errors = queries
     .filter(query => query.error)
-    .map((query) => ({
-      metric: query.queryKey?.[1] || 'unknown', // Defensive: fallback if missing
+    .map((query, i) => ({
+      metric: query.queryKey?.[1] ?? `index-${i}`, // Fallback to array index if missing
       error: query.error,
     }));
   const error = errors.length > 0 ? errors : null;
