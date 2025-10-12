@@ -302,11 +302,11 @@ jobs:
 # 300:           echo "- Semantic versioning: ${SEMVER_COMPLIANCE}%" >> "$GITHUB_STEP_SUMMARY"
 # 301:           echo "- Changelog compliance: ${CHANGELOG_COMPLIANCE}%" >> "$GITHUB_STEP_SUMMARY"
 # 302:           
-      - name: Upload release report
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-audit-${{ needs.prepare.outputs.audit_id }}
-          path: reports/release-audit.json
+      # - name: Upload release report
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: release-audit-${{ needs.prepare.outputs.audit_id }}
+      #     path: reports/release-audit.json
 
   generate-report:
     name: Generate Consolidated Report
