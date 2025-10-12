@@ -18,7 +18,7 @@
 - Keep AI-assisted changes under human review (no auto-merge)
 
 ## Incident quick steps
-1) Revoke/rotate secret immediately
-2) Audit logs for unauthorized access
+1) Audit logs for unauthorized access
+2) Revoke/rotate secret immediately
 3) Notify #security and create incident report
 4) Post-mortem → update policy

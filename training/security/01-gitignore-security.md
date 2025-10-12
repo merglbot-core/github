@@ -154,7 +154,10 @@ cd ~/projects/my-merglbot-project
 #  - gitignore-templates/frontend.gitignore
 #  - gitignore-templates/backend.gitignore
 #  - gitignore-templates/infrastructure.gitignore
-cp /path/to/merglbot-core/github/gitignore-templates/frontend.gitignore .gitignore
+# Step 2a: Verify the template exists in your repo
+ls gitignore-templates/frontend.gitignore
+# Step 2b: Copy the template using a relative path
+cp gitignore-templates/frontend.gitignore .gitignore
 
 # Step 3: Verify sensitive files are ignored
 git status
@@ -327,6 +330,18 @@ gh api repos/merglbot-core/platform/branches/<branch>/protection || echo "No pro
 git push origin <your-branch-name> --force
 # e) Notify team when complete
 # ⚠️ NEVER use --all flag (overwrites all branches catastrophically)
+# To replace the secret content within a file (safer):
+echo 'SECRET_VALUE' > secret.txt
+git filter-repo --replace-text secret.txt
+
+# To completely remove a file from history (more destructive):
+git filter-repo --path path/to/secret/file --invert-paths
+
+# 4. Force push (DANGEROUS - coordinate with team)
+# WARNING: This is a destructive action. Coordinate with your team.
+# Force push the rewritten branch. Repeat for all affected branches.
+git push origin <your-branch-name> --force
+# Do NOT use --all flag (overwrites all branches)
 ```
 
 ### Full Incident Response Checklist
