@@ -71,7 +71,7 @@ def detect_project_type(repo_path: str) -> str:
     path = Path(repo_path)
     
     # Check for infrastructure
-    if any(path.glob("*.tf")) or any(path.glob("*.yaml")) and (path / ".terraform").exists():
+    if (any(path.glob("*.tf")) or any(path.glob("*.yaml"))) and (path / ".terraform").exists():
         return "infrastructure"
     
     # Check for frontend
