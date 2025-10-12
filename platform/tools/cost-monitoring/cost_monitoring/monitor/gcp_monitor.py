@@ -20,7 +20,8 @@ def query_month_costs_by_service(
     """Query current month costs grouped by project and service."""
     
     # Build query with parameterized project IDs and month
-    month_start = f"{month}-01" if month else datetime.now().strftime("%Y-%m-01")
+    from datetime import timezone
+    month_start = f"{month}-01" if month else datetime.now(timezone.utc).strftime("%Y-%m-01")
 
     # Validate table name format to prevent SQL injection
     if not all(part.replace("_", "").replace("-", "").isalnum() 
