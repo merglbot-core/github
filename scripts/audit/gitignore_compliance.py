@@ -195,7 +195,7 @@ def audit_repositories(repos: List[str]) -> Dict[str, Any]:
         print(f"Checking {repo}...")
         
         # Clone or use existing repo
-        repo_path = f"/tmp/audit/{repo.split('/')[-1]}"
+        repo_path = f"/tmp/audit/{Path(repo).name}"
         
         if not Path(repo_path).exists():
             # Clone the repository
