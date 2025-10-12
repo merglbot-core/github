@@ -133,7 +133,7 @@ const metricsService = {
 
   // Trigger quarterly audit
   async triggerQuarterlyAudit() {
-    const response = await apiClient.post('/audits/quarterly/trigger');
+    const response = await apiClient.post(API_ENDPOINTS.AUDITS_QUARTERLY_TRIGGER);
     return response.data;
   },
 
