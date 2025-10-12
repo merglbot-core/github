@@ -76,3 +76,4 @@ docker-compose.override.yml
 .turbo/
 .cache/
 .eslintcache
+__pycache__/
