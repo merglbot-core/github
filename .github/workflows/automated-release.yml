@@ -147,12 +147,12 @@ jobs:
     
     steps:
       - name: Notify Slack
-        if: ${{ vars.SLACK_NOTIFICATIONS_ENABLED == 'true' }}
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
+          # Skip if webhook not configured (primary indicator)
           if [ -z "$SLACK_WEBHOOK_URL" ]; then
-            echo "Slack webhook URL not configured, skipping notification"
+            echo "ℹ️ Slack webhook not configured, skipping notification"
             exit 0
           fi
           curl -X POST "$SLACK_WEBHOOK_URL" \
