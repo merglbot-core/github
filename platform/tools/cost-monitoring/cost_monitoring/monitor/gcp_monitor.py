@@ -21,6 +21,14 @@ def query_month_costs_by_service(
     
     # Build query with parameterized project IDs and month
     month_start = f"{month}-01" if month else datetime.now().strftime("%Y-%m-01")
+
+    # Validate table name format to prevent SQL injection
+    if not all(part.replace("_", "").replace("-", "").isalnum() 
+              for part in [project_id, dataset, table_pattern]):
+        raise ValueError(f"Invalid table reference format: {project_id}.{dataset}.{table_pattern}")
+    
+    table_fqn = f"{project_id}.{dataset}.{table_pattern}"
+
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
             bigquery.ArrayQueryParameter("project_ids", "STRING", project_ids),
