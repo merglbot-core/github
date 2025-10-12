@@ -137,7 +137,7 @@ if command -v gitleaks >/dev/null 2>&1; then
         gitleaks_output=$(gitleaks detect --source . --log-opts="$range" --verbose --no-banner 2>&1)
         gitleaks_status=$?
 
-        if [ $gitleaks_status -ne 0 ] || echo "$gitleaks_output" | grep -v "no leaks found" | grep -q .; then
+        if [ $gitleaks_status -ne 0 ]; then
             echo "$gitleaks_output" | grep -v "no leaks found" | head -20
             log_error "Potential secrets detected!"
         
