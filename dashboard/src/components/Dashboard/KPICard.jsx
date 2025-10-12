@@ -26,8 +26,7 @@ function KPICard({ title, value, change, trend, icon, color = 'primary', subtitl
   };
 
   const getTrendColor = () => {
-    // Default to true if not specified as a prop
-    const higherIsBetter = props.higherIsBetter !== false;
+    // Use the higherIsBetter prop directly from the function parameter
   
     if (trend === 'up') {
       return higherIsBetter ? 'success' : 'error';
