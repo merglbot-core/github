@@ -35,8 +35,12 @@ You should have received:
 
 ```bash
 # macOS - using Homebrew
-brew install git gh node@20 python@3.11 terraform@1.6 gcloud
+brew install git gh node@20 python@3.11 terraform@1.6
 
+# Install a specific version of gcloud (Google Cloud SDK)
+curl -O https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-sdk-464.0.0-darwin-x86_64.tar.gz
+tar -xzf google-cloud-sdk-464.0.0-darwin-x86_64.tar.gz
+./google-cloud-sdk/install.sh
 # Verify installations
 git --version
 node --version
