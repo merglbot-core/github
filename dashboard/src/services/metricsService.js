@@ -148,7 +148,7 @@ const metricsService = {
 
   // Get alert configurations
   async getAlertConfigs() {
-    const response = await apiClient.get('/alerts/configs');
+    const response = await apiClient.get(API_ENDPOINTS.ALERTS_CONFIGS);
     return response.data;
   },
 
