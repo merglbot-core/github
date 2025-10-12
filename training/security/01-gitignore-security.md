@@ -148,8 +148,16 @@ docker-compose.override.yml
 # Step 1: Navigate to your project
 cd ~/projects/my-merglbot-project
 
-# Step 2: Download template
-curl -o .gitignore https://raw.githubusercontent.com/merglbot-core/github/main/.gitignore.template
+# Step 2: Use local vetted template (safer than remote curl)
+# Choose the template closest to your stack and inspect before use
+# Options in this repo:
+#  - gitignore-templates/frontend.gitignore
+#  - gitignore-templates/backend.gitignore
+#  - gitignore-templates/infrastructure.gitignore
+# Step 2a: Verify the template exists in your repo
+ls gitignore-templates/frontend.gitignore
+# Step 2b: Copy the template using a relative path
+cp gitignore-templates/frontend.gitignore .gitignore
 
 # Step 3: Verify sensitive files are ignored
 git status
@@ -158,6 +166,8 @@ git status
 git add .gitignore
 git commit -m "chore: Add comprehensive .gitignore for security"
 ```
+
+Security note: Avoid piping remote content directly into your repo (e.g., curl | bash). Always review templates locally before applying.
 
 **Expected Output:** No `.env`, `*.key`, or `terraform.tfstate` files should appear in `git status`
 
@@ -286,7 +296,11 @@ gcloud secrets versions add "leaked-secret-name" --data-file=new_secret.txt
 # First, install git-filter-repo if you haven't:
 # python3 -m pip install git-filter-repo
 
-# ONLY use this as a last resort for removing secrets:
+# To replace the secret content within a file (safer):
+echo 'SECRET_VALUE' > secret.txt
+git filter-repo --replace-text secret.txt
+
+# To completely remove a file from history (more destructive):
 git filter-repo --path path/to/secret/file --invert-paths
 
 # 4. Force push (DANGEROUS - coordinate with team)

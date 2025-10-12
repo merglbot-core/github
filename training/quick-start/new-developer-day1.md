@@ -248,11 +248,16 @@ git diff
 # Stage changes
 git add docs/CONTRIBUTORS.md
 
-# Commit with conventional commits format
-git commit -m "docs: Add my first contribution to CONTRIBUTORS
+# Commit with conventional commits format and error handling
+if git commit -m "docs: Add my first contribution to CONTRIBUTORS
 
 - Added my name to contributors list
-- Updated documentation structure"
+- Updated documentation structure"; then
+  echo "✅ Commit successful"
+else
+  echo "❌ Commit blocked - check pre-commit hooks (e.g., git-secrets)"
+  exit 1
+fi
 ```
 
 ### 4.5 Push and Create PR
