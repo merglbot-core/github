@@ -51,7 +51,7 @@ function Dashboard() {
   } = useMetrics();
 
   if (isLoading) return <LoadingState />;
-  if (error) return <Alert severity="error">Error loading metrics: {error.message}</Alert>;
+  if (error) return <Alert severity="error">Error loading metrics: {error[0].error.message}</Alert>;
 
   const deploymentData = [
     { name: 'Mon', success: 12, failed: 1, rollback: 0 },
