@@ -335,16 +335,7 @@ jobs:
           name: security-audit-report-${{ needs.prepare.outputs.audit_id }}
           path: reports/consolidated-audit.html
           
-      - name: Send notifications
-        if: always()
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: |
-          python3 scripts/audit/send_notifications.py \
-            --report reports/consolidated-audit.html \
-            --audit-id "${{ needs.prepare.outputs.audit_id }}" \
-            --quarter "${AUDIT_QUARTER:-Manual}"
-          
+# Removed "Send notifications" step due to missing script.
       - name: Create tracking issue
         if: inputs.create_issues != false
         env:
