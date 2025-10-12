@@ -32,7 +32,7 @@ function useMetrics(options = {}) {
   const errors = queries
     .filter(query => query.error)
     .map((query) => ({
-      metric: query.queryKey[1], // Assumes queryKey is e.g., ['metrics', 'releases']
+      metric: query.queryKey?.[1] || 'unknown', // Defensive: fallback if missing
       error: query.error,
     }));
   const error = errors.length > 0 ? errors : null;
