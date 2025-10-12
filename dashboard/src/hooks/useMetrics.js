@@ -31,9 +31,9 @@ function useMetrics(options = {}) {
   // Aggregate all errors instead of just the first one
   const errors = queries
     .filter(query => query.error)
-    .map((query, index) => ({
-      metric: ['releases', 'bots', 'security', 'deployments'][index],
-      error: query.error
+    .map((query) => ({
+      metric: query.queryKey[1], // Assumes queryKey is e.g., ['metrics', 'releases']
+      error: query.error,
     }));
   const error = errors.length > 0 ? errors : null;
 
