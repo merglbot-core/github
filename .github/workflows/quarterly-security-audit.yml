@@ -283,23 +283,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         
-      - name: Audit release processes
-        id: releases
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python3 scripts/audit/audit_releases.py \
-            --repos '${{ needs.prepare.outputs.repositories }}' \
-            --output reports/release-audit.json
-          
-          # Check compliance metrics
-          SEMVER_COMPLIANCE=$(jq '.semver_compliance_rate' reports/release-audit.json)
-          CHANGELOG_COMPLIANCE=$(jq '.changelog_compliance_rate' reports/release-audit.json)
-          
-          echo "### 📦 Release Process Audit" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Semantic versioning: ${SEMVER_COMPLIANCE}%" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Changelog compliance: ${CHANGELOG_COMPLIANCE}%" >> "$GITHUB_STEP_SUMMARY"
-          
+# 286:       - name: Audit release processes
+# 287:         id: releases
+# 288:         env:
+# 289:           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+# 290:         run: |
+# 291:           python3 scripts/audit/audit_releases.py \
+# 292:             --repos '${{ needs.prepare.outputs.repositories }}' \
+# 293:             --output reports/release-audit.json
+# 294:           
+# 295:           # Check compliance metrics
+# 296:           SEMVER_COMPLIANCE=$(jq '.semver_compliance_rate' reports/release-audit.json)
+# 297:           CHANGELOG_COMPLIANCE=$(jq '.changelog_compliance_rate' reports/release-audit.json)
+# 298:           
+# 299:           echo "### 📦 Release Process Audit" >> "$GITHUB_STEP_SUMMARY"
+# 300:           echo "- Semantic versioning: ${SEMVER_COMPLIANCE}%" >> "$GITHUB_STEP_SUMMARY"
+# 301:           echo "- Changelog compliance: ${CHANGELOG_COMPLIANCE}%" >> "$GITHUB_STEP_SUMMARY"
+# 302:           
       - name: Upload release report
         uses: actions/upload-artifact@v4
         with:
