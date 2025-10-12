@@ -142,9 +142,10 @@ def collect_github(
         }
     else:
         # Extract from enterprise response
+        seats_data = cop.get("seats") or []
         cop = {
-            "seats_assigned": cop.get("seats", [{}])[0].get("assigned", 0),
-            "seats_purchased": cop.get("seats", [{}])[0].get("purchased", 0)
+            "seats_assigned": seats_data[0].get("assigned", 0) if seats_data else 0,
+            "seats_purchased": seats_data[0].get("purchased", 0) if seats_data else 0
         }
     
     # Calculate Copilot costs
