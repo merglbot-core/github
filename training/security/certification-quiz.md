@@ -68,7 +68,7 @@
 
 **Q7. What is the correct secret naming convention at merglbot?**
 - [ ] A) `api-key`
-- [ ] B) `runtime--service--env--name`
+- [ ] B) `runtime-service-env-name`
 - [ ] C) `SECRET_NAME`
 - [ ] D) No convention needed
 
