@@ -249,11 +249,10 @@ git diff
 git add docs/CONTRIBUTORS.md
 
 # Commit with conventional commits format
-echo "docs: Add my first contribution to CONTRIBUTORS
+git commit -m "docs: Add my first contribution to CONTRIBUTORS
 
 - Added my name to contributors list
-- Updated documentation structure" > commit-message.txt
-git commit -F commit-message.txt
+- Updated documentation structure"
 ```
 
 ### 4.5 Push and Create PR
