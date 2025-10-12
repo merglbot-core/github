@@ -273,7 +273,10 @@ gcloud secrets versions add "leaked-secret-name" --data-file=new_secret.txt
 # 2. Remove from git history using a modern tool
 # First, install git-filter-repo if you haven't:
 # python3 -m pip install git-filter-repo
+# Replace 'path/to/secret/file' with the actual path to the file containing the secret (e.g., '.env')
 git filter-repo --path path/to/secret/file --invert-paths
+# Example:
+# git filter-repo --path .env --invert-paths
 
 # 3. Force push (coordinate with your team!)
 git push origin --force --all
