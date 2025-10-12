@@ -79,13 +79,13 @@ echo "Checking for large files..."
 LARGE_FILES=0
 for file in $STAGED_FILES; do
     if [ -f "$file" ]; then
-        if ! size=$(wc -c < "$file" 2>/dev/null) || ! [[ "$size" =~ ^[0-9]+$ ]]; then
+        size=$(wc -c < "$file" 2>/dev/null)
+        if [ -z "$size" ] || ! [ "$size" -eq "$size" ] 2>/dev/null; then
             echo -e "${YELLOW}⚠️  Could not determine size of $file. Skipping large file check for this file.${NC}"
             continue
         fi
         if [ "$size" -gt 10485760 ]; then # 10MB
-            mb_size=$(( size / 1048576 ))
-            echo -e "${YELLOW}⚠️  Large file detected: $file (${mb_size}MB)${NC}"
+            echo -e "${YELLOW}⚠️  Large file detected: $file ($(($size / 1048576))MB)${NC}"
             ((LARGE_FILES++))
         fi
     fi

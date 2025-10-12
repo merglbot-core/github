@@ -89,8 +89,8 @@ jobs:
           ## 🚀 What's Changed
           EOF
 
-          # Append commits safely (prevent injection)
-          echo "$COMMITS" >> CHANGELOG_TEMP.md
+          # Append commits without shell expansion (prevent injection)
+          printf '%s\n' "${COMMITS}" >> CHANGELOG_TEMP.md
 
           cat >> CHANGELOG_TEMP.md << EOF
 

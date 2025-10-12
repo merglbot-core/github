@@ -133,14 +133,15 @@ fi
 # 4. Secret Detection
 echo -e "${BLUE}[4/5] Scanning for secrets...${NC}"
 if command -v gitleaks >/dev/null 2>&1; then
-    if git rev-list "$range" >/dev/null 2>&1; then
-        gitleaks_output=$(gitleaks detect --source . --log-opts="$range" --verbose --no-banner 2>&1)
-        gitleaks_status=$?
-
-        if [ $gitleaks_status -ne 0 ]; then
-            echo "$gitleaks_output" | grep -v "no leaks found" | head -20
+    # Create temporary file for commits
+    TEMP_COMMITS=$(mktemp -t commits.XXXXXX)
+    git rev-list "$range" > "$TEMP_COMMITS" 2>/dev/null || true
+    
+    if [ -s "$TEMP_COMMITS" ]; then
+        if gitleaks detect --source . --log-opts="$range" --verbose --no-banner 2>&1 | grep -v "no leaks found" | head -20; then
             log_error "Potential secrets detected!"
-        
+            rm -f "$TEMP_COMMITS"
+            
             # Allow override with confirmation
             echo ""
             read -p "Type 'PUSH ANYWAY' to override (or press Enter to abort): " override_confirmation
@@ -153,6 +154,7 @@ if command -v gitleaks >/dev/null 2>&1; then
             log_success "No secrets detected"
         fi
     fi
+    rm -f "$TEMP_COMMITS"
 else
     log_warning "gitleaks not installed. Install with: brew install gitleaks"
 fi
