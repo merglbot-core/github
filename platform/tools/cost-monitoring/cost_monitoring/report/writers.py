@@ -24,7 +24,7 @@ def write_markdown(path: str, data: Dict[str, Any]) -> None:
         
         # Header
         f.write(f"# Cost Report {month}\n\n")
-        f.write(f"Generated: {dt.datetime.now().strftime('%Y-%m-%d %H:%M UTC')}\n\n")
+        f.write(f"Generated: {dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n\n")
         
         # Summary
         github_total = github_data.get("total_monthly_cost_usd", 0)
@@ -302,7 +302,7 @@ def write_all_reports(
     write_markdown(str(md_path), data)
     
     # Write JSON
-    data["generated_at"] = dt.datetime.now().isoformat()
+    data["generated_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     write_json(str(json_path), data)
     
     return {

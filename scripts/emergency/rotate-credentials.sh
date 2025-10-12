@@ -67,9 +67,10 @@ function rotate_gcp_secret() {
     fi
     
     # Generate new secret value securely (never echo the value)
-    # Use a temporary file in a secure location with restricted permissions
-    SECURE_DIR="${TMPDIR:-/dev/shm}"
-    TEMP_SECRET_FILE=$(mktemp -p "$SECURE_DIR" rotate_secret.XXXXXX) || { echo -e "${RED}  ❌ Failed to create temporary file${NC}"; log_incident "ERROR: Failed to create temporary file"; return 1; }
+    # Create a secure temporary directory with restricted permissions
+    SECURE_DIR=$(mktemp -d -t rotate_secret_dir.XXXXXX) || { echo -e "${RED}  ❌ Failed to create temporary directory${NC}"; log_incident "ERROR: Failed to create temporary directory"; return 1; }
+    chmod 700 "$SECURE_DIR"
+    TEMP_SECRET_FILE="${SECURE_DIR}/secret.tmp"
     chmod 600 "$TEMP_SECRET_FILE"
     openssl rand -base64 32 > "$TEMP_SECRET_FILE"
     
@@ -80,12 +81,13 @@ function rotate_gcp_secret() {
     else
         echo -e "${RED}  ❌ Failed to add new version${NC}"
         log_incident "ERROR: Failed to add new version to secret: $secret_name"
-        rm -f "$TEMP_SECRET_FILE"
+        rm -rf "$SECURE_DIR"
         return 1
     fi
     
-    # Securely remove temporary file
+    # Securely remove temporary directory and files
     shred -u "$TEMP_SECRET_FILE" 2>/dev/null || rm -f "$TEMP_SECRET_FILE"
+    rm -rf "$SECURE_DIR"
 }
 
 function rotate_github_token() {

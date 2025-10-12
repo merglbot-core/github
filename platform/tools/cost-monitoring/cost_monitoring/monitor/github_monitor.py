@@ -27,10 +27,9 @@ def _headers() -> Dict[str, str]:
     }
 
 
-def list_org_members_count(org: str) -> int:
+def list_org_members_count(gh: Github, org: str) -> int:
     """Get member count for an organization without logging PII."""
     try:
-        gh = Github(os.environ.get("GITHUB_TOKEN"))
         members = gh.get_organization(org).get_members()
         count = members.totalCount
         logger.info(f"Organization {org} has {count} members")
@@ -106,13 +105,16 @@ def collect_github(
 ) -> Dict[str, Any]:
     """Collect all GitHub cost data."""
     
+    # Initialize Github client once
+    gh = Github(os.environ.get("GITHUB_TOKEN"))
+    
     # Collect org member counts
     org_members = []
     # Note: Proper unique member counting would require fetching actual member IDs
     # and tracking them across orgs, which may have privacy implications.
     # For now, we'll use the sum as an upper bound estimate
     for org in orgs:
-        member_count = list_org_members_count(org)
+        member_count = list_org_members_count(gh, org)
         org_members.append({
             "org": org,
             "members": member_count

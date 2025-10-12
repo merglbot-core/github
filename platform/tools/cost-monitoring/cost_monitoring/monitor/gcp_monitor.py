@@ -28,10 +28,10 @@ def query_month_costs_by_service(
         project_id, dataset, table_pattern = table_fqn.split('.')
     except ValueError:
         raise ValueError(f"Invalid table reference format: {table_fqn}")
-    # Allow only alphanumeric chars, underscores, and hyphens in table_pattern (no wildcards)
+    # Allow alphanumeric chars, underscores, hyphens, and wildcards in table_pattern
     if not all(part.replace("_", "").replace("-", "").isalnum() for part in [project_id, dataset]) or \
-       not all(c.isalnum() or c in "_-" for c in table_pattern):
-        raise ValueError(f"Invalid table reference format: {table_fqn} (wildcards are not allowed)")
+       not all(c.isalnum() or c in "_-*" for c in table_pattern):
+        raise ValueError(f"Invalid table reference format: {table_fqn}")
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
             bigquery.ArrayQueryParameter("project_ids", "STRING", project_ids),
@@ -133,6 +133,16 @@ def list_budgets(billing_account_id: str) -> List[Dict[str, Any]]:
         return []
 
 
+def _get_all_projects_recursively(config_node: Any) -> List[str]:
+    """Recursively extract all project IDs from nested configuration."""
+    projects = []
+    if isinstance(config_node, list):
+        projects.extend(p for p in config_node if isinstance(p, str))
+    elif isinstance(config_node, dict):
+        for value in config_node.values():
+            projects.extend(_get_all_projects_recursively(value))
+    return projects
+
 def collect_gcp(
     config: Dict[str, Any],
     month: Optional[str] = None
@@ -146,17 +156,9 @@ def collect_gcp(
     table_pattern = billing_config.get("table_pattern", "gcp_billing_export_v1_*")
     billing_account_id = config.get("billing_account_id")
     
-    # Get all project IDs
-    all_projects = []
+    # Get all project IDs using recursive helper
     projects_config = config.get("projects", {})
-    
-    for category, category_data in projects_config.items():
-        if isinstance(category_data, list):
-            all_projects.extend(category_data)
-        elif isinstance(category_data, dict):
-            for subcategory, project_list in category_data.items():
-                if isinstance(project_list, list):
-                    all_projects.extend(project_list)
+    all_projects = _get_all_projects_recursively(projects_config)
     
     if not all_projects:
         logger.warning("No projects configured for GCP monitoring")

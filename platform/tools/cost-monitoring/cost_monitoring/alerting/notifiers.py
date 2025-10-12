@@ -7,7 +7,7 @@ import json
 import requests
 from typing import Dict, Any, List, Optional
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .thresholds import format_alert_message
 
@@ -163,7 +163,7 @@ def format_slack_cost_report(
         "elements": [
             {
                 "type": "mrkdwn",
-                "text": f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M UTC')} | View full report in GitHub Actions"
+                "text": f"Generated at {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} | View full report in GitHub Actions"
             }
         ]
     })

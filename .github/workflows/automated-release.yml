@@ -54,13 +54,10 @@ jobs:
           if [ -n "${{ inputs.version }}" ]; then
             VERSION="${{ inputs.version }}"
           else
-            # Use semantic-release to determine next version (robust JSON parsing)
-            if ! command -v jq &> /dev/null; then
-              echo "jq not found, installing..."
-              sudo apt-get update && sudo apt-get install -y jq
-            fi
-            # semantic-release doesn't have --stdout flag, parse from dry-run output
-            VERSION=$(npx semantic-release --dry-run --no-ci 2>&1 | grep -oP 'The next release version is \K[0-9]+\.[0-9]+\.[0-9]+' || echo '')
+            # jq is already available in GitHub Actions Ubuntu runners
+            # Parse semantic-release output more robustly
+            RELEASE_OUTPUT=$(npx semantic-release --dry-run --no-ci 2>&1 || true)
+            VERSION=$(echo "$RELEASE_OUTPUT" | grep -E 'next release version|new version|would publish' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo '')
             if [ -z "$VERSION" ]; then
               echo "No release needed"
               echo "skip=true" >> $GITHUB_OUTPUT
