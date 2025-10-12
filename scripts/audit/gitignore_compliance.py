@@ -202,7 +202,8 @@ def audit_repositories(repos: List[str]) -> Dict[str, Any]:
             subprocess.run(
                 ["git", "clone", f"https://github.com/{repo}.git", repo_path],
                 capture_output=True,
-                text=True
+                text=True,
+                check=True
             )
         
         # Check compliance
