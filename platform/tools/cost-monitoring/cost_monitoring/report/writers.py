@@ -2,7 +2,7 @@
 Report writers for CSV, Markdown, and JSON formats.
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import csv
 import json
 import datetime as dt

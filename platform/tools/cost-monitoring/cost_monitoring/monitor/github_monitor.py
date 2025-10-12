@@ -23,7 +23,7 @@ def _headers() -> Dict[str, str]:
     return {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
-        "Authorization": f"token {token}",
+        "Authorization": f"Bearer {token}",
     }
 
 

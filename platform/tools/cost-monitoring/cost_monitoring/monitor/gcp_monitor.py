@@ -12,9 +12,10 @@ logger = logging.getLogger(__name__)
 
 
 def query_month_costs_by_service(
-    bq: bigquery.Client, 
-    table_fqn: str, 
-    project_ids: List[str]
+    bq: bigquery.Client,
+    table_fqn: str,
+    project_ids: List[str],
+    month: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """Query current month costs grouped by project and service."""
     
@@ -164,7 +165,7 @@ def collect_gcp(
         table_fqn = f"{project_id}.{dataset}.{table_pattern}"
         
         # Query costs
-        project_costs = query_month_costs_by_service(bq_client, table_fqn, all_projects)
+        project_costs = query_month_costs_by_service(bq_client, table_fqn, all_projects, current_month)
         
         # Get budgets if billing account is configured
         budgets = []

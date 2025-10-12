@@ -200,4 +200,4 @@ def format_alert_message(alert: Dict[str, Any]) -> str:
             service = alert.get("service", "")
             return f"⚠️ GCP '{project}' - {service}: ${value:.2f} exceeds limit ${threshold:.2f}"
     
-    return f"Alert: {alert}"
+    return f"Alert: {alert.get('scope', 'unknown')} - {alert.get('type', 'unknown')} (value: {alert.get('value', 'N/A')}, threshold: {alert.get('threshold', 'N/A')})"

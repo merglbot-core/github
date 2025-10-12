@@ -12,11 +12,14 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
-def send_slack(webhook_url: str, markdown: str, blocks: Optional[List] = None) -> bool:
+def send_slack(webhook_url: str, markdown: str, blocks: Optional[List[Dict[str, Any]]] = None) -> bool:
     """Send notification to Slack."""
     try:
-        payload = {"text": markdown}
+        if not webhook_url or not webhook_url.startswith("https://hooks.slack.com/"):
+            logger.error("Invalid Slack webhook URL format")
+            return False
         
+        payload = {"text": markdown}
         if blocks:
             payload["blocks"] = blocks
         
