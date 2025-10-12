@@ -82,7 +82,7 @@ Print-friendly cheat sheets for daily use:
 - **Validity:** 6 months
 - **Recertification:** Every 6 months
 
-### Bot Interaction Certification  
+### Bot Interaction Certification
 - **Requirements:** Complete bot track + submit 3 reviewed PRs
 - **Practical Exam:** Live coding session with AI assistance
 - **Validity:** 12 months
