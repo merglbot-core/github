@@ -32,7 +32,7 @@ jobs:
           fail=0
           while IFS= read -r f; do
             [ -z "$f" ] && continue
-            if grep -nE "git\s+push[^\n]*--force\s+--all" "$f" | grep -viE "never|do not|nepoužívej|nepouzivej|nepoužij"; then
+            if grep -nEi "git\s+push[^\n]*((--force(-with-lease)?|--force-with-lease)[^\n]*--all|--all[^\n]*(--force(-with-lease)?|--force-with-lease))" "$f" | grep -viE "never|do not|nepoužívej|nepouzivej|nepoužij"; then
               echo "❌ Dangerous pattern found in $f (git push --force --all). Use branch-only force push and include warnings."
               fail=1
             fi
