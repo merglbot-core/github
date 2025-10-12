@@ -95,7 +95,7 @@ const metricsService = {
 
   // Get recent deployments
   async getRecentDeployments(limit = 10) {
-    const response = await apiClient.get('/deployments/recent', {
+    const response = await apiClient.get(API_ENDPOINTS.DEPLOYMENTS_RECENT, {
       params: { limit }
     });
     return response.data;
@@ -103,7 +103,7 @@ const metricsService = {
 
   // Get rollback history
   async getRollbackHistory(period = '30d') {
-    const response = await apiClient.get('/rollbacks', {
+    const response = await apiClient.get(API_ENDPOINTS.ROLLBACKS, {
       params: { period }
     });
     return response.data;
@@ -111,7 +111,7 @@ const metricsService = {
 
   // Get security incidents
   async getSecurityIncidents(period = '30d') {
-    const response = await apiClient.get('/security/incidents', {
+    const response = await apiClient.get(API_ENDPOINTS.SECURITY_INCIDENTS, {
       params: { period }
     });
     return response.data;
@@ -125,7 +125,7 @@ const metricsService = {
 
   // Get quarterly review data
   async getQuarterlyReview(quarter) {
-    const response = await apiClient.get('/reviews/quarterly', {
+    const response = await apiClient.get(API_ENDPOINTS.REVIEWS_QUARTERLY, {
       params: { quarter }
     });
     return response.data;
@@ -139,7 +139,7 @@ const metricsService = {
 
   // Export metrics to CSV
   async exportMetrics(type, period) {
-    const response = await apiClient.get(`/metrics/export/${type}`, {
+    const response = await apiClient.get(`${API_ENDPOINTS.METRICS_EXPORT}/${type}`, {
       params: { period },
       responseType: 'blob'
     });
@@ -154,17 +154,13 @@ const metricsService = {
 
   // Update alert configuration
   async updateAlertConfig(id, config) {
-    const response = await apiClient.put(`/alerts/configs/${id}`, config);
+    const response = await apiClient.put(`${API_ENDPOINTS.ALERTS_CONFIGS}/${id}`, config);
     return response.data;
   },
 
   // Test alert
   async testAlert(alertType) {
-    const endpoint =
-      typeof API_ENDPOINTS.ALERTS_TEST === 'function'
-        ? API_ENDPOINTS.ALERTS_TEST(alertType)
-        : API_ENDPOINTS.ALERTS_TEST.replace(':type', alertType);
-    const response = await apiClient.post(endpoint);
+    const response = await apiClient.post(`${API_ENDPOINTS.ALERTS_TEST}/${alertType}`);
     return response.data;
   },
 };
