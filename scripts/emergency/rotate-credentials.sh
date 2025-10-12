@@ -69,7 +69,7 @@ function rotate_gcp_secret() {
     # Generate new secret value securely (never echo the value)
     # Use a temporary file in a secure location with restricted permissions
     SECURE_DIR="${TMPDIR:-/dev/shm}"
-    TEMP_SECRET_FILE=$(mktemp -p "$SECURE_DIR" rotate_secret.XXXXXX)
+    TEMP_SECRET_FILE=$(mktemp -p "$SECURE_DIR" rotate_secret.XXXXXX) || { echo -e "${RED}  ❌ Failed to create temporary file${NC}"; log_incident "ERROR: Failed to create temporary file"; return 1; }
     chmod 600 "$TEMP_SECRET_FILE"
     openssl rand -base64 32 > "$TEMP_SECRET_FILE"
     

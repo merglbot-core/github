@@ -203,11 +203,13 @@ cp gitignore-templates/infrastructure.gitignore /path/to/project/.gitignore
 # macOS:
 brew install gitleaks
 
-# Linux (apt):
-sudo apt-get install gitleaks
-
 # Linux (snap):
 sudo snap install gitleaks
+
+# Linux (manual):
+# Download from https://github.com/gitleaks/gitleaks/releases
+# chmod +x gitleaks
+# sudo mv gitleaks /usr/local/bin/
 
 # Windows (scoop):
 scoop install gitleaks

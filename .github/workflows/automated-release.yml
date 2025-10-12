@@ -57,9 +57,10 @@ jobs:
             # Use semantic-release to determine next version (robust JSON parsing)
             if ! command -v jq &> /dev/null; then
               echo "jq not found, installing..."
-              apt-get update && apt-get install -y jq
+              sudo apt-get update && sudo apt-get install -y jq
             fi
-            VERSION=$(npx semantic-release --dry-run --no-ci --stdout | jq -r '.nextRelease.version // empty')
+            # semantic-release doesn't have --stdout flag, parse from dry-run output
+            VERSION=$(npx semantic-release --dry-run --no-ci 2>&1 | grep -oP 'The next release version is \K[0-9]+\.[0-9]+\.[0-9]+' || echo '')
             if [ -z "$VERSION" ]; then
               echo "No release needed"
               echo "skip=true" >> $GITHUB_OUTPUT
@@ -88,8 +89,8 @@ jobs:
           ## 🚀 What's Changed
           EOF
 
-          # Append commits without shell expansion (prevent injection)
-          printf '%s\n' "${COMMITS}" >> CHANGELOG_TEMP.md
+          # Append commits safely (prevent injection)
+          echo "$COMMITS" >> CHANGELOG_TEMP.md
 
           cat >> CHANGELOG_TEMP.md << EOF
 

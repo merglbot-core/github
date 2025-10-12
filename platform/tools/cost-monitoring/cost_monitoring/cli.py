@@ -21,7 +21,6 @@ from .monitor.gcp_monitor import collect_gcp
 from .alerting.thresholds import evaluate_all_thresholds, format_alert_message
 from .alerting.notifiers import send_cost_report_to_slack
 from .report.writers import write_all_reports
-from github import Github
 
 # Configure logging
 logging.basicConfig(
@@ -337,6 +336,8 @@ Status: {"⚠️ THRESHOLDS EXCEEDED" if threshold_result['threshold_exceeded'] 
 def create_github_issue_for_alerts(alerts: list, month: str, data: Dict[str, Any]) -> bool:
     """Create GitHub issue for threshold alerts."""
     try:
+        from github import Github
+        
         token = os.environ.get("GITHUB_TOKEN")
         if not token:
             logger.warning("GITHUB_TOKEN not set, skipping issue creation")
@@ -346,6 +347,11 @@ def create_github_issue_for_alerts(alerts: list, month: str, data: Dict[str, Any
         repo_name = os.environ.get("GITHUB_REPOSITORY")
         if not repo_name:
             logger.warning("GITHUB_REPOSITORY not set, skipping issue creation")
+            return False
+        
+        # Validate repo_name format (should be owner/repo)
+        if not repo_name or "/" not in repo_name or not all(part for part in repo_name.split("/", 1)):
+            logger.error(f"Invalid repository name format: {repo_name}")
             return False
         
         g = Github(token)

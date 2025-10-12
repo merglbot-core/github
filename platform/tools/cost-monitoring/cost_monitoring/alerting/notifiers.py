@@ -9,7 +9,7 @@ from typing import Dict, Any, List, Optional
 import logging
 from datetime import datetime
 
-from ..alerting.thresholds import format_alert_message
+from .thresholds import format_alert_message
 
 logger = logging.getLogger(__name__)
 

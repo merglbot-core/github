@@ -93,10 +93,11 @@ jobs:
           CMD="$CMD --soft-fail"
           
           echo "Running: $CMD"
+          EXIT=0
           $CMD || EXIT=$?
           
           echo "reports_dir=$(pwd)/reports" >> "$GITHUB_OUTPUT"
-          echo "exit_code=${EXIT:-0}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
 
       - name: Generate Step Summary
         if: always()
