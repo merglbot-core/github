@@ -139,8 +139,18 @@ def evaluate_all_thresholds(
 ) -> Dict[str, Any]:
     """Evaluate all thresholds and return alerts."""
     
-    github_alerts = evaluate_github_thresholds(github_data, thresholds)
-    gcp_alerts = evaluate_gcp_thresholds(gcp_data, thresholds)
+    github_alerts = []
+    gcp_alerts = []
+    
+    if github_data:
+        github_alerts = evaluate_github_thresholds(github_data, thresholds)
+    else:
+        logger.warning("No GitHub data provided for threshold evaluation")
+        
+    if gcp_data:
+        gcp_alerts = evaluate_gcp_thresholds(gcp_data, thresholds)
+    else:
+        logger.warning("No GCP data provided for threshold evaluation")
     
     all_alerts = github_alerts + gcp_alerts
     
