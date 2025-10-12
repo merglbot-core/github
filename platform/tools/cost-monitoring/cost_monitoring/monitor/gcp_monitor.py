@@ -18,10 +18,12 @@ def query_month_costs_by_service(
 ) -> List[Dict[str, Any]]:
     """Query current month costs grouped by project and service."""
     
-    # Build query with parameterized project IDs
+    # Build query with parameterized project IDs and month
+    month_start = f"{month}-01" if month else datetime.now().strftime("%Y-%m-01")
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
-            bigquery.ArrayQueryParameter("project_ids", "STRING", project_ids)
+            bigquery.ArrayQueryParameter("project_ids", "STRING", project_ids),
+            bigquery.ScalarQueryParameter("month_start", "STRING", month_start)
         ]
     )
     
