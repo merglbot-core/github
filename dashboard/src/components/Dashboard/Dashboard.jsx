@@ -51,7 +51,13 @@ function Dashboard() {
   } = useMetrics();
 
   if (isLoading) return <LoadingState />;
-  if (error) return <Alert severity="error">Error loading metrics: {error[0].error.message}</Alert>;
+  if (error) {
+    // Safely extract error message with proper validation
+    const errorMessage = Array.isArray(error) && error.length > 0 && error[0]?.error?.message
+      ? error[0].error.message
+      : 'Failed to load metrics. Please try again later.';
+    return <Alert severity="error">Error loading metrics: {errorMessage}</Alert>;
+  }
 
   const deploymentData = [
     { name: 'Mon', success: 12, failed: 1, rollback: 0 },
