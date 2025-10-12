@@ -194,33 +194,33 @@ def audit_repositories(repos: List[str]) -> Dict[str, Any]:
         # Clone or use existing repo
         import tempfile
 
-        # Create a secure temporary directory
-        temp_dir = tempfile.mkdtemp(prefix="audit-")
-        repo_path = f"{temp_dir}/{Path(repo).name}"
-        
-        if not Path(repo_path).exists():
-            # Clone the repository
-            subprocess.run(
-                ["git", "clone", f"https://github.com/{repo}.git", repo_path],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-        
-        # Check compliance
-        repo_result = check_gitignore_compliance(repo_path)
-        results["details"].append(repo_result)
-        
-        # Update summary stats
-        if not repo_result["has_gitignore"]:
-            results["repos_without_gitignore"] += 1
-            results["non_compliant_repos"] += 1
-        elif repo_result["compliance_score"] >= 80:
-            results["compliant_repos"] += 1
-        else:
-            results["non_compliant_repos"] += 1
-        
-        results["total_issues"] += len(repo_result["issues"])
+        # Create a secure temporary directory and ensure cleanup
+        with tempfile.TemporaryDirectory(prefix="audit-") as temp_dir:
+            repo_path = f"{temp_dir}/{Path(repo).name}"
+            
+            if not Path(repo_path).exists():
+                # Clone the repository
+                subprocess.run(
+                    ["git", "clone", f"https://github.com/{repo}.git", repo_path],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+            
+            # Check compliance
+            repo_result = check_gitignore_compliance(repo_path)
+            results["details"].append(repo_result)
+            
+            # Update summary stats
+            if not repo_result["has_gitignore"]:
+                results["repos_without_gitignore"] += 1
+                results["non_compliant_repos"] += 1
+            elif repo_result["compliance_score"] >= 80:
+                results["compliant_repos"] += 1
+            else:
+                results["non_compliant_repos"] += 1
+            
+            results["total_issues"] += len(repo_result["issues"])
     
     # Calculate overall compliance rate
     results["compliance_rate"] = (
