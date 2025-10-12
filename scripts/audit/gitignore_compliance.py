@@ -200,12 +200,26 @@ def audit_repositories(repos: List[str]) -> Dict[str, Any]:
             
             if not Path(repo_path).exists():
                 # Clone the repository
-                subprocess.run(
-                    ["git", "clone", f"https://github.com/{repo}.git", repo_path],
-                    capture_output=True,
-                    text=True,
-                    check=True
-                )
+                try:
+                    subprocess.run(
+                        ["git", "clone", f"https://github.com/{repo}.git", repo_path],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                except subprocess.CalledProcessError as e:
+                    print(f"ERROR: Failed to clone {repo}: {e.stderr.strip() if e.stderr else e}")
+                    # Record the error in results and continue to next repo
+                    results["details"].append({
+                        "repo": repo,
+                        "has_gitignore": False,
+                        "compliance_score": 0,
+                        "issues": [f"Failed to clone repository: {e.stderr.strip() if e.stderr else str(e)}"]
+                    })
+                    results["repos_without_gitignore"] += 1
+                    results["non_compliant_repos"] += 1
+                    results["total_issues"] += 1
+                    continue
             
             # Check compliance
             repo_result = check_gitignore_compliance(repo_path)
