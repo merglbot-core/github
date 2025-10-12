@@ -29,12 +29,20 @@ export function getCsrfToken() {
 
 /**
  * Sanitize HTML to prevent XSS attacks
+ * This function escapes HTML entities to prevent script injection
  * @param {string} html - HTML string to sanitize
- * @returns {string} - Sanitized HTML string
+ * @returns {string} - Sanitized HTML string with escaped entities
  */
 export function sanitizeHtml(html) {
+  if (!html) return '';
+  
+  // Create a text node which automatically escapes HTML entities
   const div = document.createElement('div');
-  div.textContent = html;
+  const textNode = document.createTextNode(html);
+  div.appendChild(textNode);
+  
+  // Return escaped HTML - safe to use with innerHTML if needed
+  // This converts <script> to &lt;script&gt; etc.
   return div.innerHTML;
 }
 
