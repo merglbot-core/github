@@ -32,9 +32,7 @@ def list_org_members_count(org: str) -> int:
     try:
         gh = Github(os.environ.get("GITHUB_TOKEN"))
         members = gh.get_organization(org).get_members()
-        count = 0
-        for _ in members:
-            count += 1
+        count = members.totalCount
         logger.info(f"Organization {org} has {count} members")
         return count
     except Exception as e:
