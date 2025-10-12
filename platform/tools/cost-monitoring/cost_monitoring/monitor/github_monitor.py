@@ -143,9 +143,9 @@ def collect_github(
             "seats_purchased": seats_data[0].get("purchased", 0) if seats_data else 0
         }
     
-    # Calculate Copilot costs
+    # Calculate Copilot costs (based on purchased seats for billing)
     copilot_price_per_seat = float(pricing.get("copilot_usd_per_seat", 19.0))
-    cop_cost = cop.get("seats_assigned", 0) * copilot_price_per_seat
+    cop_cost = cop.get("seats_purchased", 0) * copilot_price_per_seat
     
     # Try to get Enterprise Cloud seats
     ec = get_enterprise_cloud_seats(enterprise)

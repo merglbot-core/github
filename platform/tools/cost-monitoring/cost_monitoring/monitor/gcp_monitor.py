@@ -28,7 +28,9 @@ def query_month_costs_by_service(
         project_id, dataset, table_pattern = table_fqn.split('.')
     except ValueError:
         raise ValueError(f"Invalid table reference format: {table_fqn}")
-    if not all(part.replace("_", "").replace("-", "").isalnum() for part in [project_id, dataset, table_pattern]):
+    # Allow alphanumeric chars, underscores, hyphens, and wildcards in table_pattern
+    if not all(part.replace("_", "").replace("-", "").isalnum() for part in [project_id, dataset]) or \
+       not all(c.isalnum() or c in "_-*" for c in table_pattern):
         raise ValueError(f"Invalid table reference format: {table_fqn}")
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
