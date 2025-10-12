@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { API_ENDPOINTS } from '../config/api';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
@@ -10,7 +11,7 @@ const apiClient = axios.create({
   },
 });
 
-// Add request interceptor for authentication
+// Add request interceptor for authentication and CSRF protection
 apiClient.interceptors.request.use(
   (config) => {
     // Add auth token if available
@@ -18,6 +19,15 @@ apiClient.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+    
+    // Add CSRF token for mutating operations
+    if (['post', 'put', 'delete', 'patch'].includes(config.method)) {
+      const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+      if (csrfToken) {
+        config.headers['X-CSRF-Token'] = csrfToken;
+      }
+    }
+    
     return config;
   },
   (error) => {
@@ -29,8 +39,8 @@ apiClient.interceptors.request.use(
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      // Handle unauthorized access
+    if (error.response?.status === 401 && window.location.pathname !== '/login') {
+      // Handle unauthorized access, but avoid redirect loop
       localStorage.removeItem('auth_token');
       window.location.href = '/login';
     }
@@ -38,10 +48,18 @@ apiClient.interceptors.response.use(
   }
 );
 
+// Valid periods for metrics
+const VALID_PERIODS = ['7d', '30d', '90d', '1y'];
+
 const metricsService = {
   // Release metrics
   async getReleaseMetrics(period = '30d') {
-    const response = await apiClient.get('/metrics/releases', {
+    // Validate period parameter
+    if (!VALID_PERIODS.includes(period)) {
+      throw new Error(`Invalid period: ${period}. Valid periods are: ${VALID_PERIODS.join(', ')}`);
+    }
+    
+    const response = await apiClient.get(API_ENDPOINTS.METRICS_RELEASES, {
       params: { period }
     });
     return response.data;
@@ -49,7 +67,7 @@ const metricsService = {
 
   // Bot metrics
   async getBotMetrics(period = '30d') {
-    const response = await apiClient.get('/metrics/bots', {
+    const response = await apiClient.get(API_ENDPOINTS.METRICS_BOTS, {
       params: { period }
     });
     return response.data;
@@ -57,7 +75,7 @@ const metricsService = {
 
   // Security metrics
   async getSecurityMetrics() {
-    const response = await apiClient.get('/metrics/security');
+    const response = await apiClient.get(API_ENDPOINTS.METRICS_SECURITY);
     return response.data;
   },
 

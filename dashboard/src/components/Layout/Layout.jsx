@@ -25,9 +25,7 @@ import {
   SmartToy as BotIcon,
   Security as SecurityIcon,
   Settings as SettingsIcon,
-  Refresh as RefreshIcon,
-  Brightness4,
-  Brightness7
+  Refresh as RefreshIcon
 } from '@mui/icons-material';
 
 const drawerWidth = 240;

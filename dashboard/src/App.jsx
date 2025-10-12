@@ -1,12 +1,13 @@
 import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
-import { Box, Container } from '@mui/material';
+import { Container } from '@mui/material';
 import Layout from './components/Layout/Layout';
 import Dashboard from './components/Dashboard/Dashboard';
 import ReleaseMetrics from './components/ReleaseMetrics/ReleaseMetrics';
 import BotMetrics from './components/BotMetrics/BotMetrics';
 import SecurityMonitoring from './components/SecurityMonitoring/SecurityMonitoring';
 import Settings from './components/Settings/Settings';
+import Login from './components/Login/Login';
 import NotFound from './components/NotFound/NotFound';
 import ErrorBoundary from './components/ErrorBoundary/ErrorBoundary';
 
@@ -17,6 +18,7 @@ function App() {
         <Container maxWidth={false} sx={{ mt: 4, mb: 4 }}>
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/login" element={<Login />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/releases" element={<ReleaseMetrics />} />
             <Route path="/bots" element={<BotMetrics />} />

@@ -4,9 +4,6 @@ import {
   Paper,
   Typography,
   Box,
-  Card,
-  CardContent,
-  LinearProgress,
   Chip,
   Stack,
   Alert
@@ -38,8 +35,6 @@ import {
   Area,
   AreaChart
 } from 'recharts';
-import { useQuery } from '@tanstack/react-query';
-import { format } from 'date-fns';
 import useMetrics from '../../hooks/useMetrics';
 import KPICard from './KPICard';
 import LoadingState from '../Common/LoadingState';
