@@ -91,7 +91,7 @@ def validate_cursorrules(file_path: Path) -> Dict[str, Any]:
     # Check for security rules
     security_rules_found = 0
     for rule in REQUIRED_SECURITY_RULES:
-        if any(word in content for word in rule.split()):
+        if rule.lower() in content:
             security_rules_found += 1
     
     if security_rules_found < 3:
