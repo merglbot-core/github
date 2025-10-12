@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cost-monitoring"
+version = "1.0.0"
+description = "Enterprise Cost Monitoring Tool for Merglbot - GitHub and GCP"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "Platform Engineering", email = "platform@merglbot.ai"}
+]
+keywords = ["cost", "monitoring", "github", "gcp", "enterprise"]
+
+dependencies = [
+    "click>=8.1.7",
+    "rich>=13.7.0",
+    "pyyaml>=6.0.1",
+    "requests>=2.31.0",
+    "python-dateutil>=2.8.2",
+    "PyGithub>=2.1.1",
+    "google-cloud-bigquery>=3.13.0",
+    "google-cloud-billing>=1.11.2",
+    "google-api-core>=2.14.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.3",
+    "ruff>=0.1.6",
+    "black>=23.11.0",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.12.0",
+]
+
+[project.scripts]
+cost-monitor = "cost_monitoring.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cost_monitoring*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.black]
+line-length = 120
+target-version = ['py311']
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "-ra -q --strict-markers"

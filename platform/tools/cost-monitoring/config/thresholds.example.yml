@@ -1,0 +1,28 @@
+github:
+  copilot:
+    total_monthly_usd: 500
+    seats:
+      max: 30
+  enterprise_cloud:
+    seats:
+      max: 60
+
+gcp:
+  defaults:
+    total_monthly_usd: 300
+    per_service_monthly_usd:
+      Cloud Run: 150
+      BigQuery: 150
+      Cloud Storage: 80
+      Compute Engine: 80
+  projects:
+    mb-portal-prd:
+      total_monthly_usd: 800
+      per_service_monthly_usd:
+        Cloud Run: 500
+        BigQuery: 150
+    denatura-btf-prd:
+      total_monthly_usd: 1200
+      per_service_monthly_usd:
+        BigQuery: 800
+        Cloud Run: 300
