@@ -27,10 +27,7 @@ on:
 
 permissions:
   contents: read
-  issues: write
-  pull-requests: write
-  security-events: write
-  actions: read
+  id-token: write  # Required for OIDC/WIF authentication
   
 concurrency:
   group: security-audit-${{ github.ref }}
@@ -47,6 +44,8 @@ jobs:
   prepare:
     name: Prepare Audit Environment
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       audit_id: ${{ steps.setup.outputs.audit_id }}
       repositories: ${{ steps.repos.outputs.repositories }}
@@ -70,15 +69,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Get all repositories in the organization
+          ORG="${{ github.repository_owner }}"
           REPOS=$(gh api \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            /orgs/merglbot-core/repos \
+            "/orgs/${ORG}/repos" \
             --paginate \
             --jq '.[].full_name' | jq -R -s -c 'split("\n")[:-1]')
           
           echo "repositories=$REPOS" >> "$GITHUB_OUTPUT"
-          echo "Found $(echo $REPOS | jq '. | length') repositories to audit" >> "$GITHUB_STEP_SUMMARY"
+          REPO_COUNT=$(echo "$REPOS" | jq '. | length')
+          echo "Found ${REPO_COUNT} repositories to audit" >> "$GITHUB_STEP_SUMMARY"
 
   gitignore-compliance:
     name: Gitignore Compliance Check
@@ -105,6 +106,7 @@ jobs:
         with:
           name: gitignore-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/gitignore-audit.json
+          retention-days: 90  # Keep for one quarter
           
 #       - name: Create issues for violations
 #         if: inputs.create_issues != false
@@ -143,13 +145,17 @@ jobs:
           set +e  # Don't fail on finding secrets
           gitleaks detect --source . --report-format json --report-path reports/secrets-audit.json
           GITLEAKS_EXIT=$?
+          set -e
           
           if [ $GITLEAKS_EXIT -eq 1 ]; then
             echo "⚠️ Secrets found in repository!" >> "$GITHUB_STEP_SUMMARY"
             echo "secrets_found=true" >> "$GITHUB_OUTPUT"
-          else
+          elif [ $GITLEAKS_EXIT -eq 0 ]; then
             echo "✅ No secrets found" >> "$GITHUB_STEP_SUMMARY"
             echo "secrets_found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "❌ Gitleaks failed with exit code $GITLEAKS_EXIT" >&2
+            exit 1
           fi
           
       - name: Upload secrets report
@@ -158,6 +164,7 @@ jobs:
         with:
           name: secrets-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/secrets-audit.json
+          retention-days: 90  # Keep for one quarter
           
       - name: Create secret rotation tasks
         if: steps.gitleaks.outputs.secrets_found == 'true' && inputs.create_issues != false
@@ -199,6 +206,7 @@ jobs:
         with:
           name: bot-config-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/bot-config-audit.json
+          retention-days: 90
 
   pre-commit-hooks:
     name: Pre-commit Hook Adoption
@@ -228,12 +236,17 @@ jobs:
       #     fi
       #     
       - name: Pre-commit hook adoption check skipped
-        run: echo "Skipping pre-commit hook adoption check: scripts/audit/check_precommit_adoption.py not present. TODO: Restore when script is available."
+        run: |
+          echo "Skipping pre-commit hook adoption check: scripts/audit/check_precommit_adoption.py not present. TODO: Restore when script is available."
+          # Create empty report to avoid artifact upload failure
+          mkdir -p reports
+          echo '{"adoption_rate": 0, "message": "Pre-commit check skipped - script not implemented yet"}' > reports/precommit-audit.json
       - name: Upload pre-commit report
         uses: actions/upload-artifact@v4
         with:
           name: precommit-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/precommit-audit.json
+          retention-days: 90
 
   dependency-scanning:
     name: Dependency Vulnerability Scan
@@ -276,6 +289,7 @@ jobs:
         with:
           name: dependency-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/dependency-audit.json
+          retention-days: 90
 
   release-process-audit:
     name: Release Process Compliance
@@ -336,6 +350,7 @@ jobs:
         with:
           name: security-audit-report-${{ needs.prepare.outputs.audit_id }}
           path: reports/consolidated-audit.html
+          retention-days: 90
           
 # Removed "Send notifications" step due to missing script.
       - name: Create tracking issue
@@ -354,6 +369,9 @@ jobs:
     needs: [prepare, generate-report]
     if: inputs.auto_fix == true && always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

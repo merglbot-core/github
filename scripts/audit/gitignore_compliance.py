@@ -177,6 +177,14 @@ def check_for_secrets(repo_path: str) -> List[str]:
     return suspicious_files
 
 
+def validate_repo_name(repo: str) -> bool:
+    """Validate repository name format."""
+    import re
+    # Repository name should be in format: owner/repo
+    pattern = r'^[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+$'
+    return bool(re.match(pattern, repo))
+
+
 def audit_repositories(repos: List[str]) -> Dict[str, Any]:
     """Audit multiple repositories for gitignore compliance."""
     results = {
@@ -191,18 +199,45 @@ def audit_repositories(repos: List[str]) -> Dict[str, Any]:
     for repo in repos:
         print(f"Checking {repo}...")
         
+        # Validate repository name to prevent command injection
+        if not validate_repo_name(repo):
+            print(f"ERROR: Invalid repository name format: {repo}")
+            results["details"].append({
+                "repo": repo,
+                "has_gitignore": False,
+                "compliance_score": 0,
+                "issues": ["Invalid repository name format"]
+            })
+            results["non_compliant_repos"] += 1
+            results["total_issues"] += 1
+            continue
+        
         # Clone or use existing repo
         import tempfile
 
         # Create a secure temporary directory and ensure cleanup
         with tempfile.TemporaryDirectory(prefix="audit-") as temp_dir:
-            repo_path = f"{temp_dir}/{Path(repo).name}"
+            # Sanitize repo name for path
+            repo_name = Path(repo).name
+            if ".." in repo_name or "/" in repo_name:
+                print(f"ERROR: Invalid repository name: {repo}")
+                results["details"].append({
+                    "repo": repo,
+                    "has_gitignore": False,
+                    "compliance_score": 0,
+                    "issues": ["Invalid repository name for path"]
+                })
+                results["non_compliant_repos"] += 1
+                results["total_issues"] += 1
+                continue
+                
+            repo_path = Path(temp_dir) / repo_name
             
-            if not Path(repo_path).exists():
-                # Clone the repository
+            if not repo_path.exists():
+                # Clone the repository with depth limit and timeout
                 try:
                     subprocess.run(
-                        ["git", "clone", f"https://github.com/{repo}.git", repo_path],
+                        ["git", "clone", "--depth=1", f"https://github.com/{repo}.git", str(repo_path)],
                         capture_output=True,
                         text=True,
                         check=True
