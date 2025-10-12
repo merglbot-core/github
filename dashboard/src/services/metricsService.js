@@ -17,10 +17,9 @@ apiClient.interceptors.request.use(
   (config) => {
     // Add auth token if available (using sessionStorage for better security)
   const token = sessionStorage.getItem('auth_token');
-  if (token && token.startsWith('mock_token_')) {
+  if (token) {
     config.headers.Authorization = `Bearer ${token}`;
-      config.headers.Authorization = `Bearer ${token}`;
-    }
+  }
     
     // Add CSRF token for mutating operations
     if (['post', 'put', 'delete', 'patch'].includes(config.method)) {
