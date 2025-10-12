@@ -22,7 +22,7 @@ export function getCsrfToken() {
       window.location.hostname === '127.0.0.1';
     
     if (isDevelopment) {
-      return 'dev_csrf_' + Math.random().toString(36).substr(2, 9);
+      return 'dev_csrf_' + Math.random().toString(36).slice(2, 11);
     }
     
     // In production, missing CSRF token is a security issue
