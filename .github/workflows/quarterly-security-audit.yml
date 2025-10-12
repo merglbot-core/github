@@ -128,11 +128,15 @@ jobs:
           
       - name: Install Gitleaks
         run: |
+          # Download Gitleaks tarball and checksums
           wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.0/gitleaks_8.18.0_linux_x64.tar.gz
+          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.0/gitleaks_8.18.0_checksums.txt
+          # Verify checksum
+          grep "gitleaks_8.18.0_linux_x64.tar.gz" gitleaks_8.18.0_checksums.txt | sha256sum -c -
+          # Extract and install
           tar -xzf gitleaks_8.18.0_linux_x64.tar.gz
           chmod +x gitleaks
           sudo mv gitleaks /usr/local/bin/
-          
       - name: Run Gitleaks scan
         id: gitleaks
         run: |
