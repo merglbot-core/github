@@ -293,7 +293,11 @@ gcloud secrets versions add "leaked-secret-name" --data-file=new_secret.txt
 # First, install git-filter-repo if you haven't:
 # python3 -m pip install git-filter-repo
 
-# ONLY use this as a last resort for removing secrets:
+# To replace the secret content within a file (safer):
+echo 'SECRET_VALUE' > secret.txt
+git filter-repo --replace-text secret.txt
+
+# To completely remove a file from history (more destructive):
 git filter-repo --path path/to/secret/file --invert-paths
 
 # 4. Force push (DANGEROUS - coordinate with team)
