@@ -134,7 +134,11 @@ fi
 echo -e "${BLUE}[4/5] Scanning for secrets...${NC}"
 if command -v gitleaks >/dev/null 2>&1; then
     if git rev-list "$range" >/dev/null 2>&1; then
-        if gitleaks detect --source . --log-opts="$range" --verbose --no-banner 2>&1 | grep -v "no leaks found" | head -20; then
+        gitleaks_output=$(gitleaks detect --source . --log-opts="$range" --verbose --no-banner 2>&1)
+        gitleaks_status=$?
+
+        if [ $gitleaks_status -ne 0 ] || echo "$gitleaks_output" | grep -v "no leaks found" | grep -q .; then
+            echo "$gitleaks_output" | grep -v "no leaks found" | head -20
             log_error "Potential secrets detected!"
         
             # Allow override with confirmation
