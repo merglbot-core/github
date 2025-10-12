@@ -243,7 +243,9 @@ def main():
     
     # Create output directory
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-    Path("/tmp/audit").mkdir(parents=True, exist_ok=True)
+    import tempfile
+    temp_audit_dir = tempfile.mkdtemp(prefix="audit-")
+    # If you need to use temp_audit_dir elsewhere, pass it as an argument or use it directly.
     
     # Run audit
     results = audit_repositories(repos)
