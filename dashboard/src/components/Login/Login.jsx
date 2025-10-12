@@ -45,9 +45,14 @@ function Login() {
           window.location.hostname === '127.0.0.1';
 
         if (isDevelopment) {
-          // SessionStorage is used here only for local development mock
-          sessionStorage.setItem('auth_token', 'mock_token_' + Date.now());
-          navigate('/dashboard');
+          // Basic validation for development environment
+          if (email === 'admin@example.com' && password === 'devpassword') {
+            // SessionStorage is used here only for local development mock
+            sessionStorage.setItem('auth_token', 'mock_token_' + Date.now());
+            navigate('/dashboard');
+          } else {
+            setError('Invalid credentials. For development, use admin@example.com/devpassword');
+          }
         } else {
           // In production, this should never execute as auth is handled by IAP
           console.error('Mock authentication attempted in production environment');
