@@ -20,5 +20,5 @@ Q15: B
 Q16: B
 Q17: B
 Q18: B
-Q19: True (ONLY on specific branch; NEVER use --all)
+Q19: False - Force push should be avoided except in specific emergencies on feature branches, and NEVER use --all flag which affects all branches.
 Q20: D
