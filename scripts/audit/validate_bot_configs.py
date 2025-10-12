@@ -185,7 +185,7 @@ def validate_copilot_config(file_path: Path) -> Dict[str, Any]:
         if not isinstance(data, dict):
             result["valid"] = False
             result["issues"].append("YAML root must be a dictionary/object")
-            return result
+        return result
     except yaml.YAMLError as e:
         result["valid"] = False
         result["issues"].append(f"Invalid YAML: {e}")
