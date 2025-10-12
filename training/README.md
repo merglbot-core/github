@@ -155,7 +155,7 @@ All training materials adhere to:
 
 ---
 
-**Last Updated:** 2025-01-12  
+**Last Updated:** 2025-10-01  
 **Maintained By:** Platform Training Team (@platform-team)  
 **Version:** 1.0.0
 
