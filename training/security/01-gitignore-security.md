@@ -154,7 +154,7 @@ cd ~/projects/my-merglbot-project
 #  - gitignore-templates/frontend.gitignore
 #  - gitignore-templates/backend.gitignore
 #  - gitignore-templates/infrastructure.gitignore
-cp /path/to/merglbot-core/github/gitignore-templates/frontend.gitignore .gitignore
+cp ~/projects/merglbot/github/gitignore-templates/frontend.gitignore .gitignore # Adjust path if needed
 
 # Step 3: Verify sensitive files are ignored
 git status
