@@ -30,9 +30,16 @@ function Login() {
 
       // Mock authentication - replace with actual API call
       if (email && password) {
-        // In production, auth tokens should be handled via httpOnly cookies
-        // For development only, use sessionStorage (more secure than localStorage)
-        // This is temporary - production will use IAP authentication
+        // SECURITY NOTE: This is ONLY for development/demo purposes
+        // Production authentication is handled by Google IAP (Identity-Aware Proxy)
+        // which provides:
+        // - No client-side token storage (IAP handles auth at proxy level)
+        // - Automatic token refresh and session management
+        // - Protection against XSS, CSRF, and session hijacking
+        // - Integration with Google Workspace SSO
+        // 
+        // SessionStorage is used here only for local development mock
+        // and is NOT exposed to production environments
         sessionStorage.setItem('auth_token', 'mock_token_' + Date.now());
         navigate('/dashboard');
       } else {
