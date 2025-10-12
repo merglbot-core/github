@@ -160,7 +160,11 @@ const metricsService = {
 
   // Test alert
   async testAlert(alertType) {
-    const response = await apiClient.post(`/alerts/test/${alertType}`);
+    const endpoint =
+      typeof API_ENDPOINTS.ALERTS_TEST === 'function'
+        ? API_ENDPOINTS.ALERTS_TEST(alertType)
+        : API_ENDPOINTS.ALERTS_TEST.replace(':type', alertType);
+    const response = await apiClient.post(endpoint);
     return response.data;
   },
 };
