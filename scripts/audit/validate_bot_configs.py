@@ -167,11 +167,24 @@ def validate_copilot_config(file_path: Path) -> Dict[str, Any]:
     
     try:
         with open(file_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+            content = f.read()
+            # Basic validation before parsing
+            if len(content) > 1000000:  # Limit file size
+                result["valid"] = False
+                result["issues"].append("YAML file too large")
+                return result
             
+            data = yaml.safe_load(content)
+        
         if data is None:
             result["valid"] = False
             result["issues"].append("Empty YAML file")
+            return result
+    
+        # Validate data is a dictionary
+        if not isinstance(data, dict):
+            result["valid"] = False
+            result["issues"].append("YAML root must be a dictionary/object")
             return result
     except yaml.YAMLError as e:
         result["valid"] = False
