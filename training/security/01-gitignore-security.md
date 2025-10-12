@@ -154,7 +154,10 @@ cd ~/projects/my-merglbot-project
 #  - gitignore-templates/frontend.gitignore
 #  - gitignore-templates/backend.gitignore
 #  - gitignore-templates/infrastructure.gitignore
-cp ~/projects/merglbot/github/gitignore-templates/frontend.gitignore .gitignore # Adjust path if needed
+# Step 2a: Verify the template exists in your repo
+ls gitignore-templates/frontend.gitignore
+# Step 2b: Copy the template using a relative path
+cp gitignore-templates/frontend.gitignore .gitignore
 
 # Step 3: Verify sensitive files are ignored
 git status
