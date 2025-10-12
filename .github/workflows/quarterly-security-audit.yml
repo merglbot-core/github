@@ -1,0 +1,396 @@
+name: Quarterly Security Audit
+
+on:
+  schedule:
+    # Run quarterly on 15th of Jan, Apr, Jul, Oct at 09:00 UTC
+    - cron: "0 9 15 1 *"   # January 15
+    - cron: "0 9 15 4 *"   # April 15
+    - cron: "0 9 15 7 *"   # July 15
+    - cron: "0 9 15 10 *"  # October 15
+  workflow_dispatch:
+    inputs:
+      full_scan:
+        description: "Run full repository scan"
+        required: false
+        type: boolean
+        default: true
+      create_issues:
+        description: "Create GitHub issues for violations"
+        required: false
+        type: boolean
+        default: true
+      auto_fix:
+        description: "Attempt automatic fixes"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  security-events: write
+  actions: read
+  
+concurrency:
+  group: security-audit-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AUDIT_QUARTER: ${{ github.event.schedule && format('Q{0}-{1}', 
+    contains(github.event.schedule, '1 *') && '1' ||
+    contains(github.event.schedule, '4 *') && '2' ||
+    contains(github.event.schedule, '7 *') && '3' || '4',
+    github.run_id) || format('Manual-{0}', github.run_id) }}
+
+jobs:
+  prepare:
+    name: Prepare Audit Environment
+    runs-on: ubuntu-latest
+    outputs:
+      audit_id: ${{ steps.setup.outputs.audit_id }}
+      repositories: ${{ steps.repos.outputs.repositories }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup audit environment
+        id: setup
+        run: |
+          AUDIT_ID="audit-$(date +%Y%m%d-%H%M%S)"
+          echo "audit_id=$AUDIT_ID" >> "$GITHUB_OUTPUT"
+          echo "## 🔒 Security Audit Started" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Audit ID: $AUDIT_ID" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Quarter: ${AUDIT_QUARTER:-Manual}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Triggered by: ${{ github.actor }}" >> "$GITHUB_STEP_SUMMARY"
+          
+      - name: Get repositories to audit
+        id: repos
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get all repositories in the organization
+          REPOS=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /orgs/merglbot-core/repos \
+            --paginate \
+            --jq '.[].full_name' | jq -R -s -c 'split("\n")[:-1]')
+          
+          echo "repositories=$REPOS" >> "$GITHUB_OUTPUT"
+          echo "Found $(echo $REPOS | jq '. | length') repositories to audit" >> "$GITHUB_STEP_SUMMARY"
+
+  gitignore-compliance:
+    name: Gitignore Compliance Check
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Run gitignore compliance check
+        id: gitignore
+        run: |
+          python3 scripts/audit/gitignore_compliance.py \
+            --repos '${{ needs.prepare.outputs.repositories }}' \
+            --output reports/gitignore-audit.json
+          
+      - name: Upload gitignore report
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitignore-audit-${{ needs.prepare.outputs.audit_id }}
+          path: reports/gitignore-audit.json
+          
+      - name: Create issues for violations
+        if: inputs.create_issues != false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/audit/create_issues.py \
+            --report reports/gitignore-audit.json \
+            --type gitignore \
+            --audit-id "${{ needs.prepare.outputs.audit_id }}"
+
+  secret-scanning:
+    name: Secret Scanning
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for secret scanning
+          
+      - name: Install Gitleaks
+        run: |
+          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.0/gitleaks_8.18.0_linux_x64.tar.gz
+          tar -xzf gitleaks_8.18.0_linux_x64.tar.gz
+          chmod +x gitleaks
+          sudo mv gitleaks /usr/local/bin/
+          
+      - name: Run Gitleaks scan
+        id: gitleaks
+        run: |
+          set +e  # Don't fail on finding secrets
+          gitleaks detect --source . --report-format json --report-path reports/secrets-audit.json
+          GITLEAKS_EXIT=$?
+          
+          if [ $GITLEAKS_EXIT -eq 1 ]; then
+            echo "⚠️ Secrets found in repository!" >> "$GITHUB_STEP_SUMMARY"
+            echo "secrets_found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "✅ No secrets found" >> "$GITHUB_STEP_SUMMARY"
+            echo "secrets_found=false" >> "$GITHUB_OUTPUT"
+          fi
+          
+      - name: Upload secrets report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: secrets-audit-${{ needs.prepare.outputs.audit_id }}
+          path: reports/secrets-audit.json
+          
+      - name: Create secret rotation tasks
+        if: steps.gitleaks.outputs.secrets_found == 'true' && inputs.create_issues != false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/audit/create_issues.py \
+            --report reports/secrets-audit.json \
+            --type secrets \
+            --audit-id "${{ needs.prepare.outputs.audit_id }}" \
+            --priority high
+
+  bot-configuration:
+    name: Bot Configuration Validation
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Validate bot configurations
+        id: bots
+        run: |
+          python3 scripts/audit/validate_bot_configs.py \
+            --output reports/bot-config-audit.json
+          
+          # Check if all configs are valid
+          INVALID_COUNT=$(jq '.invalid_configs | length' reports/bot-config-audit.json)
+          if [ "$INVALID_COUNT" -gt 0 ]; then
+            echo "⚠️ Found $INVALID_COUNT invalid bot configurations" >> "$GITHUB_STEP_SUMMARY"
+            echo "has_issues=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "✅ All bot configurations are valid" >> "$GITHUB_STEP_SUMMARY"
+            echo "has_issues=false" >> "$GITHUB_OUTPUT"
+          fi
+          
+      - name: Upload bot config report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-config-audit-${{ needs.prepare.outputs.audit_id }}
+          path: reports/bot-config-audit.json
+
+  pre-commit-hooks:
+    name: Pre-commit Hook Adoption
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Check pre-commit hook adoption
+        id: hooks
+        run: |
+          python3 scripts/audit/check_precommit_adoption.py \
+            --repos '${{ needs.prepare.outputs.repositories }}' \
+            --output reports/precommit-audit.json
+          
+          # Calculate adoption rate
+          ADOPTION_RATE=$(jq '.adoption_rate' reports/precommit-audit.json)
+          echo "📊 Pre-commit hook adoption: ${ADOPTION_RATE}%" >> "$GITHUB_STEP_SUMMARY"
+          
+          if (( $(echo "$ADOPTION_RATE < 90" | bc -l) )); then
+            echo "⚠️ Adoption below 90% threshold" >> "$GITHUB_STEP_SUMMARY"
+            echo "needs_improvement=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "✅ Adoption meets target" >> "$GITHUB_STEP_SUMMARY"
+            echo "needs_improvement=false" >> "$GITHUB_OUTPUT"
+          fi
+          
+      - name: Upload pre-commit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: precommit-audit-${{ needs.prepare.outputs.audit_id }}
+          path: reports/precommit-audit.json
+
+  dependency-scanning:
+    name: Dependency Vulnerability Scan
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'json'
+          output: 'reports/dependency-audit.json'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          
+      - name: Process vulnerability results
+        id: vulns
+        run: |
+          # Count vulnerabilities by severity
+          CRITICAL=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' reports/dependency-audit.json)
+          HIGH=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="HIGH")] | length' reports/dependency-audit.json)
+          MEDIUM=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' reports/dependency-audit.json)
+          
+          echo "### 🔍 Vulnerability Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Critical: $CRITICAL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- High: $HIGH" >> "$GITHUB_STEP_SUMMARY"  
+          echo "- Medium: $MEDIUM" >> "$GITHUB_STEP_SUMMARY"
+          
+          if [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ]; then
+            echo "has_critical_vulns=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_critical_vulns=false" >> "$GITHUB_OUTPUT"
+          fi
+          
+      - name: Upload vulnerability report
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit-${{ needs.prepare.outputs.audit_id }}
+          path: reports/dependency-audit.json
+
+  release-process-audit:
+    name: Release Process Compliance
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Audit release processes
+        id: releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/audit/audit_releases.py \
+            --repos '${{ needs.prepare.outputs.repositories }}' \
+            --output reports/release-audit.json
+          
+          # Check compliance metrics
+          SEMVER_COMPLIANCE=$(jq '.semver_compliance_rate' reports/release-audit.json)
+          CHANGELOG_COMPLIANCE=$(jq '.changelog_compliance_rate' reports/release-audit.json)
+          
+          echo "### 📦 Release Process Audit" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Semantic versioning: ${SEMVER_COMPLIANCE}%" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Changelog compliance: ${CHANGELOG_COMPLIANCE}%" >> "$GITHUB_STEP_SUMMARY"
+          
+      - name: Upload release report
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-audit-${{ needs.prepare.outputs.audit_id }}
+          path: reports/release-audit.json
+
+  generate-report:
+    name: Generate Consolidated Report
+    needs: [prepare, gitignore-compliance, secret-scanning, bot-configuration, pre-commit-hooks, dependency-scanning, release-process-audit]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: audit-artifacts
+          pattern: '*-audit-${{ needs.prepare.outputs.audit_id }}'
+          
+      - name: Generate consolidated report
+        run: |
+          python3 scripts/audit/generate_report.py \
+            --input-dir audit-artifacts \
+            --output reports/consolidated-audit.html \
+            --audit-id "${{ needs.prepare.outputs.audit_id }}" \
+            --quarter "${AUDIT_QUARTER:-Manual}"
+          
+      - name: Upload consolidated report
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-audit-report-${{ needs.prepare.outputs.audit_id }}
+          path: reports/consolidated-audit.html
+          
+      - name: Send notifications
+        if: always()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          python3 scripts/audit/send_notifications.py \
+            --report reports/consolidated-audit.html \
+            --audit-id "${{ needs.prepare.outputs.audit_id }}" \
+            --quarter "${AUDIT_QUARTER:-Manual}"
+          
+      - name: Create tracking issue
+        if: inputs.create_issues != false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "Security Audit Report - ${AUDIT_QUARTER:-Manual} - ${{ needs.prepare.outputs.audit_id }}" \
+            --body-file reports/consolidated-audit.html \
+            --label "security-audit,automated" \
+            --assignee "@me"
+
+  auto-remediation:
+    name: Automatic Remediation
+    needs: [prepare, generate-report]
+    if: inputs.auto_fix == true && always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Download audit artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: audit-artifacts
+          pattern: '*-audit-${{ needs.prepare.outputs.audit_id }}'
+          
+      - name: Run auto-fix scripts
+        run: |
+          echo "### 🔧 Auto-Remediation" >> "$GITHUB_STEP_SUMMARY"
+          
+          # Fix gitignore issues
+          python3 scripts/audit/auto_fix_gitignore.py \
+            --report audit-artifacts/gitignore-audit-*/gitignore-audit.json \
+            --branch "auto-fix/security-audit-${{ needs.prepare.outputs.audit_id }}"
+          
+          # Update bot configurations
+          python3 scripts/audit/auto_fix_bot_configs.py \
+            --report audit-artifacts/bot-config-audit-*/bot-config-audit.json \
+            --branch "auto-fix/security-audit-${{ needs.prepare.outputs.audit_id }}"
+          
+          echo "✅ Auto-fixes applied to branch" >> "$GITHUB_STEP_SUMMARY"
+          
+      - name: Create pull request
+        if: success()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --title "🔒 Security Audit Auto-Fixes - ${{ needs.prepare.outputs.audit_id }}" \
+            --body "Automatic fixes from security audit ${{ needs.prepare.outputs.audit_id }}" \
+            --label "security,automated" \
+            --base main \
+            --head "auto-fix/security-audit-${{ needs.prepare.outputs.audit_id }}"
