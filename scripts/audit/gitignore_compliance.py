@@ -128,11 +128,8 @@ def check_gitignore_compliance(repo_path: str) -> Dict[str, Any]:
             continue
         
         found = False
-        pattern_base = pattern.rstrip("/").rstrip("*").rstrip("/")
-        
         for line in gitignore_lines:
-            line_base = line.rstrip("/").rstrip("*").rstrip("/")
-            if pattern_base in line_base or line_base in pattern_base:
+            if pattern == line or (pattern.endswith('/') and line == pattern.rstrip('/')):
                 found = True
                 break
         
