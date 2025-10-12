@@ -16,9 +16,9 @@ const apiClient = axios.create({
 apiClient.interceptors.request.use(
   (config) => {
     // Add auth token if available (using sessionStorage for better security)
-    // In production, this should be handled via httpOnly cookies
-    const token = sessionStorage.getItem('auth_token');
-    if (token) {
+  const token = sessionStorage.getItem('auth_token');
+  if (token && token.startsWith('mock_token_')) {
+    config.headers.Authorization = `Bearer ${token}`;
       config.headers.Authorization = `Bearer ${token}`;
     }
     
