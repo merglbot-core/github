@@ -144,7 +144,7 @@ def validate_cursorbot(file_path: Path) -> Dict[str, Any]:
     if "rules" in data:
         rules_str = str(data["rules"]).lower()
         security_count = sum(1 for rule in REQUIRED_SECURITY_RULES
-                           if rule.lower() in rules_str)
+                           if f" {rule.lower()} " in f" {rules_str} ")
         if security_count < 2:
             result["warnings"].append("Insufficient security rules in configuration")
     
