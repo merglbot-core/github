@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { API_ENDPOINTS } from '../config/api';
+import { getCsrfToken } from '../utils/security';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
@@ -23,7 +24,7 @@ apiClient.interceptors.request.use(
     
     // Add CSRF token for mutating operations
     if (['post', 'put', 'delete', 'patch'].includes(config.method)) {
-      const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content;
+      const csrfToken = getCsrfToken();
       if (csrfToken) {
         config.headers['X-CSRF-Token'] = csrfToken;
       }
@@ -160,10 +161,35 @@ const metricsService = {
 
   // Export metrics to CSV
   async exportMetrics(type, period) {
+    // Validate period parameter
+    if (!VALID_PERIODS.includes(period)) {
+      throw new Error(`Invalid period: ${period}. Valid periods are: ${VALID_PERIODS.join(', ')}`);
+    }
+    
+    // Validate export type
+    const validTypes = ['csv', 'json', 'xlsx'];
+    if (!validTypes.includes(type)) {
+      throw new Error(`Invalid export type: ${type}. Valid types are: ${validTypes.join(', ')}`);
+    }
+    
     const response = await apiClient.get(`${API_ENDPOINTS.METRICS_EXPORT}/${type}`, {
       params: { period },
       responseType: 'blob'
     });
+    
+    // Validate content-type to prevent XSS via blob rendering
+    const contentType = response.headers['content-type'];
+    const allowedTypes = [
+      'text/csv',
+      'application/json',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/octet-stream'
+    ];
+    
+    if (!allowedTypes.includes(contentType)) {
+      throw new Error(`Unsafe content type returned: ${contentType}. Export aborted for security.`);
+    }
+    
     return response.data;
   },
 
