@@ -201,8 +201,3 @@ def format_alert_message(alert: Dict[str, Any]) -> str:
             return f"⚠️ GCP '{project}' - {service}: ${value:.2f} exceeds limit ${threshold:.2f}"
     
     return f"Alert: {alert}"
-
-
-def __init__():
-    """Module initialization."""
-    pass
