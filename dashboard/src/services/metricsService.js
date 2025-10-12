@@ -81,7 +81,7 @@ const metricsService = {
 
   // Deployment metrics
   async getDeploymentMetrics(period = '7d') {
-    const response = await apiClient.get('/metrics/deployments', {
+    const response = await apiClient.get(API_ENDPOINTS.METRICS_DEPLOYMENTS, {
       params: { period }
     });
     return response.data;
