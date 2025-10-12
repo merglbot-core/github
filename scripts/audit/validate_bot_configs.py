@@ -73,7 +73,7 @@ def validate_cursorrules(file_path: Path) -> Dict[str, Any]:
         result["issues"].append("File does not exist")
         return result
     
-    with open(file_path, "r") as f:
+    with open(file_path, "r", encoding="utf-8") as f:
         content = f.read().lower()
     
     schema = BOT_SCHEMAS[".cursorrules"]
