@@ -312,6 +312,5 @@ def write_all_reports(
     }
 
 
-def __init__():
-    """Module initialization."""
-    pass
+# Module initialization code can be placed directly at the module level
+# No need for a special __init__ function
