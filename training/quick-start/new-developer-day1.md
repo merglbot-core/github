@@ -167,8 +167,6 @@ rm .env
 
 ## 📚 Part 3: Codebase Tour (60 min)
 
-### 3.1 Repository Structure
-
 ```
 merglbot-core/platform/
 ├── apps/                 # Frontend applications
