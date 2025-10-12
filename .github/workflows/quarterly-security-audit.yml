@@ -38,9 +38,9 @@ concurrency:
 
 env:
   AUDIT_QUARTER: ${{ github.event.schedule && format('Q{0}-{1}', 
-    contains(github.event.schedule, '1 *') && '1' ||
-    contains(github.event.schedule, '4 *') && '2' ||
-    contains(github.event.schedule, '7 *') && '3' || '4',
+    startsWith(github.event.schedule, '0 9 15 1 *') && '1' ||
+    startsWith(github.event.schedule, '0 9 15 4 *') && '2' ||
+    startsWith(github.event.schedule, '0 9 15 7 *') && '3' || '4',
     github.run_id) || format('Manual-{0}', github.run_id) }}
 
 jobs:
