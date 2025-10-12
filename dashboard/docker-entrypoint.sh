@@ -5,8 +5,9 @@ set -e
 : ${API_URL:=http://localhost:8080}
 
 # Basic URL validation
-# Improved URL validation: scheme, domain/localhost, optional port/path
-if ! echo "$API_URL" | grep -Eq '^https?://((localhost)|([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,})(:[0-9]{1,5})?(/.*)?$'; then
+# Improved URL validation: scheme, domain/localhost, optional port, no credentials, safe paths
+if ! echo "$API_URL" | grep -Eq '^https?://([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}(:[0-9]{1,5})?(/[a-zA-Z0-9/_-]*)?$' && \
+   ! echo "$API_URL" | grep -Eq '^https?://localhost(:[0-9]{1,5})?(/[a-zA-Z0-9/_-]*)?$'; then
   echo "Error: Invalid API_URL format: ${API_URL}"
   exit 1
 fi
