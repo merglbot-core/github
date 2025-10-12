@@ -27,10 +27,10 @@ function KPICard({ title, value, change, trend, icon, color = 'primary', subtitl
 
   const getTrendColor = () => {
     if (trend === 'up') {
-      return title.includes('MTTR') || title.includes('Incidents') ? 'error' : 'success';
+      return higherIsBetter ? 'success' : 'error';
     }
     if (trend === 'down') {
-      return title.includes('MTTR') || title.includes('Incidents') ? 'success' : 'error';
+      return higherIsBetter ? 'error' : 'success';
     }
     return 'default';
   };
