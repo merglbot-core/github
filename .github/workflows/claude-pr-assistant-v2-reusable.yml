@@ -360,13 +360,13 @@ jobs:
           
           if [ ! -s claude_response.txt ]; then
             {
-              echo "## 🤖 Claude Assistant"
+              echo "## 🤖 Merglbot PR Assistant"
               echo
               echo "No suggestions generated or LLM unavailable."
             } > comment_body.md
           else
             {
-              echo "## 🤖 Claude Assistant"
+              echo "## 🤖 Merglbot PR Assistant"
               echo
               cat claude_response.txt
               echo
@@ -582,7 +582,7 @@ jobs:
           if ! git diff --cached --quiet; then
             git --no-pager config user.name "claude-assistant[bot][${{ github.repository }}]"
             git --no-pager config user.email "claude-assistant[bot]@users.noreply.github.com"
-            COMMIT_MSG="Apply Claude Assistant patch for PR #${{ steps.parse.outputs.pr_number }}"
+            COMMIT_MSG="Apply Merglbot PR Assistant patch for PR #${{ steps.parse.outputs.pr_number }}"
             git --no-pager commit -m "$COMMIT_MSG"
   
             # Capture commit summary for reporting
@@ -616,7 +616,7 @@ jobs:
           
           # Build comment body with safe substitution
           BODY=$(cat <<-'EOF'
-          	## 🤖 Claude Assistant - Apply Mode Complete
+          	## 🤖 Merglbot PR Assistant - Apply Mode Complete
           	
           	Status: STATUS_PLACEHOLDER
           	
@@ -721,7 +721,7 @@ jobs:
             if ! jq -n --arg lines "$LINES_CHANGED" \
               '{
                 event: "COMMENT",
-                body: "🤖 **Claude Assistant Suggestions**\n\nI generated changes for this PR (" + $lines + " lines modified).\n\n⚠️ **Note:** The changes could not be converted to inline suggestions (possibly new files or complex edits).\n\n**Next steps:**\n- Review the full diff in the `Files changed` tab\n- Check the workflow artifacts for detailed patch files\n- Apply changes manually if appropriate\n\nFor questions, please check the workflow run details."
+                body: "🤖 **Merglbot PR Assistant Suggestions**\n\nI generated changes for this PR (" + $lines + " lines modified).\n\n⚠️ **Note:** The changes could not be converted to inline suggestions (possibly new files or complex edits).\n\n**Next steps:**\n- Review the full diff in the `Files changed` tab\n- Check the workflow artifacts for detailed patch files\n- Apply changes manually if appropriate\n\nFor questions, please check the workflow run details."
               }' > review.json; then
               echo "⚠️ Failed to generate review JSON" >&2
               exit 1
