@@ -1,9 +1,9 @@
 # GitHub - Shared Workflows & CI/CD Docs
 
-**Purpose:** Central repository for reusable GitHub Actions workflows and CI/CD documentation  
-**Organization:** merglbot-core  
-**Visibility:** Public (shared across organization)  
-**Status:** Active - Used by all Merglbot repositories
+- **Purpose:** Central repository for reusable GitHub Actions workflows and CI/CD documentation
+- **Organization:** merglbot-core
+- **Visibility:** Public (shared across organization)
+- **Status:** Active - Used by all Merglbot repositories
 
 ---
 
