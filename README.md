@@ -21,7 +21,8 @@ Shared GitHub Actions workflows that can be called from other repositories.
 # In your repo's .github/workflows/deploy.yml
 jobs:
   deploy:
-    uses: merglbot-core/github/.github/workflows/deploy-cloud-run.yml@main
+    # Pin to a specific version tag (e.g., v1) or a commit SHA
+    uses: merglbot-core/github/.github/workflows/deploy-cloud-run.yml@v1
     with:
       service-name: my-service
       region: europe-west1
