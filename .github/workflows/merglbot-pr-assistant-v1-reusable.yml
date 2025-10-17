@@ -1,4 +1,4 @@
-name: Claude PR Assistant v2 (Reusable Full-Featured)
+name: Merglbot PR Assistant v1 (Reusable)
 
 on:
   workflow_call:
