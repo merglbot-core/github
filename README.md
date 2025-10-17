@@ -107,7 +107,7 @@ if: ${{ secrets.API_KEY != '' }}
 
 **WIF Setup:**
 ```yaml
-- uses: google-github-actions/auth@v2
+- uses: google-github-actions/auth@v2.2.0
   with:
     workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
     service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
