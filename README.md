@@ -14,7 +14,7 @@
 Shared GitHub Actions workflows that can be called from other repositories.
 
 **Available Workflows:**
-- (List maintained in workflow files)
+- [Browse all workflows in `.github/workflows/`](https://github.com/merglbot-core/github/tree/main/.github/workflows)
 
 **Usage Example:**
 ```yaml
