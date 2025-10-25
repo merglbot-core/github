@@ -1,0 +1,184 @@
+name: GCP Architecture Scan (Nightly)
+
+on:
+  schedule:
+    # Každý den ve 2:00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      skip_github:
+        description: 'Skip GitHub repository scanning'
+        type: boolean
+        default: false
+      skip_enrich:
+        description: 'Skip Cloud Run detailed enrichment (faster)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+  pages: write
+
+env:
+  ORG_ID: '491452292611'
+  WORKSPACE_PATH: '/home/runner/work/merglbot-workspace'
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout merglbot workspace
+        uses: actions/checkout@v4
+        with:
+          repository: merglbot-core/github
+          path: merglbot-workspace/merglbot-core/github
+      
+      - name: Checkout merglbot-public (if needed)
+        if: ${{ !inputs.skip_github }}
+        uses: actions/checkout@v4
+        with:
+          repository: merglbot-public/website
+          path: merglbot-workspace/merglbot-public/website
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'merglbot-workspace/tools/gcp_arch/requirements.txt'
+      
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r merglbot-workspace/tools/gcp_arch/requirements.txt
+      
+      - name: Authenticate to GCP (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_ARCH_SCANNER_SA }}
+      
+      - name: Verify GCP authentication
+        run: |
+          gcloud auth list
+          gcloud organizations list
+      
+      - name: Run GCP Architecture Scan
+        run: |
+          set -euo pipefail
+          
+          cd merglbot-workspace
+          
+          # Build arguments
+          ARGS="--org-id ${ORG_ID}"
+          ARGS="${ARGS} --workspace ${WORKSPACE_PATH}/merglbot-workspace"
+          ARGS="${ARGS} --output-dir ${WORKSPACE_PATH}/merglbot-workspace/final/gcp-arch"
+          
+          if [[ "${{ inputs.skip_github }}" == "true" ]]; then
+            ARGS="${ARGS} --skip-github"
+          fi
+          
+          if [[ "${{ inputs.skip_enrich }}" == "true" ]]; then
+            ARGS="${ARGS} --skip-cloud-run-enrich"
+          fi
+          
+          # Run scan
+          cd tools/gcp_arch
+          python3 main.py ${ARGS}
+      
+      - name: Generate HTML visualization
+        run: |
+          cd merglbot-workspace/tools/gcp_arch/html
+          python3 generate.py \
+            --graph ../../../final/gcp-arch/graph.json \
+            --output ../../../final/gcp-arch/index.html
+      
+      - name: Create summary
+        run: |
+          cd merglbot-workspace
+          
+          echo "# 🏗️ GCP Architecture Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Organization ID:** ${ORG_ID}" >> $GITHUB_STEP_SUMMARY
+          echo "**Scan Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if command -v jq &> /dev/null && [[ -f "final/gcp-arch/graph.json" ]]; then
+            TOTAL_NODES=$(jq '.metadata.total_nodes' final/gcp-arch/graph.json)
+            TOTAL_EDGES=$(jq '.metadata.total_edges' final/gcp-arch/graph.json)
+            
+            echo "## 📊 Statistics" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Total Nodes:** ${TOTAL_NODES}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Total Edges:** ${TOTAL_EDGES}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            echo "### Node Types" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            jq -r '.metadata.node_types | to_entries | map("\(.key): \(.value)") | .[]' \
+              final/gcp-arch/graph.json >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            echo "### Edge Types" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            jq -r '.metadata.edge_types | to_entries | map("\(.key): \(.value)") | .[]' \
+              final/gcp-arch/graph.json >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- graph.json" >> $GITHUB_STEP_SUMMARY
+          echo "- index.html (interactive visualization)" >> $GITHUB_STEP_SUMMARY
+          echo "- assets.json" >> $GITHUB_STEP_SUMMARY
+          echo "- edges.json" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Upload scan artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-architecture-${{ github.run_id }}
+          path: |
+            merglbot-workspace/final/gcp-arch/graph.json
+            merglbot-workspace/final/gcp-arch/index.html
+            merglbot-workspace/final/gcp-arch/assets.json
+            merglbot-workspace/final/gcp-arch/edges.json
+            merglbot-workspace/final/gcp-arch/cloud_run_enriched.json
+            merglbot-workspace/final/gcp-arch/github_repos.json
+            merglbot-workspace/final/gcp-arch/repo_service_mappings.json
+          retention-days: 30
+      
+      - name: Prepare GitHub Pages content
+        if: github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p gh-pages/architecture
+          cp -r merglbot-workspace/final/gcp-arch/* gh-pages/architecture/
+          
+          # Create index redirect
+          cat > gh-pages/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta http-equiv="refresh" content="0; url=architecture/index.html">
+            <title>Redirecting...</title>
+          </head>
+          <body>
+            <p>Redirecting to <a href="architecture/index.html">architecture visualization</a>...</p>
+          </body>
+          </html>
+          EOF
+      
+      - name: Deploy to GitHub Pages
+        if: github.ref == 'refs/heads/main'
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./gh-pages
+          force_orphan: true
+          commit_message: 'Deploy GCP architecture scan ${{ github.run_id }}'
+
