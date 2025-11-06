@@ -18,12 +18,20 @@ jobs:
       contents: read
       security-events: write
 
+    # Pre-matrix step to split the languages string into an array
+    outputs:
+      languages_array: ${{ steps.set-matrix-languages.outputs.languages_array }}
     strategy:
       fail-fast: false
       matrix:
-        language: ${{ fromJSON(inputs.languages) }}
+        language: ${{ fromJson(needs.analyze.outputs.languages_array) }}
 
     steps:
+    - id: set-matrix-languages
+      run: |
+        # Split the input string by comma and output as a JSON array
+        echo "languages_array=$(echo '${{ inputs.languages }}' | jq -R 'split(\",\") | map(. | trim) | tojson')" >> $GITHUB_OUTPUT
+      shell: bash
     - name: Checkout repository
       uses: actions/checkout@v4
 
