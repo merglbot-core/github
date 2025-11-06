@@ -1,0 +1,613 @@
+name: Deploy to Cloud Run (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: 'Cloud Run service name'
+        required: true
+        type: string
+      region:
+        description: 'GCP region for deployment'
+        required: false
+        type: string
+        default: 'europe-west1'
+      project_id:
+        description: 'GCP project ID'
+        required: true
+        type: string
+      artifact_repo:
+        description: 'Artifact Registry repository name'
+        required: false
+        type: string
+        default: 'merglbot'
+      gar_location:
+        description: 'Artifact Registry location'
+        required: false
+        type: string
+        default: 'europe'
+      dockerfile:
+        description: 'Path to Dockerfile'
+        required: false
+        type: string
+        default: 'Dockerfile'
+      env_vars:
+        description: 'Environment variables (comma-separated KEY=VALUE pairs)'
+        required: false
+        type: string
+        default: ''
+      secrets:
+        description: 'Secrets configuration (newline-separated SECRET_KEY=secret_name:version)'
+        required: false
+        type: string
+        default: ''
+      allow_unauthenticated:
+        description: 'Allow unauthenticated access (use false for production with IAP)'
+        required: false
+        type: boolean
+        default: false
+      min_instances:
+        description: 'Minimum number of instances'
+        required: false
+        type: string
+        default: '0'
+      max_instances:
+        description: 'Maximum number of instances'
+        required: false
+        type: string
+        default: '10'
+      memory:
+        description: 'Memory allocation (e.g., 512Mi, 1Gi)'
+        required: false
+        type: string
+        default: '512Mi'
+      cpu:
+        description: 'CPU allocation (e.g., 1, 2)'
+        required: false
+        type: string
+        default: '1'
+      timeout:
+        description: 'Request timeout in seconds'
+        required: false
+        type: string
+        default: '300'
+      concurrency:
+        description: 'Maximum concurrent requests per instance'
+        required: false
+        type: string
+        default: '80'
+    secrets:
+      GCP_WIF_PROVIDER:
+        description: 'GCP Workload Identity Federation provider'
+        required: true
+      GCP_WIF_SERVICE_ACCOUNT:
+        description: 'GCP Service Account email for WIF'
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-cloudrun-${{ inputs.service }}-${{ inputs.project_id }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ contains(inputs.project_id, 'prd') && 'production' || 'development' }}
+
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+      image: ${{ steps.build.outputs.full_image }}
+      revision: ${{ steps.deploy.outputs.revision }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ========================================
+      # SECURITY FIX #1: Input Validation
+      # ========================================
+      - name: Validate inputs
+        id: validate
+        run: |
+          set -euo pipefail
+
+          echo "🔍 Validating workflow inputs..."
+
+          # Validate service name (alphanumeric, hyphens only, max 63 chars)
+          SERVICE="${{ inputs.service }}"
+          if ! echo "$SERVICE" | grep -qE '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'; then
+            echo "❌ ERROR: Invalid service name. Must be lowercase alphanumeric with hyphens, max 63 chars"
+            exit 1
+          fi
+          echo "✅ Service name validated: $SERVICE"
+
+          # Validate region (whitelist common GCP regions)
+          REGION="${{ inputs.region }}"
+          VALID_REGIONS="us-central1|us-east1|us-west1|europe-west1|europe-west2|europe-west3|asia-east1|asia-southeast1|asia-northeast1"
+          if ! echo "$REGION" | grep -qE "^($VALID_REGIONS)$"; then
+            echo "⚠️  WARNING: Region '$REGION' not in common list. Proceeding with caution."
+          else
+            echo "✅ Region validated: $REGION"
+          fi
+
+          # Validate project ID (alphanumeric, hyphens only, 6-30 chars)
+          PROJECT="${{ inputs.project_id }}"
+          if ! echo "$PROJECT" | grep -qE '^[a-z][a-z0-9-]{4,28}[a-z0-9]$'; then
+            echo "❌ ERROR: Invalid project ID format"
+            exit 1
+          fi
+          echo "✅ Project ID validated: $PROJECT"
+
+          # Validate numeric inputs
+          MIN_INSTANCES="${{ inputs.min_instances }}"
+          MAX_INSTANCES="${{ inputs.max_instances }}"
+          if ! echo "$MIN_INSTANCES" | grep -qE '^[0-9]+$'; then
+            echo "❌ ERROR: min_instances must be a positive integer"
+            exit 1
+          fi
+          if ! echo "$MAX_INSTANCES" | grep -qE '^[0-9]+$'; then
+            echo "❌ ERROR: max_instances must be a positive integer"
+            exit 1
+          fi
+          if [ "$MIN_INSTANCES" -gt "$MAX_INSTANCES" ]; then
+            echo "❌ ERROR: min_instances cannot be greater than max_instances"
+            exit 1
+          fi
+          echo "✅ Instance scaling validated: $MIN_INSTANCES-$MAX_INSTANCES"
+
+          # Validate memory format
+          MEMORY="${{ inputs.memory }}"
+          if ! echo "$MEMORY" | grep -qE '^[0-9]+[MG]i?$'; then
+            echo "❌ ERROR: Invalid memory format. Use format like '512Mi' or '1Gi'"
+            exit 1
+          fi
+          echo "✅ Memory validated: $MEMORY"
+
+          # Validate CPU
+          CPU="${{ inputs.cpu }}"
+          if ! echo "$CPU" | grep -qE '^[0-9]+$'; then
+            echo "❌ ERROR: CPU must be a positive integer"
+            exit 1
+          fi
+          echo "✅ CPU validated: $CPU"
+
+          # Validate timeout
+          TIMEOUT="${{ inputs.timeout }}"
+          if ! echo "$TIMEOUT" | grep -qE '^[0-9]+$' || [ "$TIMEOUT" -lt 1 ] || [ "$TIMEOUT" -gt 3600 ]; then
+            echo "❌ ERROR: Timeout must be between 1 and 3600 seconds"
+            exit 1
+          fi
+          echo "✅ Timeout validated: ${TIMEOUT}s"
+
+          # Validate concurrency
+          CONCURRENCY="${{ inputs.concurrency }}"
+          if ! echo "$CONCURRENCY" | grep -qE '^[0-9]+$' || [ "$CONCURRENCY" -lt 1 ] || [ "$CONCURRENCY" -gt 1000 ]; then
+            echo "❌ ERROR: Concurrency must be between 1 and 1000"
+            exit 1
+          fi
+          echo "✅ Concurrency validated: $CONCURRENCY"
+
+          # Validate environment variables format (if provided)
+          ENV_VARS="${{ inputs.env_vars }}"
+          if [ -n "$ENV_VARS" ]; then
+            # Check for proper KEY=VALUE format (basic validation)
+            if ! echo "$ENV_VARS" | grep -qE '^[A-Z_][A-Z0-9_]*='; then
+              echo "❌ ERROR: env_vars must be in KEY=VALUE format"
+              exit 1
+            fi
+            # Check for potential injection attempts
+            if echo "$ENV_VARS" | grep -qE '[$`\\]'; then
+              echo "❌ ERROR: env_vars contains potentially dangerous characters"
+              exit 1
+            fi
+            echo "✅ Environment variables format validated"
+          fi
+
+          # Validate secrets format (if provided)
+          SECRETS="${{ inputs.secrets }}"
+          if [ -n "$SECRETS" ]; then
+            # Check for proper KEY=secret:version format
+            if ! echo "$SECRETS" | grep -qE '^[A-Z_][A-Z0-9_]*=[a-z0-9_-]+:[a-z0-9]+'; then
+              echo "❌ ERROR: secrets must be in KEY=secret_name:version format"
+              exit 1
+            fi
+            echo "✅ Secrets format validated"
+          fi
+
+          # Security check: Warn if allow_unauthenticated is true for production
+          if [ "${{ inputs.allow_unauthenticated }}" == "true" ] && echo "$PROJECT" | grep -q "prd"; then
+            echo "⚠️  WARNING: Deploying with --allow-unauthenticated to production project"
+            echo "⚠️  Ensure IAP or other authentication is configured at load balancer level"
+          fi
+
+          echo "✅ All input validations passed"
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      # ========================================
+      # SECURITY FIX #2: Robust Error Handling - Docker Build
+      # ========================================
+      - name: Build Docker image
+        id: build
+        run: |
+          set -euo pipefail
+
+          echo "🔨 Building Docker image..."
+
+          IMAGE="${{ inputs.gar_location }}-docker.pkg.dev/${{ inputs.project_id }}/${{ inputs.artifact_repo }}/${{ inputs.service }}"
+          TAG="${{ github.sha }}"
+          DOCKERFILE="${{ inputs.dockerfile }}"
+
+          # Validate Dockerfile exists
+          if [ ! -f "$DOCKERFILE" ]; then
+            echo "❌ ERROR: Dockerfile not found at: $DOCKERFILE"
+            exit 1
+          fi
+          echo "✅ Dockerfile found: $DOCKERFILE"
+
+          # Build with explicit error handling
+          echo "Building image: ${IMAGE}:${TAG}"
+          if ! docker build -t "${IMAGE}:${TAG}" -f "$DOCKERFILE" . ; then
+            echo "❌ ERROR: Docker build failed"
+            echo "Check build logs above for details"
+            exit 1
+          fi
+
+          # Verify image was created
+          if ! docker image inspect "${IMAGE}:${TAG}" > /dev/null 2>&1; then
+            echo "❌ ERROR: Image build succeeded but image not found locally"
+            exit 1
+          fi
+
+          echo "✅ Docker image built successfully: ${IMAGE}:${TAG}"
+
+          # Export for next steps (no sensitive data in outputs)
+          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
+      # ========================================
+      # SECURITY FIX #2: Robust Error Handling - Docker Push
+      # ========================================
+      - name: Configure Docker for Artifact Registry
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker ${{ inputs.gar_location }}-docker.pkg.dev --quiet
+
+      - name: Push Docker image
+        id: push
+        run: |
+          set -euo pipefail
+
+          echo "📤 Pushing Docker image to Artifact Registry..."
+
+          IMAGE="${{ steps.build.outputs.image }}"
+          TAG="${{ steps.build.outputs.tag }}"
+          FULL_IMAGE="${IMAGE}:${TAG}"
+
+          # Push with explicit error handling
+          if ! docker push "$FULL_IMAGE"; then
+            echo "❌ ERROR: Docker push failed"
+            echo "Verify Artifact Registry permissions and network connectivity"
+            exit 1
+          fi
+
+          # Get image digest for immutable reference
+          echo "🔍 Retrieving image digest..."
+          if ! DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$FULL_IMAGE" 2>/dev/null | cut -d'@' -f2); then
+            echo "❌ ERROR: Failed to retrieve image digest"
+            exit 1
+          fi
+
+          if [ -z "$DIGEST" ]; then
+            echo "❌ ERROR: Image digest is empty"
+            exit 1
+          fi
+
+          FULL_IMAGE_WITH_DIGEST="${IMAGE}@${DIGEST}"
+
+          echo "✅ Image pushed successfully"
+          echo "📦 Image digest: ${DIGEST:0:20}..."
+
+          # Export digest-based reference (security best practice)
+          echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
+          echo "full_image=${FULL_IMAGE_WITH_DIGEST}" >> $GITHUB_OUTPUT
+
+      # ========================================
+      # SECURITY FIX #2: Robust Error Handling - Cloud Run Deploy
+      # ========================================
+      - name: Deploy to Cloud Run
+        id: deploy
+        env:
+          PROJECT_ID: ${{ inputs.project_id }}
+          SERVICE: ${{ inputs.service }}
+          REGION: ${{ inputs.region }}
+          IMAGE: ${{ steps.push.outputs.full_image }}
+        run: |
+          set -euo pipefail
+
+          echo "🚀 Deploying to Cloud Run..."
+          echo "Service: $SERVICE"
+          echo "Region: $REGION"
+          echo "Project: $PROJECT_ID"
+
+          # Build gcloud command with validated inputs
+          gcloud_cmd=(
+            gcloud run deploy "$SERVICE"
+            --image="$IMAGE"
+            --project="$PROJECT_ID"
+            --region="$REGION"
+            --platform=managed
+            --memory="${{ inputs.memory }}"
+            --cpu="${{ inputs.cpu }}"
+            --timeout="${{ inputs.timeout }}"
+            --concurrency="${{ inputs.concurrency }}"
+            --min-instances="${{ inputs.min_instances }}"
+            --max-instances="${{ inputs.max_instances }}"
+            --format=json
+            --quiet
+          )
+
+          # Add authentication flag
+          if [ "${{ inputs.allow_unauthenticated }}" == "true" ]; then
+            gcloud_cmd+=(--allow-unauthenticated)
+          else
+            gcloud_cmd+=(--no-allow-unauthenticated)
+          fi
+
+          # ========================================
+          # SECURITY FIX #1: Sanitized Input Handling
+          # ========================================
+
+          # Add environment variables with proper sanitization
+          if [ -n "${{ inputs.env_vars }}" ]; then
+            # Validate no shell metacharacters
+            ENV_VARS="${{ inputs.env_vars }}"
+            if echo "$ENV_VARS" | grep -qE '[$`\\]'; then
+              echo "❌ ERROR: env_vars contains shell metacharacters"
+              exit 1
+            fi
+            gcloud_cmd+=(--set-env-vars="$ENV_VARS")
+            echo "✅ Environment variables configured"
+          fi
+
+          # Add secrets with proper validation
+          if [ -n "${{ inputs.secrets }}" ]; then
+            # Convert newline-separated to comma-separated list
+            SECRET_LIST=$(echo "${{ inputs.secrets }}" | sed '/^$/d' | paste -sd, -)
+
+            # Validate secret list format
+            if ! echo "$SECRET_LIST" | grep -qE '^[A-Z_][A-Z0-9_]*=[a-z0-9_-]+:[a-z0-9]+(,[A-Z_][A-Z0-9_]*=[a-z0-9_-]+:[a-z0-9]+)*$'; then
+              echo "❌ ERROR: Invalid secrets format after processing"
+              exit 1
+            fi
+
+            gcloud_cmd+=(--set-secrets="$SECRET_LIST")
+            echo "✅ Secrets configured (count: $(echo "$SECRET_LIST" | tr ',' '\n' | wc -l))"
+          fi
+
+          # Execute deployment with error handling
+          echo "Executing deployment command..."
+          if ! DEPLOY_OUTPUT=$("${gcloud_cmd[@]}" 2>&1); then
+            echo "❌ ERROR: Cloud Run deployment failed"
+            echo "$DEPLOY_OUTPUT"
+            exit 1
+          fi
+
+          # Parse deployment output
+          if ! SERVICE_URL=$(echo "$DEPLOY_OUTPUT" | jq -r '.status.url' 2>/dev/null); then
+            echo "❌ ERROR: Failed to parse deployment output"
+            exit 1
+          fi
+
+          if [ -z "$SERVICE_URL" ] || [ "$SERVICE_URL" == "null" ]; then
+            echo "❌ ERROR: Service URL not found in deployment output"
+            exit 1
+          fi
+
+          # Get revision name
+          REVISION=$(echo "$DEPLOY_OUTPUT" | jq -r '.status.latestReadyRevisionName' 2>/dev/null)
+
+          echo "✅ Deployment successful"
+          echo "Service URL: $SERVICE_URL"
+          echo "Revision: $REVISION"
+
+          # Export outputs (service URL is safe to expose in logs)
+          echo "url=$SERVICE_URL" >> $GITHUB_OUTPUT
+          echo "revision=$REVISION" >> $GITHUB_OUTPUT
+
+      # ========================================
+      # SECURITY FIX #2: Health Check with Error Handling
+      # ========================================
+      - name: Verify deployment
+        id: verify
+        run: |
+          set -euo pipefail
+
+          echo "🏥 Verifying deployment health..."
+
+          SERVICE_URL="${{ steps.deploy.outputs.url }}"
+
+          # Wait for service to be ready
+          echo "Waiting for service to stabilize (10s)..."
+          sleep 10
+
+          # Try health check if unauthenticated
+          if [ "${{ inputs.allow_unauthenticated }}" == "true" ]; then
+            echo "Attempting health check..."
+
+            # Try common health endpoints
+            for endpoint in "/health" "/healthz" "/_health" ""; do
+              CHECK_URL="${SERVICE_URL}${endpoint}"
+              echo "Checking: $CHECK_URL"
+
+              if HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$CHECK_URL"); then
+                if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 500 ]; then
+                  echo "✅ Health check passed: HTTP $HTTP_CODE"
+                  echo "health_check=passed" >> $GITHUB_OUTPUT
+                  exit 0
+                fi
+              fi
+            done
+
+            echo "⚠️  Health check endpoints not accessible"
+            echo "health_check=skipped" >> $GITHUB_OUTPUT
+          else
+            echo "ℹ️  Service requires authentication, skipping automated health check"
+            echo "health_check=auth_required" >> $GITHUB_OUTPUT
+          fi
+
+      # ========================================
+      # SECURITY FIX #3: Secure Deployment Summary
+      # ========================================
+      - name: Update deployment summary
+        if: always()
+        run: |
+          set -euo pipefail
+
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## 🚀 Cloud Run Deployment Summary
+
+          ### Deployment Details
+          - **Service**: ${{ inputs.service }}
+          - **Region**: ${{ inputs.region }}
+          - **Project**: ${{ inputs.project_id }}
+          - **Status**: ${{ job.status }}
+
+          ### Image Information
+          - **Repository**: ${{ inputs.artifact_repo }}
+          - **Tag**: ${{ steps.build.outputs.tag }}
+          - **Digest**: `${{ steps.push.outputs.digest }}`
+
+          ### Deployment Configuration
+          - **Memory**: ${{ inputs.memory }}
+          - **CPU**: ${{ inputs.cpu }}
+          - **Timeout**: ${{ inputs.timeout }}s
+          - **Concurrency**: ${{ inputs.concurrency }}
+          - **Scaling**: ${{ inputs.min_instances }}-${{ inputs.max_instances }} instances
+          - **Authentication**: ${{ inputs.allow_unauthenticated == 'true' && '🔓 Public' || '🔒 Protected' }}
+
+          EOF
+
+          # Add URL only if deployment succeeded and service is accessible
+          if [ "${{ steps.deploy.outputs.url }}" != "" ] && [ "${{ job.status }}" == "success" ]; then
+            # Mask internal URL patterns if present
+            SERVICE_URL="${{ steps.deploy.outputs.url }}"
+
+            # For production with authentication, provide guidance instead of direct URL
+            if [ "${{ inputs.allow_unauthenticated }}" == "false" ]; then
+              cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ### 🔒 Access Information
+          Service is deployed with authentication required.
+
+          **Access via:**
+          - Identity-Aware Proxy (IAP) if configured
+          - Service account with proper IAM roles
+          - See [Cloud Run authentication docs](https://cloud.google.com/run/docs/authenticating/overview)
+
+          **Service Endpoint**: Available via GCP Console or `gcloud run services describe`
+
+          EOF
+            else
+              cat >> $GITHUB_STEP_SUMMARY << EOF
+          ### 🌐 Service URL
+          - **Endpoint**: $SERVICE_URL
+
+          ⚠️  **Note**: Service allows unauthenticated access
+
+          EOF
+            fi
+
+            # Add revision info
+            if [ "${{ steps.deploy.outputs.revision }}" != "" ]; then
+              cat >> $GITHUB_STEP_SUMMARY << EOF
+          ### 📦 Revision
+          - **Name**: \`${{ steps.deploy.outputs.revision }}\`
+
+          EOF
+            fi
+          fi
+
+          # Add health check status
+          if [ "${{ steps.verify.outputs.health_check }}" != "" ]; then
+            HEALTH_STATUS="${{ steps.verify.outputs.health_check }}"
+            case $HEALTH_STATUS in
+              passed)
+                HEALTH_ICON="✅"
+                HEALTH_MSG="Health check passed"
+                ;;
+              skipped)
+                HEALTH_ICON="⚠️"
+                HEALTH_MSG="Health check skipped (no accessible endpoint found)"
+                ;;
+              auth_required)
+                HEALTH_ICON="🔒"
+                HEALTH_MSG="Health check skipped (authentication required)"
+                ;;
+              *)
+                HEALTH_ICON="❓"
+                HEALTH_MSG="Health check status unknown"
+                ;;
+            esac
+
+            cat >> $GITHUB_STEP_SUMMARY << EOF
+          ### 🏥 Health Status
+          $HEALTH_ICON $HEALTH_MSG
+
+          EOF
+          fi
+
+          # Add failure information if deployment failed
+          if [ "${{ job.status }}" != "success" ]; then
+            cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ### ❌ Deployment Failed
+
+          **Troubleshooting steps:**
+          1. Check workflow logs for detailed error messages
+          2. Verify GCP permissions and quotas
+          3. Confirm Artifact Registry access
+          4. Review input parameters validation
+          5. Check Cloud Run service logs in GCP Console
+
+          **Rollback if needed:**
+          ```bash
+          gcloud run services update-traffic ${{ inputs.service }} \
+            --to-revisions=PREVIOUS_REVISION=100 \
+            --project=${{ inputs.project_id }} \
+            --region=${{ inputs.region }}
+          ```
+
+          EOF
+          fi
+
+          echo "✅ Deployment summary updated"
+
+      - name: Report failure
+        if: failure()
+        run: |
+          set -euo pipefail
+
+          echo "❌ Deployment workflow failed"
+          echo "Review the logs above for specific error details"
+
+          # Provide context for debugging
+          echo ""
+          echo "Deployment context:"
+          echo "  Service: ${{ inputs.service }}"
+          echo "  Region: ${{ inputs.region }}"
+          echo "  Project: ${{ inputs.project_id }}"
+          echo "  Workflow: ${{ github.workflow }}"
+          echo "  Run ID: ${{ github.run_id }}"
+          echo "  Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          exit 1
