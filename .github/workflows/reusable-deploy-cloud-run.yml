@@ -91,9 +91,9 @@ jobs:
           TAG="${{ github.sha }}"
           
           docker build -t "${IMAGE}:${TAG}" -f "${{ inputs.dockerfile }}" .
-          docker push "${IMAGE}:${TAG}"
-          
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${TAG}" | cut -d'@' -f2)
+          # Capture the output of docker push to extract the digest
+          PUSH_OUTPUT=$(docker push "${IMAGE}:${TAG}")
+          DIGEST=$(echo "$PUSH_OUTPUT" | grep -Eo 'digest: sha256:[a-f0-9]+' | head -n1 | awk '{print $2}')
           
           echo "image=${IMAGE}" >> $GITHUB_OUTPUT
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
