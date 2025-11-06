@@ -8,12 +8,9 @@ updates:
       prefix: "ci"
       include: "scope"
   - package-ecosystem: "npm"
-    directory: "/"
+    directory: "/dashboard"
     schedule:
       interval: "weekly"
     commit-message:
       prefix: "chore"
       include: "scope"
-    ignore:
-      - dependency-name: "*"
-        update-types: ["version-update:semver-major"]

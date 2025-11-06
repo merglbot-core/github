@@ -65,10 +65,81 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Validate inputs
+        id: validate
+        run: |
+          set -euo pipefail
+
+          echo "🔍 Validating workflow inputs..."
+
+          # Validate service name (alphanumeric, hyphens only, max 63 chars)
+          SERVICE="${{ inputs.service }}"
+          if ! echo "$SERVICE" | grep -qE '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'; then
+            echo "❌ ERROR: Invalid service name. Must be lowercase alphanumeric with hyphens, max 63 chars"
+            exit 1
+          fi
+          echo "✅ Service name validated: $SERVICE"
+
+          # Validate region format
+          REGION="${{ inputs.region }}"
+          if ! echo "$REGION" | grep -qE '^[a-z]+-[a-z]+[0-9]+$'; then
+            echo "❌ ERROR: Invalid region format. Expected format: us-central1, europe-west1, etc."
+            exit 1
+          fi
+          echo "✅ Region validated: $REGION"
+
+          # Validate project ID (alphanumeric, hyphens only, 6-30 chars)
+          PROJECT="${{ inputs.project_id }}"
+          if ! echo "$PROJECT" | grep -qE '^[a-z][a-z0-9-]{4,28}[a-z0-9]$'; then
+            echo "❌ ERROR: Invalid project ID format"
+            exit 1
+          fi
+          echo "✅ Project ID validated: $PROJECT"
+
+          # Validate service account email format
+          SA="${{ inputs.service_account }}"
+          if ! echo "$SA" | grep -qE '^[a-z0-9-]+@[a-z0-9-]+\.iam\.gserviceaccount\.com$'; then
+            echo "❌ ERROR: Invalid service account email format"
+            exit 1
+          fi
+          echo "✅ Service account validated: $SA"
+
+          # Validate environment
+          ENV="${{ inputs.environment }}"
+          if ! echo "$ENV" | grep -qE '^[a-zA-Z][a-zA-Z0-9_-]*$'; then
+            echo "❌ ERROR: Invalid environment name"
+            exit 1
+          fi
+          echo "✅ Environment validated: $ENV"
+
+          # Validate environment variables format (if provided)
+          ENV_VARS="${{ inputs.env_vars }}"
+          if [ -n "$ENV_VARS" ]; then
+            # Check for proper KEY=VALUE format and prevent injection
+            if echo "$ENV_VARS" | grep -qE '[$`\\]'; then
+              echo "❌ ERROR: env_vars contains potentially dangerous characters"
+              exit 1
+            fi
+            echo "✅ Environment variables format validated"
+          fi
+
+          # Validate secrets format (if provided)
+          SECRETS="${{ inputs.secrets }}"
+          if [ -n "$SECRETS" ]; then
+            # Check for proper KEY=secret:version format
+            if echo "$SECRETS" | grep -qE '[$`\\]'; then
+              echo "❌ ERROR: secrets contains potentially dangerous characters"
+              exit 1
+            fi
+            echo "✅ Secrets format validated"
+          fi
+
+          echo "✅ All input validations passed"
       
       - name: Authenticate to Google Cloud (WIF)
         id: auth
@@ -87,60 +158,206 @@ jobs:
         id: build
         run: |
           set -euo pipefail
+
+          echo "🔨 Building Docker image..."
+
           IMAGE="${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.SERVICE }}"
           TAG="${{ github.sha }}"
-          
-          docker build -t "${IMAGE}:${TAG}" -f "${{ inputs.dockerfile }}" .
-          # Capture the output of docker push to extract the digest
-          PUSH_OUTPUT=$(docker push "${IMAGE}:${TAG}")
-          DIGEST=$(echo "$PUSH_OUTPUT" | grep -Eo 'digest: sha256:[a-f0-9]+' | head -n1 | awk '{print $2}')
-          
+          DOCKERFILE="${{ inputs.dockerfile }}"
+
+          # Validate Dockerfile exists
+          if [ ! -f "$DOCKERFILE" ]; then
+            echo "❌ ERROR: Dockerfile not found at: $DOCKERFILE"
+            exit 1
+          fi
+          echo "✅ Dockerfile found: $DOCKERFILE"
+
+          # Build with explicit error handling
+          echo "Building image: ${IMAGE}:${TAG}"
+          if ! docker build -t "${IMAGE}:${TAG}" -f "$DOCKERFILE" . ; then
+            echo "❌ ERROR: Docker build failed"
+            echo "Check build logs above for details"
+            exit 1
+          fi
+
+          # Verify image was created
+          if ! docker image inspect "${IMAGE}:${TAG}" > /dev/null 2>&1; then
+            echo "❌ ERROR: Image build succeeded but image not found locally"
+            exit 1
+          fi
+
+          echo "✅ Docker image built successfully: ${IMAGE}:${TAG}"
+
+          # Push with explicit error handling (capture both stdout and stderr)
+          echo "📤 Pushing Docker image to Artifact Registry..."
+          if ! docker push "${IMAGE}:${TAG}" 2>&1; then
+            echo "❌ ERROR: Docker push failed"
+            echo "Verify Artifact Registry permissions and network connectivity"
+            exit 1
+          fi
+
+          # Get image digest reliably using docker inspect (recommended method)
+          echo "🔍 Retrieving image digest..."
+          if ! DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${TAG}" 2>/dev/null | cut -d'@' -f2); then
+            echo "❌ ERROR: Failed to retrieve image digest"
+            exit 1
+          fi
+
+          # Validate digest is not empty
+          if [ -z "$DIGEST" ]; then
+            echo "❌ ERROR: Image digest is empty"
+            exit 1
+          fi
+
+          FULL_IMAGE_WITH_DIGEST="${IMAGE}@${DIGEST}"
+
+          echo "✅ Image pushed successfully"
+          echo "📦 Image digest: ${DIGEST:0:20}..."
+
+          # Export outputs
           echo "image=${IMAGE}" >> $GITHUB_OUTPUT
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
-          echo "full_image=${IMAGE}@${DIGEST}" >> $GITHUB_OUTPUT
+          echo "full_image=${FULL_IMAGE_WITH_DIGEST}" >> $GITHUB_OUTPUT
       
       - name: Deploy to Cloud Run
         id: deploy
+        env:
+          SERVICE: ${{ inputs.service }}
+          REGION: ${{ inputs.region }}
+          PROJECT_ID: ${{ inputs.project_id }}
+          SERVICE_ACCOUNT: ${{ inputs.service_account }}
+          IMAGE: ${{ steps.build.outputs.full_image }}
         run: |
           set -euo pipefail
-          
-          # Construct gcloud command
+
+          echo "🚀 Deploying to Cloud Run..."
+          echo "Service: $SERVICE"
+          echo "Region: $REGION"
+          echo "Project: $PROJECT_ID"
+
+          # Construct gcloud command with properly quoted variables
           gcloud_cmd=(gcloud run deploy "$SERVICE"
-            "--image=${{ steps.build.outputs.full_image }}"
+            "--image=$IMAGE"
             "--region=$REGION"
             "--project=$PROJECT_ID"
-            "--service-account=${{ inputs.service_account }}"
+            "--service-account=$SERVICE_ACCOUNT"
             "--max-instances=10"
             "--min-instances=0"
             "--memory=1Gi"
             "--cpu=1"
             "--port=8080"
             "--no-allow-unauthenticated"
+            "--format=json"
+            "--quiet"
           )
 
+          # Add environment variables with sanitization
           if [ -n "${{ inputs.env_vars }}" ]; then
-            gcloud_cmd+=("--set-env-vars=${{ inputs.env_vars }}")
+            ENV_VARS="${{ inputs.env_vars }}"
+            # Validate no shell metacharacters
+            if echo "$ENV_VARS" | grep -qE '[$`\\]'; then
+              echo "❌ ERROR: env_vars contains shell metacharacters"
+              exit 1
+            fi
+            gcloud_cmd+=("--set-env-vars=$ENV_VARS")
+            echo "✅ Environment variables configured"
           fi
-          
+
+          # Add secrets with validation
           if [ -n "${{ inputs.secrets }}" ]; then
             # Convert newline-separated to comma-separated list
             SECRET_LIST=$(echo "${{ inputs.secrets }}" | sed '/^$/d' | paste -sd, -)
-            gcloud_cmd+=("--set-secrets=${SECRET_LIST}")
+            gcloud_cmd+=("--set-secrets=$SECRET_LIST")
+            echo "✅ Secrets configured"
           fi
-          
-          # Execute the command
-          "${gcloud_cmd[@]}"
 
-          URL=$(gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format="value(status.url)")
-          echo "url=$URL" >> $GITHUB_OUTPUT
+          # Execute deployment with error handling
+          echo "Executing deployment command..."
+          if ! DEPLOY_OUTPUT=$("${gcloud_cmd[@]}" 2>&1); then
+            echo "❌ ERROR: Cloud Run deployment failed"
+            echo "$DEPLOY_OUTPUT"
+            exit 1
+          fi
+
+          # Parse deployment output
+          if ! SERVICE_URL=$(echo "$DEPLOY_OUTPUT" | jq -r '.status.url' 2>/dev/null); then
+            echo "❌ ERROR: Failed to parse deployment output"
+            # Fallback to gcloud describe
+            SERVICE_URL=$(gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format="value(status.url)" 2>/dev/null || echo "")
+          fi
+
+          if [ -z "$SERVICE_URL" ] || [ "$SERVICE_URL" == "null" ]; then
+            echo "❌ ERROR: Service URL not found in deployment output"
+            exit 1
+          fi
+
+          echo "✅ Deployment successful"
+          echo "Service URL: $SERVICE_URL"
+
+          echo "url=$SERVICE_URL" >> $GITHUB_OUTPUT
       
       - name: Update deployment summary
         if: always()
         run: |
-          cat >> $GITHUB_STEP_SUMMARY << EOF
-          ## 🚀 Reusable Deployment
-          - **Service**: $SERVICE
-          - **URL**: ${{ steps.deploy.outputs.url }}
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## 🚀 Cloud Run Deployment Summary
+
+          ### Deployment Details
+          - **Service**: ${{ inputs.service }}
+          - **Region**: ${{ inputs.region }}
+          - **Project**: ${{ inputs.project_id }}
+          - **Environment**: ${{ inputs.environment }}
           - **Status**: ${{ job.status }}
+
+          ### Image Information
+          - **Image**: ${{ steps.build.outputs.image }}
+          - **Tag**: ${{ steps.build.outputs.tag }}
+          - **Digest**: `${{ steps.build.outputs.digest }}`
+
           EOF
+
+          # Add URL only if deployment succeeded
+          if [ "${{ steps.deploy.outputs.url }}" != "" ] && [ "${{ job.status }}" == "success" ]; then
+            cat >> $GITHUB_STEP_SUMMARY << EOF
+          ### 🌐 Service URL
+          - **Endpoint**: ${{ steps.deploy.outputs.url }}
+
+          EOF
+          fi
+
+          # Add failure information if deployment failed
+          if [ "${{ job.status }}" != "success" ]; then
+            cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ### ❌ Deployment Failed
+
+          **Troubleshooting steps:**
+          1. Check workflow logs for detailed error messages
+          2. Verify GCP permissions and quotas
+          3. Confirm Artifact Registry access
+          4. Review input parameters validation
+          5. Check Cloud Run service logs in GCP Console
+
+          EOF
+          fi
+
+          echo "✅ Deployment summary updated"
+
+      - name: Report failure
+        if: failure()
+        run: |
+          set -euo pipefail
+
+          echo "❌ Deployment workflow failed"
+          echo "Review the logs above for specific error details"
+
+          # Provide context for debugging
+          echo ""
+          echo "Deployment context:"
+          echo "  Service: ${{ inputs.service }}"
+          echo "  Region: ${{ inputs.region }}"
+          echo "  Project: ${{ inputs.project_id }}"
+          echo "  Workflow: ${{ github.workflow }}"
+          echo "  Run ID: ${{ github.run_id }}"
+
+          exit 1
