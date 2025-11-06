@@ -7,31 +7,23 @@ on:
         description: 'Languages to analyze as a JSON array string'
         required: false
         type: string
-        default: '["javascript"]'
+        default: '["javascript", "typescript", "python"]'
 
 jobs:
   analyze:
-    name: Analyze
+    name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
       security-events: write
 
-    # Pre-matrix step to split the languages string into an array
-    outputs:
-      languages_array: ${{ steps.set-matrix-languages.outputs.languages_array }}
     strategy:
       fail-fast: false
       matrix:
-        language: ${{ fromJson(needs.analyze.outputs.languages_array) }}
+        language: ${{ fromJSON(inputs.languages || '["javascript"]') }}
 
     steps:
-    - id: set-matrix-languages
-      run: |
-        # Split the input string by comma and output as a JSON array
-        echo "languages_array=$(echo '${{ inputs.languages }}' | jq -R 'split(\",\") | map(. | trim) | tojson')" >> $GITHUB_OUTPUT
-      shell: bash
     - name: Checkout repository
       uses: actions/checkout@v4
 
@@ -45,3 +37,5 @@ jobs:
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:${{ matrix.language }}"
