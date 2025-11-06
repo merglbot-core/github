@@ -4,10 +4,10 @@ on:
   workflow_call:
     inputs:
       languages:
-        description: 'Languages to analyze'
+        description: 'Languages to analyze as a JSON array string'
         required: false
         type: string
-        default: 'javascript'
+        default: '["javascript"]'
 
 jobs:
   analyze:
@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [ ${{ inputs.languages }} ]
+        language: ${{ fromJSON(inputs.languages) }}
 
     steps:
     - name: Checkout repository
