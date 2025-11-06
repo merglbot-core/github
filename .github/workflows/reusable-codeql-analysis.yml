@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: ${{ fromJson(needs.analyze.outputs.languages_array) }}
+        language: ${{ fromJson(inputs.languages) }}
 
     steps:
     - id: set-matrix-languages
