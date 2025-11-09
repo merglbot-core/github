@@ -41,7 +41,7 @@ jobs:
       - name: Detect dependency lockfile
         id: lockfile
         run: |
-          set -euo pipefail
+          set -eo pipefail
           if [ -f package-lock.json ]; then
             echo "manager=npm" >> $GITHUB_OUTPUT
             echo "path=package-lock.json" >> $GITHUB_OUTPUT

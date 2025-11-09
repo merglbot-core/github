@@ -17,6 +17,10 @@ jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
     env:
       CODEQL_AUTH_TOKEN: ${{ secrets.CODEQL_TOKEN || github.token }}
 
