@@ -38,11 +38,37 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Setup Node
+      - name: Detect dependency lockfile
+        id: lockfile
+        run: |
+          set -eo pipefail
+          if [ -f package-lock.json ]; then
+            echo "manager=npm" >> $GITHUB_OUTPUT
+            echo "path=package-lock.json" >> $GITHUB_OUTPUT
+          elif [ -f npm-shrinkwrap.json ]; then
+            echo "manager=npm" >> $GITHUB_OUTPUT
+            echo "path=npm-shrinkwrap.json" >> $GITHUB_OUTPUT
+          elif [ -f yarn.lock ]; then
+            echo "manager=yarn" >> $GITHUB_OUTPUT
+            echo "path=yarn.lock" >> $GITHUB_OUTPUT
+          else
+            echo "manager=" >> $GITHUB_OUTPUT
+            echo "path=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Node (with cache)
+        if: steps.lockfile.outputs.manager != ''
         uses: actions/setup-node@v6
         with:
           node-version: '20'
-          cache: 'npm'
+          cache: ${{ steps.lockfile.outputs.manager }}
+          cache-dependency-path: ${{ steps.lockfile.outputs.path }}
+
+      - name: Setup Node (no cache)
+        if: steps.lockfile.outputs.manager == ''
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
       
       - name: Install dependencies
         run: |
