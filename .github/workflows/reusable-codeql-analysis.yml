@@ -8,6 +8,10 @@ on:
         required: false
         type: string
         default: '["javascript"]'
+    secrets:
+      GITHUB_TOKEN:
+        description: 'Default token used for checkout and SARIF upload'
+        required: true
 
 jobs:
   analyze:
@@ -17,6 +21,8 @@ jobs:
       actions: read
       contents: read
       security-events: write
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     # Pre-matrix step to split the languages string into an array
     strategy:
@@ -38,4 +44,3 @@ jobs:
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v3
-
