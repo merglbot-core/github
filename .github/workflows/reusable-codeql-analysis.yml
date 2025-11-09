@@ -8,6 +8,10 @@ on:
         required: false
         type: string
         default: '["javascript"]'
+    secrets:
+      CODEQL_TOKEN:
+        description: 'Run-scoped token forwarded by the caller (typically GITHUB_TOKEN)'
+        required: true
 
 jobs:
   analyze:
@@ -17,6 +21,8 @@ jobs:
       actions: read
       contents: read
       security-events: write
+    env:
+      GITHUB_TOKEN: ${{ secrets.CODEQL_TOKEN }}
 
     # Pre-matrix step to split the languages string into an array
     strategy:
