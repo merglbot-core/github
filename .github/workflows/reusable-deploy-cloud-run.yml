@@ -38,6 +38,11 @@ on:
         description: 'Newline-separated SECRET_NAME=secret-id:version'
         required: false
         type: string
+      allow_unauthenticated:
+        description: 'Allow unauthenticated access (use only for services behind IAP/Load Balancer with own auth)'
+        required: false
+        type: boolean
+        default: false
     secrets:
       GCP_WIF_PROVIDER:
         required: true
@@ -116,8 +121,14 @@ jobs:
             "--memory=1Gi"
             "--cpu=1"
             "--port=8080"
-            "--no-allow-unauthenticated"
           )
+
+          # Authentication flag (default: no-allow-unauthenticated for security)
+          if [ "${{ inputs.allow_unauthenticated }}" = "true" ]; then
+            gcloud_cmd+=("--allow-unauthenticated")
+          else
+            gcloud_cmd+=("--no-allow-unauthenticated")
+          fi
 
           if [ -n "${{ inputs.env_vars }}" ]; then
             gcloud_cmd+=("--set-env-vars=${{ inputs.env_vars }}")
