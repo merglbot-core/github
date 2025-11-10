@@ -168,12 +168,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "v${{ steps.version.outputs.version }}" \
-            --title "Release v${{ steps.version.outputs.version }}" \
-            --notes "${{ steps.changelog.outputs.changelog }}" \
-            --verify-tag \
-            --latest
-          # If you want to support draft/prerelease, add --draft or --prerelease flags as needed
+          VERSION="v${{ steps.version.outputs.version }}"
+          
+          # Check if release already exists (idempotent)
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists, skipping release creation (idempotent)"
+          else
+            gh release create "$VERSION" \
+              --title "Release $VERSION" \
+              --notes "${{ steps.changelog.outputs.changelog }}" \
+              --verify-tag \
+              --latest
+            echo "Release $VERSION created"
+          fi
       
       - name: Update GITHUB_STEP_SUMMARY
         if: always()
