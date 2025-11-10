@@ -150,10 +150,18 @@ jobs:
       - name: Create Git tag
         if: steps.version.outputs.skip != 'true'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
-          git push origin "v${{ steps.version.outputs.version }}"
+          VERSION="v${{ steps.version.outputs.version }}"
+          
+          # Check if tag already exists (idempotent)
+          if git tag -l "$VERSION" | grep -q "$VERSION"; then
+            echo "Tag $VERSION already exists, skipping tag creation (idempotent)"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$VERSION" -m "Release $VERSION"
+            git push origin "$VERSION"
+            echo "Tag $VERSION created and pushed"
+          fi
       
       - name: Create GitHub Release
         if: steps.version.outputs.skip != 'true'
