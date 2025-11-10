@@ -102,7 +102,7 @@ jobs:
             --output reports/gitignore-audit.json
           
       - name: Upload gitignore report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: gitignore-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/gitignore-audit.json
@@ -160,7 +160,7 @@ jobs:
           
       - name: Upload secrets report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: secrets-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/secrets-audit.json
@@ -202,7 +202,7 @@ jobs:
           fi
           
       - name: Upload bot config report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: bot-config-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/bot-config-audit.json
@@ -242,7 +242,7 @@ jobs:
           mkdir -p reports
           echo '{"adoption_rate": 0, "message": "Pre-commit check skipped - script not implemented yet"}' > reports/precommit-audit.json
       - name: Upload pre-commit report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: precommit-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/precommit-audit.json
@@ -285,7 +285,7 @@ jobs:
           fi
           
       - name: Upload vulnerability report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: dependency-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/dependency-audit.json
@@ -317,7 +317,7 @@ jobs:
 # 301:           echo "- Changelog compliance: ${CHANGELOG_COMPLIANCE}%" >> "$GITHUB_STEP_SUMMARY"
 # 302:           
       # - name: Upload release report
-      #   uses: actions/upload-artifact@v4
+      #   uses: actions/upload-artifact@v5
       #   with:
       #     name: release-audit-${{ needs.prepare.outputs.audit_id }}
       #     path: reports/release-audit.json
@@ -346,7 +346,7 @@ jobs:
             --quarter "${AUDIT_QUARTER:-Manual}"
           
       - name: Upload consolidated report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: security-audit-report-${{ needs.prepare.outputs.audit_id }}
           path: reports/consolidated-audit.html
