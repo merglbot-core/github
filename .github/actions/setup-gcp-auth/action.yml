@@ -42,6 +42,7 @@ runs:
         create_credentials_file: true
         export_environment_variables: ${{ inputs.export_environment_variables }}
         cleanup_credentials: true
+        token_format: 'access_token'
     
     - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@f0990588f1e5b5af6827153b93673613abdc6ec7  # v2.1.1
@@ -52,16 +53,34 @@ runs:
       id: effective-project
       shell: bash
       run: |
+        set -euo pipefail
         if [ -n "${{ inputs.project_id }}" ]; then
+          gcloud config set project "${{ inputs.project_id }}" >/dev/null
           echo "project_id=${{ inputs.project_id }}" >> "$GITHUB_OUTPUT"
-        else
-          project="$(gcloud config get-value project 2>/dev/null || true)"
-          if [ -z "$project" ] || [ "$project" = "(unset)" ]; then
-            echo "project_id=" >> "$GITHUB_OUTPUT"
-          else
-            echo "project_id=$project" >> "$GITHUB_OUTPUT"
-          fi
+          exit 0
         fi
+        
+        if ! command -v gcloud >/dev/null 2>&1; then
+          echo "gcloud CLI not found; cannot determine project_id" >&2
+          echo "project_id=" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+        
+        ACTIVE_ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | tr -d '\n')"
+        if [ -z "$ACTIVE_ACCOUNT" ]; then
+          echo "No active gcloud account; authentication may have failed" >&2
+          echo "project_id=" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+        
+        PROJECT_ID="$(gcloud config get-value project 2>/dev/null || true)"
+        if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "(unset)" ]; then
+          echo "project_id=" >> "$GITHUB_OUTPUT"
+          echo "No default project set in gcloud config; pass 'project_id' input to this action." >&2
+          exit 1
+        fi
+        
+        echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
     
     - name: Verify authentication
       shell: bash
@@ -74,12 +93,4 @@ runs:
           echo "📍 Default project: $EFFECTIVE_PROJECT"
         else
           echo "📍 Default project: (not set)"
-        fi
-        
-        echo "🔍 GCP project from config:"
-        CONFIG_PROJECT="$(gcloud config get-value project 2>/dev/null || true)"
-        if [ -z "$CONFIG_PROJECT" ] || [ "$CONFIG_PROJECT" = "(unset)" ]; then
-          echo "   (unset)"
-        else
-          echo "   $CONFIG_PROJECT"
         fi

@@ -149,12 +149,12 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const prNumber = Number('${{ inputs.pull-request-number }}');
+            const prNumber = Number(process.env.PR_NUMBER || '0');
             if (!Number.isFinite(prNumber) || prNumber <= 0) {
-              core.setFailed('pull-request-number input must be provided for merge commit inspection.');
+              core.setFailed('PR metadata missing; ensure pull-request-number input is provided.');
               return;
             }
-            
+
             const { data: commits } = await github.rest.pulls.listCommits({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -171,3 +171,5 @@ jobs:
             } else {
               console.log(`✅ No merge commits found`);
             }
+        env:
+          PR_NUMBER: ${{ steps.pr-data.outputs.number }}

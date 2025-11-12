@@ -54,7 +54,7 @@ permissions:
   pull-requests: write  # For posting plan comments
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -79,7 +79,11 @@ jobs:
       
       - name: Terraform Init
         working-directory: ${{ inputs.working-directory }}
-        run: terraform init -backend=false
+        env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/terraform-plugin-cache
+        run: |
+          mkdir -p "${TF_PLUGIN_CACHE_DIR}"
+          terraform init -backend=false
       
       - name: Terraform Validate
         working-directory: ${{ inputs.working-directory }}

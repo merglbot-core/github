@@ -40,8 +40,8 @@ jobs:
 |-------|----------|---------|-------------|
 | `workload_identity_provider` | ✅ Yes | - | GCP WIF provider |
 | `service_account` | ✅ Yes | - | Service account email |
-| `project_id` | ❌ No | `''` | GCP project ID |
-| `export_environment_variables` | ❌ No | `'true'` | Export GCP env vars |
+| `project_id` | ❌ No | `''` | GCP Project ID (optional, sets the default project) |
+| `export_environment_variables` | ❌ No | `'true'` | Export `GCLOUD_PROJECT`, `GCP_PROJECT`, `GOOGLE_CLOUD_PROJECT` |
 
 ## Outputs
 
