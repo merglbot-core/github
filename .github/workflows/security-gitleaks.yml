@@ -53,12 +53,12 @@ jobs:
           persist-credentials: false
       
       - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@cb7149a9idq6d6d0fd086319b0e5e1d9c985c5b7  # v2.3.6
+        uses: gitleaks/gitleaks-action@cb7149a9fd96d6d0fd086319b0e5e1d9c985c5b7  # v2.3.6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
         with:
-          config: ${{ inputs.config-path != '' && inputs.config-path || '' }}
+          config: ${{ inputs.config-path }}
           fail: ${{ inputs.fail-on-detection }}
           
           # Generate SARIF report for GitHub Security tab
@@ -73,18 +73,23 @@ jobs:
           category: gitleaks
       
       - name: Comment on PR (if secrets found)
-        if: failure() && github.event_name == 'pull_request'
+        if: failure() && github.event.pull_request.number
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            const pullRequestNumber = context.payload.pull_request?.number;
+            if (!pullRequestNumber) {
+              core.warning('No pull_request context available. Skipping comment.');
+              return;
+            }
+            
             github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: pullRequestNumber,
               body: '🔐 **Gitleaks detected potential secrets in this PR!**\n\n' +
                     'Please review the workflow run and remove any hardcoded secrets.\n' +
                     'Use `${{ secrets.SECRET_NAME }}` instead of hardcoded values.\n\n' +
                     'See: https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId
             })
-

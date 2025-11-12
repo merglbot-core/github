@@ -86,12 +86,27 @@ jobs:
         with:
           persist-credentials: false
       
+      - name: Resolve lockfile path
+        id: lockfile
+        shell: bash
+        run: |
+          manager="${{ inputs.package-manager }}"
+          if [ "$manager" = "pnpm" ]; then
+            lockfile="pnpm-lock.yaml"
+          elif [ "$manager" = "yarn" ]; then
+            lockfile="yarn.lock"
+          else
+            lockfile="package-lock.json"
+          fi
+          
+          echo "name=$lockfile" >> "$GITHUB_OUTPUT"
+      
       - name: Setup Node.js
         uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8  # v4.0.2
         with:
           node-version: ${{ inputs.node-version }}
           cache: ${{ inputs.package-manager }}
-          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+          cache-dependency-path: ${{ inputs.working-directory }}/${{ steps.lockfile.outputs.name }}
       
       - name: Setup pnpm
         if: inputs.package-manager == 'pnpm'

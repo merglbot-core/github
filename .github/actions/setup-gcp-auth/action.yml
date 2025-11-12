@@ -25,6 +25,11 @@ inputs:
     required: false
     default: 'true'
 
+outputs:
+  project_id:
+    description: 'Effective GCP project ID resolved by the action'
+    value: ${{ steps.effective-project.outputs.project_id }}
+
 runs:
   using: composite
   steps:
@@ -43,17 +48,38 @@ runs:
       with:
         project_id: ${{ inputs.project_id }}
     
+    - name: Determine effective project
+      id: effective-project
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.project_id }}" ]; then
+          echo "project_id=${{ inputs.project_id }}" >> "$GITHUB_OUTPUT"
+        else
+          project="$(gcloud config get-value project 2>/dev/null || true)"
+          if [ -z "$project" ] || [ "$project" = "(unset)" ]; then
+            echo "project_id=" >> "$GITHUB_OUTPUT"
+          else
+            echo "project_id=$project" >> "$GITHUB_OUTPUT"
+          fi
+        fi
+    
     - name: Verify authentication
       shell: bash
       run: |
         echo "✅ Authenticated as:"
         gcloud auth list --filter=status:ACTIVE --format="value(account)"
         
-        if [ -n "${{ inputs.project_id }}" ]; then
-          echo "📍 Default project: ${{ inputs.project_id }}"
-          gcloud config set project "${{ inputs.project_id }}"
+        EFFECTIVE_PROJECT="${{ steps.effective-project.outputs.project_id }}"
+        if [ -n "$EFFECTIVE_PROJECT" ]; then
+          echo "📍 Default project: $EFFECTIVE_PROJECT"
+        else
+          echo "📍 Default project: (not set)"
         fi
         
-        echo "🔍 GCP Environment:"
-        gcloud config list
-
+        echo "🔍 GCP project from config:"
+        CONFIG_PROJECT="$(gcloud config get-value project 2>/dev/null || true)"
+        if [ -z "$CONFIG_PROJECT" ] || [ "$CONFIG_PROJECT" = "(unset)" ]; then
+          echo "   (unset)"
+        else
+          echo "   $CONFIG_PROJECT"
+        fi

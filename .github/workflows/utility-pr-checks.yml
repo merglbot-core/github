@@ -5,6 +5,8 @@
 #   jobs:
 #     pr-checks:
 #       uses: merglbot-core/github/.github/workflows/utility-pr-checks.yml@v2
+#       with:
+#         pull-request-number: ${{ github.event.pull_request.number }}
 #
 # Purpose: Enforce PR hygiene (conventional commits, size, branch naming)
 # Category: Utility
@@ -34,6 +36,11 @@ on:
         type: string
         default: 'feat/,fix/,docs/,ci/,chore/,refactor/'
         required: false
+      
+      pull-request-number:
+        description: 'Pull request number (required when invoked via workflow_call)'
+        type: number
+        required: true
 
 permissions:
   contents: read
@@ -43,16 +50,40 @@ jobs:
   pr-checks:
     name: PR Checks
     runs-on: ubuntu-24.04
-    if: github.event_name == 'pull_request'
     
     steps:
+      - name: Fetch PR metadata
+        id: pr-data
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          result-encoding: string
+          script: |
+            const prNumber = Number('${{ inputs.pull-request-number }}');
+            if (!Number.isFinite(prNumber) || prNumber <= 0) {
+              core.setFailed('pull-request-number input must be provided for reusable workflow calls.');
+              return;
+            }
+            
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            
+            core.setOutput('title', pr.title ?? '');
+            core.setOutput('branch', pr.head.ref ?? '');
+            core.setOutput('additions', String(pr.additions ?? 0));
+            core.setOutput('deletions', String(pr.deletions ?? 0));
+            core.setOutput('number', String(pr.number));
+
       - name: Check PR title (Conventional Commits)
         if: inputs.enforce-conventional-commits
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const title = context.payload.pull_request.title;
+            const title = process.env.PR_TITLE || '';
             const pattern = /^(feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert)(\(.+\))?!?: .+/;
             
             if (!pattern.test(title)) {
@@ -64,13 +95,15 @@ jobs:
             } else {
               console.log(`✅ PR title follows Conventional Commits format`);
             }
+        env:
+          PR_TITLE: ${{ steps.pr-data.outputs.title }}
       
       - name: Check branch naming
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const branch = context.payload.pull_request.head.ref;
+            const branch = process.env.PR_BRANCH || '';
             const allowedPrefixes = '${{ inputs.allowed-branch-prefixes }}'.split(',');
             
             const isValid = allowedPrefixes.some(prefix => branch.startsWith(prefix.trim()));
@@ -83,6 +116,8 @@ jobs:
             } else {
               console.log(`✅ Branch name follows convention`);
             }
+        env:
+          PR_BRANCH: ${{ steps.pr-data.outputs.branch }}
       
       - name: Check PR size
         if: inputs.max-pr-size > 0
@@ -90,9 +125,8 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const pr = context.payload.pull_request;
-            const additions = pr.additions || 0;
-            const deletions = pr.deletions || 0;
+            const additions = Number(process.env.PR_ADDITIONS || '0');
+            const deletions = Number(process.env.PR_DELETIONS || '0');
             const totalChanges = additions + deletions;
             const maxSize = ${{ inputs.max-pr-size }};
             
@@ -106,16 +140,25 @@ jobs:
             } else {
               console.log(`✅ PR size OK (${totalChanges}/${maxSize} LOC)`);
             }
+        env:
+          PR_ADDITIONS: ${{ steps.pr-data.outputs.additions }}
+          PR_DELETIONS: ${{ steps.pr-data.outputs.deletions }}
       
       - name: Check for merge commits
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
+            const prNumber = Number('${{ inputs.pull-request-number }}');
+            if (!Number.isFinite(prNumber) || prNumber <= 0) {
+              core.setFailed('pull-request-number input must be provided for merge commit inspection.');
+              return;
+            }
+            
             const { data: commits } = await github.rest.pulls.listCommits({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number
+              pull_number: prNumber
             });
             
             const mergeCommits = commits.filter(commit => commit.parents.length > 1);
@@ -128,4 +171,3 @@ jobs:
             } else {
               console.log(`✅ No merge commits found`);
             }
-

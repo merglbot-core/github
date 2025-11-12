@@ -89,7 +89,7 @@ jobs:
         if: inputs.run-tflint
         uses: terraform-linters/setup-tflint@19a52fbac37dacb22a09518e4ef6ee234f2d4987  # v4.0.0
         with:
-          tflint_version: latest
+          tflint_version: v0.51.1
       
       - name: Run TFLint
         if: inputs.run-tflint
@@ -100,7 +100,9 @@ jobs:
       
       - name: Setup Checkov
         if: inputs.run-checkov
-        run: pip install checkov
+        run: |
+          python -m pip install --upgrade pip
+          pip install checkov==3.2.493
       
       - name: Run Checkov
         if: inputs.run-checkov
@@ -111,11 +113,9 @@ jobs:
             --output cli \
             --quiet \
             --compact
-        continue-on-error: true
       
       - name: Terraform Plan
         if: inputs.run-plan
         working-directory: ${{ inputs.working-directory }}
         run: terraform plan -no-color
         continue-on-error: true
-

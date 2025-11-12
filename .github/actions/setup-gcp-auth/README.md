@@ -20,6 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Authenticate to GCP
+        id: gcp-auth
         uses: merglbot-core/github/.github/actions/setup-gcp-auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
@@ -29,7 +30,7 @@ jobs:
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy my-service \
-            --image gcr.io/${{ steps.auth.outputs.project_id }}/my-image \
+            --image gcr.io/${{ steps.gcp-auth.outputs.project_id }}/my-image \
             --region europe-west1
 ```
 
@@ -41,6 +42,12 @@ jobs:
 | `service_account` | ✅ Yes | - | Service account email |
 | `project_id` | ❌ No | `''` | GCP project ID |
 | `export_environment_variables` | ❌ No | `'true'` | Export GCP env vars |
+
+## Outputs
+
+| Output | Description |
+|--------|-------------|
+| `project_id` | Effective project ID (explicit input or detected from the active gcloud config) |
 
 ## Requirements
 
@@ -63,4 +70,3 @@ jobs:
 ---
 
 *Created: 2025-11-12 | Part of Enterprise CI Audit*
-
