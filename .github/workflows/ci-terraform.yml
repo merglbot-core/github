@@ -1,0 +1,124 @@
+# CI: Terraform
+# Reusable workflow for Terraform IaC validation
+#
+# Usage:
+#   jobs:
+#     terraform:
+#       uses: merglbot-core/github/.github/workflows/ci-terraform.yml@v2
+#       with:
+#         terraform-version: '1.6'
+#
+# Purpose: Standardize Terraform CI (infra, tf-modules-)
+# Category: CI
+# Priority: MEDIUM
+# Status: PRODUCTION
+# Created: 2025-11-12 (Enterprise CI Audit)
+
+name: CI - Terraform
+
+on:
+  workflow_call:
+    inputs:
+      terraform-version:
+        description: 'Terraform version to use'
+        type: string
+        default: '1.6'
+        required: false
+      
+      working-directory:
+        description: 'Working directory for Terraform commands'
+        type: string
+        default: '.'
+        required: false
+      
+      run-tflint:
+        description: 'Run tflint'
+        type: boolean
+        default: true
+        required: false
+      
+      run-checkov:
+        description: 'Run checkov security scan'
+        type: boolean
+        default: true
+        required: false
+      
+      run-plan:
+        description: 'Run terraform plan (requires cloud credentials)'
+        type: boolean
+        default: false
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  terraform:
+    name: Terraform CI
+    runs-on: ubuntu-24.04
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+        with:
+          persist-credentials: false
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@a1502cd9e758c50496cc9ac5308c4843bcd56d36  # v3.0.0
+        with:
+          terraform_version: ${{ inputs.terraform-version }}
+      
+      - name: Terraform Format Check
+        working-directory: ${{ inputs.working-directory }}
+        run: terraform fmt -check -recursive
+      
+      - name: Terraform Init
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/terraform-plugin-cache
+        run: |
+          mkdir -p "${TF_PLUGIN_CACHE_DIR}"
+          terraform init -backend=false
+      
+      - name: Terraform Validate
+        working-directory: ${{ inputs.working-directory }}
+        run: terraform validate
+      
+      - name: Setup TFLint
+        if: inputs.run-tflint
+        uses: terraform-linters/setup-tflint@19a52fbac37dacb22a09518e4ef6ee234f2d4987  # v4.0.0
+        with:
+          tflint_version: v0.51.1
+      
+      - name: Run TFLint
+        if: inputs.run-tflint
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          tflint --init
+          tflint --format compact
+      
+      - name: Setup Checkov
+        if: inputs.run-checkov
+        run: |
+          python -m pip install --upgrade pip
+          pip install checkov==3.2.493
+      
+      - name: Run Checkov
+        if: inputs.run-checkov
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          checkov --directory . \
+            --framework terraform \
+            --output cli \
+            --quiet \
+            --compact
+      
+      - name: Terraform Plan
+        if: inputs.run-plan
+        working-directory: ${{ inputs.working-directory }}
+        run: terraform plan -no-color
+        continue-on-error: true

@@ -1,0 +1,177 @@
+# Utility: PR Checks
+# Reusable workflow for common PR validation
+#
+# Usage:
+#   jobs:
+#     pr-checks:
+#       uses: merglbot-core/github/.github/workflows/utility-pr-checks.yml@v2
+#       with:
+#         pull-request-number: ${{ github.event.pull_request.number }}
+#
+# Purpose: Enforce PR hygiene (conventional commits, size, branch naming)
+# Category: Utility
+# Priority: LOW
+# Status: PRODUCTION
+# Created: 2025-11-12 (Enterprise CI Audit)
+
+name: Utility - PR Checks
+
+on:
+  workflow_call:
+    inputs:
+      max-pr-size:
+        description: 'Maximum PR size in lines of code (0 to disable)'
+        type: number
+        default: 400
+        required: false
+      
+      enforce-conventional-commits:
+        description: 'Enforce conventional commit format in PR title'
+        type: boolean
+        default: true
+        required: false
+      
+      allowed-branch-prefixes:
+        description: 'Comma-separated allowed branch prefixes (feat/,fix/,docs/,ci/)'
+        type: string
+        default: 'feat/,fix/,docs/,ci/,chore/,refactor/'
+        required: false
+      
+      pull-request-number:
+        description: 'Pull request number (required when invoked via workflow_call)'
+        type: number
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  pr-checks:
+    name: PR Checks
+    runs-on: ubuntu-24.04
+    
+    steps:
+      - name: Fetch PR metadata
+        id: pr-data
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          github-token: ${{ github.token }}
+          result-encoding: string
+          script: |
+            const prNumber = Number(process.env.PR_NUMBER_INPUT || '0');
+            if (!Number.isFinite(prNumber) || prNumber <= 0) {
+              core.setFailed('pull-request-number input must be provided for reusable workflow calls.');
+              return;
+            }
+            
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            
+            core.setOutput('title', pr.title ?? '');
+            core.setOutput('branch', pr.head.ref ?? '');
+            core.setOutput('additions', String(pr.additions ?? 0));
+            core.setOutput('deletions', String(pr.deletions ?? 0));
+            core.setOutput('number', String(pr.number));
+        env:
+          PR_NUMBER_INPUT: ${{ inputs.pull-request-number }}
+
+      - name: Check PR title (Conventional Commits)
+        if: inputs.enforce-conventional-commits
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const title = process.env.PR_TITLE || '';
+            const pattern = /^(feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert)(\(.+\))?!?: .+/;
+            
+            if (!pattern.test(title)) {
+              core.setFailed(
+                `PR title "${title}" doesn't follow Conventional Commits format.\n` +
+                `Expected: type(scope)?: description\n` +
+                `Examples: feat: add login, fix(api): resolve timeout, docs: update README`
+              );
+            } else {
+              console.log(`✅ PR title follows Conventional Commits format`);
+            }
+        env:
+          PR_TITLE: ${{ steps.pr-data.outputs.title }}
+      
+      - name: Check branch naming
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const branch = process.env.PR_BRANCH || '';
+            const allowedPrefixes = '${{ inputs.allowed-branch-prefixes }}'.split(',');
+            
+            const isValid = allowedPrefixes.some(prefix => branch.startsWith(prefix.trim()));
+            
+            if (!isValid) {
+              core.warning(
+                `Branch "${branch}" doesn't follow naming convention.\n` +
+                `Recommended prefixes: ${allowedPrefixes.join(', ')}`
+              );
+            } else {
+              console.log(`✅ Branch name follows convention`);
+            }
+        env:
+          PR_BRANCH: ${{ steps.pr-data.outputs.branch }}
+      
+      - name: Check PR size
+        if: inputs.max-pr-size > 0
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const additions = Number(process.env.PR_ADDITIONS || '0');
+            const deletions = Number(process.env.PR_DELETIONS || '0');
+            const totalChanges = additions + deletions;
+            const maxSize = ${{ inputs.max-pr-size }};
+            
+            console.log(`📊 PR size: +${additions} -${deletions} (total: ${totalChanges} LOC)`);
+            
+            if (totalChanges > maxSize) {
+              core.warning(
+                `⚠️ Large PR detected: ${totalChanges} LOC (limit: ${maxSize}).\n` +
+                `Consider splitting into smaller PRs for easier review.`
+              );
+            } else {
+              console.log(`✅ PR size OK (${totalChanges}/${maxSize} LOC)`);
+            }
+        env:
+          PR_ADDITIONS: ${{ steps.pr-data.outputs.additions }}
+          PR_DELETIONS: ${{ steps.pr-data.outputs.deletions }}
+      
+      - name: Check for merge commits
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const prNumber = Number(process.env.PR_NUMBER || '0');
+            if (!Number.isFinite(prNumber) || prNumber <= 0) {
+              core.setFailed('PR metadata missing; ensure pull-request-number input is provided.');
+              return;
+            }
+
+            const { data: commits } = await github.rest.pulls.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            
+            const mergeCommits = commits.filter(commit => commit.parents.length > 1);
+            
+            if (mergeCommits.length > 0) {
+              core.warning(
+                `⚠️ Found ${mergeCommits.length} merge commit(s) in PR.\n` +
+                `Use rebase or squash merge to maintain linear history.`
+              );
+            } else {
+              console.log(`✅ No merge commits found`);
+            }
+        env:
+          PR_NUMBER: ${{ steps.pr-data.outputs.number }}

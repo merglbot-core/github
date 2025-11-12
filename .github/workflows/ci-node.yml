@@ -1,0 +1,184 @@
+# CI: Node.js
+# Reusable workflow for Node.js projects (CI: lint, test, build)
+#
+# Usage:
+#   jobs:
+#     ci:
+#       uses: merglbot-core/github/.github/workflows/ci-node.yml@v2
+#       with:
+#         node-version: '20'
+#         package-manager: 'pnpm'
+#
+# Purpose: Standardize Node.js CI across 8 repos (website, btf-viz, platform, etc.)
+# Category: CI
+# Priority: MEDIUM
+# Status: PRODUCTION
+# Created: 2025-11-12 (Enterprise CI Audit)
+
+name: CI - Node.js
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: 'Node.js version to use'
+        type: string
+        default: '20'
+        required: false
+      
+      package-manager:
+        description: 'Package manager (npm, pnpm, yarn)'
+        type: string
+        default: 'pnpm'
+        required: false
+      
+      install-command:
+        description: 'Install command (default: auto-detected based on package-manager)'
+        type: string
+        default: ''
+        required: false
+      
+      build-command:
+        description: 'Build command'
+        type: string
+        default: 'build'
+        required: false
+      
+      test-command:
+        description: 'Test command (empty to skip tests)'
+        type: string
+        default: 'test'
+        required: false
+      
+      lint-command:
+        description: 'Lint command (empty to skip linting)'
+        type: string
+        default: 'lint'
+        required: false
+      
+      working-directory:
+        description: 'Working directory for commands'
+        type: string
+        default: '.'
+        required: false
+      
+      upload-build-artifacts:
+        description: 'Upload build artifacts (dist/, build/, .next/, etc.)'
+        type: boolean
+        default: false
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Node.js CI
+    runs-on: ubuntu-24.04
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+        with:
+          persist-credentials: false
+      
+      - name: Setup pnpm
+        if: inputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2  # v4.0.0
+        with:
+          version: 8
+      
+      - name: Resolve lockfile path
+        id: lockfile
+        shell: bash
+        run: |
+          manager="${{ inputs.package-manager }}"
+          if [ "$manager" = "pnpm" ]; then
+            lockfile="pnpm-lock.yaml"
+          elif [ "$manager" = "yarn" ]; then
+            lockfile="yarn.lock"
+          else
+            lockfile="package-lock.json"
+          fi
+          
+          echo "name=$lockfile" >> "$GITHUB_OUTPUT"
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8  # v4.0.2
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+          cache-dependency-path: ${{ inputs.working-directory }}/${{ steps.lockfile.outputs.name }}
+      
+      - name: Get install command
+        id: install-cmd
+        shell: bash
+        run: |
+          install_cmd="${{ inputs.install-command }}"
+          if [ -n "$install_cmd" ]; then
+            printf "cmd=%s\n" "$install_cmd" >> "$GITHUB_OUTPUT"
+          elif [ "${{ inputs.package-manager }}" = "pnpm" ]; then
+            echo "cmd=pnpm install --frozen-lockfile" >> "$GITHUB_OUTPUT"
+          elif [ "${{ inputs.package-manager }}" = "yarn" ]; then
+            echo "cmd=yarn install --frozen-lockfile" >> "$GITHUB_OUTPUT"
+          else
+            echo "cmd=npm ci" >> "$GITHUB_OUTPUT"
+          fi
+      
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ steps.install-cmd.outputs.cmd }}
+      
+      - name: Run linter
+        if: inputs.lint-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.package-manager }} run ${{ inputs.lint-command }}
+      
+      - name: Run tests
+        if: inputs.test-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.package-manager }} run ${{ inputs.test-command }}
+        env:
+          CI: true
+      
+      - name: Build
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.package-manager }} run ${{ inputs.build-command }}
+        env:
+          CI: true
+      
+      - name: Verify build outputs exist
+        if: inputs.upload-build-artifacts
+        id: verify-build
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          for dir in "${{ inputs.working-directory }}/dist" "${{ inputs.working-directory }}/build" "${{ inputs.working-directory }}/.next"; do
+            if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null || true)" ]; then
+              echo "Found build output: $dir"
+              found=1
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No build outputs found to upload." >&2
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          fi
+      
+      - name: Upload build artifacts
+        if: inputs.upload-build-artifacts && steps.verify-build.outputs.found == 'true'
+        uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3  # v4.3.1
+        with:
+          name: build-${{ github.sha }}
+          path: |
+            ${{ inputs.working-directory }}/dist
+            ${{ inputs.working-directory }}/build
+            ${{ inputs.working-directory }}/.next
+          retention-days: 7
+          if-no-files-found: warn
