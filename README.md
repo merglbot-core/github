@@ -53,16 +53,27 @@ Training documentation and onboarding materials.
 
 ---
 
-## 📚 Documentation
+## 📚 Documentation & Standards
+
+### Governance
+
+This repository follows the [Merglbot Rulebook v2](https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md) for all delivery standards.
+
+**Key Standards:**
+- [PR Policy](https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md) - Required PR process
+- [Branch Protection](https://github.com/merglbot-public/docs/blob/main/BRANCH_PROTECTION.md) - Branch protection rules
+- [Contributing Guidelines](CONTRIBUTING.md) - How to contribute
+- [Security Policy](SECURITY.md) - Security procedures
 
 ### Comprehensive Guides
 
 **README_WARP_IMPLEMENTATION.md** (264 lines) - WARP implementation guide
 
 **Related WARP Docs:**
-- `WARP_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md` (merglbot-public/docs) - 491 lines
-- `WARP_GLOBAL_RULES.txt` § GitHub Actions - Security best practices
-- `WARP_QUICK_REFERENCE.md` §1, §9 - GitHub Actions rules
+- [WARP_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md](https://github.com/merglbot-public/docs/blob/main/WARP_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md) - 491 lines
+- [WARP_GITHUB_ACTIONS_GLOBAL_RULES.md](https://github.com/merglbot-public/docs/blob/main/WARP_GITHUB_ACTIONS_GLOBAL_RULES.md) - Global rules
+- [WARP_GLOBAL_RULES.txt](https://github.com/merglbot-public/docs/blob/main/WARP_GLOBAL_RULES.txt) § GitHub Actions - Security best practices
+- [WARP_QUICK_REFERENCE.md](https://github.com/merglbot-public/docs/blob/main/WARP_QUICK_REFERENCE.md) §1, §9 - GitHub Actions rules
 
 ---
 
