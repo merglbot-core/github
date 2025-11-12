@@ -74,18 +74,6 @@ jobs:
           fetch-depth: 0  # Full history for comprehensive scanning
           persist-credentials: false
       
-      - name: Detect fork permissions
-        id: repo-scope
-        shell: bash
-        run: |
-          set -euo pipefail
-          from_fork=false
-          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; then
-            from_fork=true
-          fi
-          echo "from-fork=$from_fork" >> "$GITHUB_OUTPUT"
-          echo "Detected from_fork=$from_fork"
-      
       - name: Install Gitleaks CLI
         shell: bash
         run: |
@@ -143,18 +131,18 @@ jobs:
           fi
       
       - name: Upload SARIF report
-        if: always() && steps.repo-scope.outputs.from-fork != 'true'
+        if: always() && github.event_name != 'pull_request'
         uses: github/codeql-action/upload-sarif@eb055d739abdc2e8de2e5f4ba1a8b246daa779aa  # v3.26.0
         with:
           sarif_file: results.sarif
           category: gitleaks
       
-      - name: Skip SARIF upload for forks
-        if: always() && steps.repo-scope.outputs.from-fork == 'true'
-        run: echo "Skipping SARIF upload because the pull request originates from a fork (insufficient token perms)."
+      - name: Skip SARIF upload for pull request context
+        if: always() && github.event_name == 'pull_request'
+        run: echo "Skipping SARIF upload because pull_request tokens lack security-events:write."
       
       - name: Comment on PR (if secrets found)
-        if: steps.scan.outputs.has-findings == 'true' && github.event.pull_request.number && steps.repo-scope.outputs.from-fork != 'true'
+        if: steps.scan.outputs.has-findings == 'true' && github.event.pull_request.number
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
         with:
           github-token: ${{ github.token }}
