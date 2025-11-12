@@ -39,7 +39,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write  # For posting comments
+  issues: write  # Needed for optional PR comments
 
 jobs:
   dependency-review:
@@ -66,4 +66,3 @@ jobs:
           # Retry configuration for API rate limits
           retry-on-snapshot-warnings: true
           retry-on-snapshot-warnings-timeout: 600
-

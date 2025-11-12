@@ -56,7 +56,6 @@ jobs:
         uses: gitleaks/gitleaks-action@cb7149a9fd96d6d0fd086319b0e5e1d9c985c5b7  # v2.3.6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
         with:
           config: ${{ inputs.config-path }}
           fail: ${{ inputs.fail-on-detection }}
