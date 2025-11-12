@@ -46,7 +46,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      issues: ${{ inputs.comment-summary-in-pr && 'write' || 'read' }}
+      pull-requests: write
     
     steps:
       - name: Checkout code

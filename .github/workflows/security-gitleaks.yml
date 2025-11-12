@@ -33,8 +33,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write  # For posting comments
-  security-events: write  # For uploading SARIF
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}
@@ -44,6 +42,10 @@ jobs:
   gitleaks:
     name: Secret Scanning
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
     
     steps:
       - name: Validate config path
@@ -95,7 +97,7 @@ jobs:
         if: failure() && github.event.pull_request.number
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           script: |
             const pullRequestNumber = context.payload.pull_request?.number;
             if (!pullRequestNumber) {

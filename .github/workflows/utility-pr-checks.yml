@@ -56,9 +56,9 @@ jobs:
         id: pr-data
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           result-encoding: string
-        script: |
+          script: |
             const prNumber = Number(process.env.PR_NUMBER_INPUT || '0');
             if (!Number.isFinite(prNumber) || prNumber <= 0) {
               core.setFailed('pull-request-number input must be provided for reusable workflow calls.');
@@ -83,7 +83,7 @@ jobs:
         if: inputs.enforce-conventional-commits
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           script: |
             const title = process.env.PR_TITLE || '';
             const pattern = /^(feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert)(\(.+\))?!?: .+/;
@@ -103,7 +103,7 @@ jobs:
       - name: Check branch naming
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           script: |
             const branch = process.env.PR_BRANCH || '';
             const allowedPrefixes = '${{ inputs.allowed-branch-prefixes }}'.split(',');
@@ -125,7 +125,7 @@ jobs:
         if: inputs.max-pr-size > 0
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           script: |
             const additions = Number(process.env.PR_ADDITIONS || '0');
             const deletions = Number(process.env.PR_DELETIONS || '0');
@@ -149,7 +149,7 @@ jobs:
       - name: Check for merge commits
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           script: |
             const prNumber = Number(process.env.PR_NUMBER || '0');
             if (!Number.isFinite(prNumber) || prNumber <= 0) {
