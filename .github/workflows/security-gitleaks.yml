@@ -1,0 +1,90 @@
+# Security: Gitleaks Secret Scanning
+# Reusable workflow for detecting secrets in code
+#
+# Usage:
+#   jobs:
+#     gitleaks:
+#       uses: merglbot-core/github/.github/workflows/security-gitleaks.yml@v2
+#       with:
+#         fail-on-detection: true  # Optional: fail if secrets found
+#
+# Purpose: Detect hardcoded secrets, API keys, tokens before they reach production
+# Category: Security
+# Priority: HIGH
+# Status: DRAFT
+# Created: 2025-11-12 (Enterprise CI Audit)
+
+name: Security - Gitleaks
+
+on:
+  workflow_call:
+    inputs:
+      fail-on-detection:
+        description: 'Fail the workflow if secrets are detected'
+        type: boolean
+        default: true
+        required: false
+      
+      config-path:
+        description: 'Path to custom gitleaks config file (optional)'
+        type: string
+        default: ''
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write  # For posting comments
+  security-events: write  # For uploading SARIF
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitleaks:
+    name: Secret Scanning
+    runs-on: ubuntu-24.04
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+        with:
+          fetch-depth: 0  # Full history for comprehensive scanning
+          persist-credentials: false
+      
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@cb7149a9idq6d6d0fd086319b0e5e1d9c985c5b7  # v2.3.6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        with:
+          config: ${{ inputs.config-path != '' && inputs.config-path || '' }}
+          fail: ${{ inputs.fail-on-detection }}
+          
+          # Generate SARIF report for GitHub Security tab
+          report_format: sarif
+          report_path: gitleaks-report.sarif
+      
+      - name: Upload SARIF report
+        if: always()
+        uses: github/codeql-action/upload-sarif@eb055d739abdc2e8de2e5f4ba1a8b246daa779aa  # v3.26.0
+        with:
+          sarif_file: gitleaks-report.sarif
+          category: gitleaks
+      
+      - name: Comment on PR (if secrets found)
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '🔐 **Gitleaks detected potential secrets in this PR!**\n\n' +
+                    'Please review the workflow run and remove any hardcoded secrets.\n' +
+                    'Use `${{ secrets.SECRET_NAME }}` instead of hardcoded values.\n\n' +
+                    'See: https://github.com/' + context.repo.owner + '/' + context.repo.repo + '/actions/runs/' + context.runId
+            })
+

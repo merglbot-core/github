@@ -1,0 +1,59 @@
+name: Setup GCP Authentication
+description: 'Authenticate to Google Cloud using Workload Identity Federation (OIDC)'
+
+# Purpose: Centralize GCP authentication logic using WIF/OIDC (no SA JSON keys)
+# Category: Composite Action
+# Usage: Eliminates duplicated auth steps across 5+ deployment workflows
+# Created: 2025-11-12 (Enterprise CI Audit)
+
+inputs:
+  workload_identity_provider:
+    description: 'GCP Workload Identity Provider (format: projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER)'
+    required: true
+  
+  service_account:
+    description: 'GCP Service Account email (format: SA_NAME@PROJECT_ID.iam.gserviceaccount.com)'
+    required: true
+  
+  project_id:
+    description: 'GCP Project ID (optional, for setting default project)'
+    required: false
+    default: ''
+  
+  export_environment_variables:
+    description: 'Export GCP environment variables (GCLOUD_PROJECT, GCP_PROJECT, GOOGLE_CLOUD_PROJECT)'
+    required: false
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Authenticate to Google Cloud
+      id: auth
+      uses: google-github-actions/auth@f112390a2df9932162083945e46d439060d66ec2  # v2.1.4
+      with:
+        workload_identity_provider: ${{ inputs.workload_identity_provider }}
+        service_account: ${{ inputs.service_account }}
+        create_credentials_file: true
+        export_environment_variables: ${{ inputs.export_environment_variables }}
+        cleanup_credentials: true
+    
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@f0990588f1e5b5af6827153b93673613abdc6ec7  # v2.1.1
+      with:
+        project_id: ${{ inputs.project_id }}
+    
+    - name: Verify authentication
+      shell: bash
+      run: |
+        echo "✅ Authenticated as:"
+        gcloud auth list --filter=status:ACTIVE --format="value(account)"
+        
+        if [ -n "${{ inputs.project_id }}" ]; then
+          echo "📍 Default project: ${{ inputs.project_id }}"
+          gcloud config set project "${{ inputs.project_id }}"
+        fi
+        
+        echo "🔍 GCP Environment:"
+        gcloud config list
+
