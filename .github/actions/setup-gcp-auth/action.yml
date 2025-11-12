@@ -40,9 +40,11 @@ runs:
         workload_identity_provider: ${{ inputs.workload_identity_provider }}
         service_account: ${{ inputs.service_account }}
         create_credentials_file: true
+        credentials_file_path: "${{ runner.temp }}/gcp-credentials.json"
         export_environment_variables: ${{ inputs.export_environment_variables }}
         cleanup_credentials: true
         token_format: 'access_token'
+        audience: 'https://sts.googleapis.com/'
     
     - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@f0990588f1e5b5af6827153b93673613abdc6ec7  # v2.1.1
@@ -54,30 +56,35 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        if [ -n "${{ inputs.project_id }}" ]; then
-          gcloud config set project "${{ inputs.project_id }}" >/dev/null
-          echo "project_id=${{ inputs.project_id }}" >> "$GITHUB_OUTPUT"
+        PROJECT_INPUT="${{ inputs.project_id }}"
+        if [ -n "$PROJECT_INPUT" ]; then
+          if ! [[ "$PROJECT_INPUT" =~ ^[a-z][a-z0-9-]{5,29}$ ]]; then
+            echo "Invalid project_id format: $PROJECT_INPUT" >&2
+            echo "project_id=" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "project_id=$PROJECT_INPUT" >> "$GITHUB_OUTPUT"
           exit 0
         fi
         
         if ! command -v gcloud >/dev/null 2>&1; then
           echo "gcloud CLI not found; cannot determine project_id" >&2
           echo "project_id=" >> "$GITHUB_OUTPUT"
-          exit 1
+          exit 0
         fi
         
         ACTIVE_ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' | tr -d '\n')"
         if [ -z "$ACTIVE_ACCOUNT" ]; then
           echo "No active gcloud account; authentication may have failed" >&2
           echo "project_id=" >> "$GITHUB_OUTPUT"
-          exit 1
+          exit 0
         fi
         
         PROJECT_ID="$(gcloud config get-value project 2>/dev/null || true)"
         if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "(unset)" ]; then
           echo "project_id=" >> "$GITHUB_OUTPUT"
-          echo "No default project set in gcloud config; pass 'project_id' input to this action." >&2
-          exit 1
+          echo "No default project set in gcloud config; pass 'project_id' input to this action or set via gcloud config." >&2
+          exit 0
         fi
         
         echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"

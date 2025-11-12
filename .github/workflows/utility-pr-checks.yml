@@ -58,8 +58,8 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           result-encoding: string
-          script: |
-            const prNumber = Number('${{ inputs.pull-request-number }}');
+        script: |
+            const prNumber = Number(process.env.PR_NUMBER_INPUT || '0');
             if (!Number.isFinite(prNumber) || prNumber <= 0) {
               core.setFailed('pull-request-number input must be provided for reusable workflow calls.');
               return;
@@ -76,6 +76,8 @@ jobs:
             core.setOutput('additions', String(pr.additions ?? 0));
             core.setOutput('deletions', String(pr.deletions ?? 0));
             core.setOutput('number', String(pr.number));
+        env:
+          PR_NUMBER_INPUT: ${{ inputs.pull-request-number }}
 
       - name: Check PR title (Conventional Commits)
         if: inputs.enforce-conventional-commits

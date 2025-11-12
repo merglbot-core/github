@@ -11,7 +11,7 @@ Eliminates duplicated GCP authentication steps across deployment workflows. Enfo
 ```yaml
 jobs:
   deploy:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     permissions:
       id-token: write  # Required for OIDC
       contents: read

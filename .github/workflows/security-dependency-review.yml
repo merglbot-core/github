@@ -39,12 +39,14 @@ on:
 
 permissions:
   contents: read
-  issues: write  # Needed for optional PR comments
 
 jobs:
   dependency-review:
     name: Dependency Review
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: ${{ inputs.comment-summary-in-pr && 'write' || 'read' }}
     
     steps:
       - name: Checkout code

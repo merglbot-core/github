@@ -118,8 +118,9 @@ jobs:
         id: install-cmd
         shell: bash
         run: |
-          if [ -n "${{ inputs.install-command }}" ]; then
-            echo "cmd=${{ inputs.install-command }}" >> $GITHUB_OUTPUT
+          install_cmd="${{ inputs.install-command }}"
+          if [ -n "$install_cmd" ]; then
+            printf "cmd=%s\n" "$install_cmd" >> "$GITHUB_OUTPUT"
           elif [ "${{ inputs.package-manager }}" = "pnpm" ]; then
             echo "cmd=pnpm install --frozen-lockfile" >> $GITHUB_OUTPUT
           elif [ "${{ inputs.package-manager }}" = "yarn" ]; then
@@ -150,6 +151,24 @@ jobs:
         env:
           CI: true
       
+      - name: Verify build outputs exist
+        if: inputs.upload-build-artifacts
+        id: verify-build
+        shell: bash
+        run: |
+          set -euo pipefail
+          found=0
+          for dir in "${{ inputs.working-directory }}/dist" "${{ inputs.working-directory }}/build" "${{ inputs.working-directory }}/.next"; do
+            if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null || true)" ]; then
+              echo "Found build output: $dir"
+              found=1
+            fi
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No build outputs found to upload." >&2
+            exit 1
+          fi
+      
       - name: Upload build artifacts
         if: inputs.upload-build-artifacts
         uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3  # v4.3.1
@@ -160,4 +179,4 @@ jobs:
             ${{ inputs.working-directory }}/build
             ${{ inputs.working-directory }}/.next
           retention-days: 7
-          if-no-files-found: ignore
+          if-no-files-found: error

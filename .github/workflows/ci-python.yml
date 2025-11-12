@@ -111,7 +111,6 @@ jobs:
         if: contains(inputs.lint-tools, 'mypy')
         working-directory: ${{ inputs.working-directory }}
         run: mypy .
-        continue-on-error: true
       
       - name: Run tests
         if: inputs.test-command != ''
