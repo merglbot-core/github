@@ -74,13 +74,61 @@ jobs:
           fetch-depth: 0  # Full history for comprehensive scanning
           persist-credentials: false
       
+      - name: Install Gitleaks CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="8.18.1"
+          archive="gitleaks_${version}_linux_x64.tar.gz"
+          url="https://github.com/zricethezav/gitleaks/releases/download/v${version}/${archive}"
+          workdir="$(mktemp -d)"
+          curl -sSL "$url" -o "${workdir}/${archive}"
+          tar -xzf "${workdir}/${archive}" -C "${workdir}"
+          chmod +x "${workdir}/gitleaks"
+          install_dir="${HOME}/.local/bin"
+          mkdir -p "${install_dir}"
+          mv "${workdir}/gitleaks" "${install_dir}/gitleaks"
+          echo "${install_dir}" >> "${GITHUB_PATH}"
+          gitleaks version
+      
       - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@44c470ffc35caa8b1eb3e8012ca53c2f9bea4eb5  # v2.3.6
+        id: scan
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          config: ${{ steps.config.outputs.path }}
-          fail: ${{ inputs.fail-on-detection }}
+          FAIL_ON_DETECTION: ${{ inputs.fail-on-detection }}
+          CONFIG_PATH: ${{ steps.config.outputs.path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(detect --source . --redact --report-format sarif --report-path results.sarif)
+          if [ -n "${CONFIG_PATH}" ]; then
+            args+=("--config=${CONFIG_PATH}")
+          fi
+          if [ "${FAIL_ON_DETECTION}" = "true" ]; then
+            args+=("--exit-code=2")
+          else
+            args+=("--exit-code=0")
+          fi
+          echo "Running: gitleaks ${args[*]}"
+          set +e
+          gitleaks "${args[@]}"
+          status=$?
+          set -e
+          if [ "$status" -eq 2 ]; then
+            echo "has-findings=true" >> "$GITHUB_OUTPUT"
+            if [ "${FAIL_ON_DETECTION}" = "true" ]; then
+              exit 2
+            else
+              echo "Secrets detected but fail-on-detection disabled; continuing."
+            fi
+          elif [ "$status" -ne 0 ]; then
+            echo "Gitleaks exited with status $status"
+            exit "$status"
+          else
+            echo "has-findings=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ ! -f results.sarif ]; then
+            echo '{"version":"2.1.0","runs":[]}' > results.sarif
+          fi
       
       - name: Upload SARIF report
         if: always()
@@ -90,7 +138,7 @@ jobs:
           category: gitleaks
       
       - name: Comment on PR (if secrets found)
-        if: failure() && github.event.pull_request.number
+        if: steps.scan.outputs.has-findings == 'true' && github.event.pull_request.number
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
         with:
           github-token: ${{ github.token }}
