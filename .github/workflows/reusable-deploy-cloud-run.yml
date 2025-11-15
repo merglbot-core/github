@@ -98,9 +98,18 @@ jobs:
           docker build -t "${IMAGE}:${TAG}" -f "${{ inputs.dockerfile }}" .
           docker push "${IMAGE}:${TAG}"
           
-          FULL_IMAGE_WITH_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${TAG}")
+          # docker inspect sometimes lags immediately after push, so retry briefly
+          for attempt in {1..5}; do
+            FULL_IMAGE_WITH_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${TAG}" 2>/dev/null || true)
+            if [ -n "$FULL_IMAGE_WITH_DIGEST" ]; then
+              break
+            fi
+            echo "Digest not yet available (attempt ${attempt}/5). Retrying in 2s..."
+            sleep 2
+          done
+          
           if [ -z "$FULL_IMAGE_WITH_DIGEST" ]; then
-            echo "::error::Unable to resolve pushed image digest via docker inspect."
+            echo "::error::Unable to resolve pushed image digest via docker inspect after retries."
             exit 1
           fi
           
@@ -141,8 +150,8 @@ jobs:
           fi
           
           if [ -n "${{ inputs.secrets }}" ]; then
-            # Convert newline-separated to comma-separated list
-            SECRET_LIST=$(echo "${{ inputs.secrets }}" | tr '\n' ',' | sed 's/,$//')
+            # Convert newline-separated to comma-separated list (ignore blank lines)
+            SECRET_LIST=$(echo "${{ inputs.secrets }}" | sed '/^$/d' | tr '\n' ',' | sed 's/,$//')
             gcloud_cmd+=("--set-secrets=${SECRET_LIST}")
           fi
           
