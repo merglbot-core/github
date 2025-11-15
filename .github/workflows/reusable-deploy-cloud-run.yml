@@ -73,7 +73,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
       
       - name: Authenticate to Google Cloud (WIF)
         id: auth
@@ -96,14 +96,29 @@ jobs:
           TAG="${{ github.sha }}"
           
           docker build -t "${IMAGE}:${TAG}" -f "${{ inputs.dockerfile }}" .
-          # Capture the output of docker push to extract the digest
-          PUSH_OUTPUT=$(docker push "${IMAGE}:${TAG}")
-          DIGEST=$(echo "$PUSH_OUTPUT" | grep -Eo 'digest: sha256:[a-f0-9]+' | head -n1 | awk '{print $2}')
+          docker push "${IMAGE}:${TAG}"
           
-          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
-          echo "full_image=${IMAGE}@${DIGEST}" >> $GITHUB_OUTPUT
+          # docker inspect sometimes lags immediately after push, so retry briefly
+          for attempt in {1..5}; do
+            FULL_IMAGE_WITH_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${TAG}" 2>/dev/null || true)
+            if [ -n "$FULL_IMAGE_WITH_DIGEST" ]; then
+              break
+            fi
+            echo "Digest not yet available (attempt ${attempt}/5). Retrying in 2s..."
+            sleep 2
+          done
+          
+          if [ -z "$FULL_IMAGE_WITH_DIGEST" ]; then
+            echo "::error::Unable to resolve pushed image digest via docker inspect after retries."
+            exit 1
+          fi
+          
+          DIGEST="${FULL_IMAGE_WITH_DIGEST#*@}"
+          
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "full_image=${FULL_IMAGE_WITH_DIGEST}" >> "$GITHUB_OUTPUT"
       
       - name: Deploy to Cloud Run
         id: deploy
@@ -135,8 +150,8 @@ jobs:
           fi
           
           if [ -n "${{ inputs.secrets }}" ]; then
-            # Convert newline-separated to comma-separated list
-            SECRET_LIST=$(echo "${{ inputs.secrets }}" | sed '/^$/d' | paste -sd, -)
+            # Convert newline-separated to comma-separated list (ignore blank lines)
+            SECRET_LIST=$(echo "${{ inputs.secrets }}" | sed '/^$/d' | tr '\n' ',' | sed 's/,$//')
             gcloud_cmd+=("--set-secrets=${SECRET_LIST}")
           fi
           
