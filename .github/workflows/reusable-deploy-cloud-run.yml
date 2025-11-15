@@ -96,14 +96,20 @@ jobs:
           TAG="${{ github.sha }}"
           
           docker build -t "${IMAGE}:${TAG}" -f "${{ inputs.dockerfile }}" .
-          # Capture the output of docker push to extract the digest
-          PUSH_OUTPUT=$(docker push "${IMAGE}:${TAG}")
-          DIGEST=$(echo "$PUSH_OUTPUT" | grep -Eo 'digest: sha256:[a-f0-9]+' | head -n1 | awk '{print $2}')
+          docker push "${IMAGE}:${TAG}"
           
-          echo "image=${IMAGE}" >> $GITHUB_OUTPUT
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "digest=${DIGEST}" >> $GITHUB_OUTPUT
-          echo "full_image=${IMAGE}@${DIGEST}" >> $GITHUB_OUTPUT
+          FULL_IMAGE_WITH_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${TAG}")
+          if [ -z "$FULL_IMAGE_WITH_DIGEST" ]; then
+            echo "::error::Unable to resolve pushed image digest via docker inspect."
+            exit 1
+          fi
+          
+          DIGEST="${FULL_IMAGE_WITH_DIGEST#*@}"
+          
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "full_image=${FULL_IMAGE_WITH_DIGEST}" >> "$GITHUB_OUTPUT"
       
       - name: Deploy to Cloud Run
         id: deploy
@@ -136,7 +142,7 @@ jobs:
           
           if [ -n "${{ inputs.secrets }}" ]; then
             # Convert newline-separated to comma-separated list
-            SECRET_LIST=$(echo "${{ inputs.secrets }}" | sed '/^$/d' | paste -sd, -)
+            SECRET_LIST=$(echo "${{ inputs.secrets }}" | tr '\n' ',' | sed 's/,$//')
             gcloud_cmd+=("--set-secrets=${SECRET_LIST}")
           fi
           
