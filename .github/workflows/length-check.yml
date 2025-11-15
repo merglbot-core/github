@@ -3,6 +3,9 @@ name: PR Text Length Check (central)
 on:
   workflow_call:
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
