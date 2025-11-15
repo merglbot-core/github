@@ -9,20 +9,20 @@ on:
         type: string
         default: '["javascript"]'
     secrets:
-      CODEQL_TOKEN:
-        description: 'Optional run-scoped token forwarded by the caller (defaults to auto GITHUB_TOKEN)'
-        required: false
+      GITHUB_TOKEN:
+        description: 'Default token used for checkout and SARIF upload'
+        required: true
 
 jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
     permissions:
-      contents: read
       actions: read
+      contents: read
       security-events: write
     env:
-      CODEQL_AUTH_TOKEN: ${{ secrets.CODEQL_TOKEN || github.token }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     # Pre-matrix step to split the languages string into an array
     strategy:
@@ -32,18 +32,15 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
+      uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
 
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@ea9e4e37992a54ee68a9622e985e60c8e8f12d9f  # v4.0.0
+      uses: github/codeql-action/init@eb055d739abdc2e8de2e5f4ba1a8b246daa779aa  # v3.25.0
       with:
         languages: ${{ matrix.language }}
-        token: ${{ env.CODEQL_AUTH_TOKEN }}
 
     - name: Autobuild
-      uses: github/codeql-action/autobuild@ea9e4e37992a54ee68a9622e985e60c8e8f12d9f  # v4.0.0
+      uses: github/codeql-action/autobuild@eb055d739abdc2e8de2e5f4ba1a8b246daa779aa  # v3.25.0
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@ea9e4e37992a54ee68a9622e985e60c8e8f12d9f  # v4.0.0
-      with:
-        token: ${{ env.CODEQL_AUTH_TOKEN }}
+      uses: github/codeql-action/analyze@eb055d739abdc2e8de2e5f4ba1a8b246daa779aa  # v3.25.0
