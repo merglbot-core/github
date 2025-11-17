@@ -75,7 +75,7 @@ jobs:
           persist-credentials: false
       
       - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@cb7149a9fd96d6d0fd086319b0e5e1d9c985c5b7  # v2.3.6
+        uses: gitleaks/gitleaks-action@bf2dc8e55639c1e091e9b45970152e4313705814  # v2.3.6 (latest)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
