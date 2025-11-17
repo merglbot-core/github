@@ -92,6 +92,7 @@ jobs:
         with:
           sarif_file: gitleaks-report.sarif
           category: gitleaks
+          token: ${{ github.token }}
       
       - name: Comment on PR (if secrets found)
         if: failure() && github.event.pull_request.number
