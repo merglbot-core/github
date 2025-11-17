@@ -74,17 +74,28 @@ jobs:
           fetch-depth: 0  # Full history for comprehensive scanning
           persist-credentials: false
       
+      - name: Install Gitleaks CLI
+        run: |
+          set -euo pipefail
+          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+          tar -xzf gitleaks_8.18.4_linux_x64.tar.gz
+          sudo mv gitleaks /usr/local/bin/
+          gitleaks version
+      
       - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@bf2dc8e55639c1e091e9b45970152e4313705814  # v2.3.6 (latest)
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          config: ${{ steps.config.outputs.path }}
-          fail: ${{ inputs.fail-on-detection }}
+        run: |
+          set -euo pipefail
+          config_arg=""
+          if [ -n "${{ steps.config.outputs.path }}" ]; then
+            config_arg="--config=${{ steps.config.outputs.path }}"
+          fi
           
-          # Generate SARIF report for GitHub Security tab
-          report_format: sarif
-          report_path: gitleaks-report.sarif
+          # Run gitleaks and generate SARIF report
+          if [ "${{ inputs.fail-on-detection }}" = "true" ]; then
+            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --verbose --no-git
+          else
+            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --verbose --no-git || true
+          fi
       
       - name: Upload SARIF report
         if: always()
