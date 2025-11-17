@@ -108,7 +108,7 @@ jobs:
       
       # Container Security: Trivy Scanning
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.48.1
         with:
           image-ref: ${{ steps.build.outputs.full_image }}
           format: 'sarif'
@@ -150,7 +150,7 @@ jobs:
       - name: Sign container image
         run: |
           cosign sign --yes \
-            --certificate-identity="${{ github.repository }}" \
+            --certificate-identity="https://github.com/${{ github.workflow_ref }}" \
             --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
             ${{ steps.build.outputs.full_image }}
       
