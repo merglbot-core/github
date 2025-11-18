@@ -51,10 +51,6 @@ on:
       GAR_LOCATION:
         required: true
 
-permissions:
-  contents: read
-  id-token: write
-
 concurrency:
   group: deploy-${{ inputs.service }}-${{ github.ref }}
   cancel-in-progress: false
@@ -70,7 +66,11 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
-    
+    permissions:
+      contents: write          # needed for release asset upload on tags
+      id-token: write          # needed for WIF to GCP
+      security-events: write   # needed for SARIF upload
+
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
@@ -97,7 +97,6 @@ jobs:
           
           docker build -t "${IMAGE}:${TAG}" -f "${{ inputs.dockerfile }}" .
           docker push "${IMAGE}:${TAG}"
-          
           # docker inspect sometimes lags immediately after push, so retry briefly
           for attempt in {1..5}; do
             FULL_IMAGE_WITH_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${TAG}" 2>/dev/null || true)
@@ -119,6 +118,55 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
           echo "full_image=${FULL_IMAGE_WITH_DIGEST}" >> "$GITHUB_OUTPUT"
+      
+      # Container Security: Trivy Scanning
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.48.1
+        with:
+          image-ref: ${{ steps.build.outputs.full_image }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'
+      
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+      
+      # Container Security: SBOM Generation
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0.17.0
+        with:
+          image: ${{ steps.build.outputs.full_image }}
+          format: 'cyclonedx-json'
+          output-file: 'sbom.json'
+      
+      - name: Upload SBOM as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 'sbom-${{ github.sha }}'
+          path: 'sbom.json'
+          retention-days: 365
+      
+      - name: Upload SBOM to release (if tag)
+        # Avoid publishing SBOMs to public repos by default; remove the guard if transparency to public is desired.
+        if: startsWith(github.ref, 'refs/tags/') && github.repository_visibility != 'public'
+        uses: softprops/action-gh-release@v2.0.2
+        with:
+          files: sbom.json
+      
+      # Container Security: Cosign Signing
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.5.0
+      
+      - name: Sign container image
+        run: |
+          cosign sign --yes \
+            --certificate-identity="https://github.com/${{ github.repository }}/.github/workflows/reusable-deploy-cloud-run.yml@${{ github.ref }}" \
+            --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+            ${{ steps.build.outputs.full_image }}
       
       - name: Deploy to Cloud Run
         id: deploy
