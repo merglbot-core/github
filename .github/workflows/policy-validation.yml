@@ -1,0 +1,137 @@
+name: Policy Validation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.github/policies/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - '.github/policies/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: policy-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-policies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+      
+      - name: Install Conftest
+        run: |
+          set -euo pipefail
+          CONFTEST_VERSION="0.49.1"
+          wget "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+          tar xzf "conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+          sudo mv conftest /usr/local/bin/
+          conftest --version
+      
+      - name: Validate all workflows
+        id: validate
+        run: |
+          set -euo pipefail
+          
+          echo "🔍 Validating workflows against policies..."
+          echo ""
+          
+          FAILED=0
+          PASSED=0
+          WARNINGS=0
+          
+          for workflow in .github/workflows/*.yml .github/workflows/*.yaml; do
+            [ -f "$workflow" ] || continue
+            
+            echo "Checking: $workflow"
+            
+            if conftest test "$workflow" \
+              --policy .github/policies \
+              --output table \
+              --no-color 2>&1 | tee /tmp/conftest-output.txt; then
+              echo "  ✅ PASS"
+              PASSED=$((PASSED + 1))
+            else
+              echo "  ❌ FAIL"
+              FAILED=$((FAILED + 1))
+              cat /tmp/conftest-output.txt >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            # Check for warnings
+            if grep -q "WARN" /tmp/conftest-output.txt 2>/dev/null; then
+              WARNINGS=$((WARNINGS + 1))
+            fi
+            
+            echo ""
+          done
+          
+          echo "validation_failed=$FAILED" >> $GITHUB_OUTPUT
+          echo "validation_passed=$PASSED" >> $GITHUB_OUTPUT
+          echo "validation_warnings=$WARNINGS" >> $GITHUB_OUTPUT
+          
+          # Summary
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## 📋 Policy Validation Results
+          
+          - ✅ **Passed**: $PASSED workflows
+          - ❌ **Failed**: $FAILED workflows
+          - ⚠️  **Warnings**: $WARNINGS workflows
+          
+          ### Policy Checks
+          - SHA pinning for actions
+          - Concurrency control
+          - Timeout minutes
+          - No hardcoded secrets
+          - Explicit permissions
+          - SOC2 compliance (production reviewers, data leakage)
+          - Container scanning (Trivy)
+          
+          EOF
+          
+          if [ $FAILED -gt 0 ]; then
+            echo "❌ Policy validation failed for $FAILED workflow(s)"
+            exit 1
+          fi
+          
+          echo "✅ All workflows passed policy validation"
+      
+      - name: Comment on PR (if failures)
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        with:
+          script: |
+            const output = `## ❌ Policy Validation Failed
+            
+            **Failed workflows**: ${{ steps.validate.outputs.validation_failed }}
+            **Passed workflows**: ${{ steps.validate.outputs.validation_passed }}
+            **Warnings**: ${{ steps.validate.outputs.validation_warnings }}
+            
+            Please review the workflow summary for details on policy violations.
+            
+            ### Common Fixes
+            - Use SHA-pinned actions (not tags): \`uses: actions/checkout@abc123...\`
+            - Add \`concurrency:\` block to workflows with push triggers
+            - Add \`timeout-minutes:\` to all jobs
+            - Use \`$\{\{secrets.*\}\}\` for secrets (never hardcode)
+            - Add explicit \`permissions:\` blocks
+            
+            See: \`.github/policies/workflows.rego\` for all policy rules.
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
