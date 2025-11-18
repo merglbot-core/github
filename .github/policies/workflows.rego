@@ -44,7 +44,7 @@ deny[msg] {
   step.run
   run_cmd := step.run
   line := split(run_cmd, "\n")[_]
-  matches := regex.find_n(`(?i)(password|token|key|secret|api_key)\s*=\s*("[^"]*"|'[^']*'|[^'"\s]+)`, line, 1)
+  matches := regex.find_all_string_submatch_n(`(?i)(password|token|key|secret|api_key)\s*=\s*("[^"]*"|'[^']*'|[^'"\s]+)`, line, 1)
   count(matches) > 0
   value := matches[0][2]
   not regex.match(`\$\{\{`, value)
