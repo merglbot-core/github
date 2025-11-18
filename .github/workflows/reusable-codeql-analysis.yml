@@ -17,6 +17,7 @@ jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read
       actions: read
@@ -32,18 +33,18 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v5
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
 
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v4
+      uses: github/codeql-action/init@014f16e7ab1402f30e7c3329d33797e7948572db  # v4.31.3
       with:
         languages: ${{ matrix.language }}
         token: ${{ env.CODEQL_AUTH_TOKEN }}
 
     - name: Autobuild
-      uses: github/codeql-action/autobuild@v4
+      uses: github/codeql-action/autobuild@014f16e7ab1402f30e7c3329d33797e7948572db  # v4.31.3
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v4
+      uses: github/codeql-action/analyze@014f16e7ab1402f30e7c3329d33797e7948572db  # v4.31.3
       with:
         token: ${{ env.CODEQL_AUTH_TOKEN }}

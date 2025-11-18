@@ -44,6 +44,7 @@ jobs:
   prepare:
     name: Prepare Audit Environment
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
     outputs:
@@ -51,7 +52,7 @@ jobs:
       repositories: ${{ steps.repos.outputs.repositories }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         
       - name: Setup audit environment
         id: setup
@@ -85,12 +86,13 @@ jobs:
     name: Gitignore Compliance Check
     needs: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c  # v6.0.0
         with:
           python-version: '3.11'
           
@@ -102,7 +104,7 @@ jobs:
             --output reports/gitignore-audit.json
           
       - name: Upload gitignore report
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         with:
           name: gitignore-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/gitignore-audit.json
@@ -122,9 +124,10 @@ jobs:
     name: Secret Scanning
     needs: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         with:
           fetch-depth: 0  # Full history for secret scanning
           
@@ -160,7 +163,7 @@ jobs:
           
       - name: Upload secrets report
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         with:
           name: secrets-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/secrets-audit.json
@@ -181,9 +184,10 @@ jobs:
     name: Bot Configuration Validation
     needs: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         
       - name: Validate bot configurations
         id: bots
@@ -202,7 +206,7 @@ jobs:
           fi
           
       - name: Upload bot config report
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         with:
           name: bot-config-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/bot-config-audit.json
@@ -212,9 +216,10 @@ jobs:
     name: Pre-commit Hook Adoption
     needs: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         
       # - name: Check pre-commit hook adoption
       #   id: hooks
@@ -242,7 +247,7 @@ jobs:
           mkdir -p reports
           echo '{"adoption_rate": 0, "message": "Pre-commit check skipped - script not implemented yet"}' > reports/precommit-audit.json
       - name: Upload pre-commit report
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         with:
           name: precommit-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/precommit-audit.json
@@ -252,12 +257,13 @@ jobs:
     name: Dependency Vulnerability Scan
     needs: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8  # v0.33.1
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -285,7 +291,7 @@ jobs:
           fi
           
       - name: Upload vulnerability report
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         with:
           name: dependency-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/dependency-audit.json
@@ -295,9 +301,10 @@ jobs:
     name: Release Process Compliance
     needs: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         
 # 286:       - name: Audit release processes
 # 287:         id: releases
@@ -317,7 +324,7 @@ jobs:
 # 301:           echo "- Changelog compliance: ${CHANGELOG_COMPLIANCE}%" >> "$GITHUB_STEP_SUMMARY"
 # 302:           
       # - name: Upload release report
-      #   uses: actions/upload-artifact@v5
+      #   uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
       #   with:
       #     name: release-audit-${{ needs.prepare.outputs.audit_id }}
       #     path: reports/release-audit.json
@@ -327,12 +334,13 @@ jobs:
     needs: [prepare, gitignore-compliance, secret-scanning, bot-configuration, pre-commit-hooks, dependency-scanning, release-process-audit]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         
       - name: Download all artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5.0.0
         with:
           path: audit-artifacts
           pattern: '*-audit-${{ needs.prepare.outputs.audit_id }}'
@@ -346,7 +354,7 @@ jobs:
             --quarter "${AUDIT_QUARTER:-Manual}"
           
       - name: Upload consolidated report
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4  # v5.0.0
         with:
           name: security-audit-report-${{ needs.prepare.outputs.audit_id }}
           path: reports/consolidated-audit.html
@@ -369,15 +377,16 @@ jobs:
     needs: [prepare, generate-report]
     if: inputs.auto_fix == true && always()
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         
       - name: Download audit artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0  # v5.0.0
         with:
           path: audit-artifacts
           pattern: '*-audit-${{ needs.prepare.outputs.audit_id }}'

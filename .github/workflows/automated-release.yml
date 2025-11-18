@@ -27,13 +27,14 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     outputs:
       version: ${{ steps.version.outputs.version }}
       changelog: ${{ steps.changelog.outputs.changelog }}
       
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -58,7 +59,7 @@ jobs:
 
       - name: Setup Node (with cache)
         if: steps.lockfile.outputs.manager != ''
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903  # v6.0.0
         with:
           node-version: '20'
           cache: ${{ steps.lockfile.outputs.manager }}
@@ -66,7 +67,7 @@ jobs:
 
       - name: Setup Node (no cache)
         if: steps.lockfile.outputs.manager == ''
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903  # v6.0.0
         with:
           node-version: '20'
       
@@ -198,6 +199,7 @@ jobs:
     needs: release
     if: needs.release.outputs.version != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     
     steps:
       - name: Notify Slack
