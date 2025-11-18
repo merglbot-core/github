@@ -90,6 +90,7 @@ Policies are automatically enforced via `.github/workflows/policy-validation.yml
 | Concurrency control | Push triggers need concurrency | Add `concurrency: { ... }` |
 | Container scanning | Docker builds need Trivy | Add Trivy scanning step |
 | pull_request_target guard | Every job needs `if:` when using pull_request_target | Add a guard, e.g. `if: github.event.pull_request.head.repo.fork == false` |
+| write-all permissions | Do not use write-all permissions | Specify explicit permissions at workflow/job level |
 
 ### warn[msg] - Warnings (Non-blocking)
 
@@ -97,6 +98,7 @@ Policies are automatically enforced via `.github/workflows/policy-validation.yml
 |------|-------------|----------------|
 | Reusable trigger | Reusable should use workflow_call | Add `on: workflow_call` |
 | Deploy environments | Deploys should use environments | Add `environment: production` |
+| Echo PII | Avoid echoing sensitive data (customer/email/phone/SSN/credit card) | Remove/obfuscate PII in logs |
 
 ## Compliance Mapping
 

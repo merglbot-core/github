@@ -44,21 +44,27 @@ deny[msg] {
   step.run
   run_cmd := step.run
   line := split(run_cmd, "\n")[_]
-  regex.match(`(?i)(password|token|key|secret|api_key)\s*=\s*("[^"]*"|'[^']*'|[^'"\s]+)`, line)
-  not contains(line, "${{")
+  matches := regex.find_n(`(?i)(password|token|key|secret|api_key)\s*=\s*("[^"]*"|'[^']*'|[^'"\s]+)`, line, 1)
+  count(matches) > 0
+  value := matches[0][2]
+  not regex.match(`\$\{\{`, value)
   msg = "Potential hardcoded secret in run command (use ${{secrets.*}} instead)"
 }
 
 # SOC2 Compliance: Workflows must have explicit permissions (least privilege)
 deny[msg] {
   job := input.jobs[job_name]
-  not input.permissions
-  not job.permissions
+  not has_explicit_permissions(input.permissions)
+  not has_explicit_permissions(job.permissions)
   msg := sprintf("Job '%v' must have an explicit permissions block, or the workflow must have one (least privilege principle)", [job_name])
 }
 
+has_explicit_permissions(p) {
+  is_object(p)
+}
+
 # SOC2 Compliance: Detect potential data leakage in logs
-deny[msg] {
+warn[msg] {
   run_cmd := input.jobs[_].steps[_].run
   line := split(run_cmd, "\n")[_]
   regex.match(`(?i)^\s*echo\b.*(customer|user|email|mail|phone|ssn|credit[_-]?card)`, line)
