@@ -9,7 +9,6 @@ deny[msg] {
   action := input.jobs[_].steps[step_idx].uses
   not regex.match(`@[a-f0-9]{40}$`, action)
   not startswith(action, "./")
-  not startswith(action, "./.github/")
   msg := sprintf("Action must be SHA-pinned (found tag/version): %v", [action])
 }
 
@@ -39,7 +38,11 @@ deny[msg] {
 
 # Deny: No hardcoded secrets in run commands
 deny[msg] {
-  run_cmd := input.jobs[_].steps[_].run
+  some i, j
+  job := input.jobs[i]
+  step := job.steps[j]
+  step.run
+  run_cmd := step.run
   line := split(run_cmd, "\n")[_]
   regex.match(`(?i)(password|token|key|secret|api_key)\s*=\s*("[^"]*"|'[^']*'|[^'"\s]+)`, line)
   not contains(line, "${{")
@@ -72,9 +75,14 @@ deny[msg] {
 
 # Security: Require GITHUB_TOKEN permissions to be explicit
 deny[msg] {
-  input.permissions
   input.permissions == "write-all"
-  msg = "Do not use 'write-all' permissions - specify explicit permissions (least privilege)"
+  msg = "Do not use 'write-all' permissions at the workflow level - specify explicit permissions (least privilege)"
+}
+
+deny[msg] {
+  job := input.jobs[job_name]
+  job.permissions == "write-all"
+  msg := sprintf("Job '%v' must not use 'write-all' permissions - specify explicit permissions (least privilege)", [job_name])
 }
 
 # Compliance: Container images must be scanned
@@ -86,11 +94,15 @@ deny[msg] {
 }
 
 job_builds_docker(job) {
-  regex.match(`docker (build|push)`, job.steps[_].run)
+  regex.match(`(?i)\bdocker\s+(build|push)\b`, job.steps[_].run)
+}
+
+job_builds_docker(job) {
+  startswith(job.steps[_].uses, "docker/build-push-action")
 }
 
 job_has_trivy_scan(job) {
-  contains(job.steps[_].uses, "trivy-action")
+  startswith(job.steps[_].uses, "aquasecurity/trivy-action")
 }
 
 # Best Practice: Reusable workflows should use workflow_call
