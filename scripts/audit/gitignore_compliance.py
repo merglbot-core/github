@@ -310,7 +310,7 @@ def main():
     
     # Save results
     with open(args.output, "w") as f:
-        json.dump(results, f, indent=2)
+        json.dump(results, f, indent=2, default=str)
     
     # Print summary
     print(f"\n=== Gitignore Compliance Report ===")
