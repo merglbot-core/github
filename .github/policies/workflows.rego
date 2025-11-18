@@ -41,7 +41,7 @@ deny[msg] {
 deny[msg] {
   run_cmd := input.jobs[_].steps[_].run
   line := split(run_cmd, "\n")[_]
-  regex.match(`(?i)(password|token|key|secret|api_key)\s*=\s*['"]?[^'"\s]+['"]?$`, line)
+  regex.match(`(?i)(password|token|key|secret|api_key)\s*=\s*("[^"]*"|'[^']*'|[^'"\s]+)`, line)
   not contains(line, "${{")
   msg = "Potential hardcoded secret in run command (use ${{secrets.*}} instead)"
 }
@@ -56,10 +56,10 @@ deny[msg] {
 
 # SOC2 Compliance: Detect potential data leakage in logs
 deny[msg] {
-  input.jobs[_].steps[_].run
   run_cmd := input.jobs[_].steps[_].run
-  regex.match(`(?i)(customer|user|email|phone|ssn|credit_card).*echo`, run_cmd)
-  msg = "Potential data leakage: Do not echo sensitive data (customer/user/email/phone) in logs"
+  line := split(run_cmd, "\n")[_]
+  regex.match(`(?i)^\s*echo\b.*(customer|user|email|mail|phone|ssn|credit[_-]?card)`, line)
+  msg = "Potential data leakage: Do not echo sensitive data (customer/user/email/phone/SSN/credit card) in logs"
 }
 
 # Security: Prevent use of pull_request_target without proper guards

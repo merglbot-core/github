@@ -125,6 +125,7 @@ uses: ./.github/actions/custom-action
 ```
 
 Note: Exemptions are not currently implemented - all policies are enforced.
+Note: The exemption mechanism is planned but not yet implemented. Currently, all policies are enforced without exception.
 
 ## Troubleshooting
 
