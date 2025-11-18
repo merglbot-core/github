@@ -51,11 +51,6 @@ on:
       GAR_LOCATION:
         required: true
 
-permissions:
-  contents: write
-  id-token: write
-  security-events: write
-
 concurrency:
   group: deploy-${{ inputs.service }}-${{ github.ref }}
   cancel-in-progress: false
@@ -71,7 +66,11 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
-    
+    permissions:
+      contents: write          # needed for release asset upload on tags
+      id-token: write          # needed for WIF to GCP
+      security-events: write   # needed for SARIF upload
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -97,9 +96,13 @@ jobs:
           TAG="${{ github.sha }}"
           
           docker build -t "${IMAGE}:${TAG}" -f "${{ inputs.dockerfile }}" .
-          # Capture the output of docker push to extract the digest
-          PUSH_OUTPUT=$(docker push "${IMAGE}:${TAG}")
-          DIGEST=$(echo "$PUSH_OUTPUT" | grep -Eo 'digest: sha256:[a-f0-9]+' | head -n1 | awk '{print $2}')
+          docker push "${IMAGE}:${TAG}"
+          # Resolve digest explicitly to avoid parsing push stdout
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${TAG}" | awk -F@ '{print $2}')
+          if [ -z "${DIGEST}" ]; then
+            echo "Digest resolution failed" >&2
+            exit 1
+          fi
           
           echo "image=${IMAGE}" >> $GITHUB_OUTPUT
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
@@ -138,6 +141,7 @@ jobs:
           retention-days: 365
       
       - name: Upload SBOM to release (if tag)
+        # Avoid publishing SBOMs to public repos by default; remove the guard if transparency to public is desired.
         if: startsWith(github.ref, 'refs/tags/') && github.repository_visibility != 'public'
         uses: softprops/action-gh-release@v2
         with:
@@ -150,7 +154,7 @@ jobs:
       - name: Sign container image
         run: |
           cosign sign --yes \
-            --certificate-identity="https://github.com/${{ github.workflow_ref }}" \
+            --certificate-identity="https://github.com/${{ github.repository }}/.github/workflows/reusable-deploy-cloud-run.yml@${{ github.ref }}" \
             --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
             ${{ steps.build.outputs.full_image }}
       
