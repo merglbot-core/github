@@ -97,13 +97,6 @@ jobs:
           
           docker build -t "${IMAGE}:${TAG}" -f "${{ inputs.dockerfile }}" .
           docker push "${IMAGE}:${TAG}"
-          # Resolve digest explicitly to avoid parsing push stdout
-          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${TAG}" | awk -F@ '{print $2}')
-          if [ -z "${DIGEST}" ]; then
-            echo "Digest resolution failed" >&2
-            exit 1
-          fi
-          
           # docker inspect sometimes lags immediately after push, so retry briefly
           for attempt in {1..5}; do
             FULL_IMAGE_WITH_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${TAG}" 2>/dev/null || true)
@@ -160,7 +153,7 @@ jobs:
       - name: Upload SBOM to release (if tag)
         # Avoid publishing SBOMs to public repos by default; remove the guard if transparency to public is desired.
         if: startsWith(github.ref, 'refs/tags/') && github.repository_visibility != 'public'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v2.0.2
         with:
           files: sbom.json
       
