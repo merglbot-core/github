@@ -28,15 +28,16 @@ jobs:
   run:
     name: Generate Cost Report
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       PYTHONUNBUFFERED: "1"
       
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c
         with:
           python-version: "3.11"
           cache: "pip"
@@ -44,7 +45,7 @@ jobs:
 
       - name: Authenticate to GCP via WIF
         id: auth
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
@@ -127,7 +128,7 @@ jobs:
 
       - name: Upload cost reports
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
         with:
           name: cost-reports-${{ github.run_id }}
           path: platform/tools/cost-monitoring/reports/

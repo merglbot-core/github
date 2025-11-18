@@ -25,8 +25,8 @@ This directory contains OPA (Open Policy Agent) policies for validating GitHub A
 
 ### Compliance Policies (SOC2)
 
-1. **Production Reviewers**: Production deploys must have required reviewers
-   - Ensures change control and approval process
+1. **Production Approvals**: Production deploys should target protected environments with required reviewers
+   - GitHub enforces reviewers via environment protection rules configured in repo settings (policy validates environment usage, not the settings themselves)
 
 2. **Data Leakage Prevention**: Detect potential PII in logs
    - Warns if echoing customer/user/email/phone data
@@ -53,8 +53,8 @@ This directory contains OPA (Open Policy Agent) policies for validating GitHub A
 ### Local Validation
 
 ```bash
-# Install Conftest
-brew install conftest
+# Install Conftest (see https://www.conftest.dev/install/ for your OS/package manager)
+# macOS example: brew install conftest
 
 # Validate a single workflow
 conftest test .github/workflows/ci.yml --policy .github/policies
@@ -86,10 +86,10 @@ Policies are automatically enforced via `.github/workflows/policy-validation.yml
 | SHA pinning | Actions must use commit SHA | Use `@abc123...` instead of `@v4` |
 | Hardcoded secrets | No secrets in workflow files | Use `${{secrets.*}}` |
 | Explicit permissions | Must have permissions block | Add `permissions: { ... }` |
-| Production reviewers | Production needs approvers | Add `required_reviewers` |
 | Timeout minutes | Jobs must have timeout | Add `timeout-minutes: 30` |
 | Concurrency control | Push triggers need concurrency | Add `concurrency: { ... }` |
 | Container scanning | Docker builds need Trivy | Add Trivy scanning step |
+| pull_request_target guard | Every job needs `if:` when using pull_request_target | Add a guard, e.g. `if: github.event.pull_request.head.repo.fork == false` |
 
 ### warn[msg] - Warnings (Non-blocking)
 
@@ -102,16 +102,16 @@ Policies are automatically enforced via `.github/workflows/policy-validation.yml
 
 ### SOC2 Controls
 
-- **CC6.1** (Logical Access): Explicit permissions, production reviewers
+- **CC6.1** (Logical Access): Explicit permissions; production approvals enforced via GitHub environments (configured in repo settings)
 - **CC6.6** (Vulnerability Management): Container scanning, SHA pinning
-- **CC7.2** (Change Management): Production reviewers, concurrency control
+- **CC7.2** (Change Management): Concurrency control; production deployments should use protected environments
 - **CC7.3** (Data Protection): Data leakage prevention
 
 ### SLSA Framework
 
 - **Level 2**: SHA pinning (immutable dependencies)
 - **Level 3**: Container signing (Cosign), SBOM generation
-- **Level 4**: Policy enforcement (this implementation)
+- **Level 4**: Policy enforcement (contributes to higher SLSA levels)
 
 ## Exemptions
 
@@ -148,4 +148,3 @@ If a policy incorrectly flags valid code:
 - [Conftest](https://www.conftest.dev/)
 - [GitHub Actions Security](https://docs.github.com/en/actions/security-guides)
 - [WARP CI/CD Standards](../../docs/WARP_GITHUB_ACTIONS_GLOBAL_RULES.md)
-

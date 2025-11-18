@@ -15,8 +15,8 @@ deny[msg] {
 
 # Deny: Workflows must have concurrency control
 deny[msg] {
+  is_push_trigger
   not input.concurrency
-  input.on.push
   msg = "Workflow with 'push' trigger must have concurrency control to prevent redundant runs"
 }
 
@@ -32,33 +32,26 @@ deny[msg] {
   input.jobs[_].steps[_].env[key]
   regex.match(`(?i)(password|token|key|secret|api_key)`, key)
   value := input.jobs[_].steps[_].env[key]
-  not startswith(value, "${{")
+  is_string(value)
+  not regex.match(`\$\{\{`, value)
   msg := sprintf("Hardcoded secret detected in env var: %v (use ${{secrets.*}} instead)", [key])
 }
 
 # Deny: No hardcoded secrets in run commands
 deny[msg] {
-  input.jobs[_].steps[_].run
   run_cmd := input.jobs[_].steps[_].run
-  regex.match(`(?i)(password|token|key|secret|api_key)\s*=\s*["'][^$]`, run_cmd)
-  not regex.match(`\$\{\{`, run_cmd)
+  line := split(run_cmd, "\n")[_]
+  regex.match(`(?i)(password|token|key|secret|api_key)\s*=\s*['"]?[^'"\s]+['"]?$`, line)
+  not contains(line, "${{")
   msg = "Potential hardcoded secret in run command (use ${{secrets.*}} instead)"
-}
-
-# SOC2 Compliance: Production deploys must have required reviewers
-deny[msg] {
-  input.jobs[job_name].environment.name == "production"
-  not input.jobs[job_name].environment.required_reviewers
-  not input.jobs[job_name].environment.reviewers
-  msg := sprintf("Production deploy in job '%v' must have required reviewers (SOC2 control)", [job_name])
 }
 
 # SOC2 Compliance: Workflows must have explicit permissions (least privilege)
 deny[msg] {
-  input.jobs[_]
+  job := input.jobs[job_name]
   not input.permissions
-  not input.jobs[_].permissions
-  msg = "Workflow or job must have explicit permissions block (least privilege principle)"
+  not job.permissions
+  msg := sprintf("Job '%v' must have an explicit permissions block, or the workflow must have one (least privilege principle)", [job_name])
 }
 
 # SOC2 Compliance: Detect potential data leakage in logs
@@ -71,9 +64,10 @@ deny[msg] {
 
 # Security: Prevent use of pull_request_target without proper guards
 deny[msg] {
-  input.on.pull_request_target
-  not input.jobs[_].if
-  msg = "pull_request_target trigger must have 'if' condition to prevent code injection from forks"
+  is_pr_target_trigger
+  job := input.jobs[job_name]
+  not job.if
+  msg := sprintf("Job '%v' must have an 'if' condition when using 'pull_request_target' to prevent code injection from forks", [job_name])
 }
 
 # Security: Require GITHUB_TOKEN permissions to be explicit
@@ -85,32 +79,75 @@ deny[msg] {
 
 # Compliance: Container images must be scanned
 deny[msg] {
-  input.jobs[_].steps[_].run
-  run_cmd := input.jobs[_].steps[_].run
-  regex.match(`docker (build|push)`, run_cmd)
-  not has_trivy_scan
-  msg = "Workflows that build Docker images must include Trivy vulnerability scanning"
+  job := input.jobs[job_name]
+  job_builds_docker(job)
+  not job_has_trivy_scan(job)
+  msg := sprintf("Job '%v' builds a Docker image but does not include a Trivy scan step in the same job", [job_name])
 }
 
-has_trivy_scan {
-  input.jobs[_].steps[_].uses
-  action := input.jobs[_].steps[_].uses
-  contains(action, "trivy-action")
+job_builds_docker(job) {
+  regex.match(`docker (build|push)`, job.steps[_].run)
+}
+
+job_has_trivy_scan(job) {
+  contains(job.steps[_].uses, "trivy-action")
 }
 
 # Best Practice: Reusable workflows should use workflow_call
 warn[msg] {
-  input.name
   contains(input.name, "Reusable")
-  not input.on.workflow_call
+  not is_workflow_call_trigger
   msg = "Reusable workflows should use 'workflow_call' trigger"
 }
 
 # Best Practice: Deploy workflows should use environments
 warn[msg] {
-  input.name
   regex.match(`(?i)(deploy|release)`, input.name)
-  not input.jobs[_].environment
-  msg = "Deploy/Release workflows should use GitHub environments for protection rules"
+  job := input.jobs[job_name]
+  not job.environment
+  msg := sprintf("Job '%v' in deploy/release workflow should use GitHub environments for protection rules", [job_name])
 }
 
+# Helpers
+
+is_push_trigger {
+  input.on == "push"
+}
+
+is_push_trigger {
+  is_array(input.on)
+  input.on[_] == "push"
+}
+
+is_push_trigger {
+  is_object(input.on)
+  input.on.push
+}
+
+is_pr_target_trigger {
+  input.on == "pull_request_target"
+}
+
+is_pr_target_trigger {
+  is_array(input.on)
+  input.on[_] == "pull_request_target"
+}
+
+is_pr_target_trigger {
+  is_object(input.on)
+  input.on.pull_request_target
+}
+
+is_workflow_call_trigger {
+  input.on == "workflow_call"
+}
+
+is_workflow_call_trigger {
+  is_array(input.on)
+  input.on[_] == "workflow_call"
+}
+
+is_workflow_call_trigger {
+  is_object(input.on)
+  input.on.workflow_call
+}
