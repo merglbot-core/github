@@ -52,7 +52,7 @@ jobs:
       repositories: ${{ steps.repos.outputs.repositories }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         
       - name: Setup audit environment
         id: setup
@@ -89,7 +89,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         
       - name: Setup Python
         uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c
@@ -127,7 +127,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         with:
           fetch-depth: 0  # Full history for secret scanning
           
@@ -187,7 +187,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         
       - name: Validate bot configurations
         id: bots
@@ -219,7 +219,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         
       # - name: Check pre-commit hook adoption
       #   id: hooks
@@ -260,10 +260,10 @@ jobs:
     timeout-minutes: 40
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8  # v0.33.1
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -304,7 +304,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         
 # 286:       - name: Audit release processes
 # 287:         id: releases
@@ -337,7 +337,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         
       - name: Download all artifacts
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
@@ -383,7 +383,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         
       - name: Download audit artifacts
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53

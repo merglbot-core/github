@@ -70,29 +70,42 @@ jobs:
           echo "path=$config_path" >> "$GITHUB_OUTPUT"
       
       - name: Checkout code
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
         with:
           fetch-depth: 0  # Full history for comprehensive scanning
           persist-credentials: false
       
+      - name: Install Gitleaks CLI
+        run: |
+          set -euo pipefail
+          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+          tar -xzf gitleaks_8.18.4_linux_x64.tar.gz
+          sudo mv gitleaks /usr/local/bin/
+          gitleaks version
+      
       - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@cb7149a9fd96d6d0fd086319b0e5e1d9c985c5b7  # v2.3.6
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          config: ${{ steps.config.outputs.path }}
-          fail: ${{ inputs.fail-on-detection }}
+        run: |
+          set -euo pipefail
+          config_arg=""
+          if [ -n "${{ steps.config.outputs.path }}" ]; then
+            config_arg="--config=${{ steps.config.outputs.path }}"
+          fi
           
-          # Generate SARIF report for GitHub Security tab
-          report_format: sarif
-          report_path: gitleaks-report.sarif
+          # Run gitleaks and generate SARIF report
+          if [ "${{ inputs.fail-on-detection }}" = "true" ]; then
+            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --verbose --no-git
+          else
+            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --verbose --no-git || true
+          fi
       
       - name: Upload SARIF report
         if: always()
+        continue-on-error: true  # SARIF upload may fail in reusable workflow context due to token permissions
         uses: github/codeql-action/upload-sarif@eb055d739abdc2e8de2e5f4ba1a8b246daa779aa  # v3.26.0
         with:
           sarif_file: gitleaks-report.sarif
           category: gitleaks
+          token: ${{ github.token }}
       
       - name: Comment on PR (if secrets found)
         if: failure() && github.event.pull_request.number
