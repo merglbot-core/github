@@ -194,6 +194,7 @@ def detect_project_type(repo_path: str) -> str:
     pkg = path / "package.json"
     if pkg.exists():
         try:
+            # Skip large package.json files (likely generated or non-standard) to avoid performance issues
             if pkg.stat().st_size > 2 * 1024 * 1024:
                 return "backend"
             with pkg.open("r", encoding="utf-8", errors="replace") as f:
