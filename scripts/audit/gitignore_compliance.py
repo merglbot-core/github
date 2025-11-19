@@ -68,19 +68,25 @@ REQUIRED_PATTERNS = {
 
 def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
     """
-    Normalize repository identifiers so JSON reports cannot inject control
-    characters or unbounded values.
+    Normalize repository identifiers to a constrained, safe form so audit
+    reports cannot inject path traversal or control characters.
     """
     raw = str(identifier)
-    cleaned = "".join(char for char in raw if char.isprintable()).strip()
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:/@")
+    filtered = "".join(char for char in raw if char in allowed)
+    normalized = filtered.replace(":", "/").replace("@", "/")
+    while "//" in normalized:
+        normalized = normalized.replace("//", "/")
+    cleaned = normalized.strip("/.")
+    
     note: Optional[str] = None
     if not cleaned:
         cleaned = "unknown-repository"
         note = "Repository identifier missing; substituted placeholder"
-    if len(cleaned) > 256:
+    elif len(cleaned) > 256:
         cleaned = f"{cleaned[:256]}..."
         note = "Repository identifier truncated for reporting"
-    elif cleaned != raw.strip():
+    elif cleaned != raw:
         note = "Repository identifier sanitized for reporting"
     return cleaned, note
 
@@ -124,20 +130,21 @@ def check_gitignore_compliance(repo_path: str, repo_identifier: str) -> Dict[str
         Dict[str, Any]: Compliance details including missing patterns and issues.
     """
     safe_identifier, identifier_note = sanitize_identifier(repo_identifier)
+    issues: List[str] = []
+    if identifier_note:
+        issues.append(identifier_note)
     path = Path(repo_path).resolve()
     
     if not path.exists() or not path.is_dir():
-        result = {
+        issues.append("invalid_repository_path")
+        return {
             "repo": safe_identifier,
             "has_gitignore": False,
             "project_type": "unknown",
             "missing_patterns": [],
             "compliance_score": 0,
-            "issues": [f"invalid_repository_path: {path}"]
+            "issues": issues
         }
-        if identifier_note:
-            result["issues"].append(identifier_note)
-        return result
     
     gitignore_path = path / ".gitignore"
     
@@ -147,11 +154,8 @@ def check_gitignore_compliance(repo_path: str, repo_identifier: str) -> Dict[str
         "project_type": detect_project_type(str(path)),
         "missing_patterns": [],
         "compliance_score": 0,
-        "issues": []
+        "issues": issues
     }
-    
-    if identifier_note:
-        result["issues"].append(identifier_note)
     
     if not gitignore_path.exists():
         result["issues"].append("No .gitignore file found")
@@ -318,14 +322,17 @@ def audit_repositories(repos: List[str]) -> Dict[str, Any]:
             try:
                 repo_result = check_gitignore_compliance(str(repo_path), repo)
             except Exception as exc:
-                safe_repo, _ = sanitize_identifier(repo)
+                safe_repo, note = sanitize_identifier(repo)
+                issues = [f"compliance_check_failed: {type(exc).__name__}: {exc}"]
+                if note:
+                    issues.append(note)
                 repo_result = {
                     "repo": safe_repo,
                     "has_gitignore": False,
                     "project_type": "unknown",
                     "missing_patterns": [],
                     "compliance_score": 0,
-                    "issues": [f"compliance_check_failed: {type(exc).__name__}: {exc}"]
+                    "issues": issues
                 }
             results["details"].append(repo_result)
             
