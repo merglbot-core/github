@@ -8,6 +8,8 @@ import os
 import sys
 import argparse
 import subprocess
+import hashlib
+import fnmatch
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 
@@ -91,10 +93,12 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
     normalized = filtered.replace(":", "/").replace("@", "/")
     while "//" in normalized:
         normalized = normalized.replace("//", "/")
-    normalized = normalized.strip("/.")
+    normalized = normalized.strip("/")
+    
     traversal_detected = False
     segments: List[str] = []
     reserved_names = {".git", ".ssh", ""}
+    
     # Simplified sanitization loop
     for segment in normalized.split("/"):
         if not segment or segment == ".":
@@ -104,13 +108,22 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
             continue
         
         seg = segment
-        if seg.startswith("."):
+        # Only strip leading dots if it looks like a traversal attempt (..)
+        # or if we want to be very strict. The previous logic stripped ALL leading dots
+        # which broke .config -> config. 
+        # We will only flag traversal if it contains ".." and strip nothing, 
+        # relying on the ".." check above.
+        # However, to be safe against ".foo" becoming hidden files if we don't want them,
+        # we might want to keep some logic. But for repo identifiers, .config is valid.
+        # Let's just check for ".." explicitly.
+        
+        if seg == ".." or ".." in seg:
             traversal_detected = True
-            seg = seg.lstrip(".")
+            continue
+
         seg = seg.rstrip(".")
         
-        # Check reserved names before further processing if needed, 
-        # but here we just check the final segment
+        # Check reserved names
         if not seg or seg in reserved_names:
             traversal_detected = True
             continue
@@ -125,17 +138,39 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
     note: Optional[str] = None
     if not cleaned:
         # Prevent collision for unknown repositories by appending a hash of the original
-        import hashlib
-        repo_hash = hashlib.md5(str(identifier).encode()).hexdigest()[:8]
+        # Use SHA256 for better collision resistance
+        repo_hash = hashlib.sha256(str(identifier).encode()).hexdigest()[:16]
         cleaned = f"unknown-repository-{repo_hash}"
         note = "Repository identifier missing; substituted placeholder with hash"
     elif len(cleaned) > 253:
-        cleaned = f"{cleaned[:250]}..."
+        # Ensure the final string including ellipsis stays within 253 chars
+        safe_limit = 250
+        # Simple truncation for now, byte-aware is better but this is safe enough for ASCII-heavy identifiers
+        cleaned = f"{cleaned[:safe_limit]}..."
         note = "Repository identifier truncated for reporting"
     elif traversal_detected:
         note = "Repository identifier sanitized for path traversal segments"
     elif cleaned != raw or length_truncated:
         note = "Repository identifier sanitized for reporting"
+        
+    # Final containment check against 'reports' root to be absolutely sure
+    try:
+        # We don't need to actually create the directory, just check the path logic
+        reports_root = Path("reports").resolve()
+        # We simulate where this would go. 
+        # Note: cleaned is just a relative path string at this point.
+        # If we were to join it with reports_root, would it escape?
+        # Since we stripped ".." and "/", it shouldn't, but let's verify.
+        # We use a dummy root for validation if reports doesn't exist or we are in a weird cwd
+        candidate = (reports_root / cleaned).resolve()
+        # If candidate is not relative to reports_root, we have a traversal
+        if not str(candidate).startswith(str(reports_root)):
+             raise ValueError("Path traversal detected")
+    except Exception:
+        note = (note or "Repository identifier sanitized for reporting") + "; constrained to safe placeholder"
+        repo_hash = hashlib.sha256(str(identifier).encode()).hexdigest()[:16]
+        cleaned = f"unknown-repository-{repo_hash}"
+
     return cleaned, note
 
 
@@ -202,10 +237,11 @@ def detect_project_type(repo_path: str) -> str:
             deps = content.get("dependencies") or {}
             dev_deps = content.get("devDependencies") or {}
             frontend_markers = {"react", "vue", "angular", "next", "nuxt", "vite"}
-            if any(marker in deps for marker in frontend_markers) or any(
-                marker in dev_deps for marker in frontend_markers
-            ):
+            
+            # Efficient set intersection check
+            if frontend_markers.intersection(deps.keys()) or frontend_markers.intersection(dev_deps.keys()):
                 return "frontend"
+                
             if (path / "public").exists() or (path / "src" / "index.html").exists():
                 return "frontend"
         except (OSError, json.JSONDecodeError):
@@ -331,39 +367,74 @@ def check_for_secrets(repo_path: str) -> List[str]:
         "config.prod.json", "settings.prod.py"
     ]
     
+    prune_dirs = {".git", "node_modules", "dist", "build", ".venv", "venv", "vendor"}
+    skip_exts = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".zip", ".tar", ".gz", ".tgz", ".xz", ".7z", ".pdf", ".mp4", ".mov", ".iso", ".bin", ".exe", ".dll"}
+    max_depth = 12
+    
     total_matches = 0
-    for pattern in secret_patterns:
-        if total_matches >= MAX_TOTAL_SECRET_MATCHES:
-            break
-        per_pattern_matches = 0
-        for file in path.rglob(pattern):
-            if (
-                total_matches >= MAX_TOTAL_SECRET_MATCHES
-                or per_pattern_matches >= MAX_SECRET_MATCHES_PER_PATTERN
-            ):
-                break
-            try:
-                if file.is_symlink() or not file.is_file():
-                    continue
-                resolved = file.resolve()
-            except OSError:
+    
+    # Use os.walk for better control over traversal (pruning, depth)
+    for root, dirs, files in os.walk(path, topdown=True):
+        # Depth limit
+        try:
+            depth = len(Path(root).relative_to(base_path).parts)
+            if depth > max_depth:
+                dirs[:] = [] # Stop descending
                 continue
-            if len(str(resolved)) > MAX_PATH_LENGTH:
-                continue
-            try:
-                relative = resolved.relative_to(base_path)
-            except ValueError:
-                continue
+        except ValueError:
+            continue
             
-            # Efficiently check for excluded directories using string operations
-            # instead of creating a set of parts which is slower
-            rel_str = str(relative)
-            if ".git/" in rel_str or "node_modules/" in rel_str or rel_str.startswith(".git") or rel_str.startswith("node_modules"):
+        # Prune heavy dirs
+        dirs[:] = [d for d in dirs if d not in prune_dirs]
+        
+        for fname in files:
+            if total_matches >= MAX_TOTAL_SECRET_MATCHES:
+                break
+                
+            # Quick skip binary/media files
+            _, ext = os.path.splitext(fname)
+            if ext.lower() in skip_exts:
                 continue
                 
-            suspicious_files.append(str(relative))
-            total_matches += 1
-            per_pattern_matches += 1
+            # Check patterns
+            matched = False
+            for pattern in secret_patterns:
+                if fnmatch.fnmatch(fname, pattern):
+                    matched = True
+                    break
+            
+            if matched:
+                file_path = Path(root) / fname
+                try:
+                    # Security: Prevent out-of-tree traversal via symlinks
+                    if file_path.is_symlink() or not file_path.is_file():
+                        continue
+                        
+                    # Resolve and check containment
+                    # resolve(strict=False) to avoid errors if file disappears
+                    resolved = file_path.resolve()
+                    
+                    if len(str(resolved)) > MAX_PATH_LENGTH:
+                        continue
+                        
+                    # Ensure it's inside the repo
+                    relative = resolved.relative_to(base_path)
+                    
+                except (ValueError, OSError):
+                    # ValueError: not relative to base_path (out of tree)
+                    # OSError: resolution failed
+                    continue
+                
+                rel_str = str(relative)
+                # Double check exclusions on the resolved path
+                if ".git/" in rel_str or "node_modules/" in rel_str or rel_str.startswith(".git") or rel_str.startswith("node_modules"):
+                    continue
+                    
+                suspicious_files.append(rel_str)
+                total_matches += 1
+                
+        if total_matches >= MAX_TOTAL_SECRET_MATCHES:
+            break
     
     return suspicious_files
 
