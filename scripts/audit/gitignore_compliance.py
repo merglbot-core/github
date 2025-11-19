@@ -9,7 +9,7 @@ import sys
 import argparse
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional, Tuple
 
 
 # Required patterns for different project types
@@ -66,6 +66,25 @@ REQUIRED_PATTERNS = {
 }
 
 
+def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
+    """
+    Normalize repository identifiers so JSON reports cannot inject control
+    characters or unbounded values.
+    """
+    raw = str(identifier)
+    cleaned = "".join(char for char in raw if char.isprintable()).strip()
+    note: Optional[str] = None
+    if not cleaned:
+        cleaned = "unknown-repository"
+        note = "Repository identifier missing; substituted placeholder"
+    if len(cleaned) > 256:
+        cleaned = f"{cleaned[:256]}..."
+        note = "Repository identifier truncated for reporting"
+    elif cleaned != raw.strip():
+        note = "Repository identifier sanitized for reporting"
+    return cleaned, note
+
+
 def detect_project_type(repo_path: str) -> str:
     """Detect the type of project based on files present."""
     path = Path(repo_path)
@@ -94,18 +113,45 @@ def detect_project_type(repo_path: str) -> str:
 
 
 def check_gitignore_compliance(repo_path: str, repo_identifier: str) -> Dict[str, Any]:
-    """Check if repository has proper gitignore configuration."""
-    path = Path(repo_path)
+    """
+    Check if repository has proper gitignore configuration.
+    
+    Args:
+        repo_path (str): Filesystem path to the repository under audit.
+        repo_identifier (str): Human-readable identifier (e.g., owner/repo).
+    
+    Returns:
+        Dict[str, Any]: Compliance details including missing patterns and issues.
+    """
+    safe_identifier, identifier_note = sanitize_identifier(repo_identifier)
+    path = Path(repo_path).resolve()
+    
+    if not path.exists() or not path.is_dir():
+        result = {
+            "repo": safe_identifier,
+            "has_gitignore": False,
+            "project_type": "unknown",
+            "missing_patterns": [],
+            "compliance_score": 0,
+            "issues": [f"invalid_repository_path: {path}"]
+        }
+        if identifier_note:
+            result["issues"].append(identifier_note)
+        return result
+    
     gitignore_path = path / ".gitignore"
     
     result = {
-        "repo": repo_identifier,
+        "repo": safe_identifier,
         "has_gitignore": gitignore_path.exists(),
-        "project_type": detect_project_type(repo_path),
+        "project_type": detect_project_type(str(path)),
         "missing_patterns": [],
         "compliance_score": 0,
         "issues": []
     }
+    
+    if identifier_note:
+        result["issues"].append(identifier_note)
     
     if not gitignore_path.exists():
         result["issues"].append("No .gitignore file found")
@@ -142,7 +188,7 @@ def check_gitignore_compliance(repo_path: str, repo_identifier: str) -> Dict[str
     result["compliance_score"] = (found_patterns / total_patterns * 100) if total_patterns > 0 else 0
     
     # Check for potential secrets in repository
-    result["potential_secrets"] = check_for_secrets(repo_path)
+    result["potential_secrets"] = check_for_secrets(str(path))
     
     if result["potential_secrets"]:
         result["issues"].append(f"Found {len(result['potential_secrets'])} potential secrets")
@@ -268,8 +314,19 @@ def audit_repositories(repos: List[str]) -> Dict[str, Any]:
                     results["total_issues"] += 1
                     continue
             
-            # Check compliance
-            repo_result = check_gitignore_compliance(repo_path, repo)
+            # Check compliance and isolate per-repo failures
+            try:
+                repo_result = check_gitignore_compliance(str(repo_path), repo)
+            except Exception as exc:
+                safe_repo, _ = sanitize_identifier(repo)
+                repo_result = {
+                    "repo": safe_repo,
+                    "has_gitignore": False,
+                    "project_type": "unknown",
+                    "missing_patterns": [],
+                    "compliance_score": 0,
+                    "issues": [f"compliance_check_failed: {type(exc).__name__}: {exc}"]
+                }
             results["details"].append(repo_result)
             
             # Update summary stats
