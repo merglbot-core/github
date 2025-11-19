@@ -69,6 +69,11 @@ REQUIRED_PATTERNS = {
 ALLOWED_IDENTIFIER_CHARS = set(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:/@"
 )
+# Bounds to guard against pathological identifiers and filesystem operations
+MAX_IDENTIFIER_INPUT_LENGTH = 4096  # matches common filesystem path limits
+MAX_IDENTIFIER_SEGMENTS = 10  # repo identifiers should rarely exceed this depth
+MAX_PATH_LENGTH = 4096
+MAX_SECRET_MATCHES_PER_PATTERN = 500
 
 
 def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
@@ -77,6 +82,10 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
     reports cannot inject path traversal or control characters.
     """
     raw = str(identifier)
+    length_truncated = False
+    if len(raw) > MAX_IDENTIFIER_INPUT_LENGTH:
+        raw = raw[:MAX_IDENTIFIER_INPUT_LENGTH]
+        length_truncated = True
     filtered = "".join(char for char in raw if char in ALLOWED_IDENTIFIER_CHARS)
     normalized = filtered.replace(":", "/").replace("@", "/")
     while "//" in normalized:
@@ -92,17 +101,16 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
         if ".." in seg:
             traversal_detected = True
             continue
-        # Strip leading dots to avoid hidden directories and collapse repeated dots
-        while seg.startswith("."):
+        if seg.startswith("."):
             traversal_detected = True
-            seg = seg[1:]
+            seg = seg.lstrip(".")
         seg = seg.rstrip(". ")
-        seg = "".join(ch for ch in seg if ch.isalnum() or ch in "-_.")
+        seg = "".join(ch for ch in seg if ch in ALLOWED_IDENTIFIER_CHARS)
         if not seg or seg in reserved_names:
             traversal_detected = True
             continue
-        segments.append(seg)
-        if len(segments) >= 10:
+        segments.append(seg.lower())
+        if len(segments) >= MAX_IDENTIFIER_SEGMENTS:
             traversal_detected = True
             break
     cleaned = "/".join(segments)
@@ -116,26 +124,40 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
         note = "Repository identifier truncated for reporting"
     elif traversal_detected:
         note = "Repository identifier sanitized for path traversal segments"
-    elif cleaned != raw:
+    elif cleaned != raw or length_truncated:
         note = "Repository identifier sanitized for reporting"
     return cleaned, note
 
 
 def detect_project_type(repo_path: str) -> str:
     """Detect the type of project based on files present."""
-    path = Path(repo_path)
+    path = Path(repo_path).resolve()
     
-    # Check for infrastructure
-    if (any(path.glob("*.tf")) or any(path.glob("*.yaml"))) and (path / ".terraform").exists():
+    # Check for infrastructure markers
+    has_tf = any(path.glob("*.tf")) or any((path / "infra").glob("**/*.tf"))
+    has_k8s_yaml = any((path / "k8s").glob("**/*.yaml")) or any((path / "kubernetes").glob("**/*.yaml"))
+    has_helm = (path / "Chart.yaml").exists() or (path / "charts").exists()
+    has_kustomize = (path / "kustomization.yaml").exists()
+    has_compose = (path / "docker-compose.yaml").exists() or (path / "compose.yaml").exists()
+    if has_tf or has_k8s_yaml or has_helm or has_kustomize or has_compose:
         return "infrastructure"
     
     # Check for frontend
     pkg = path / "package.json"
     if pkg.exists():
         try:
+            if pkg.stat().st_size > 2 * 1024 * 1024:
+                raise OSError("package_json_too_large")
             with pkg.open("r", encoding="utf-8", errors="replace") as f:
                 content = json.load(f)
-            if any(dep in content.get("dependencies", {}) for dep in ["react", "vue", "angular"]):
+            deps = content.get("dependencies", {}) or {}
+            dev_deps = content.get("devDependencies", {}) or {}
+            frontend_markers = {"react", "vue", "angular", "next", "nuxt", "vite"}
+            if any(marker in deps for marker in frontend_markers) or any(
+                marker in dev_deps for marker in frontend_markers
+            ):
+                return "frontend"
+            if (path / "public").exists() or (path / "src" / "index.html").exists():
                 return "frontend"
         except (OSError, json.JSONDecodeError):
             pass
@@ -204,11 +226,10 @@ def check_gitignore_compliance(repo_path: str, repo_identifier: str) -> Dict[str
         return result
     gitignore_lines: List[str] = []
     for line in gitignore_content.splitlines():
-        if not line:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
             continue
-        if line.lstrip().startswith("#"):
-            continue
-        gitignore_lines.append(line.rstrip("\n\r"))
+        gitignore_lines.append(stripped)
     
     # Get required patterns for project type
     required = REQUIRED_PATTERNS.get(result["project_type"], REQUIRED_PATTERNS["backend"])
@@ -248,7 +269,7 @@ def check_gitignore_compliance(repo_path: str, repo_identifier: str) -> Dict[str
 
 def check_for_secrets(repo_path: str) -> List[str]:
     """Quick check for potential secrets in repository."""
-    suspicious_files = []
+    suspicious_files: List[str] = []
     path = Path(repo_path).resolve()
     base_path = path
     
@@ -262,15 +283,17 @@ def check_for_secrets(repo_path: str) -> List[str]:
     ]
     
     for pattern in secret_patterns:
+        match_count = 0
         for file in path.rglob(pattern):
+            if match_count >= MAX_SECRET_MATCHES_PER_PATTERN:
+                break
             try:
-                if file.is_symlink():
+                if file.is_symlink() or not file.is_file():
                     continue
                 resolved = file.resolve(strict=False)
             except OSError:
                 continue
-            # Guard against absurd path lengths to avoid resource exhaustion
-            if len(str(resolved)) > 4096:
+            if len(str(resolved)) > MAX_PATH_LENGTH:
                 continue
             try:
                 relative = resolved.relative_to(base_path)
@@ -280,6 +303,7 @@ def check_for_secrets(repo_path: str) -> List[str]:
             if ".git" in parts or "node_modules" in parts:
                 continue
             suspicious_files.append(str(relative))
+            match_count += 1
     
     return suspicious_files
 
