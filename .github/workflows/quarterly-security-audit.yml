@@ -131,7 +131,15 @@ jobs:
         with:
           fetch-depth: 0  # Full history for secret scanning
       - name: Prepare reports directory
-        run: mkdir -p -m 700 reports
+        run: |
+          set -euo pipefail
+          mkdir -p "reports"
+          chmod 700 "reports"
+          if ! find "reports" -maxdepth 0 -perm 0700 | grep -q .; then
+            echo "Failed to create reports directory with proper permissions"
+            ls -ld reports || true
+            exit 1
+          fi
           
       - name: Install Gitleaks
         run: |
@@ -191,7 +199,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
       - name: Prepare reports directory
-        run: mkdir -p -m 700 reports
+        run: |
+          set -euo pipefail
+          mkdir -p "reports"
+          chmod 700 "reports"
+          if ! find "reports" -maxdepth 0 -perm 0700 | grep -q .; then
+            echo "Failed to create reports directory with proper permissions"
+            ls -ld reports || true
+            exit 1
+          fi
         
       - name: Validate bot configurations
         id: bots
@@ -266,7 +282,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v5.0.0
       - name: Prepare reports directory
-        run: mkdir -p -m 700 reports
+        run: |
+          set -euo pipefail
+          mkdir -p "reports"
+          chmod 700 "reports"
+          if ! find "reports" -maxdepth 0 -perm 0700 | grep -q .; then
+            echo "Failed to create reports directory with proper permissions"
+            ls -ld reports || true
+            exit 1
+          fi
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8  # v0.33.1
