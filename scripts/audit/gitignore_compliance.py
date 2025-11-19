@@ -66,26 +66,42 @@ REQUIRED_PATTERNS = {
 }
 
 
+ALLOWED_IDENTIFIER_CHARS = set(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:/@"
+)
+
+
 def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
     """
     Normalize repository identifiers to a constrained, safe form so audit
     reports cannot inject path traversal or control characters.
     """
     raw = str(identifier)
-    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:/@")
-    filtered = "".join(char for char in raw if char in allowed)
+    filtered = "".join(char for char in raw if char in ALLOWED_IDENTIFIER_CHARS)
     normalized = filtered.replace(":", "/").replace("@", "/")
     while "//" in normalized:
         normalized = normalized.replace("//", "/")
-    cleaned = normalized.strip("/.")
+    normalized = normalized.strip("/.")
+    traversal_detected = False
+    segments: List[str] = []
+    for segment in normalized.split("/"):
+        if not segment or segment == ".":
+            continue
+        if segment == "..":
+            traversal_detected = True
+            continue
+        segments.append(segment)
+    cleaned = "/".join(segments)
     
     note: Optional[str] = None
     if not cleaned:
         cleaned = "unknown-repository"
         note = "Repository identifier missing; substituted placeholder"
-    elif len(cleaned) > 256:
-        cleaned = f"{cleaned[:256]}..."
+    elif len(cleaned) > 253:
+        cleaned = f"{cleaned[:253]}..."
         note = "Repository identifier truncated for reporting"
+    elif traversal_detected:
+        note = "Repository identifier sanitized for path traversal segments"
     elif cleaned != raw:
         note = "Repository identifier sanitized for reporting"
     return cleaned, note
@@ -100,11 +116,15 @@ def detect_project_type(repo_path: str) -> str:
         return "infrastructure"
     
     # Check for frontend
-    if (path / "package.json").exists():
-        with open(path / "package.json", "r") as f:
-            content = json.load(f)
+    pkg = path / "package.json"
+    if pkg.exists():
+        try:
+            with pkg.open("r", encoding="utf-8", errors="replace") as f:
+                content = json.load(f)
             if any(dep in content.get("dependencies", {}) for dep in ["react", "vue", "angular"]):
                 return "frontend"
+        except Exception:
+            pass
     
     # Check for backend
     if (path / "requirements.txt").exists() or (path / "pyproject.toml").exists():
@@ -161,11 +181,18 @@ def check_gitignore_compliance(repo_path: str, repo_identifier: str) -> Dict[str
         result["issues"].append("No .gitignore file found")
         return result
     
-    # Read gitignore content
-    with open(gitignore_path, "r") as f:
-        gitignore_content = f.read()
-        gitignore_lines = [line.strip() for line in gitignore_content.splitlines() 
-                          if line.strip() and not line.strip().startswith("#")]
+    # Read gitignore content safely
+    try:
+        with open(gitignore_path, "r", encoding="utf-8", errors="replace") as f:
+            gitignore_content = f.read()
+    except Exception as exc:
+        result["issues"].append(f".gitignore_unreadable:{type(exc).__name__}")
+        return result
+    gitignore_lines = [
+        line.strip()
+        for line in gitignore_content.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
     
     # Get required patterns for project type
     required = REQUIRED_PATTERNS.get(result["project_type"], REQUIRED_PATTERNS["backend"])
@@ -206,7 +233,8 @@ def check_gitignore_compliance(repo_path: str, repo_identifier: str) -> Dict[str
 def check_for_secrets(repo_path: str) -> List[str]:
     """Quick check for potential secrets in repository."""
     suspicious_files = []
-    path = Path(repo_path)
+    path = Path(repo_path).resolve()
+    base_path = path
     
     # Common secret file patterns
     secret_patterns = [
@@ -219,10 +247,17 @@ def check_for_secrets(repo_path: str) -> List[str]:
     
     for pattern in secret_patterns:
         for file in path.rglob(pattern):
-            # Skip if in .git or node_modules
-            if ".git" in str(file) or "node_modules" in str(file):
+            try:
+                resolved = file.resolve()
+            except FileNotFoundError:
                 continue
-            suspicious_files.append(str(file.relative_to(path)))
+            try:
+                relative = resolved.relative_to(base_path)
+            except ValueError:
+                continue
+            if ".git" in relative.parts or "node_modules" in relative.parts:
+                continue
+            suspicious_files.append(str(relative))
     
     return suspicious_files
 
@@ -323,7 +358,11 @@ def audit_repositories(repos: List[str]) -> Dict[str, Any]:
                 repo_result = check_gitignore_compliance(str(repo_path), repo)
             except Exception as exc:
                 safe_repo, note = sanitize_identifier(repo)
-                issues = [f"compliance_check_failed: {type(exc).__name__}: {exc}"]
+                print(
+                    f"[ERROR] compliance_check_failed for {repo!r}: {type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+                issues = [f"compliance_check_failed:{type(exc).__name__}"]
                 if note:
                     issues.append(note)
                 repo_result = {
