@@ -97,7 +97,7 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
     
     traversal_detected = False
     segments: List[str] = []
-    reserved_names = {".git", ".ssh", ""}
+    reserved_names = {".git", ".ssh"}
     
     # Simplified sanitization loop
     for segment in normalized.split("/"):
@@ -107,19 +107,12 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
             traversal_detected = True
             continue
         
-        seg = segment
-        # Check for ".." to prevent path traversal.
-        
-        if seg == ".." or ".." in seg:
-            traversal_detected = True
-            continue
-
         # Check reserved names
-        if not seg or seg in reserved_names:
+        if segment in reserved_names:
             traversal_detected = True
             continue
             
-        segments.append(seg) # Preserve case
+        segments.append(segment) # Preserve case
         if len(segments) >= MAX_IDENTIFIER_SEGMENTS:
             traversal_detected = True
             break
@@ -133,11 +126,18 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
         repo_hash = hashlib.sha256(str(identifier).encode()).hexdigest()[:16]
         cleaned = f"unknown-repository-{repo_hash}"
         note = "Repository identifier missing; substituted placeholder with hash"
-    elif len(cleaned) > 253:
-        # Ensure the final string including ellipsis stays within 253 chars
-        safe_limit = 250
-        # Simple truncation for now, byte-aware is better but this is safe enough for ASCII-heavy identifiers
-        cleaned = f"{cleaned[:safe_limit]}..."
+    elif len(cleaned.encode("utf-8")) > 253:
+        # Respect common filesystem limits for a single path component.
+        # Reserve space for suffix and ensure byte-safe truncation.
+        suffix = "..."
+        max_component_bytes = 253  # conservative single-segment limit
+        encoded = cleaned.encode("utf-8")
+        if len(encoded) > max_component_bytes - len(suffix.encode("utf-8")):
+            limit = max_component_bytes - len(suffix.encode("utf-8"))
+            cut = limit
+            while cut > 0 and (encoded[cut] & 0b11000000) == 0b10000000:
+                cut -= 1
+            cleaned = encoded[:cut].decode("utf-8", errors="ignore") + suffix
         note = "Repository identifier truncated for reporting"
     elif traversal_detected:
         note = "Repository identifier sanitized for path traversal segments"
@@ -203,7 +203,8 @@ def detect_project_type(repo_path: str) -> str:
             has_tf = _any_rglob_pruned(infra_dir, "*.tf", prune_dirs)
             
     has_k8s_yaml = False
-    if not has_tf: # If Terraform markers are absent, check for Kubernetes markers as an alternative infrastructure indicator
+    has_k8s_yaml = False
+    if not has_tf:  # If Terraform markers are absent, check for Kubernetes markers as an alternative infrastructure indicator
         has_k8s_yaml = _any_rglob_pruned(path, "*.yaml", prune_dirs) or _any_rglob_pruned(path, "*.yml", prune_dirs)
 
     has_helm = (path / "Chart.yaml").exists() or (path / "charts").exists()
@@ -385,6 +386,17 @@ def check_for_secrets(repo_path: str) -> List[str]:
             if ext.lower() in skip_exts:
                 continue
                 
+            # Skip excessively large files (e.g., logs, dumps) to prevent DoS/performance issues
+            try:
+                file_path = Path(root) / fname
+                # Only check size if it's a regular file (symlinks handled later but stat follows by default)
+                # We use os.lstat or Path.lstat to check symlink itself, but here we want target size if we were reading.
+                # Since we are only checking filename, this is a heuristic.
+                if file_path.is_file() and file_path.stat().st_size > 10 * 1024 * 1024:
+                    continue
+            except OSError:
+                continue
+                
             # Check patterns
             matched = False
 
@@ -417,7 +429,8 @@ def check_for_secrets(repo_path: str) -> List[str]:
                 
                 rel_str = str(relative)
                 # Double check exclusions on the resolved path
-                if ".git/" in rel_str or "node_modules/" in rel_str or rel_str.startswith(".git") or rel_str.startswith("node_modules"):
+                # Double check exclusions on the resolved path using robust parts check
+                if any(part in prune_dirs for part in relative.parts):
                     continue
                     
                 suspicious_files.append(rel_str)
