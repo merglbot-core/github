@@ -8,12 +8,8 @@ import os
 import sys
 import argparse
 import subprocess
-import json
-import os
-import sys
-import argparse
-import subprocess
 import hashlib
+import fnmatch
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 
@@ -112,14 +108,7 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
             continue
         
         seg = segment
-        # Only strip leading dots if it looks like a traversal attempt (..)
-        # or if we want to be very strict. The previous logic stripped ALL leading dots
-        # which broke .config -> config. 
-        # We will only flag traversal if it contains ".." and strip nothing, 
-        # relying on the ".." check above.
-        # However, to be safe against ".foo" becoming hidden files if we don't want them,
-        # we might want to keep some logic. But for repo identifiers, .config is valid.
-        # Let's just check for ".." explicitly.
+        # Check for ".." to prevent path traversal.
         
         if seg == ".." or ".." in seg:
             traversal_detected = True
@@ -169,7 +158,7 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
         except ValueError:
              raise ValueError("Path traversal detected")
              
-    except Exception:
+    except (ValueError, OSError):
         note = (note or "Repository identifier sanitized for reporting") + "; constrained to safe placeholder"
         repo_hash = hashlib.sha256(str(identifier).encode()).hexdigest()[:16]
         cleaned = f"unknown-repository-{repo_hash}"
@@ -192,7 +181,7 @@ def _any_rglob_pruned(root: Path, pattern: str, prune: List[str]) -> bool:
                     return True
             # Fallback for other patterns (less efficient but functional)
             else:
-                import fnmatch
+                # fnmatch imported at top level
                 if any(fnmatch.fnmatch(f, pattern) for f in files):
                     return True
     except OSError:
@@ -229,17 +218,16 @@ def detect_project_type(repo_path: str) -> str:
     if pkg.exists():
         try:
             # Skip large package.json files (likely generated or non-standard) to avoid performance issues
-            if pkg.stat().st_size > MAX_PACKAGE_JSON_SIZE:
-                return "backend"
-            with pkg.open("r", encoding="utf-8", errors="replace") as f:
-                content = json.load(f)
-            deps = content.get("dependencies") or {}
-            dev_deps = content.get("devDependencies") or {}
-            frontend_markers = {"react", "vue", "angular", "next", "nuxt", "vite"}
-            
-            # Efficient set intersection check
-            if frontend_markers.intersection(deps.keys()) or frontend_markers.intersection(dev_deps.keys()):
-                return "frontend"
+            if pkg.stat().st_size <= MAX_PACKAGE_JSON_SIZE:
+                with pkg.open("r", encoding="utf-8", errors="replace") as f:
+                    content = json.load(f)
+                deps = content.get("dependencies") or {}
+                dev_deps = content.get("devDependencies") or {}
+                frontend_markers = {"react", "vue", "angular", "next", "nuxt", "vite"}
+                
+                # Efficient set intersection check
+                if frontend_markers.intersection(deps.keys()) or frontend_markers.intersection(dev_deps.keys()):
+                    return "frontend"
                 
             if (path / "public").exists() or (path / "src" / "index.html").exists():
                 return "frontend"
@@ -399,15 +387,7 @@ def check_for_secrets(repo_path: str) -> List[str]:
                 
             # Check patterns
             matched = False
-            import fnmatch # Import here since we removed it from top level (or we could keep it top level, but plan said remove)
-                           # Actually, plan said remove redundant import. If we use it here, we should keep it at top.
-                           # Wait, I removed it from top level in chunk 1. So I need to import it here or put it back.
-                           # Better to put it back at top level in a separate edit or just import here.
-                           # Let's import here to be safe for now, or better yet, I will add it back to top level in a subsequent tool call if needed.
-                           # Actually, `fnmatch` is used in `_any_rglob_pruned` too (implied by "fallback").
-                           # Let's check `_any_rglob_pruned`. It imports fnmatch locally.
-                           # So importing here locally is fine.
-            import fnmatch
+
             for pattern in secret_patterns:
                 if fnmatch.fnmatch(fname, pattern):
                     matched = True
