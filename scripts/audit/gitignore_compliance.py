@@ -74,6 +74,7 @@ MAX_IDENTIFIER_INPUT_LENGTH = 4096  # matches common filesystem path limits
 MAX_IDENTIFIER_SEGMENTS = 10  # repo identifiers should rarely exceed this depth
 MAX_PATH_LENGTH = 4096
 MAX_SECRET_MATCHES_PER_PATTERN = 500
+MAX_TOTAL_SECRET_MATCHES = 5000
 
 
 def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
@@ -94,31 +95,40 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
     traversal_detected = False
     segments: List[str] = []
     reserved_names = {".git", ".ssh", ""}
+    # Simplified sanitization loop
     for segment in normalized.split("/"):
-        seg = segment.strip()
-        if not seg or seg == ".":
+        if not segment or segment == ".":
             continue
-        if ".." in seg:
+        if ".." in segment:
             traversal_detected = True
             continue
+        
+        seg = segment
         if seg.startswith("."):
             traversal_detected = True
             seg = seg.lstrip(".")
         seg = seg.rstrip(".")
-        seg = "".join(ch for ch in seg if ch in ALLOWED_IDENTIFIER_CHARS)
+        
+        # Check reserved names before further processing if needed, 
+        # but here we just check the final segment
         if not seg or seg in reserved_names:
             traversal_detected = True
             continue
+            
         segments.append(seg.lower())
         if len(segments) >= MAX_IDENTIFIER_SEGMENTS:
             traversal_detected = True
             break
+            
     cleaned = "/".join(segments)
     
     note: Optional[str] = None
     if not cleaned:
-        cleaned = "unknown-repository"
-        note = "Repository identifier missing; substituted placeholder"
+        # Prevent collision for unknown repositories by appending a hash of the original
+        import hashlib
+        repo_hash = hashlib.md5(str(identifier).encode()).hexdigest()[:8]
+        cleaned = f"unknown-repository-{repo_hash}"
+        note = "Repository identifier missing; substituted placeholder with hash"
     elif len(cleaned) > 253:
         cleaned = f"{cleaned[:250]}..."
         note = "Repository identifier truncated for reporting"
@@ -129,27 +139,54 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
     return cleaned, note
 
 
+def _any_rglob_pruned(root: Path, pattern: str, prune: List[str]) -> bool:
+    """Check for pattern match while pruning specific directories."""
+    try:
+        for base, dirs, files in os.walk(root, topdown=True):
+            # prune heavy/common directories in place
+            dirs[:] = [d for d in dirs if d not in prune]
+            
+            # Check files in current directory
+            # Simple glob matching for extension
+            if pattern.startswith("*."):
+                ext = pattern[1:]
+                if any(f.endswith(ext) for f in files):
+                    return True
+            # Fallback for other patterns (less efficient but functional)
+            else:
+                import fnmatch
+                if any(fnmatch.fnmatch(f, pattern) for f in files):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def detect_project_type(repo_path: str) -> str:
     """Detect the type of project based on files present."""
     path = Path(repo_path).resolve()
+    prune_dirs = ["node_modules", ".git", "vendor", ".venv", "venv", "dist", "build"]
     
     # Check for infrastructure markers with short-circuiting
+    # Combine checks to avoid redundant existence checks
     has_tf = any(path.glob("*.tf"))
     if not has_tf:
         infra_dir = path / "infra"
         if infra_dir.exists():
-            has_tf = any(infra_dir.rglob("*.tf"))
+            has_tf = _any_rglob_pruned(infra_dir, "*.tf", prune_dirs)
+            
     has_k8s_yaml = False
-    k8s_dir = path / "k8s"
-    if k8s_dir.exists():
-        has_k8s_yaml = any(k8s_dir.rglob("*.yaml"))
-    if not has_k8s_yaml:
-        kube_dir = path / "kubernetes"
-        if kube_dir.exists():
-            has_k8s_yaml = any(kube_dir.rglob("*.yaml"))
+    if not has_tf: # Optimization: don't check k8s if already infra
+        for kdir in (path / "k8s", path / "kubernetes"):
+            if kdir.exists():
+                if _any_rglob_pruned(kdir, "*.yaml", prune_dirs):
+                    has_k8s_yaml = True
+                    break
+
     has_helm = (path / "Chart.yaml").exists() or (path / "charts").exists()
     has_kustomize = (path / "kustomization.yaml").exists()
     has_compose = (path / "docker-compose.yaml").exists() or (path / "compose.yaml").exists()
+    
     if has_tf or has_k8s_yaml or has_helm or has_kustomize or has_compose:
         return "infrastructure"
     
@@ -295,12 +332,12 @@ def check_for_secrets(repo_path: str) -> List[str]:
     
     total_matches = 0
     for pattern in secret_patterns:
-        if total_matches >= MAX_SECRET_MATCHES_PER_PATTERN:
+        if total_matches >= MAX_TOTAL_SECRET_MATCHES:
             break
         per_pattern_matches = 0
         for file in path.rglob(pattern):
             if (
-                total_matches >= MAX_SECRET_MATCHES_PER_PATTERN
+                total_matches >= MAX_TOTAL_SECRET_MATCHES
                 or per_pattern_matches >= MAX_SECRET_MATCHES_PER_PATTERN
             ):
                 break
@@ -316,9 +353,13 @@ def check_for_secrets(repo_path: str) -> List[str]:
                 relative = resolved.relative_to(base_path)
             except ValueError:
                 continue
-            parts = set(relative.parts)
-            if ".git" in parts or "node_modules" in parts:
+            
+            # Efficiently check for excluded directories using string operations
+            # instead of creating a set of parts which is slower
+            rel_str = str(relative)
+            if ".git/" in rel_str or "node_modules/" in rel_str or rel_str.startswith(".git") or rel_str.startswith("node_modules"):
                 continue
+                
             suspicious_files.append(str(relative))
             total_matches += 1
             per_pattern_matches += 1
