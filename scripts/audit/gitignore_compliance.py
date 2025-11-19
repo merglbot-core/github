@@ -84,13 +84,27 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
     normalized = normalized.strip("/.")
     traversal_detected = False
     segments: List[str] = []
+    reserved_names = {".git", ".ssh", ""}
     for segment in normalized.split("/"):
-        if not segment or segment == ".":
+        seg = segment.strip()
+        if not seg or seg == ".":
             continue
-        if segment == "..":
+        if ".." in seg:
             traversal_detected = True
             continue
-        segments.append(segment)
+        # Strip leading dots to avoid hidden directories and collapse repeated dots
+        while seg.startswith("."):
+            traversal_detected = True
+            seg = seg[1:]
+        seg = seg.rstrip(". ")
+        seg = "".join(ch for ch in seg if ch.isalnum() or ch in "-_.")
+        if not seg or seg in reserved_names:
+            traversal_detected = True
+            continue
+        segments.append(seg)
+        if len(segments) >= 10:
+            traversal_detected = True
+            break
     cleaned = "/".join(segments)
     
     note: Optional[str] = None
@@ -123,7 +137,7 @@ def detect_project_type(repo_path: str) -> str:
                 content = json.load(f)
             if any(dep in content.get("dependencies", {}) for dep in ["react", "vue", "angular"]):
                 return "frontend"
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             pass
     
     # Check for backend
@@ -185,14 +199,16 @@ def check_gitignore_compliance(repo_path: str, repo_identifier: str) -> Dict[str
     try:
         with open(gitignore_path, "r", encoding="utf-8", errors="replace") as f:
             gitignore_content = f.read()
-    except Exception as exc:
+    except OSError as exc:
         result["issues"].append(f".gitignore_unreadable:{type(exc).__name__}")
         return result
-    gitignore_lines = [
-        line.strip()
-        for line in gitignore_content.splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    ]
+    gitignore_lines: List[str] = []
+    for line in gitignore_content.splitlines():
+        if not line:
+            continue
+        if line.lstrip().startswith("#"):
+            continue
+        gitignore_lines.append(line.rstrip("\n\r"))
     
     # Get required patterns for project type
     required = REQUIRED_PATTERNS.get(result["project_type"], REQUIRED_PATTERNS["backend"])
@@ -248,14 +264,20 @@ def check_for_secrets(repo_path: str) -> List[str]:
     for pattern in secret_patterns:
         for file in path.rglob(pattern):
             try:
-                resolved = file.resolve()
-            except FileNotFoundError:
+                if file.is_symlink():
+                    continue
+                resolved = file.resolve(strict=False)
+            except OSError:
+                continue
+            # Guard against absurd path lengths to avoid resource exhaustion
+            if len(str(resolved)) > 4096:
                 continue
             try:
                 relative = resolved.relative_to(base_path)
             except ValueError:
                 continue
-            if ".git" in relative.parts or "node_modules" in relative.parts:
+            parts = set(relative.parts)
+            if ".git" in parts or "node_modules" in parts:
                 continue
             suspicious_files.append(str(relative))
     
@@ -359,7 +381,7 @@ def audit_repositories(repos: List[str]) -> Dict[str, Any]:
             except Exception as exc:
                 safe_repo, note = sanitize_identifier(repo)
                 print(
-                    f"[ERROR] compliance_check_failed for {repo!r}: {type(exc).__name__}: {exc}",
+                    f"[ERROR] compliance_check_failed for {safe_repo!r}: {type(exc).__name__}",
                     file=sys.stderr,
                 )
                 issues = [f"compliance_check_failed:{type(exc).__name__}"]
