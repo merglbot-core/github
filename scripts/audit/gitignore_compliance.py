@@ -133,9 +133,20 @@ def detect_project_type(repo_path: str) -> str:
     """Detect the type of project based on files present."""
     path = Path(repo_path).resolve()
     
-    # Check for infrastructure markers
-    has_tf = any(path.glob("*.tf")) or any((path / "infra").glob("**/*.tf"))
-    has_k8s_yaml = any((path / "k8s").glob("**/*.yaml")) or any((path / "kubernetes").glob("**/*.yaml"))
+    # Check for infrastructure markers with short-circuiting
+    has_tf = any(path.glob("*.tf"))
+    if not has_tf:
+        infra_dir = path / "infra"
+        if infra_dir.exists():
+            has_tf = any(infra_dir.rglob("*.tf"))
+    has_k8s_yaml = False
+    k8s_dir = path / "k8s"
+    if k8s_dir.exists():
+        has_k8s_yaml = any(k8s_dir.rglob("*.yaml"))
+    if not has_k8s_yaml:
+        kube_dir = path / "kubernetes"
+        if kube_dir.exists():
+            has_k8s_yaml = any(kube_dir.rglob("*.yaml"))
     has_helm = (path / "Chart.yaml").exists() or (path / "charts").exists()
     has_kustomize = (path / "kustomization.yaml").exists()
     has_compose = (path / "docker-compose.yaml").exists() or (path / "compose.yaml").exists()
@@ -147,7 +158,7 @@ def detect_project_type(repo_path: str) -> str:
     if pkg.exists():
         try:
             if pkg.stat().st_size > 2 * 1024 * 1024:
-                raise ValueError("package.json exceeds maximum size of 2MB")
+                return "backend"
             with pkg.open("r", encoding="utf-8", errors="replace") as f:
                 content = json.load(f)
             deps = content.get("dependencies") or {}
@@ -286,8 +297,12 @@ def check_for_secrets(repo_path: str) -> List[str]:
     for pattern in secret_patterns:
         if total_matches >= MAX_SECRET_MATCHES_PER_PATTERN:
             break
+        per_pattern_matches = 0
         for file in path.rglob(pattern):
-            if match_count >= MAX_SECRET_MATCHES_PER_PATTERN:
+            if (
+                total_matches >= MAX_SECRET_MATCHES_PER_PATTERN
+                or per_pattern_matches >= MAX_SECRET_MATCHES_PER_PATTERN
+            ):
                 break
             try:
                 if file.is_symlink() or not file.is_file():
@@ -306,6 +321,7 @@ def check_for_secrets(repo_path: str) -> List[str]:
                 continue
             suspicious_files.append(str(relative))
             total_matches += 1
+            per_pattern_matches += 1
     
     return suspicious_files
 
