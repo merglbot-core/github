@@ -93,13 +93,13 @@ def detect_project_type(repo_path: str) -> str:
     return "backend"
 
 
-def check_gitignore_compliance(repo_path: str) -> Dict[str, Any]:
+def check_gitignore_compliance(repo_path: str, repo_identifier: str) -> Dict[str, Any]:
     """Check if repository has proper gitignore configuration."""
     path = Path(repo_path)
     gitignore_path = path / ".gitignore"
     
     result = {
-        "repo": repo_path,
+        "repo": repo_identifier,
         "has_gitignore": gitignore_path.exists(),
         "project_type": detect_project_type(repo_path),
         "missing_patterns": [],
@@ -269,7 +269,7 @@ def audit_repositories(repos: List[str]) -> Dict[str, Any]:
                     continue
             
             # Check compliance
-            repo_result = check_gitignore_compliance(repo_path)
+            repo_result = check_gitignore_compliance(repo_path, repo)
             results["details"].append(repo_result)
             
             # Update summary stats
@@ -310,7 +310,7 @@ def main():
     
     # Save results
     with open(args.output, "w") as f:
-        json.dump(results, f, indent=2, default=str)
+        json.dump(results, f, indent=2)
     
     # Print summary
     print(f"\n=== Gitignore Compliance Report ===")
