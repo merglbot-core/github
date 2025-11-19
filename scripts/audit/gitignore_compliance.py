@@ -104,7 +104,7 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
         if seg.startswith("."):
             traversal_detected = True
             seg = seg.lstrip(".")
-        seg = seg.rstrip(". ")
+        seg = seg.rstrip(".")
         seg = "".join(ch for ch in seg if ch in ALLOWED_IDENTIFIER_CHARS)
         if not seg or seg in reserved_names:
             traversal_detected = True
@@ -120,7 +120,7 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
         cleaned = "unknown-repository"
         note = "Repository identifier missing; substituted placeholder"
     elif len(cleaned) > 253:
-        cleaned = f"{cleaned[:253]}..."
+        cleaned = f"{cleaned[:250]}..."
         note = "Repository identifier truncated for reporting"
     elif traversal_detected:
         note = "Repository identifier sanitized for path traversal segments"
@@ -147,11 +147,11 @@ def detect_project_type(repo_path: str) -> str:
     if pkg.exists():
         try:
             if pkg.stat().st_size > 2 * 1024 * 1024:
-                raise OSError("package_json_too_large")
+                raise ValueError("package.json exceeds maximum size of 2MB")
             with pkg.open("r", encoding="utf-8", errors="replace") as f:
                 content = json.load(f)
-            deps = content.get("dependencies", {}) or {}
-            dev_deps = content.get("devDependencies", {}) or {}
+            deps = content.get("dependencies") or {}
+            dev_deps = content.get("devDependencies") or {}
             frontend_markers = {"react", "vue", "angular", "next", "nuxt", "vite"}
             if any(marker in deps for marker in frontend_markers) or any(
                 marker in dev_deps for marker in frontend_markers
@@ -282,15 +282,17 @@ def check_for_secrets(repo_path: str) -> List[str]:
         "config.prod.json", "settings.prod.py"
     ]
     
+    total_matches = 0
     for pattern in secret_patterns:
-        match_count = 0
+        if total_matches >= MAX_SECRET_MATCHES_PER_PATTERN:
+            break
         for file in path.rglob(pattern):
             if match_count >= MAX_SECRET_MATCHES_PER_PATTERN:
                 break
             try:
                 if file.is_symlink() or not file.is_file():
                     continue
-                resolved = file.resolve(strict=False)
+                resolved = file.resolve()
             except OSError:
                 continue
             if len(str(resolved)) > MAX_PATH_LENGTH:
@@ -303,7 +305,7 @@ def check_for_secrets(repo_path: str) -> List[str]:
             if ".git" in parts or "node_modules" in parts:
                 continue
             suspicious_files.append(str(relative))
-            match_count += 1
+            total_matches += 1
     
     return suspicious_files
 
