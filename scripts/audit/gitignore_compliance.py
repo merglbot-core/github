@@ -8,8 +8,12 @@ import os
 import sys
 import argparse
 import subprocess
+import json
+import os
+import sys
+import argparse
+import subprocess
 import hashlib
-import fnmatch
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 
@@ -75,8 +79,8 @@ ALLOWED_IDENTIFIER_CHARS = set(
 MAX_IDENTIFIER_INPUT_LENGTH = 4096  # matches common filesystem path limits
 MAX_IDENTIFIER_SEGMENTS = 10  # repo identifiers should rarely exceed this depth
 MAX_PATH_LENGTH = 4096
-MAX_SECRET_MATCHES_PER_PATTERN = 500
-MAX_TOTAL_SECRET_MATCHES = 5000
+MAX_TOTAL_SECRET_MATCHES = 5000  # Global limit for secret matches to prevent DoS
+MAX_PACKAGE_JSON_SIZE = 2 * 1024 * 1024  # 2MB limit for package.json parsing
 
 
 def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
@@ -121,14 +125,12 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
             traversal_detected = True
             continue
 
-        seg = seg.rstrip(".")
-        
         # Check reserved names
         if not seg or seg in reserved_names:
             traversal_detected = True
             continue
             
-        segments.append(seg.lower())
+        segments.append(seg) # Preserve case
         if len(segments) >= MAX_IDENTIFIER_SEGMENTS:
             traversal_detected = True
             break
@@ -159,13 +161,14 @@ def sanitize_identifier(identifier: Any) -> Tuple[str, Optional[str]]:
         reports_root = Path("reports").resolve()
         # We simulate where this would go. 
         # Note: cleaned is just a relative path string at this point.
-        # If we were to join it with reports_root, would it escape?
-        # Since we stripped ".." and "/", it shouldn't, but let's verify.
-        # We use a dummy root for validation if reports doesn't exist or we are in a weird cwd
         candidate = (reports_root / cleaned).resolve()
-        # If candidate is not relative to reports_root, we have a traversal
-        if not str(candidate).startswith(str(reports_root)):
+        
+        # Robust check using pathlib (Python 3.9+ has is_relative_to, but we support older envs too)
+        try:
+            candidate.relative_to(reports_root)
+        except ValueError:
              raise ValueError("Path traversal detected")
+             
     except Exception:
         note = (note or "Repository identifier sanitized for reporting") + "; constrained to safe placeholder"
         repo_hash = hashlib.sha256(str(identifier).encode()).hexdigest()[:16]
@@ -211,12 +214,8 @@ def detect_project_type(repo_path: str) -> str:
             has_tf = _any_rglob_pruned(infra_dir, "*.tf", prune_dirs)
             
     has_k8s_yaml = False
-    if not has_tf: # Optimization: don't check k8s if already infra
-        for kdir in (path / "k8s", path / "kubernetes"):
-            if kdir.exists():
-                if _any_rglob_pruned(kdir, "*.yaml", prune_dirs):
-                    has_k8s_yaml = True
-                    break
+    if not has_tf: # If Terraform markers are absent, check for Kubernetes markers as an alternative infrastructure indicator
+        has_k8s_yaml = _any_rglob_pruned(path, "*.yaml", prune_dirs) or _any_rglob_pruned(path, "*.yml", prune_dirs)
 
     has_helm = (path / "Chart.yaml").exists() or (path / "charts").exists()
     has_kustomize = (path / "kustomization.yaml").exists()
@@ -230,7 +229,7 @@ def detect_project_type(repo_path: str) -> str:
     if pkg.exists():
         try:
             # Skip large package.json files (likely generated or non-standard) to avoid performance issues
-            if pkg.stat().st_size > 2 * 1024 * 1024:
+            if pkg.stat().st_size > MAX_PACKAGE_JSON_SIZE:
                 return "backend"
             with pkg.open("r", encoding="utf-8", errors="replace") as f:
                 content = json.load(f)
@@ -344,7 +343,8 @@ def check_gitignore_compliance(repo_path: str, repo_identifier: str) -> Dict[str
     result["potential_secrets"] = check_for_secrets(str(path))
     
     if result["potential_secrets"]:
-        result["issues"].append(f"Found {len(result['potential_secrets'])} potential secrets")
+        secret_count = len(result["potential_secrets"])
+        result["issues"].append(f"Found {secret_count} potential secrets (showing max {MAX_TOTAL_SECRET_MATCHES})")
     
     if result["compliance_score"] < 80:
         result["issues"].append(f"Low compliance score: {result['compliance_score']:.1f}%")
@@ -389,6 +389,7 @@ def check_for_secrets(repo_path: str) -> List[str]:
         
         for fname in files:
             if total_matches >= MAX_TOTAL_SECRET_MATCHES:
+                dirs[:] = [] # Stop descending
                 break
                 
             # Quick skip binary/media files
@@ -398,6 +399,15 @@ def check_for_secrets(repo_path: str) -> List[str]:
                 
             # Check patterns
             matched = False
+            import fnmatch # Import here since we removed it from top level (or we could keep it top level, but plan said remove)
+                           # Actually, plan said remove redundant import. If we use it here, we should keep it at top.
+                           # Wait, I removed it from top level in chunk 1. So I need to import it here or put it back.
+                           # Better to put it back at top level in a separate edit or just import here.
+                           # Let's import here to be safe for now, or better yet, I will add it back to top level in a subsequent tool call if needed.
+                           # Actually, `fnmatch` is used in `_any_rglob_pruned` too (implied by "fallback").
+                           # Let's check `_any_rglob_pruned`. It imports fnmatch locally.
+                           # So importing here locally is fine.
+            import fnmatch
             for pattern in secret_patterns:
                 if fnmatch.fnmatch(fname, pattern):
                     matched = True
@@ -412,7 +422,7 @@ def check_for_secrets(repo_path: str) -> List[str]:
                         
                     # Resolve and check containment
                     # resolve(strict=False) to avoid errors if file disappears
-                    resolved = file_path.resolve()
+                    resolved = file_path.resolve(strict=False)
                     
                     if len(str(resolved)) > MAX_PATH_LENGTH:
                         continue
@@ -434,6 +444,7 @@ def check_for_secrets(repo_path: str) -> List[str]:
                 total_matches += 1
                 
         if total_matches >= MAX_TOTAL_SECRET_MATCHES:
+            dirs[:] = [] # Stop descending
             break
     
     return suspicious_files
