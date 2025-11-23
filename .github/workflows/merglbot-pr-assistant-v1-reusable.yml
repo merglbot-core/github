@@ -340,11 +340,14 @@ jobs:
               ]
             }')
 
+          # Write payload to file to avoid "Argument list too long" with curl -d
+          printf "%s" "$PAYLOAD" > /tmp/payload.json
+          
           RESP=$(curl -s https://api.anthropic.com/v1/messages \
             -H "content-type: application/json" \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: ${ANTHROPIC_API_VERSION:-2023-06-01}" \
-            -d "$PAYLOAD")
+            -d @/tmp/payload.json)
     
           printf "%s" "$RESP" > claude_api_suggest.json
           echo "$RESP" | jq -r '.content[0].text // ""' > claude_response.txt
@@ -489,11 +492,14 @@ jobs:
               ]
             }')
 
+          # Write payload to file to avoid "Argument list too long" with curl -d
+          printf "%s" "$PAYLOAD" > /tmp/payload_apply.json
+          
           RESP=$(curl -s https://api.anthropic.com/v1/messages \
             -H "content-type: application/json" \
             -H "x-api-key: $ANTHROPIC_API_KEY" \
             -H "anthropic-version: ${ANTHROPIC_API_VERSION:-2023-06-01}" \
-            -d "$PAYLOAD")
+            -d @/tmp/payload_apply.json)
           
           # Extract patch content from LLM response
           echo "$RESP" | jq -r '.content[0].text // .content // empty' > patch_raw.txt
