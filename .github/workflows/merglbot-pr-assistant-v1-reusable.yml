@@ -288,26 +288,25 @@ jobs:
           MODEL='${{ steps.cfg.outputs.model }}'
           TEMP='${{ steps.cfg.outputs.temperature }}'
     
-          # Escape for JSON
+          # Truncate inputs to avoid "Argument list too long" error
           COMMENT_SAFE=$(printf "%s" "$COMMENT" | head -c "$MAX_COMMENT_CHARS")
-          COMMENT_JSON=$(printf "%s" "$COMMENT_SAFE" | jq -R -s '.')
           DIFF_CONTENT=$(head -n "$MAX_DIFF_LINES" pr_diff.txt)
-          DIFF_JSON=$(printf "%s" "$DIFF_CONTENT" | jq -R -s '.')
 
           if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
             printf "LLM not configured; posting diff summary only." > claude_response.txt
             exit 0
           fi
     
-          # Note: The read -r -d '' heredoc always returns exit code 1, which causes failure with set -e
-          # Since the PAYLOAD_TEMPLATE is not actually used (the real payload is built with jq below),
-          # we can safely remove this heredoc
-
+          # Write inputs to temp files to avoid command line length limits
+          printf "%s" "$COMMENT_SAFE" > /tmp/comment.txt
+          printf "%s" "$DIFF_CONTENT" > /tmp/diff.txt
+          
+          # Build payload using file inputs (avoids "Argument list too long")
           PAYLOAD=$(jq -n \
             --arg model "$MODEL" \
             --arg temp "$TEMP" \
-            --arg comment "$COMMENT_JSON" \
-            --arg diff "$DIFF_JSON" \
+            --rawfile comment /tmp/comment.txt \
+            --rawfile diff /tmp/diff.txt \
             '{
               "model": $model,
               "max_tokens": 4096,
