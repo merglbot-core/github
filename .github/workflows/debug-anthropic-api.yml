@@ -1,0 +1,51 @@
+name: Debug Anthropic API
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test API with multiple versions
+        env:
+          KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          echo "Testing API..."
+          
+          for VERSION in "2023-06-01" "2024-06-01"; do
+            echo "=== API Version: $VERSION ==="
+            
+            RESP=$(curl -s https://api.anthropic.com/v1/messages \
+              -H "content-type: application/json" \
+              -H "x-api-key: $KEY" \
+              -H "anthropic-version: $VERSION" \
+              -d "{
+                \"model\": \"claude-sonnet-4-5-20250929\",
+                \"max_tokens\": 20,
+                \"messages\": [{\"role\": \"user\", \"content\": \"Say OK\"}]
+              }")
+            
+            echo "$RESP" | jq -r "."
+            
+            if echo "$RESP" | jq -e ".error" > /dev/null; then
+              echo "ERROR TYPE: $(echo "$RESP" | jq -r ".error.type")"
+              echo "ERROR MSG: $(echo "$RESP" | jq -r ".error.message")"
+            fi
+            
+            echo "---"
+          done
+          
+          echo ""
+          echo "=== Testing Haiku (baseline) ==="
+          RESP=$(curl -s https://api.anthropic.com/v1/messages \
+            -H "content-type: application/json" \
+            -H "x-api-key: $KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -d "{
+              \"model\": \"claude-3-haiku-20240307\",
+              \"max_tokens\": 20,
+              \"messages\": [{\"role\": \"user\", \"content\": \"Say OK\"}]
+            }")
+          
+          echo "$RESP" | jq -r "."
