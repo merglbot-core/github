@@ -223,13 +223,28 @@ jobs:
           
           echo "📊 OpenAI Response:"
           echo "   Length: $(echo "$OPENAI_RESP" | wc -c) chars"
+          echo "   Response keys: $(echo "$OPENAI_RESP" | jq -r 'keys | join(", ")' 2>/dev/null || echo 'N/A')"
           
           if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
             echo "   ❌ ERROR: $(echo "$OPENAI_RESP" | jq -r '.error.message')"
             echo "API_ERROR" > openai_review.txt
           else
             echo "   ✅ Success"
-            echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // "EMPTY"' > openai_review.txt
+            # GPT-5.1 may have content in different places - try multiple
+            CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
+            if [ -z "$CONTENT" ]; then
+              # Try output_text for reasoning models
+              CONTENT=$(echo "$OPENAI_RESP" | jq -r '.output_text // empty')
+            fi
+            if [ -z "$CONTENT" ]; then
+              # Try output array for responses API
+              CONTENT=$(echo "$OPENAI_RESP" | jq -r '.output[0].content[0].text // empty')
+            fi
+            if [ -z "$CONTENT" ]; then
+              CONTENT="EMPTY"
+            fi
+            echo "   Content length: ${#CONTENT} chars"
+            echo "$CONTENT" > openai_review.txt
           fi
           echo ""
           
@@ -309,6 +324,7 @@ jobs:
           
           echo "📊 Synthesis Response:"
           echo "   Length: $(echo "$SYNTHESIS_RESP" | wc -c) chars"
+          echo "   Response keys: $(echo "$SYNTHESIS_RESP" | jq -r 'keys | join(", ")' 2>/dev/null || echo 'N/A')"
           
           if echo "$SYNTHESIS_RESP" | jq -e ".error" > /dev/null 2>&1; then
             echo "   ❌ ERROR: $(echo "$SYNTHESIS_RESP" | jq -r '.error.message')"
@@ -316,7 +332,21 @@ jobs:
             cp anthropic_review.txt final_review.txt
           else
             echo "   ✅ Success"
-            echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.content // "SYNTHESIS_EMPTY"' > final_review.txt
+            # GPT-5.1 may have content in different places
+            CONTENT=$(echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.content // empty')
+            if [ -z "$CONTENT" ]; then
+              CONTENT=$(echo "$SYNTHESIS_RESP" | jq -r '.output_text // empty')
+            fi
+            if [ -z "$CONTENT" ]; then
+              CONTENT=$(echo "$SYNTHESIS_RESP" | jq -r '.output[0].content[0].text // empty')
+            fi
+            if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
+              echo "   ⚠️ No content found, using Anthropic fallback"
+              cp anthropic_review.txt final_review.txt
+            else
+              echo "   Content length: ${#CONTENT} chars"
+              echo "$CONTENT" > final_review.txt
+            fi
           fi
           
           FINAL_SIZE=$(cat final_review.txt | wc -w)
