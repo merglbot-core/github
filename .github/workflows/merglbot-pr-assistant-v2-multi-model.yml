@@ -22,7 +22,7 @@ on:
         description: "OpenAI model"
         required: false
         type: string  
-        default: "gpt-5.1-pro"
+        default: "gpt-5.1-thinking"
       temperature:
         description: "Temperature"
         required: false
@@ -55,9 +55,10 @@ on:
         description: "OpenAI model"
         required: false
         type: choice
-        default: "gpt-5.1-pro"
+        default: "gpt-5.1-thinking"
         options:
-          - gpt-5.1-pro
+          - gpt-5.1-thinking
+          - gpt-5.1
           - gpt-4-turbo
           - o1-preview
           - o1-mini
@@ -133,7 +134,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_MODEL: ${{ inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}
-          OPENAI_MODEL: ${{ inputs.openai_model || 'gpt-5.1-pro' }}
+          OPENAI_MODEL: ${{ inputs.openai_model || 'gpt-5.1-thinking' }}
           TEMPERATURE: ${{ inputs.temperature || '0.2' }}
           PROMPT: ${{ inputs.prompt }}
         run: |
@@ -198,6 +199,7 @@ jobs:
           # === OPENAI CALL ===
           echo "🟢 Calling OpenAI ($OPENAI_MODEL)..."
           echo "   Temperature: $TEMPERATURE"
+          echo "   Reasoning Effort: HIGH"
           echo ""
           
           jq -n \
@@ -210,7 +212,8 @@ jobs:
                 {role: "user", content: $prompt}
               ],
               temperature: ($temp | tonumber),
-              max_tokens: 4000
+              max_tokens: 4000,
+              reasoning_effort: "high"
             }' > /tmp/openai_payload.json
           
           OPENAI_RESP=$(curl -s https://api.openai.com/v1/chat/completions \
@@ -239,7 +242,7 @@ jobs:
       - name: Step 2 - Synthesize Final Review (OpenAI)
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ inputs.openai_model || 'gpt-5.1-pro' }}
+          OPENAI_MODEL: ${{ inputs.openai_model || 'gpt-5.1-thinking' }}
           ANTHROPIC_MODEL: ${{ inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}
         run: |
           set -euo pipefail
@@ -279,8 +282,8 @@ jobs:
             echo "---"
             echo "**🤖 Review Models:**"
             echo "- Primary: Anthropic $ANTHROPIC_MODEL"
-            echo "- Secondary: OpenAI $OPENAI_MODEL"
-            echo "- Synthesis: OpenAI $OPENAI_MODEL"
+            echo "- Secondary: OpenAI $OPENAI_MODEL (reasoning_effort: HIGH 🧠)"
+            echo "- Synthesis: OpenAI $OPENAI_MODEL (reasoning_effort: HIGH 🧠)"
           } > /tmp/synthesis_prompt.txt
           
           SYNTHESIS_PROMPT=$(cat /tmp/synthesis_prompt.txt)
@@ -295,10 +298,13 @@ jobs:
                 {role: "user", content: $prompt}
               ],
               temperature: 0.3,
-              max_tokens: 6000
+              max_tokens: 6000,
+              reasoning_effort: "high"
             }' > /tmp/synthesis_payload.json
           
-          echo "🟢 Calling OpenAI for synthesis..."
+          echo "🟢 Calling OpenAI for synthesis ($OPENAI_MODEL)..."
+          echo "   Reasoning Effort: HIGH"
+          echo ""
           
           SYNTHESIS_RESP=$(curl -s https://api.openai.com/v1/chat/completions \
             -H "Content-Type: application/json" \
@@ -365,7 +371,8 @@ jobs:
             echo ""
             echo "- **PR**: #${{ steps.parse.outputs.pr_number }}"
             echo "- **Anthropic Model**: ${{ inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}"
-            echo "- **OpenAI Model**: ${{ inputs.openai_model || 'gpt-4.1-mini' }}"
+            echo "- **OpenAI Model**: ${{ inputs.openai_model || 'gpt-5.1-thinking' }}"
+            echo "- **Reasoning Effort**: HIGH 🧠"
             echo "- **Status**: $([ -s final_review.txt ] && echo "✅ Success" || echo "❌ Failed")"
             echo ""
             echo "### Review Sizes"
