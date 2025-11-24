@@ -350,6 +350,22 @@ jobs:
             -d @/tmp/payload.json)
     
           printf "%s" "$RESP" > claude_api_suggest.json
+          
+          # DEBUG: Show API response
+          echo "=== API Response Debug ==="
+          echo "Response length: $(echo "$RESP" | wc -c)"
+          echo "First 500 chars:"
+          echo "$RESP" | head -c 500
+          echo ""
+          echo "=== Checking for errors ==="
+          if echo "$RESP" | jq -e ".error" > /dev/null 2>&1; then
+            echo "ERROR FOUND:"
+            echo "$RESP" | jq ".error"
+          else
+            echo "No error field in response"
+          fi
+          echo "======================="
+          
           echo "$RESP" | jq -r '.content[0].text // ""' > claude_response.txt
 
       - name: Post comment (suggest mode)
