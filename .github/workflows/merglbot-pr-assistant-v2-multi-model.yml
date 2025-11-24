@@ -205,13 +205,11 @@ jobs:
           jq -n \
             --arg model "$OPENAI_MODEL" \
             --arg prompt "$FULL_PROMPT" \
-            --arg temp "$TEMPERATURE" \
             '{
               model: $model,
               messages: [
                 {role: "user", content: $prompt}
               ],
-              temperature: ($temp | tonumber),
               max_completion_tokens: 4000,
               reasoning_effort: "high"
             }' > /tmp/openai_payload.json
@@ -294,7 +292,6 @@ jobs:
                 {role: "system", content: "You are an expert code reviewer that synthesizes multiple AI reviews into a single comprehensive review."},
                 {role: "user", content: $prompt}
               ],
-              temperature: 0.3,
               max_completion_tokens: 6000,
               reasoning_effort: "high"
             }' > /tmp/synthesis_payload.json
