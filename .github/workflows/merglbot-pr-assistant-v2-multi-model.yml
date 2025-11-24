@@ -220,7 +220,7 @@ jobs:
               messages: [
                 {role: "user", content: $prompt}
               ],
-              max_completion_tokens: 8000,
+              max_completion_tokens: 16000,
               reasoning_effort: "high"
             }' > /tmp/openai_payload.json
           
@@ -273,6 +273,27 @@ jobs:
             echo "   Extracted content length: ${#CONTENT} chars"
             echo "   Content (first 200 chars): $(echo "$CONTENT" | head -c 200)..."
             echo "$CONTENT" > openai_review.txt
+            
+            # Quality check
+            WORD_COUNT=$(echo "$CONTENT" | wc -w)
+            echo ""
+            echo "📊 Quality Check:"
+            echo "   Word count: $WORD_COUNT"
+            
+            if [ "$WORD_COUNT" -lt 100 ]; then
+              echo "   ⚠️ WARNING: Response too short (< 100 words)"
+            elif [ "$WORD_COUNT" -lt 300 ]; then
+              echo "   ⚠️ Low quality: Response should be > 300 words"
+            else
+              echo "   ✅ Length OK"
+            fi
+            
+            # Check for structured content
+            if echo "$CONTENT" | grep -q -i "security\|bug\|issue\|finding"; then
+              echo "   ✅ Contains findings keywords"
+            else
+              echo "   ⚠️ Missing expected keywords (security/bug/issue/finding)"
+            fi
           fi
           echo ""
           
@@ -335,7 +356,7 @@ jobs:
                 {role: "system", content: "You are an expert code reviewer that synthesizes multiple AI reviews into a single comprehensive review."},
                 {role: "user", content: $prompt}
               ],
-              max_completion_tokens: 6000,
+              max_completion_tokens: 10000,
               reasoning_effort: "high"
             }' > /tmp/synthesis_payload.json
           
@@ -393,6 +414,53 @@ jobs:
           echo "   Final review: $FINAL_SIZE words"
           echo ""
           
+          # Quality validation
+          echo "📊 Final Review Quality Check:"
+          
+          FINAL_CONTENT=$(cat final_review.txt)
+          
+          # Check word count
+          if [ "$FINAL_SIZE" -lt 500 ]; then
+            echo "   ⚠️ WARNING: Review too short (< 500 words)"
+          else
+            echo "   ✅ Length: $FINAL_SIZE words (good)"
+          fi
+          
+          # Check for required sections
+          if echo "$FINAL_CONTENT" | grep -q -i "sumář\|summary"; then
+            echo "   ✅ Has summary section"
+          else
+            echo "   ⚠️ Missing summary section"
+          fi
+          
+          if echo "$FINAL_CONTENT" | grep -q -i "findings\|zjištění"; then
+            echo "   ✅ Has findings section"
+          else
+            echo "   ⚠️ Missing findings section"
+          fi
+          
+          if echo "$FINAL_CONTENT" | grep -q -i "závěr\|conclusion\|doporučení"; then
+            echo "   ✅ Has conclusion"
+          else
+            echo "   ⚠️ Missing conclusion"
+          fi
+          
+          # Check for WARP rules references
+          if echo "$FINAL_CONTENT" | grep -q "WARP"; then
+            WARP_COUNT=$(echo "$FINAL_CONTENT" | grep -o "WARP" | wc -l)
+            echo "   ✅ WARP rules mentioned ($WARP_COUNT times)"
+          else
+            echo "   ⚠️ No WARP rules references"
+          fi
+          
+          # Check for line numbers or code references
+          if echo "$FINAL_CONTENT" | grep -q -E "line [0-9]+|řádek [0-9]+|Lines [0-9]"; then
+            echo "   ✅ Contains specific line references"
+          else
+            echo "   ⚠️ Missing line number references"
+          fi
+          
+          echo ""
           echo "========================================="
           echo "STEP 2 COMPLETE"
           echo "========================================="
