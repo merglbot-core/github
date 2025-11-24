@@ -1,0 +1,184 @@
+name: Test Anthropic API Key
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-api-key:
+    name: Verify Anthropic API Key
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+      - name: Check if API key is available
+        id: check_secret
+        run: |
+          if [ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            echo "❌ ANTHROPIC_API_KEY secret is NOT available"
+            echo "status=missing" >> "$GITHUB_OUTPUT"
+            exit 1
+          else
+            echo "✅ ANTHROPIC_API_KEY secret is available"
+            KEY_LENGTH="${#ANTHROPIC_API_KEY}"
+            echo "Key length: $KEY_LENGTH characters"
+            echo "status=present" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Test API connectivity with minimal request
+        id: test_api
+        if: steps.check_secret.outputs.status == 'present'
+        run: |
+          echo "Testing Anthropic API with minimal request..."
+          echo ""
+          
+          # Test with Haiku 3.0 (cheapest model for testing)
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" https://api.anthropic.com/v1/messages \
+            -H "content-type: application/json" \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -d '{
+              "model": "claude-3-haiku-20240307",
+              "max_tokens": 10,
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "Reply with OK"
+                }
+              ]
+            }')
+          
+          # Separate response body and status
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | grep -v "HTTP_STATUS:")
+          
+          echo "HTTP Status: $HTTP_STATUS"
+          echo ""
+          
+          # Save response for analysis
+          echo "$BODY" > /tmp/api_response.json
+          
+          # Parse response
+          ERROR_TYPE=$(echo "$BODY" | jq -r '.error.type // "none"')
+          ERROR_MSG=$(echo "$BODY" | jq -r '.error.message // "none"')
+          CONTENT=$(echo "$BODY" | jq -r '.content[0].text // "none"')
+          
+          echo "Error Type: $ERROR_TYPE"
+          echo "Error Message: $ERROR_MSG"
+          echo "Response Content: $CONTENT"
+          echo ""
+          
+          # Determine result
+          if [ "$HTTP_STATUS" = "200" ] && [ "$CONTENT" != "none" ]; then
+            echo "::notice title=API Key Status::✅ API key is VALID and working"
+            echo "✅ SUCCESS: API key is valid, API call successful"
+            echo "✅ Received response: $CONTENT"
+            echo "result=success" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [ "$ERROR_TYPE" = "authentication_error" ]; then
+            echo "::error title=API Key Invalid::❌ API key is present but INVALID or EXPIRED"
+            echo "❌ FAILED: Authentication error - API key is invalid or expired"
+            echo "Error: $ERROR_MSG"
+            echo "result=auth_error" >> "$GITHUB_OUTPUT"
+            exit 1
+          elif [ "$ERROR_TYPE" = "rate_limit_error" ]; then
+            echo "::warning title=Rate Limit::⚠️ API key is valid but rate limit exceeded"
+            echo "⚠️ Rate limit exceeded - API key is valid but quota exhausted"
+            echo "result=rate_limit" >> "$GITHUB_OUTPUT"
+            exit 1
+          elif [ "$ERROR_TYPE" = "overloaded_error" ]; then
+            echo "::warning title=API Overloaded::⚠️ Anthropic API is temporarily overloaded"
+            echo "⚠️ API overloaded - Try again later"
+            echo "result=overloaded" >> "$GITHUB_OUTPUT"
+            exit 0
+          else
+            echo "::error title=Unknown Error::❌ Unexpected error occurred"
+            echo "❌ FAILED: Unexpected error"
+            echo "Error Type: $ERROR_TYPE"
+            echo "Error Message: $ERROR_MSG"
+            echo "Full Response:"
+            cat /tmp/api_response.json
+            echo "result=unknown_error" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Test with Thinking Model
+        id: test_thinking
+        if: steps.test_api.outputs.result == 'success'
+        run: |
+          echo "Testing Sonnet 4.5 Thinking model..."
+          echo ""
+          
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" https://api.anthropic.com/v1/messages \
+            -H "content-type: application/json" \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -d '{
+              "model": "claude-sonnet-4-5-thinking-20250929",
+              "max_tokens": 50,
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "What is 2+2?"
+                }
+              ]
+            }')
+          
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | grep -v "HTTP_STATUS:")
+          
+          echo "HTTP Status: $HTTP_STATUS"
+          
+          ERROR_TYPE=$(echo "$BODY" | jq -r '.error.type // "none"')
+          CONTENT=$(echo "$BODY" | jq -r '.content[0].text // "none"')
+          
+          if [ "$HTTP_STATUS" = "200" ] && [ "$CONTENT" != "none" ]; then
+            echo "::notice title=Thinking Model::✅ Sonnet 4.5 Thinking model works!"
+            echo "✅ Thinking model response: $CONTENT"
+            exit 0
+          else
+            echo "::warning title=Thinking Model::⚠️ Thinking model returned error: $ERROR_TYPE"
+            echo "This may be expected if API key doesn't have access to latest models"
+            exit 0
+          fi
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "=== API Key Verification Summary ==="
+          echo ""
+          echo "Secret Status: ${{ steps.check_secret.outputs.status }}"
+          echo "API Test Result: ${{ steps.test_api.outputs.result }}"
+          echo ""
+          
+          if [ "${{ steps.test_api.outputs.result }}" = "success" ]; then
+            echo "✅ CONCLUSION: API key is valid and functional"
+            echo ""
+            echo "Next steps:"
+            echo "1. Merge PR #80 (thinking model as default)"
+            echo "2. Test PR Assistant workflow with real PR"
+          elif [ "${{ steps.test_api.outputs.result }}" = "auth_error" ]; then
+            echo "❌ CONCLUSION: API key is INVALID or EXPIRED"
+            echo ""
+            echo "REQUIRED ACTIONS:"
+            echo "1. Login to https://console.anthropic.com/"
+            echo "2. Go to Settings → API Keys"
+            echo "3. Check key status (active/expired)"
+            echo "4. If expired: Generate new key"
+            echo "5. Update secret in GitHub:"
+            echo "   gh secret set ANTHROPIC_API_KEY --org merglbot-core --visibility all"
+            echo "   gh secret set ANTHROPIC_API_KEY --org merglbot-public --visibility all"
+            echo "   gh secret set ANTHROPIC_API_KEY --org merglbot-denatura --visibility all"
+          else
+            echo "⚠️ CONCLUSION: Test inconclusive"
+            echo "Check logs above for details"
+          fi
+
