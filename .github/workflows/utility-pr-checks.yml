@@ -55,7 +55,7 @@ jobs:
     steps:
       - name: Fetch PR metadata
         id: pr-data
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8.0.0
         with:
           github-token: ${{ github.token }}
           result-encoding: string
@@ -82,7 +82,7 @@ jobs:
 
       - name: Check PR title (Conventional Commits)
         if: inputs.enforce-conventional-commits
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8.0.0
         with:
           github-token: ${{ github.token }}
           script: |
@@ -102,7 +102,7 @@ jobs:
           PR_TITLE: ${{ steps.pr-data.outputs.title }}
       
       - name: Check branch naming
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8.0.0
         with:
           github-token: ${{ github.token }}
           script: |
@@ -124,7 +124,7 @@ jobs:
       
       - name: Check PR size
         if: inputs.max-pr-size > 0
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8.0.0
         with:
           github-token: ${{ github.token }}
           script: |
@@ -148,7 +148,7 @@ jobs:
           PR_DELETIONS: ${{ steps.pr-data.outputs.deletions }}
       
       - name: Check for merge commits
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7.0.1
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8.0.0
         with:
           github-token: ${{ github.token }}
           script: |
