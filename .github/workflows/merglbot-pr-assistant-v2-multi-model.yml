@@ -278,12 +278,9 @@ jobs:
             echo "4. Zachová strukturu: Sumář, Findings, Závěr"
             echo "5. Odpověď v češtině, kód komentuj anglicky"
             echo ""
-            echo "**Na konci VŽDY přidej:**"
-            echo "---"
-            echo "**🤖 Review Models:**"
-            echo "- Primary: Anthropic $ANTHROPIC_MODEL"
-            echo "- Secondary: OpenAI $OPENAI_MODEL (reasoning_effort: HIGH 🧠)"
-            echo "- Synthesis: OpenAI $OPENAI_MODEL (reasoning_effort: HIGH 🧠)"
+            echo "**DŮLEŽITÉ: NIKDY nepřidávej sekci o review models na konec - to se přidá automaticky!**"
+            echo ""
+            echo "Zaměř se pouze na code review obsah."
           } > /tmp/synthesis_prompt.txt
           
           SYNTHESIS_PROMPT=$(cat /tmp/synthesis_prompt.txt)
@@ -336,6 +333,8 @@ jobs:
       - name: Post PR Comment
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+          ANTHROPIC_MODEL: ${{ inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}
+          OPENAI_MODEL: ${{ inputs.openai_model || 'gpt-5.1-thinking' }}
         run: |
           set -euo pipefail
           
@@ -354,7 +353,16 @@ jobs:
               cat final_review.txt
               echo ""
               echo "---"
-              echo "*Multi-model AI review. Please verify before applying.*"
+              echo ""
+              echo "### 🤖 Review Models"
+              echo ""
+              echo "- **Primary Analysis**: Anthropic \`$ANTHROPIC_MODEL\`"
+              echo "- **Secondary Analysis**: OpenAI \`$OPENAI_MODEL\` **(reasoning_effort: HIGH 🧠)**"
+              echo "- **Final Synthesis**: OpenAI \`$OPENAI_MODEL\` **(reasoning_effort: HIGH 🧠)**"
+              echo ""
+              echo "---"
+              echo ""
+              echo "*Multi-model AI review powered by cutting-edge reasoning. Please verify before applying.*"
             } > comment.md
           fi
           
@@ -370,6 +378,7 @@ jobs:
             echo "## 🤖 Multi-Model PR Assistant v2"
             echo ""
             echo "- **PR**: #${{ steps.parse.outputs.pr_number }}"
+            echo "- **Timestamp**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
             echo "- **Anthropic Model**: ${{ inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}"
             echo "- **OpenAI Model**: ${{ inputs.openai_model || 'gpt-5.1-thinking' }}"
             echo "- **Reasoning Effort**: HIGH 🧠"
@@ -379,5 +388,10 @@ jobs:
             echo "- Anthropic: $(cat anthropic_review.txt | wc -w) words"
             echo "- OpenAI: $(cat openai_review.txt | wc -w) words"
             echo "- Final: $(cat final_review.txt | wc -w) words"
+            echo ""
+            echo "### Model Configuration"
+            echo "- **Primary Analysis**: Anthropic (temperature: ${{ inputs.temperature || '0.2' }})"
+            echo "- **Secondary Analysis**: OpenAI + reasoning_effort: HIGH"
+            echo "- **Synthesis**: OpenAI + reasoning_effort: HIGH"
           } >> "$GITHUB_STEP_SUMMARY"
 
