@@ -212,7 +212,7 @@ jobs:
                 {role: "user", content: $prompt}
               ],
               temperature: ($temp | tonumber),
-              max_tokens: 4000,
+              max_completion_tokens: 4000,
               reasoning_effort: "high"
             }' > /tmp/openai_payload.json
           
@@ -295,7 +295,7 @@ jobs:
                 {role: "user", content: $prompt}
               ],
               temperature: 0.3,
-              max_tokens: 6000,
+              max_completion_tokens: 6000,
               reasoning_effort: "high"
             }' > /tmp/synthesis_payload.json
           
