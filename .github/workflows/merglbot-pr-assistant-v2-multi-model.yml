@@ -186,19 +186,29 @@ jobs:
           
           echo "📊 Anthropic Response:"
           echo "   Length: $(echo "$ANTHROPIC_RESP" | wc -c) chars"
+          echo ""
+          echo "📥 Anthropic Full Response (first 2000 chars):"
+          echo "$ANTHROPIC_RESP" | jq '.' | head -c 2000
+          echo "..."
+          echo ""
           
           if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
             echo "   ❌ ERROR: $(echo "$ANTHROPIC_RESP" | jq -r '.error.message')"
             echo "API_ERROR" > anthropic_review.txt
           else
             echo "   ✅ Success"
-            echo "$ANTHROPIC_RESP" | jq -r '.content[0].text // "EMPTY"' > anthropic_review.txt
+            ANTHROPIC_CONTENT=$(echo "$ANTHROPIC_RESP" | jq -r '.content[0].text // "EMPTY"')
+            echo "   Extracted content (first 500 chars): $(echo "$ANTHROPIC_CONTENT" | head -c 500)..."
+            echo "$ANTHROPIC_CONTENT" > anthropic_review.txt
           fi
           echo ""
           
           # === OPENAI CALL (GPT-5.1 reasoning model) ===
           echo "🟢 Calling OpenAI ($OPENAI_MODEL)..."
           echo "   Reasoning Effort: HIGH (GPT-5.1 uses default temperature=1)"
+          echo ""
+          echo "📝 OpenAI Prompt (first 500 chars):"
+          echo "   $(echo "$FULL_PROMPT" | head -c 500)..."
           echo ""
           
           jq -n \
@@ -213,6 +223,10 @@ jobs:
               reasoning_effort: "high"
             }' > /tmp/openai_payload.json
           
+          echo "📤 OpenAI Payload structure:"
+          jq 'del(.messages[0].content) | . + {messages: [{role: .messages[0].role, content: "<truncated>"}]}' /tmp/openai_payload.json
+          echo ""
+          
           OPENAI_RESP=$(curl -s https://api.openai.com/v1/chat/completions \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $OPENAI_API_KEY" \
@@ -223,26 +237,39 @@ jobs:
           echo "📊 OpenAI Response:"
           echo "   Length: $(echo "$OPENAI_RESP" | wc -c) chars"
           echo "   Response keys: $(echo "$OPENAI_RESP" | jq -r 'keys | join(", ")' 2>/dev/null || echo 'N/A')"
+          echo "   Message structure: $(echo "$OPENAI_RESP" | jq -r '.choices[0].message | keys | join(", ")' 2>/dev/null || echo 'N/A')"
+          echo ""
+          echo "📥 OpenAI Full Response (first 2000 chars):"
+          echo "$OPENAI_RESP" | jq '.' | head -c 2000
+          echo "..."
+          echo ""
           
           if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
             echo "   ❌ ERROR: $(echo "$OPENAI_RESP" | jq -r '.error.message')"
             echo "API_ERROR" > openai_review.txt
           else
             echo "   ✅ Success"
-            # GPT-5.1 may have content in different places - try multiple
+            
+            # Debug: Show full message object (truncated)
+            echo "   Full message (first 500 chars):"
+            echo "$OPENAI_RESP" | jq -r '.choices[0].message | tostring' | head -c 500
+            echo "..."
+            echo ""
+            
+            # Extract content - try multiple paths
             CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
-            if [ -z "$CONTENT" ]; then
-              # Try output_text for reasoning models
-              CONTENT=$(echo "$OPENAI_RESP" | jq -r '.output_text // empty')
+            
+            if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
+              # Try refusal field (for safety rejections)
+              CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.refusal // empty')
             fi
-            if [ -z "$CONTENT" ]; then
-              # Try output array for responses API
-              CONTENT=$(echo "$OPENAI_RESP" | jq -r '.output[0].content[0].text // empty')
-            fi
-            if [ -z "$CONTENT" ]; then
+            
+            if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
               CONTENT="EMPTY"
             fi
-            echo "   Content length: ${#CONTENT} chars"
+            
+            echo "   Extracted content length: ${#CONTENT} chars"
+            echo "   Content (first 200 chars): $(echo "$CONTENT" | head -c 200)..."
             echo "$CONTENT" > openai_review.txt
           fi
           echo ""
@@ -313,6 +340,12 @@ jobs:
           echo "🟢 Calling OpenAI for synthesis ($OPENAI_MODEL)..."
           echo "   Reasoning Effort: HIGH"
           echo ""
+          echo "📝 Synthesis Prompt (first 1000 chars):"
+          echo "   $(echo "$SYNTHESIS_PROMPT" | head -c 1000)..."
+          echo ""
+          echo "📤 Synthesis Payload structure:"
+          jq 'del(.messages[].content) | . + {messages: [.messages[] | {role: .role, content: "<truncated>"}]}' /tmp/synthesis_payload.json
+          echo ""
           
           SYNTHESIS_RESP=$(curl -s https://api.openai.com/v1/chat/completions \
             -H "Content-Type: application/json" \
@@ -324,6 +357,11 @@ jobs:
           echo "📊 Synthesis Response:"
           echo "   Length: $(echo "$SYNTHESIS_RESP" | wc -c) chars"
           echo "   Response keys: $(echo "$SYNTHESIS_RESP" | jq -r 'keys | join(", ")' 2>/dev/null || echo 'N/A')"
+          echo ""
+          echo "📥 Synthesis Full Response (first 2000 chars):"
+          echo "$SYNTHESIS_RESP" | jq '.' | head -c 2000
+          echo "..."
+          echo ""
           
           if echo "$SYNTHESIS_RESP" | jq -e ".error" > /dev/null 2>&1; then
             echo "   ❌ ERROR: $(echo "$SYNTHESIS_RESP" | jq -r '.error.message')"
