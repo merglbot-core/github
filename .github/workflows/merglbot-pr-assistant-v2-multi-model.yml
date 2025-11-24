@@ -220,7 +220,7 @@ jobs:
               messages: [
                 {role: "user", content: $prompt}
               ],
-              max_completion_tokens: 4000,
+              max_completion_tokens: 8000,
               reasoning_effort: "high"
             }' > /tmp/openai_payload.json
           
