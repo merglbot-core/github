@@ -117,16 +117,6 @@ on:
         required: false
         type: number
         default: 0.2
-      openai_temperature:
-        description: 'Teplota pro OpenAI (0.0-1.0)'
-        required: false
-        type: number
-        default: 0.2
-      openai_max_tokens:
-        description: 'OpenAI max_tokens'
-        required: false
-        type: number
-        default: 4096
       enable_openai:
         description: 'Povolit OpenAI review/patch'
         required: false
@@ -141,16 +131,6 @@ on:
           - suggest
           - apply-suggestions
           - apply
-      allowed_paths:
-        description: 'Povolené cesty (globs oddělené čárkou)'
-        required: false
-        type: string
-        default: '**'
-      max_changed_lines:
-        description: 'Maximální počet změněných řádků pro apply režimy'
-        required: false
-        type: number
-        default: 800
       patch_provider:
         description: 'Zdroj patchů (claude|openai)'
         required: false
