@@ -188,7 +188,8 @@ jobs:
           echo "   Length: $(echo "$ANTHROPIC_RESP" | wc -c) chars"
           echo ""
           echo "📥 Anthropic Full Response (first 2000 chars):"
-          echo "$ANTHROPIC_RESP" | jq '.' | head -c 2000
+          echo "$ANTHROPIC_RESP" | head -c 2000
+          echo ""
           echo "..."
           echo ""
           
@@ -240,7 +241,8 @@ jobs:
           echo "   Message structure: $(echo "$OPENAI_RESP" | jq -r '.choices[0].message | keys | join(", ")' 2>/dev/null || echo 'N/A')"
           echo ""
           echo "📥 OpenAI Full Response (first 2000 chars):"
-          echo "$OPENAI_RESP" | jq '.' | head -c 2000
+          echo "$OPENAI_RESP" | head -c 2000
+          echo ""
           echo "..."
           echo ""
           
@@ -359,7 +361,8 @@ jobs:
           echo "   Response keys: $(echo "$SYNTHESIS_RESP" | jq -r 'keys | join(", ")' 2>/dev/null || echo 'N/A')"
           echo ""
           echo "📥 Synthesis Full Response (first 2000 chars):"
-          echo "$SYNTHESIS_RESP" | jq '.' | head -c 2000
+          echo "$SYNTHESIS_RESP" | head -c 2000
+          echo ""
           echo "..."
           echo ""
           
