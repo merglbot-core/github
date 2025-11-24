@@ -146,17 +146,15 @@ jobs:
           
           DIFF_CONTENT=$(cat pr_diff.txt | head -c 50000)
           
-          # Build full prompt
-          cat > /tmp/full_prompt.txt << 'PROMPTEOF'
-$PROMPT
-
-PR Diff:
-```
-$DIFF_CONTENT
-```
-PROMPTEOF
+          # Build full prompt in file
+          echo "$PROMPT" > /tmp/full_prompt.txt
+          echo "" >> /tmp/full_prompt.txt
+          echo "PR Diff:" >> /tmp/full_prompt.txt
+          echo '```' >> /tmp/full_prompt.txt
+          echo "$DIFF_CONTENT" >> /tmp/full_prompt.txt
+          echo '```' >> /tmp/full_prompt.txt
           
-          export FULL_PROMPT=$(cat /tmp/full_prompt.txt | envsubst)
+          FULL_PROMPT=$(cat /tmp/full_prompt.txt)
           
           # === ANTHROPIC CALL ===
           echo "🔵 Calling Anthropic ($ANTHROPIC_MODEL)..."
@@ -259,33 +257,33 @@ PROMPTEOF
           echo "   OpenAI: $(echo "$OPENAI_REVIEW" | wc -w) words"
           echo ""
           
-          # Build synthesis prompt
-          cat > /tmp/synthesis_prompt.txt << 'SYNTHEOF'
-Máš k dispozici dva AI-generované code review stejného PR:
-
-**Review od Anthropic ($ANTHROPIC_MODEL):**
-$ANTHROPIC_REVIEW
-
-**Review od OpenAI ($OPENAI_MODEL):**
-$OPENAI_REVIEW
-
-**Tvůj úkol:**
-Vytvoř finální, komplexní code review, který:
-1. Zkombinuje nejlepší insights z obou reviews
-2. Odstraní duplicity
-3. Prioritizuje findings podle severity
-4. Zachová strukturu: Sumář, Findings, Závěr
-5. Odpověď v češtině, kód komentuj anglicky
-
-**Na konci VŽDY přidej:**
----
-**🤖 Review Models:**
-- Primary: Anthropic $ANTHROPIC_MODEL
-- Secondary: OpenAI $OPENAI_MODEL  
-- Synthesis: OpenAI $OPENAI_MODEL
-SYNTHEOF
+          # Build synthesis prompt in file
+          {
+            echo "Máš k dispozici dva AI-generované code review stejného PR:"
+            echo ""
+            echo "**Review od Anthropic ($ANTHROPIC_MODEL):**"
+            echo "$ANTHROPIC_REVIEW"
+            echo ""
+            echo "**Review od OpenAI ($OPENAI_MODEL):**"
+            echo "$OPENAI_REVIEW"
+            echo ""
+            echo "**Tvůj úkol:**"
+            echo "Vytvoř finální, komplexní code review, který:"
+            echo "1. Zkombinuje nejlepší insights z obou reviews"
+            echo "2. Odstraní duplicity"
+            echo "3. Prioritizuje findings podle severity"
+            echo "4. Zachová strukturu: Sumář, Findings, Závěr"
+            echo "5. Odpověď v češtině, kód komentuj anglicky"
+            echo ""
+            echo "**Na konci VŽDY přidej:**"
+            echo "---"
+            echo "**🤖 Review Models:**"
+            echo "- Primary: Anthropic $ANTHROPIC_MODEL"
+            echo "- Secondary: OpenAI $OPENAI_MODEL"
+            echo "- Synthesis: OpenAI $OPENAI_MODEL"
+          } > /tmp/synthesis_prompt.txt
           
-          export SYNTHESIS_PROMPT=$(cat /tmp/synthesis_prompt.txt | envsubst)
+          SYNTHESIS_PROMPT=$(cat /tmp/synthesis_prompt.txt)
           
           jq -n \
             --arg model "$OPENAI_MODEL" \
@@ -338,11 +336,11 @@ SYNTHEOF
           PR_NUM="${{ steps.parse.outputs.pr_number }}"
           
           if [ ! -s final_review.txt ] || grep -q "EMPTY\|ERROR" final_review.txt; then
-            cat > comment.md << 'COMMENTEOF'
-## 🤖 Merglbot PR Assistant (Multi-Model)
-
-No review generated or API error occurred.
-COMMENTEOF
+            {
+              echo "## 🤖 Merglbot PR Assistant (Multi-Model)"
+              echo ""
+              echo "No review generated or API error occurred."
+            } > comment.md
           else
             {
               echo "## 🤖 Merglbot PR Assistant (Multi-Model)"
