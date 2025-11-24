@@ -77,3 +77,7 @@ docker-compose.override.yml
 .cache/
 .eslintcache
 __pycache__/
+
+# Agent temporary files (WARP: repo hygiene)
+tmp/
+*.tmp
