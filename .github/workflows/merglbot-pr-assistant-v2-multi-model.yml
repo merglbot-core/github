@@ -196,10 +196,9 @@ jobs:
           fi
           echo ""
           
-          # === OPENAI CALL ===
+          # === OPENAI CALL (GPT-5.1 reasoning model) ===
           echo "🟢 Calling OpenAI ($OPENAI_MODEL)..."
-          echo "   Temperature: $TEMPERATURE"
-          echo "   Reasoning Effort: HIGH"
+          echo "   Reasoning Effort: HIGH (GPT-5.1 uses default temperature=1)"
           echo ""
           
           jq -n \
