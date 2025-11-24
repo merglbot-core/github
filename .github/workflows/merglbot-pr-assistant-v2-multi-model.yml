@@ -1,0 +1,378 @@
+name: Merglbot PR Assistant v2 (Multi-Model)
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: "PR number"
+        required: true
+        type: string
+      prompt:
+        description: "Custom instruction"
+        required: false
+        type: string
+        default: |
+          Proveď profesionální code review tohoto PR. Zaměř se na: (1) bezpečnost (secrets, OIDC/WIF), (2) architekturní konzistenci s WARP rules, (3) potenciální bugy a edge cases, (4) kvalitu kódu a idiomatičnost. Odpověz česky, kód komentuj anglicky. Výstup: krátký sumář (3-5 řádků), seznam konkrétních findings (každý s vysvětlením a doporučením), závěr (schválit/changes needed).
+      anthropic_model:
+        description: "Anthropic model"
+        required: false
+        type: string
+        default: "claude-sonnet-4-5-20250929"
+      openai_model:
+        description: "OpenAI model"
+        required: false
+        type: string  
+        default: "gpt-4.1-mini"
+      temperature:
+        description: "Temperature"
+        required: false
+        type: string
+        default: "0.2"
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+      OPENAI_API_KEY:
+        required: true
+      GH_TOKEN:
+        required: false
+
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number"
+        required: true
+        type: string
+      anthropic_model:
+        description: "Anthropic model"
+        required: false
+        type: choice
+        default: "claude-sonnet-4-5-20250929"
+        options:
+          - claude-sonnet-4-5-20250929
+          - claude-opus-4-1-20250805
+          - claude-3-5-haiku-20241022
+      openai_model:
+        description: "OpenAI model"
+        required: false
+        type: choice
+        default: "gpt-4.1-mini"
+        options:
+          - gpt-4.1-mini
+          - gpt-4-turbo
+          - gpt-4
+          - o1-preview
+          - o1-mini
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: pr-assistant-v2-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  multi-model-review:
+    name: Multi-Model PR Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
+    env:
+      ANTHROPIC_API_VERSION: "2023-06-01"
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Parse PR Number
+        id: parse
+        run: |
+          set -euo pipefail
+          
+          echo "=== Parsing PR Number ==="
+          PR_INPUT="${{ inputs.pr_number }}"
+          
+          if [[ "$PR_INPUT" =~ ^[0-9]+$ ]]; then
+            PR_NUM="$PR_INPUT"
+          elif [[ "$PR_INPUT" =~ /pull/([0-9]+) ]]; then
+            PR_NUM="${BASH_REMATCH[1]}"
+          else
+            echo "Invalid PR number: $PR_INPUT"
+            exit 1
+          fi
+          
+          echo "pr_number=$PR_NUM" >> "$GITHUB_OUTPUT"
+          echo "✅ PR Number: $PR_NUM"
+      
+      - name: Get PR Diff
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          
+          PR_NUM="${{ steps.parse.outputs.pr_number }}"
+          
+          echo "=== Fetching PR Diff ==="
+          gh pr diff "$PR_NUM" > pr_diff.txt
+          
+          DIFF_SIZE=$(wc -l < pr_diff.txt)
+          echo "Diff size: $DIFF_SIZE lines"
+          
+          if [ "$DIFF_SIZE" -eq 0 ]; then
+            echo "⚠️ Empty diff"
+            echo "# No changes" > pr_diff.txt
+          fi
+          
+          echo "✅ Diff fetched"
+      
+      - name: Step 1 - Parallel API Calls (Anthropic + OpenAI)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_MODEL: ${{ inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}
+          OPENAI_MODEL: ${{ inputs.openai_model || 'gpt-4.1-mini' }}
+          TEMPERATURE: ${{ inputs.temperature || '0.2' }}
+          PROMPT: ${{ inputs.prompt }}
+        run: |
+          set -euo pipefail
+          
+          echo "========================================="
+          echo "STEP 1: PARALLEL API CALLS"
+          echo "========================================="
+          echo ""
+          
+          DIFF_CONTENT=$(cat pr_diff.txt | head -c 50000)
+          
+          # Build full prompt
+          cat > /tmp/full_prompt.txt << 'PROMPTEOF'
+$PROMPT
+
+PR Diff:
+```
+$DIFF_CONTENT
+```
+PROMPTEOF
+          
+          export FULL_PROMPT=$(cat /tmp/full_prompt.txt | envsubst)
+          
+          # === ANTHROPIC CALL ===
+          echo "🔵 Calling Anthropic ($ANTHROPIC_MODEL)..."
+          echo "   API Version: $ANTHROPIC_API_VERSION"
+          echo "   Temperature: $TEMPERATURE"
+          echo ""
+          
+          jq -n \
+            --arg model "$ANTHROPIC_MODEL" \
+            --arg prompt "$FULL_PROMPT" \
+            --arg temp "$TEMPERATURE" \
+            '{
+              model: $model,
+              max_tokens: 4000,
+              temperature: ($temp | tonumber),
+              messages: [
+                {role: "user", content: $prompt}
+              ]
+            }' > /tmp/anthropic_payload.json
+          
+          ANTHROPIC_RESP=$(curl -s https://api.anthropic.com/v1/messages \
+            -H "content-type: application/json" \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: $ANTHROPIC_API_VERSION" \
+            -d @/tmp/anthropic_payload.json)
+          
+          echo "$ANTHROPIC_RESP" > anthropic_response.json
+          
+          echo "📊 Anthropic Response:"
+          echo "   Length: $(echo "$ANTHROPIC_RESP" | wc -c) chars"
+          
+          if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
+            echo "   ❌ ERROR: $(echo "$ANTHROPIC_RESP" | jq -r '.error.message')"
+            echo "API_ERROR" > anthropic_review.txt
+          else
+            echo "   ✅ Success"
+            echo "$ANTHROPIC_RESP" | jq -r '.content[0].text // "EMPTY"' > anthropic_review.txt
+          fi
+          echo ""
+          
+          # === OPENAI CALL ===
+          echo "🟢 Calling OpenAI ($OPENAI_MODEL)..."
+          echo "   Temperature: $TEMPERATURE"
+          echo ""
+          
+          jq -n \
+            --arg model "$OPENAI_MODEL" \
+            --arg prompt "$FULL_PROMPT" \
+            --arg temp "$TEMPERATURE" \
+            '{
+              model: $model,
+              messages: [
+                {role: "user", content: $prompt}
+              ],
+              temperature: ($temp | tonumber),
+              max_tokens: 4000
+            }' > /tmp/openai_payload.json
+          
+          OPENAI_RESP=$(curl -s https://api.openai.com/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -d @/tmp/openai_payload.json)
+          
+          echo "$OPENAI_RESP" > openai_response.json
+          
+          echo "📊 OpenAI Response:"
+          echo "   Length: $(echo "$OPENAI_RESP" | wc -c) chars"
+          
+          if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
+            echo "   ❌ ERROR: $(echo "$OPENAI_RESP" | jq -r '.error.message')"
+            echo "API_ERROR" > openai_review.txt
+          else
+            echo "   ✅ Success"
+            echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // "EMPTY"' > openai_review.txt
+          fi
+          echo ""
+          
+          echo "========================================="
+          echo "STEP 1 COMPLETE"
+          echo "========================================="
+      
+      - name: Step 2 - Synthesize Final Review (OpenAI)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ inputs.openai_model || 'gpt-4.1-mini' }}
+          ANTHROPIC_MODEL: ${{ inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}
+        run: |
+          set -euo pipefail
+          
+          echo "========================================="
+          echo "STEP 2: FINAL SYNTHESIS"
+          echo "========================================="
+          echo ""
+          
+          ANTHROPIC_REVIEW=$(cat anthropic_review.txt)
+          OPENAI_REVIEW=$(cat openai_review.txt)
+          
+          echo "📋 Input Reviews:"
+          echo "   Anthropic: $(echo "$ANTHROPIC_REVIEW" | wc -w) words"
+          echo "   OpenAI: $(echo "$OPENAI_REVIEW" | wc -w) words"
+          echo ""
+          
+          # Build synthesis prompt
+          cat > /tmp/synthesis_prompt.txt << 'SYNTHEOF'
+Máš k dispozici dva AI-generované code review stejného PR:
+
+**Review od Anthropic ($ANTHROPIC_MODEL):**
+$ANTHROPIC_REVIEW
+
+**Review od OpenAI ($OPENAI_MODEL):**
+$OPENAI_REVIEW
+
+**Tvůj úkol:**
+Vytvoř finální, komplexní code review, který:
+1. Zkombinuje nejlepší insights z obou reviews
+2. Odstraní duplicity
+3. Prioritizuje findings podle severity
+4. Zachová strukturu: Sumář, Findings, Závěr
+5. Odpověď v češtině, kód komentuj anglicky
+
+**Na konci VŽDY přidej:**
+---
+**🤖 Review Models:**
+- Primary: Anthropic $ANTHROPIC_MODEL
+- Secondary: OpenAI $OPENAI_MODEL  
+- Synthesis: OpenAI $OPENAI_MODEL
+SYNTHEOF
+          
+          export SYNTHESIS_PROMPT=$(cat /tmp/synthesis_prompt.txt | envsubst)
+          
+          jq -n \
+            --arg model "$OPENAI_MODEL" \
+            --arg prompt "$SYNTHESIS_PROMPT" \
+            '{
+              model: $model,
+              messages: [
+                {role: "system", content: "You are an expert code reviewer that synthesizes multiple AI reviews into a single comprehensive review."},
+                {role: "user", content: $prompt}
+              ],
+              temperature: 0.3,
+              max_tokens: 6000
+            }' > /tmp/synthesis_payload.json
+          
+          echo "🟢 Calling OpenAI for synthesis..."
+          
+          SYNTHESIS_RESP=$(curl -s https://api.openai.com/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -d @/tmp/synthesis_payload.json)
+          
+          echo "$SYNTHESIS_RESP" > synthesis_response.json
+          
+          echo "📊 Synthesis Response:"
+          echo "   Length: $(echo "$SYNTHESIS_RESP" | wc -c) chars"
+          
+          if echo "$SYNTHESIS_RESP" | jq -e ".error" > /dev/null 2>&1; then
+            echo "   ❌ ERROR: $(echo "$SYNTHESIS_RESP" | jq -r '.error.message')"
+            echo "Fallback: Using Anthropic review only"
+            cp anthropic_review.txt final_review.txt
+          else
+            echo "   ✅ Success"
+            echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.content // "SYNTHESIS_EMPTY"' > final_review.txt
+          fi
+          
+          FINAL_SIZE=$(cat final_review.txt | wc -w)
+          echo "   Final review: $FINAL_SIZE words"
+          echo ""
+          
+          echo "========================================="
+          echo "STEP 2 COMPLETE"
+          echo "========================================="
+      
+      - name: Post PR Comment
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          
+          PR_NUM="${{ steps.parse.outputs.pr_number }}"
+          
+          if [ ! -s final_review.txt ] || grep -q "EMPTY\|ERROR" final_review.txt; then
+            cat > comment.md << 'COMMENTEOF'
+## 🤖 Merglbot PR Assistant (Multi-Model)
+
+No review generated or API error occurred.
+COMMENTEOF
+          else
+            {
+              echo "## 🤖 Merglbot PR Assistant (Multi-Model)"
+              echo ""
+              cat final_review.txt
+              echo ""
+              echo "---"
+              echo "*Multi-model AI review. Please verify before applying.*"
+            } > comment.md
+          fi
+          
+          gh pr comment "$PR_NUM" --body-file comment.md
+          
+          echo "✅ Comment posted to PR #$PR_NUM"
+      
+      - name: Workflow Summary
+        run: |
+          set -euo pipefail
+          
+          {
+            echo "## 🤖 Multi-Model PR Assistant v2"
+            echo ""
+            echo "- **PR**: #${{ steps.parse.outputs.pr_number }}"
+            echo "- **Anthropic Model**: ${{ inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}"
+            echo "- **OpenAI Model**: ${{ inputs.openai_model || 'gpt-4.1-mini' }}"
+            echo "- **Status**: $([ -s final_review.txt ] && echo "✅ Success" || echo "❌ Failed")"
+            echo ""
+            echo "### Review Sizes"
+            echo "- Anthropic: $(cat anthropic_review.txt | wc -w) words"
+            echo "- OpenAI: $(cat openai_review.txt | wc -w) words"
+            echo "- Final: $(cat final_review.txt | wc -w) words"
+          } >> "$GITHUB_STEP_SUMMARY"
+
