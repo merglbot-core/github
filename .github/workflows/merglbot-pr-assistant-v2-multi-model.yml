@@ -22,7 +22,7 @@ on:
         description: "OpenAI model"
         required: false
         type: string  
-        default: "gpt-5.1-codex"
+        default: "gpt-5.1-pro"
       temperature:
         description: "Temperature"
         required: false
@@ -55,12 +55,12 @@ on:
         description: "OpenAI model"
         required: false
         type: choice
-        default: "gpt-5.1-codex"
+        default: "gpt-5.1-pro"
         options:
-          - gpt-5.1-codex
-          - gpt-5.1-codex-mini
+          - gpt-5.1-pro
           - gpt-4-turbo
           - o1-preview
+          - o1-mini
           - gpt-4
 
 permissions:
@@ -133,7 +133,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_MODEL: ${{ inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}
-          OPENAI_MODEL: ${{ inputs.openai_model || 'gpt-5.1-codex' }}
+          OPENAI_MODEL: ${{ inputs.openai_model || 'gpt-5.1-pro' }}
           TEMPERATURE: ${{ inputs.temperature || '0.2' }}
           PROMPT: ${{ inputs.prompt }}
         run: |
@@ -239,7 +239,7 @@ jobs:
       - name: Step 2 - Synthesize Final Review (OpenAI)
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ inputs.openai_model || 'gpt-5.1-codex' }}
+          OPENAI_MODEL: ${{ inputs.openai_model || 'gpt-5.1-pro' }}
           ANTHROPIC_MODEL: ${{ inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}
         run: |
           set -euo pipefail
