@@ -1,21 +1,59 @@
-# Claude PR Assistant v2 (Reusable Workflows)
+# ⚠️ DEPRECATED: Claude PR Assistant v2
+
+> **This document is deprecated.** PR Assistant v3 is now the standard.
+> See [WARP_PR_ASSISTANT_V3.md](https://github.com/merglbot-public/docs/blob/main/WARP_PR_ASSISTANT_V3.md)
+
+---
+
+## Quick Start (v3)
+
+On any PR in any Merglbot repository, comment:
+
+```
+@merglbot review
+```
+
+This triggers a multi-model review using **Claude Sonnet 4.5 + GPT-5.1 (HIGH reasoning)**.
+
+For lighter review: `@merglbot review --light`
+
+---
+
+## Current Workflow Location
+
+- **Source**: `.github/workflows/merglbot-pr-assistant-v3-on-demand.yml`
+- **Tag**: `merglbot-core/github@v3.1.0`
+- **Coverage**: 100% (15 repos across 6 organizations)
+
+---
+
+## Deprecated Content Below
+
+> The following content is kept for historical reference only.
+
+---
+
+# Claude PR Assistant v2 (Reusable Workflows) - DEPRECATED
 
 ## Overview
 
 This repository provides centralized, reusable GitHub Actions workflows for AI-assisted PR reviews and text length validation across the Merglbot enterprise.
 
-**Workflows:**
-- `claude-pr-assistant-preview.yml` – Preview/canary (dry-run, label-gated, idempotent comment)
-- `claude-pr-assistant.yml` – Stable (suggest/apply-suggestions modes)
-- `length-check.yml` – PR text length validation (WARP limits)
+**Workflows (DEPRECATED):**
+- `claude-pr-assistant-preview.yml` – REMOVED
+- `claude-pr-assistant.yml` – REMOVED  
+- `length-check.yml` – Still available
 
 ---
 
-## Usage: Minimal wrapper (opt-in, label-gated)
+## Usage (DEPRECATED)
 
-Add this file to your repository: `.github/workflows/ai-pr.yml`
+> **Do not use this pattern.** Use `@merglbot review` comment instead.
+
+~~Add this file to your repository: `.github/workflows/ai-pr.yml`~~
 
 ```yaml
+# DEPRECATED - DO NOT USE
 name: AI PR Assistant (v2 preview)
 
 on:
