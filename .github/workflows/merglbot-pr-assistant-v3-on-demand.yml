@@ -235,12 +235,12 @@ jobs:
             REVIEW_DEPTH="LIGHT"
             OUTPUT_INSTRUCTIONS="Output a CONCISE review (max 500 words). Focus only on critical and high priority issues."
             MAX_TOKENS_ANTHROPIC=4000
-            MAX_TOKENS_OPENAI=8000
+            MAX_TOKENS_OPENAI=16000
           else
             REVIEW_DEPTH="FULL"
             OUTPUT_INSTRUCTIONS="Output a COMPREHENSIVE review with detailed analysis, code examples, WARP rule references, and actionable checkboxes."
             MAX_TOKENS_ANTHROPIC=8000
-            MAX_TOKENS_OPENAI=16000
+            MAX_TOKENS_OPENAI=32000
           fi
           
           echo "Review depth: $REVIEW_DEPTH"
@@ -439,9 +439,26 @@ jobs:
             echo "API_ERROR" > openai_review.txt
           else
             echo "Success"
+            # Debug: show usage stats
+            TOTAL_TOKENS=$(echo "$OPENAI_RESP" | jq -r '.usage.total_tokens // 0')
+            PROMPT_TOKENS=$(echo "$OPENAI_RESP" | jq -r '.usage.prompt_tokens // 0')
+            COMPLETION_TOKENS=$(echo "$OPENAI_RESP" | jq -r '.usage.completion_tokens // 0')
+            REASONING_TOKENS=$(echo "$OPENAI_RESP" | jq -r '.usage.completion_tokens_details.reasoning_tokens // 0')
+            OUTPUT_TOKENS=$((COMPLETION_TOKENS - REASONING_TOKENS))
+            echo "  Token usage:"
+            echo "    Prompt: $PROMPT_TOKENS"
+            echo "    Completion: $COMPLETION_TOKENS (reasoning: $REASONING_TOKENS, output: $OUTPUT_TOKENS)"
+            echo "    Total: $TOTAL_TOKENS"
+            
             CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
             if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
-              CONTENT="EMPTY"
+              echo "  WARNING: No content in response, checking for refusal..."
+              CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.refusal // empty')
+              if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
+                echo "  No refusal either. Response structure:"
+                echo "$OPENAI_RESP" | jq '.choices[0].message | keys' 2>/dev/null || true
+                CONTENT="EMPTY"
+              fi
             fi
             echo "Words: $(echo "$CONTENT" | wc -w)"
             echo "$CONTENT" > openai_review.txt
@@ -475,9 +492,9 @@ jobs:
           echo "  OpenAI: $(echo "$OPENAI_REVIEW" | wc -w) words"
           
           if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
-            MAX_SYNTH_TOKENS=6000
+            MAX_SYNTH_TOKENS=12000
           else
-            MAX_SYNTH_TOKENS=14000
+            MAX_SYNTH_TOKENS=24000
           fi
           
           # Build synthesis prompt
