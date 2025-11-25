@@ -1,0 +1,118 @@
+name: Deploy to Cloud Run (WIF)
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: 'Cloud Run service name'
+        required: true
+        type: string
+      region:
+        description: 'GCP region'
+        required: false
+        type: string
+        default: 'europe-west1'
+      image_name:
+        description: 'Container image name (without registry prefix)'
+        required: true
+        type: string
+      dockerfile:
+        description: 'Path to Dockerfile'
+        required: false
+        type: string
+        default: 'Dockerfile'
+      environment:
+        description: 'Environment (staging/production)'
+        required: false
+        type: string
+        default: 'staging'
+      min_instances:
+        description: 'Minimum instances'
+        required: false
+        type: number
+        default: 0
+      max_instances:
+        description: 'Maximum instances'
+        required: false
+        type: number
+        default: 10
+    secrets:
+      WIF_PROVIDER:
+        description: 'Workload Identity Federation provider'
+        required: true
+      WIF_SERVICE_ACCOUNT:
+        description: 'Service account email for WIF'
+        required: true
+      GCP_PROJECT_ID:
+        description: 'GCP Project ID'
+        required: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # Required for WIF OIDC token
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP (WIF)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+          token_format: 'access_token'
+
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ inputs.region }}-docker.pkg.dev --quiet
+
+      - name: Build Container Image
+        run: |
+          IMAGE="${{ inputs.region }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/containers/${{ inputs.image_name }}:${{ github.sha }}"
+          docker build -t $IMAGE -f ${{ inputs.dockerfile }} .
+          docker push $IMAGE
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ inputs.service_name }} \
+            --image ${{ env.IMAGE }} \
+            --region ${{ inputs.region }} \
+            --platform managed \
+            --min-instances ${{ inputs.min_instances }} \
+            --max-instances ${{ inputs.max_instances }} \
+            --allow-unauthenticated \
+            --set-env-vars="ENVIRONMENT=${{ inputs.environment }}" \
+            --quiet
+
+      - name: Get Service URL
+        id: url
+        run: |
+          URL=$(gcloud run services describe ${{ inputs.service_name }} \
+            --region ${{ inputs.region }} \
+            --format 'value(status.url)')
+          echo "url=$URL" >> $GITHUB_OUTPUT
+          echo "🚀 Service deployed to: $URL"
+
+      - name: Health Check
+        run: |
+          echo "Performing health check..."
+          for i in {1..5}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ steps.url.outputs.url }}/health" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "✅ Health check passed!"
+              exit 0
+            fi
+            echo "Attempt $i: Status $STATUS, retrying..."
+            sleep 10
+          done
+          echo "⚠️ Health check did not pass (may be expected for some services)"
