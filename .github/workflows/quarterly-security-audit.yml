@@ -28,6 +28,7 @@ on:
 permissions:
   contents: read
   id-token: write  # Required for OIDC/WIF authentication
+  issues: write    # Required for creating tracking issues
   
 concurrency:
   group: security-audit-${{ github.ref }}
