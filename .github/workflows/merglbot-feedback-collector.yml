@@ -1,0 +1,223 @@
+name: Merglbot Feedback Collector
+
+# Collect feedback (reactions) on Merglbot PR review comments
+# Runs weekly to aggregate feedback for prompt improvement
+
+on:
+  schedule:
+    # Run every Monday at 9:00 UTC
+    - cron: '0 9 * * 1'
+  
+  workflow_dispatch:
+    inputs:
+      days_back:
+        description: "Days to look back for feedback"
+        required: false
+        default: "7"
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: read
+  issues: read
+
+jobs:
+  collect-feedback:
+    name: Collect Review Feedback
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Collect Feedback from PRs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DAYS_BACK: ${{ github.event.inputs.days_back || '7' }}
+        run: |
+          set -euo pipefail
+          
+          echo "========================================="
+          echo "📊 MERGLBOT FEEDBACK COLLECTOR"
+          echo "========================================="
+          echo ""
+          echo "Repository: ${{ github.repository }}"
+          echo "Days back: $DAYS_BACK"
+          echo ""
+          
+          # Calculate date range
+          SINCE_DATE=$(date -u -d "$DAYS_BACK days ago" '+%Y-%m-%dT00:00:00Z' 2>/dev/null || date -u -v-${DAYS_BACK}d '+%Y-%m-%dT00:00:00Z')
+          echo "Collecting feedback since: $SINCE_DATE"
+          echo ""
+          
+          # Initialize counters
+          TOTAL_REVIEWS=0
+          THUMBS_UP=0
+          THUMBS_DOWN=0
+          NO_FEEDBACK=0
+          
+          # Create feedback directory
+          mkdir -p feedback
+          
+          # Get all closed and open PRs
+          echo "🔍 Searching for Merglbot review comments..."
+          
+          # Search for issue comments containing Merglbot review signature
+          gh api "repos/${{ github.repository }}/issues/comments" \
+            --paginate \
+            -q '.[] | select(.body | contains("Merglbot PR Assistant")) | {id: .id, issue_url: .issue_url, created_at: .created_at, user: .user.login}' \
+            > /tmp/merglbot_comments.json 2>/dev/null || echo "[]" > /tmp/merglbot_comments.json
+          
+          COMMENT_COUNT=$(cat /tmp/merglbot_comments.json | jq -s 'length')
+          echo "Found $COMMENT_COUNT Merglbot review comments"
+          echo ""
+          
+          # Process each comment
+          echo "📈 Collecting reactions..."
+          
+          cat /tmp/merglbot_comments.json | jq -c '.' | while read -r comment; do
+            COMMENT_ID=$(echo "$comment" | jq -r '.id')
+            CREATED_AT=$(echo "$comment" | jq -r '.created_at')
+            
+            # Get reactions for this comment
+            REACTIONS=$(gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID/reactions" 2>/dev/null || echo "[]")
+            
+            PLUS_ONE=$(echo "$REACTIONS" | jq '[.[] | select(.content == "+1")] | length')
+            MINUS_ONE=$(echo "$REACTIONS" | jq '[.[] | select(.content == "-1")] | length')
+            
+            echo "  Comment $COMMENT_ID: 👍 $PLUS_ONE / 👎 $MINUS_ONE"
+            
+            # Save to feedback file
+            echo "{\"comment_id\": $COMMENT_ID, \"created_at\": \"$CREATED_AT\", \"thumbs_up\": $PLUS_ONE, \"thumbs_down\": $MINUS_ONE}" >> feedback/reactions.jsonl
+          done
+          
+          # Aggregate feedback
+          echo ""
+          echo "📊 Aggregating feedback..."
+          
+          if [ -f feedback/reactions.jsonl ]; then
+            TOTAL_REVIEWS=$(wc -l < feedback/reactions.jsonl)
+            THUMBS_UP=$(cat feedback/reactions.jsonl | jq -s '[.[].thumbs_up] | add // 0')
+            THUMBS_DOWN=$(cat feedback/reactions.jsonl | jq -s '[.[].thumbs_down] | add // 0')
+            NO_FEEDBACK=$(cat feedback/reactions.jsonl | jq -s '[.[] | select(.thumbs_up == 0 and .thumbs_down == 0)] | length')
+          fi
+          
+          # Calculate satisfaction score
+          TOTAL_FEEDBACK=$((THUMBS_UP + THUMBS_DOWN))
+          if [ "$TOTAL_FEEDBACK" -gt 0 ]; then
+            SATISFACTION_SCORE=$(echo "scale=1; $THUMBS_UP * 100 / $TOTAL_FEEDBACK" | bc)
+          else
+            SATISFACTION_SCORE="N/A"
+          fi
+          
+          echo ""
+          echo "========================================="
+          echo "📊 FEEDBACK SUMMARY"
+          echo "========================================="
+          echo ""
+          echo "Total Reviews: $TOTAL_REVIEWS"
+          echo "👍 Helpful: $THUMBS_UP"
+          echo "👎 Not Helpful: $THUMBS_DOWN"
+          echo "No Feedback: $NO_FEEDBACK"
+          echo "Satisfaction Score: $SATISFACTION_SCORE%"
+          echo ""
+          
+          # Create summary JSON
+          TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          cat > feedback/summary.json << SUMMARY_EOF
+          {
+            "timestamp": "$TIMESTAMP",
+            "repository": "${{ github.repository }}",
+            "period_days": $DAYS_BACK,
+            "since": "$SINCE_DATE",
+            "metrics": {
+              "total_reviews": $TOTAL_REVIEWS,
+              "thumbs_up": $THUMBS_UP,
+              "thumbs_down": $THUMBS_DOWN,
+              "no_feedback": $NO_FEEDBACK,
+              "satisfaction_percent": "$SATISFACTION_SCORE"
+            }
+          }
+          SUMMARY_EOF
+          
+          echo "Summary saved to feedback/summary.json"
+          cat feedback/summary.json
+      
+      - name: Generate Feedback Report
+        run: |
+          # Create markdown report
+          cat > feedback/FEEDBACK_REPORT.md << 'REPORT_EOF'
+          # 📊 Merglbot PR Assistant - Feedback Report
+          
+          Generated: $(date -u '+%Y-%m-%d %H:%M UTC')
+          
+          ## Summary
+          
+          | Metric | Value |
+          |--------|-------|
+          REPORT_EOF
+          
+          if [ -f feedback/summary.json ]; then
+            TOTAL=$(jq -r '.metrics.total_reviews' feedback/summary.json)
+            UP=$(jq -r '.metrics.thumbs_up' feedback/summary.json)
+            DOWN=$(jq -r '.metrics.thumbs_down' feedback/summary.json)
+            SCORE=$(jq -r '.metrics.satisfaction_percent' feedback/summary.json)
+            
+            echo "| Total Reviews | $TOTAL |" >> feedback/FEEDBACK_REPORT.md
+            echo "| 👍 Helpful | $UP |" >> feedback/FEEDBACK_REPORT.md
+            echo "| 👎 Not Helpful | $DOWN |" >> feedback/FEEDBACK_REPORT.md
+            echo "| Satisfaction | ${SCORE}% |" >> feedback/FEEDBACK_REPORT.md
+          fi
+          
+          cat >> feedback/FEEDBACK_REPORT.md << 'REPORT_EOF'
+          
+          ## Insights
+          
+          - Reviews with no feedback may indicate users didn't find them valuable enough to react
+          - Low satisfaction scores suggest prompt improvements are needed
+          - High satisfaction with many reviews indicates good prompt quality
+          
+          ## Next Steps
+          
+          Based on feedback:
+          1. Analyze reviews with 👎 reactions for common issues
+          2. Compare successful vs unsuccessful review patterns
+          3. Adjust prompts based on findings
+          
+          ---
+          
+          *This report is auto-generated by the Merglbot Feedback Collector workflow.*
+          REPORT_EOF
+          
+          echo "Report generated:"
+          cat feedback/FEEDBACK_REPORT.md
+      
+      - name: Upload Feedback Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: merglbot-feedback-${{ github.run_id }}
+          path: feedback/
+          retention-days: 365
+      
+      - name: Post Summary
+        run: |
+          if [ -f feedback/summary.json ]; then
+            TOTAL=$(jq -r '.metrics.total_reviews' feedback/summary.json)
+            UP=$(jq -r '.metrics.thumbs_up' feedback/summary.json)
+            DOWN=$(jq -r '.metrics.thumbs_down' feedback/summary.json)
+            SCORE=$(jq -r '.metrics.satisfaction_percent' feedback/summary.json)
+            
+            {
+              echo "## 📊 Merglbot Feedback Report"
+              echo ""
+              echo "| Metric | Value |"
+              echo "|--------|-------|"
+              echo "| Total Reviews | $TOTAL |"
+              echo "| 👍 Helpful | $UP |"
+              echo "| 👎 Not Helpful | $DOWN |"
+              echo "| Satisfaction | ${SCORE}% |"
+              echo ""
+              echo "Full report available in artifacts."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+

@@ -62,22 +62,34 @@ jobs:
     steps:
       - name: Get PR Number and Mode
         id: get_pr
+        env:
+          # Security: Use env var to avoid command injection from comment body
+          COMMENT_CONTAINS_LIGHT: ${{ contains(github.event.comment.body, '--light') }}
+          IS_WORKFLOW_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
+          INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
+          INPUT_REVIEW_MODE: ${{ github.event.inputs.review_mode }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "pr_number=${{ github.event.inputs.pr_number }}" >> "$GITHUB_OUTPUT"
+          if [ "$IS_WORKFLOW_DISPATCH" == "true" ]; then
+            # Validate PR number is numeric (security)
+            if ! [[ "$INPUT_PR_NUMBER" =~ ^[0-9]+$ ]]; then
+              echo "::error::Invalid PR number: must be numeric"
+              exit 1
+            fi
+            echo "pr_number=$INPUT_PR_NUMBER" >> "$GITHUB_OUTPUT"
             echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "review_mode=${{ github.event.inputs.review_mode || 'full' }}" >> "$GITHUB_OUTPUT"
-            echo "Manual trigger for PR #${{ github.event.inputs.pr_number }} (mode: ${{ github.event.inputs.review_mode || 'full' }})"
+            echo "review_mode=${INPUT_REVIEW_MODE:-full}" >> "$GITHUB_OUTPUT"
+            echo "✅ Manual trigger for PR #$INPUT_PR_NUMBER (mode: ${INPUT_REVIEW_MODE:-full})"
           else
-            echo "pr_number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
+            echo "pr_number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
             echo "should_run=true" >> "$GITHUB_OUTPUT"
-            COMMENT_BODY="${{ github.event.comment.body }}"
-            if echo "$COMMENT_BODY" | grep -qi "\-\-light"; then
+            # Security: Use GitHub native contains() instead of shell grep
+            if [ "$COMMENT_CONTAINS_LIGHT" == "true" ]; then
               echo "review_mode=light" >> "$GITHUB_OUTPUT"
-              echo "Comment trigger for PR #${{ github.event.issue.number }} (mode: LIGHT)"
+              echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: LIGHT)"
             else
               echo "review_mode=full" >> "$GITHUB_OUTPUT"
-              echo "Comment trigger for PR #${{ github.event.issue.number }} (mode: FULL)"
+              echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: FULL)"
             fi
           fi
 
@@ -665,6 +677,16 @@ jobs:
               else
                 echo "*Full analysis. For quick review: \`@merglbot review --light\`*"
               fi
+              echo ""
+              echo "---"
+              echo ""
+              echo "### 📊 Help Us Improve"
+              echo ""
+              echo "Was this review helpful? React to this comment:"
+              echo "- 👍 **Helpful** - Good findings, accurate analysis"
+              echo "- 👎 **Not helpful** - False positives, missed issues, or unclear"
+              echo ""
+              echo "*Your feedback helps us improve the AI review quality.*"
             } > comment.md
           fi
           
@@ -705,3 +727,76 @@ jobs:
             echo "**Count**: $BUGBOT_COUNT"
             echo "**Sources**: $BUGBOT_SOURCES"
           } >> "$GITHUB_STEP_SUMMARY"
+      
+      - name: Save Review Metrics (Feedback Loop)
+        if: always()
+        env:
+          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}
+          OPENAI_MODEL: ${{ github.event.inputs.openai_model || 'gpt-5.1' }}
+        run: |
+          # Create metrics JSON for feedback loop analysis
+          TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          PR_NUM="${{ env.PR_NUMBER }}"
+          REVIEW_MODE="${{ env.REVIEW_MODE }}"
+          
+          ANTHROPIC_WORDS=$(cat anthropic_review.txt 2>/dev/null | wc -w || echo 0)
+          OPENAI_WORDS=$(cat openai_review.txt 2>/dev/null | wc -w || echo 0)
+          FINAL_WORDS=$(cat final_review.txt 2>/dev/null | wc -w || echo 0)
+          BUGBOT_COUNT=$(cat bugbot_count.txt 2>/dev/null || echo 0)
+          
+          # Count findings by severity
+          CRITICAL_COUNT=$(grep -c "Critical\|🔴" final_review.txt 2>/dev/null || echo 0)
+          HIGH_COUNT=$(grep -c "High Priority\|🟠" final_review.txt 2>/dev/null || echo 0)
+          MEDIUM_COUNT=$(grep -c "Medium Priority\|🟡" final_review.txt 2>/dev/null || echo 0)
+          LOW_COUNT=$(grep -c "Low Priority\|🟢" final_review.txt 2>/dev/null || echo 0)
+          
+          # Detect verdict
+          if grep -qi "APPROVE" final_review.txt 2>/dev/null; then
+            VERDICT="APPROVE"
+          elif grep -qi "CHANGES NEEDED" final_review.txt 2>/dev/null; then
+            VERDICT="CHANGES_NEEDED"
+          else
+            VERDICT="UNKNOWN"
+          fi
+          
+          # Create metrics file
+          mkdir -p metrics
+          cat > metrics/review-metrics.json << METRICS_EOF
+          {
+            "timestamp": "$TIMESTAMP",
+            "repository": "${{ github.repository }}",
+            "pr_number": $PR_NUM,
+            "review_mode": "$REVIEW_MODE",
+            "trigger": "${{ github.event_name }}",
+            "run_id": "${{ github.run_id }}",
+            "models": {
+              "anthropic": "$ANTHROPIC_MODEL",
+              "openai": "$OPENAI_MODEL"
+            },
+            "output": {
+              "anthropic_words": $ANTHROPIC_WORDS,
+              "openai_words": $OPENAI_WORDS,
+              "final_words": $FINAL_WORDS
+            },
+            "findings": {
+              "critical": $CRITICAL_COUNT,
+              "high": $HIGH_COUNT,
+              "medium": $MEDIUM_COUNT,
+              "low": $LOW_COUNT
+            },
+            "verdict": "$VERDICT",
+            "bugbot_sources": $BUGBOT_COUNT,
+            "status": "${{ job.status }}"
+          }
+          METRICS_EOF
+          
+          echo "📊 Review metrics saved"
+          cat metrics/review-metrics.json
+      
+      - name: Upload Metrics Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-metrics-${{ env.PR_NUMBER }}-${{ github.run_id }}
+          path: metrics/
+          retention-days: 90
