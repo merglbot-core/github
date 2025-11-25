@@ -10,6 +10,14 @@ on:
         description: "PR number"
         required: true
         type: string
+      review_mode:
+        description: "Review mode (full = detailed, light = concise)"
+        required: false
+        type: choice
+        default: "full"
+        options:
+          - full
+          - light
       anthropic_model:
         description: "Anthropic model"
         required: false
@@ -50,18 +58,27 @@ jobs:
     outputs:
       pr_number: ${{ steps.get_pr.outputs.pr_number }}
       should_run: ${{ steps.get_pr.outputs.should_run }}
+      review_mode: ${{ steps.get_pr.outputs.review_mode }}
     steps:
-      - name: Get PR Number
+      - name: Get PR Number and Mode
         id: get_pr
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "pr_number=${{ github.event.inputs.pr_number }}" >> "$GITHUB_OUTPUT"
             echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "Manual trigger for PR #${{ github.event.inputs.pr_number }}"
+            echo "review_mode=${{ github.event.inputs.review_mode || 'full' }}" >> "$GITHUB_OUTPUT"
+            echo "Manual trigger for PR #${{ github.event.inputs.pr_number }} (mode: ${{ github.event.inputs.review_mode || 'full' }})"
           else
             echo "pr_number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
             echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "Comment trigger for PR #${{ github.event.issue.number }}"
+            COMMENT_BODY="${{ github.event.comment.body }}"
+            if echo "$COMMENT_BODY" | grep -qi "\-\-light"; then
+              echo "review_mode=light" >> "$GITHUB_OUTPUT"
+              echo "Comment trigger for PR #${{ github.event.issue.number }} (mode: LIGHT)"
+            else
+              echo "review_mode=full" >> "$GITHUB_OUTPUT"
+              echo "Comment trigger for PR #${{ github.event.issue.number }} (mode: FULL)"
+            fi
           fi
 
   multi-model-review:
@@ -69,11 +86,12 @@ jobs:
     needs: check-trigger
     if: needs.check-trigger.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     
     env:
       ANTHROPIC_API_VERSION: "2023-06-01"
       PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
+      REVIEW_MODE: ${{ needs.check-trigger.outputs.review_mode }}
     
     steps:
       - name: Checkout
@@ -87,7 +105,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
-            -f content='+1' || true
+            -f content='eyes' || true
       
       - name: Gather Full PR Context
         id: context
@@ -102,6 +120,7 @@ jobs:
           
           PR_NUM="${{ env.PR_NUMBER }}"
           echo "PR Number: $PR_NUM"
+          echo "Review Mode: ${{ env.REVIEW_MODE }}"
           
           gh pr view "$PR_NUM" --json title,body,author,baseRefName,headRefName,labels,additions,deletions,changedFiles > pr_metadata.json
           
@@ -118,6 +137,10 @@ jobs:
           
           echo "$PR_TITLE" > pr_title.txt
           echo "$PR_BODY" > pr_body.txt
+          echo "$PR_AUTHOR" > pr_author.txt
+          echo "$PR_ADDITIONS" > pr_additions.txt
+          echo "$PR_DELETIONS" > pr_deletions.txt
+          echo "$PR_FILES" > pr_files_count.txt
           
           gh pr diff "$PR_NUM" > pr_diff.txt
           DIFF_LINES=$(wc -l < pr_diff.txt)
@@ -129,21 +152,50 @@ jobs:
           
           echo "Extracting bugbot findings..."
           echo "" > bugbot_findings.txt
+          BUGBOT_TOTAL=0
+          BUGBOT_SOURCES=""
           
-          for BOT_PATTERN in "cursor" "gemini" "copilot" "coderabbit" "qodo" "pr-agent" "snyk"; do
+          for BOT_PATTERN in cursor gemini copilot coderabbit qodo pr-agent snyk sonar codacy deepsource; do
             FINDINGS=$(jq -r --arg pat "$BOT_PATTERN" '.[] | select(.user.login | test($pat; "i")) | .body' issue_comments.json 2>/dev/null || echo "")
             if [ -n "$FINDINGS" ] && [ "$FINDINGS" != "null" ]; then
-              echo "=== $BOT_PATTERN Bot Findings ===" >> bugbot_findings.txt
-              echo "$FINDINGS" >> bugbot_findings.txt
-              echo "" >> bugbot_findings.txt
+              {
+                echo "### $BOT_PATTERN Bot Findings"
+                echo ""
+                echo "$FINDINGS"
+                echo ""
+                echo "---"
+                echo ""
+              } >> bugbot_findings.txt
+              BUGBOT_TOTAL=$((BUGBOT_TOTAL + 1))
+              if [ -n "$BUGBOT_SOURCES" ]; then
+                BUGBOT_SOURCES="$BUGBOT_SOURCES, $BOT_PATTERN"
+              else
+                BUGBOT_SOURCES="$BOT_PATTERN"
+              fi
               echo "Found $BOT_PATTERN findings"
             fi
           done
           
-          BUGBOT_SIZE=$(wc -c < bugbot_findings.txt)
-          if [ "$BUGBOT_SIZE" -lt 10 ]; then
-            echo "No automated bot findings detected." > bugbot_findings.txt
+          gh api "repos/${{ github.repository }}/pulls/$PR_NUM/comments" --paginate > review_comments.json 2>/dev/null || echo "[]" > review_comments.json
+          REVIEW_COMMENT_COUNT=$(jq 'length' review_comments.json)
+          if [ "$REVIEW_COMMENT_COUNT" -gt 0 ]; then
+            {
+              echo "### Existing Review Comments"
+              echo ""
+              jq -r '.[] | "**\(.user.login)** on \(.path): \(.body)"' review_comments.json 2>/dev/null || echo "None"
+              echo ""
+            } >> bugbot_findings.txt
           fi
+          
+          BUGBOT_SIZE=$(wc -c < bugbot_findings.txt)
+          if [ "$BUGBOT_SIZE" -lt 20 ]; then
+            echo "No automated bot findings detected." > bugbot_findings.txt
+            BUGBOT_SOURCES="none"
+          fi
+          
+          echo "Bugbot sources: $BUGBOT_TOTAL ($BUGBOT_SOURCES)"
+          echo "$BUGBOT_TOTAL" > bugbot_count.txt
+          echo "$BUGBOT_SOURCES" > bugbot_sources.txt
           
           echo "========================================="
           echo "CONTEXT GATHERING COMPLETE"
@@ -164,143 +216,166 @@ jobs:
           
           PR_TITLE=$(cat pr_title.txt)
           PR_BODY=$(cat pr_body.txt)
-          PR_DIFF=$(cat pr_diff.txt | head -c 80000)
-          CHANGED_FILES=$(cat changed_files.txt | head -50 | tr '\n' ', ')
+          PR_AUTHOR=$(cat pr_author.txt)
+          PR_ADDITIONS=$(cat pr_additions.txt)
+          PR_DELETIONS=$(cat pr_deletions.txt)
+          PR_FILES_COUNT=$(cat pr_files_count.txt)
+          PR_DIFF=$(cat pr_diff.txt | head -c 100000)
+          CHANGED_FILES=$(cat changed_files.txt | head -100 | tr '\n' ', ')
           BUGBOT_FINDINGS=$(cat bugbot_findings.txt)
+          BUGBOT_COUNT=$(cat bugbot_count.txt)
+          BUGBOT_SOURCES=$(cat bugbot_sources.txt)
           
-          echo "Context sizes:"
+          echo "Context loaded:"
           echo "  PR Body: $(echo "$PR_BODY" | wc -c) chars"
           echo "  PR Diff: $(echo "$PR_DIFF" | wc -c) chars"
-          echo "  Bugbot Findings: $(echo "$BUGBOT_FINDINGS" | wc -c) chars"
+          echo "  Bugbot Sources: $BUGBOT_SOURCES ($BUGBOT_COUNT)"
           
-          # Create prompt file using cat heredoc
-          cat > /tmp/full_prompt.txt << 'PROMPT_EOF'
-          # Merglbot Multi-Model Code Review v3
+          if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
+            REVIEW_DEPTH="LIGHT"
+            OUTPUT_INSTRUCTIONS="Output a CONCISE review (max 500 words). Focus only on critical and high priority issues."
+            MAX_TOKENS_ANTHROPIC=4000
+            MAX_TOKENS_OPENAI=8000
+          else
+            REVIEW_DEPTH="FULL"
+            OUTPUT_INSTRUCTIONS="Output a COMPREHENSIVE review with detailed analysis, code examples, WARP rule references, and actionable checkboxes."
+            MAX_TOKENS_ANTHROPIC=8000
+            MAX_TOKENS_OPENAI=16000
+          fi
           
-          You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence.
+          echo "Review depth: $REVIEW_DEPTH"
           
-          ## MERGLBOT AI AGENT APPENDIX v2.5
-          
-          This is your authoritative reference for all Merglbot standards. Follow these rules strictly.
-          
-          ### Critical Rules (MUST FOLLOW)
-          
-          1. PR Hygiene: Push na STEJNY PR/branch, nevytvarej duplikaty
-          2. Production: Vse pres PR + schvaleni, nikdy push na main
-          3. Security: Zadne secrets v kodu; jen GitHub secrets; zadne SA JSON - vzdy WIF/OIDC
-          4. Auth: Session-based v1 (OAuth+Firestore)
-          5. Workflow: Plan - Act - Verify (studuj docs, implementuj, validuj)
-          6. PR Size: Pod 400 radku (vyjimka jen u cistych docs)
-          7. Commits: Conventional (feat:, fix:, docs:, chore:, ci:)
-          8. Branch: feat/, fix/, docs/, ci/ - vzdy squash merge do main
-          9. SSOT: Dokumentacni reference miri do merglbot-public/docs/
-          10. Destructive: Double-confirm pred destruktivni akci
-          11. CI Idempotency: CI kroky musi byt idempotentni
-          12. Security Gating: Trivy/CodeQL gaty se NEzmekuji
-          
-          ### SSOT Documentation (GitHub Links)
-          
-          Core Governance:
-          - https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md - Platform rules READ FIRST
-          - https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md - PR requirements
-          - https://github.com/merglbot-public/docs/blob/main/BRANCH_PROTECTION.md - Branch rules
-          - https://github.com/merglbot-public/docs/blob/main/GOVERNANCE.md - RACI decision-making
-          - https://github.com/merglbot-public/docs/blob/main/CONTRIBUTING.md - Contribution guide
-          - https://github.com/merglbot-public/docs/blob/main/WARP_PR_SIZE_AND_REVIEW_HYGIENE.md - PR size best practices
-          
-          Security:
-          - https://github.com/merglbot-public/docs/blob/main/SECURITY.md - Vulnerability reporting
-          - https://github.com/merglbot-public/docs/blob/main/SECURITY_AUTOMATION_TOOLS.md - GHAS CodeQL
-          - https://github.com/merglbot-public/docs/blob/main/WARP_SECRETS_NAMING_AND_LOGGING.md - Secrets management
-          - https://github.com/merglbot-public/docs/blob/main/WARP_SECURITY_INCIDENT_RESPONSE.md - Incident handling
-          - https://github.com/merglbot-public/docs/blob/main/WARP_CONTAINER_HARDENING.md - Docker security Trivy gating
-          
-          Infrastructure/CI:
-          - https://github.com/merglbot-public/docs/blob/main/IAC_STANDARDS.md - Terraform best practices
-          - https://github.com/merglbot-public/docs/blob/main/WARP_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md - Reusable workflows
-          - https://github.com/merglbot-public/docs/blob/main/WARP_GITHUB_ACTIONS_GLOBAL_RULES.md - GHA standards
-          
-          Architecture:
-          - https://github.com/merglbot-public/docs/blob/main/ARCHITECTURE_OVERVIEW.md - System design C4 model
-          - https://github.com/merglbot-public/docs/blob/main/AUTHENTICATION_AUTHORIZATION.md - Auth v1/v2 CRITICAL
-          - https://github.com/merglbot-public/docs/blob/main/API_GOVERNANCE.md - OpenAPI versioning
-          - https://github.com/merglbot-public/docs/blob/main/REPOSITORY_MAP.md - 13 repos overview
-          
-          WARP Agent Rules:
-          - https://github.com/merglbot-public/docs/blob/main/WARP_GLOBAL_RULES.txt - Global rules
-          - https://github.com/merglbot-public/docs/blob/main/WARP_QUICK_REFERENCE.md - Quick reference
-          - https://github.com/merglbot-public/docs/blob/main/WARP_TECHNOLOGY_INDEX.md - Technology index
-          
-          ### Quick Decision Trees
-          
-          - Production/Infra/Docs change? -> PR povinne
-          - Auth prace? -> AUTHENTICATION_AUTHORIZATION.md
-          - CI/CD? -> WARP_GITHUB_ACTIONS_GLOBAL_RULES.md
-          - Security/Trivy? -> WARP_CONTAINER_HARDENING.md
-          - Nejasne? -> RULEBOOK_V2.md jako start
-          
-          ### Current Status (2025-11-24)
-          
-          - CI/CD 100% Functional across all orgs
-          - Trivy gating on HIGH/CRITICAL mandatory
-          - CodeQL v4 everywhere
-          - PR Assistant 100% coverage
-          
-          ## YOUR MISSION
-          
-          Perform a thorough, professional code review that:
-          1. Focuses on what matters - security, bugs, architecture
-          2. Respects the PRs stated goal - dont suggest unrelated changes
-          3. Analyzes ALL bugbot findings below - validate, filter false positives, prioritize
-          4. Follows Merglbot standards above - WARP rules, security-first, OIDC/WIF
-          
-          ## Output Rules
-          
-          - Language: Czech for explanations, English for code comments
-          - Structure: Sumar (3-5 lines), Findings (prioritized by severity), Zaver
-          - Severity Levels: Critical (must fix), High, Medium, Low
-          - Be Concise: No filler, only actionable insights
-          - Reference WARP rules when applicable
-          
-          PROMPT_EOF
-          
-          # Append dynamic content
-          {
-            echo ""
-            echo "## PR INFORMATION"
-            echo ""
-            echo "Title: $PR_TITLE"
-            echo "PR Number: #${{ env.PR_NUMBER }}"
-            echo "Changed Files: $CHANGED_FILES"
-            echo ""
-            echo "### PR Description (FULL)"
-            echo ""
-            echo "$PR_BODY"
-            echo ""
-            echo "## BUGBOT FINDINGS (ANALYZE ALL)"
-            echo ""
-            echo "Read each finding carefully. Validate which are real issues, filter out false positives."
-            echo ""
-            echo "$BUGBOT_FINDINGS"
-            echo ""
-            echo "## PR DIFF"
-            echo ""
-            echo '```diff'
-            echo "$PR_DIFF"
-            echo '```'
-            echo ""
-            echo "## YOUR TASK"
-            echo ""
-            echo "1. Read the Merglbot Appendix above - understand platform standards"
-            echo "2. Analyze the PR description - understand authors intent"
-            echo "3. Process ALL bugbot findings - validate each one"
-            echo "4. Find NEW issues bots might have missed"
-            echo "5. Respect PR scope - only flag relevant issues"
-            echo "6. Output structured review in Czech"
-            echo ""
-            echo "IMPORTANT: Focus on substance. A PR with no issues should get approved quickly."
-            echo "If bugbots found issues, explicitly state whether you agree or disagree with each."
-          } >> /tmp/full_prompt.txt
+          # Build prompt using printf to file
+          printf '%s\n' "# Merglbot Multi-Model Code Review v3.1" > /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence." >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "## MERGLBOT AI AGENT APPENDIX v2.5" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "This is your authoritative reference for all Merglbot standards." >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "### Critical Rules (MUST FOLLOW)" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "1. PR Hygiene: Push na STEJNY PR/branch, nevytvarej duplikaty" >> /tmp/full_prompt.txt
+          printf '%s\n' "2. Production: Vse pres PR + schvaleni, nikdy push na main" >> /tmp/full_prompt.txt
+          printf '%s\n' "3. Security: Zadne secrets v kodu; jen GitHub secrets; zadne SA JSON - vzdy WIF/OIDC" >> /tmp/full_prompt.txt
+          printf '%s\n' "4. Auth: Session-based v1 (OAuth+Firestore)" >> /tmp/full_prompt.txt
+          printf '%s\n' "5. Workflow: Plan - Act - Verify" >> /tmp/full_prompt.txt
+          printf '%s\n' "6. PR Size: Pod 400 radku (vyjimka jen u cistych docs) - WARP-PR-001" >> /tmp/full_prompt.txt
+          printf '%s\n' "7. Commits: Conventional (feat:, fix:, docs:, chore:, ci:)" >> /tmp/full_prompt.txt
+          printf '%s\n' "8. Branch: feat/, fix/, docs/, ci/ - vzdy squash merge do main" >> /tmp/full_prompt.txt
+          printf '%s\n' "9. SSOT: Dokumentace v merglbot-public/docs/" >> /tmp/full_prompt.txt
+          printf '%s\n' "10. Destructive: Double-confirm pred destruktivni akci" >> /tmp/full_prompt.txt
+          printf '%s\n' "11. CI Idempotency: CI kroky musi byt idempotentni" >> /tmp/full_prompt.txt
+          printf '%s\n' "12. Security Gating: Trivy/CodeQL gaty se NEzmekuji" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "### WARP Rule Reference" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "WARP-SEC-001: No hardcoded secrets - use env vars or Secret Manager" >> /tmp/full_prompt.txt
+          printf '%s\n' "WARP-SEC-002: Container hardening - Trivy HIGH/CRITICAL must pass" >> /tmp/full_prompt.txt
+          printf '%s\n' "WARP-SEC-003: OIDC/WIF over SA JSON keys" >> /tmp/full_prompt.txt
+          printf '%s\n' "WARP-SEC-004: No secrets in logs" >> /tmp/full_prompt.txt
+          printf '%s\n' "WARP-CI-001: GHA standards - pinned actions, minimal permissions" >> /tmp/full_prompt.txt
+          printf '%s\n' "WARP-CI-002: Idempotent CI steps" >> /tmp/full_prompt.txt
+          printf '%s\n' "WARP-PR-001: PR size under 400 lines" >> /tmp/full_prompt.txt
+          printf '%s\n' "WARP-PR-002: Conventional commits" >> /tmp/full_prompt.txt
+          printf '%s\n' "WARP-ARCH-001: Auth via AUTHENTICATION_AUTHORIZATION.md" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "### SSOT Documentation Links" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md - Platform rules" >> /tmp/full_prompt.txt
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md - PR requirements" >> /tmp/full_prompt.txt
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/SECURITY.md - Security" >> /tmp/full_prompt.txt
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/WARP_SECRETS_NAMING_AND_LOGGING.md - Secrets" >> /tmp/full_prompt.txt
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/WARP_GITHUB_ACTIONS_GLOBAL_RULES.md - GHA" >> /tmp/full_prompt.txt
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/AUTHENTICATION_AUTHORIZATION.md - Auth" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "---" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "## YOUR MISSION" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "Perform a thorough, professional code review that:" >> /tmp/full_prompt.txt
+          printf '%s\n' "1. Focuses on what matters - security, bugs, architecture" >> /tmp/full_prompt.txt
+          printf '%s\n' "2. Respects PRs stated goal - dont suggest unrelated changes" >> /tmp/full_prompt.txt
+          printf '%s\n' "3. Analyzes ALL bugbot findings - validate, filter false positives" >> /tmp/full_prompt.txt
+          printf '%s\n' "4. Follows Merglbot standards - cite WARP rules" >> /tmp/full_prompt.txt
+          printf '%s\n' "5. Provides actionable feedback with code examples" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "## OUTPUT REQUIREMENTS" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "Review Mode: $REVIEW_DEPTH" >> /tmp/full_prompt.txt
+          printf '%s\n' "$OUTPUT_INSTRUCTIONS" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "### Output Structure" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "# Code Review Sumar" >> /tmp/full_prompt.txt
+          printf '%s\n' "[3-5 sentences about PR, quality, concerns]" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "## Findings" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "### Critical (Must Fix)" >> /tmp/full_prompt.txt
+          printf '%s\n' "[List with code examples and WARP rule citations]" >> /tmp/full_prompt.txt
+          printf '%s\n' "- [ ] Finding: Description (WARP-XXX)" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "### High Priority" >> /tmp/full_prompt.txt
+          printf '%s\n' "[List]" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "### Medium Priority" >> /tmp/full_prompt.txt
+          printf '%s\n' "[List]" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "### Low Priority" >> /tmp/full_prompt.txt
+          printf '%s\n' "[List]" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "## Whats Good" >> /tmp/full_prompt.txt
+          printf '%s\n' "[2-4 positive aspects]" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "## Bugbot Findings Analysis" >> /tmp/full_prompt.txt
+          printf '%s\n' "[For EACH bugbot finding state: Agree/Disagree/Partially with reason]" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "## Zaver" >> /tmp/full_prompt.txt
+          printf '%s\n' "Verdict: [APPROVE or CHANGES NEEDED]" >> /tmp/full_prompt.txt
+          printf '%s\n' "[1-2 sentences]" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "### Rules" >> /tmp/full_prompt.txt
+          printf '%s\n' "- Czech for explanations, English for code" >> /tmp/full_prompt.txt
+          printf '%s\n' "- Include line numbers" >> /tmp/full_prompt.txt
+          printf '%s\n' "- Cite WARP rules" >> /tmp/full_prompt.txt
+          printf '%s\n' "- Code examples for fixes" >> /tmp/full_prompt.txt
+          printf '%s\n' "- Use checkboxes for actions" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "---" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "## PR INFORMATION" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "Title: $PR_TITLE" >> /tmp/full_prompt.txt
+          printf '%s\n' "PR Number: #${{ env.PR_NUMBER }}" >> /tmp/full_prompt.txt
+          printf '%s\n' "Author: @$PR_AUTHOR" >> /tmp/full_prompt.txt
+          printf '%s\n' "Changes: +$PR_ADDITIONS / -$PR_DELETIONS in $PR_FILES_COUNT files" >> /tmp/full_prompt.txt
+          printf '%s\n' "Changed Files: $CHANGED_FILES" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "### PR Description" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "$PR_BODY" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "---" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "## BUGBOT FINDINGS ($BUGBOT_COUNT sources: $BUGBOT_SOURCES)" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "For EACH finding below, state: Agree/Disagree/Partially" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "$BUGBOT_FINDINGS" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "---" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "## PR DIFF" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          echo '```diff' >> /tmp/full_prompt.txt
+          printf '%s\n' "$PR_DIFF" >> /tmp/full_prompt.txt
+          echo '```' >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "---" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "Now provide your review following the structure above." >> /tmp/full_prompt.txt
           
           FULL_PROMPT=$(cat /tmp/full_prompt.txt)
           PROMPT_SIZE=$(echo "$FULL_PROMPT" | wc -c)
@@ -312,9 +387,10 @@ jobs:
           jq -n \
             --arg model "$ANTHROPIC_MODEL" \
             --arg prompt "$FULL_PROMPT" \
+            --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
             '{
               model: $model,
-              max_tokens: 8000,
+              max_tokens: $max_tokens,
               temperature: 0.2,
               messages: [{role: "user", content: $prompt}]
             }' > /tmp/anthropic_payload.json
@@ -343,10 +419,11 @@ jobs:
           jq -n \
             --arg model "$OPENAI_MODEL" \
             --arg prompt "$FULL_PROMPT" \
+            --argjson max_tokens "$MAX_TOKENS_OPENAI" \
             '{
               model: $model,
               messages: [{role: "user", content: $prompt}],
-              max_completion_tokens: 16000,
+              max_completion_tokens: $max_tokens,
               reasoning_effort: "high"
             }' > /tmp/openai_payload.json
           
@@ -390,87 +467,78 @@ jobs:
           OPENAI_REVIEW=$(cat openai_review.txt)
           PR_TITLE=$(cat pr_title.txt)
           PR_BODY=$(cat pr_body.txt | head -c 3000)
+          BUGBOT_COUNT=$(cat bugbot_count.txt)
+          BUGBOT_SOURCES=$(cat bugbot_sources.txt)
           
           echo "Input Reviews:"
           echo "  Anthropic: $(echo "$ANTHROPIC_REVIEW" | wc -w) words"
           echo "  OpenAI: $(echo "$OPENAI_REVIEW" | wc -w) words"
           
-          # Create synthesis prompt
-          cat > /tmp/synthesis_prompt.txt << 'SYNTH_EOF'
-          # Final Review Synthesis Task
+          if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
+            MAX_SYNTH_TOKENS=6000
+          else
+            MAX_SYNTH_TOKENS=14000
+          fi
           
-          You are synthesizing two independent AI code reviews into ONE final, high-quality review.
-          
-          ## Synthesis Rules
-          1. Eliminate Duplicates: If both reviews mention the same issue, keep the better explanation
-          2. Prioritize by Impact: Security > Bugs > Architecture > Style
-          3. Filter False Positives: Remove findings that dont apply to actual changes
-          4. Respect PR Scope: Dont include suggestions unrelated to PRs goal
-          5. Be Decisive: End with clear APPROVE or CHANGES NEEDED verdict
-          
-          ## Output Format (STRICT)
-          
-          # Code Review Sumar
-          [3-5 sentences about what PR does, overall quality, key concerns]
-          
-          ## Findings
-          
-          ### Critical (Must Fix)
-          [List or None]
-          
-          ### High Priority
-          [List or None]
-          
-          ### Medium Priority
-          [List or None]
-          
-          ### Low Priority / Suggestions
-          [List or None]
-          
-          ## Whats Good
-          [2-3 positive aspects]
-          
-          ## Zaver
-          
-          Verdict: [APPROVE or CHANGES NEEDED]
-          [1-2 sentences explaining verdict]
-          
-          ## IMPORTANT
-          - Output ONLY the review content above
-          - DO NOT add Review Models section
-          - Use Czech for text, English for code
-          - Be concise but thorough
-          
-          SYNTH_EOF
-          
-          # Append context
-          {
-            echo ""
-            echo "## PR Context"
-            echo "Title: $PR_TITLE"
-            echo "Description: $PR_BODY"
-            echo ""
-            echo "## Review from Anthropic ($ANTHROPIC_MODEL)"
-            echo "$ANTHROPIC_REVIEW"
-            echo ""
-            echo "## Review from OpenAI ($OPENAI_MODEL with HIGH reasoning)"
-            echo "$OPENAI_REVIEW"
-            echo ""
-            echo "Now synthesize into FINAL review."
-          } >> /tmp/synthesis_prompt.txt
+          # Build synthesis prompt
+          printf '%s\n' "# Final Review Synthesis" > /tmp/synthesis_prompt.txt
+          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "Synthesize two AI reviews into ONE final review." >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "## Rules" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "1. Eliminate duplicates - keep better explanation" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "2. Prioritize: Security > Bugs > Architecture > Style" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "3. Filter false positives" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "4. Preserve code examples and WARP citations" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "5. End with clear APPROVE or CHANGES NEEDED" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "## Output Format" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "# Code Review Sumar" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "[3-5 sentences]" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "## Findings" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "### Critical (Must Fix)" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "### High Priority" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "### Medium Priority" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "### Low Priority" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "## Whats Good" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "## Zaver" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "Verdict: [APPROVE or CHANGES NEEDED]" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "DO NOT add Review Models section." >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "Use Czech for text, English for code." >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "---" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "## PR Context" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "Title: $PR_TITLE" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "## Anthropic Review ($ANTHROPIC_MODEL)" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "$ANTHROPIC_REVIEW" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "## OpenAI Review ($OPENAI_MODEL - HIGH reasoning)" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "$OPENAI_REVIEW" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "Now synthesize into FINAL review." >> /tmp/synthesis_prompt.txt
           
           SYNTHESIS_PROMPT=$(cat /tmp/synthesis_prompt.txt)
           
           jq -n \
             --arg model "$OPENAI_MODEL" \
             --arg prompt "$SYNTHESIS_PROMPT" \
+            --argjson max_tokens "$MAX_SYNTH_TOKENS" \
             '{
               model: $model,
               messages: [
                 {role: "system", content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
                 {role: "user", content: $prompt}
               ],
-              max_completion_tokens: 12000,
+              max_completion_tokens: $max_tokens,
               reasoning_effort: "high"
             }' > /tmp/synthesis_payload.json
           
@@ -497,9 +565,7 @@ jobs:
             fi
           fi
           
-          WORD_COUNT=$(cat final_review.txt | wc -w)
-          echo "Final review: $WORD_COUNT words"
-          
+          echo "Final review: $(cat final_review.txt | wc -w) words"
           echo "========================================="
           echo "STEP 2 COMPLETE"
           echo "========================================="
@@ -513,59 +579,112 @@ jobs:
           set -euo pipefail
           
           PR_NUM="${{ env.PR_NUMBER }}"
+          BUGBOT_COUNT=$(cat bugbot_count.txt 2>/dev/null || echo "0")
+          BUGBOT_SOURCES=$(cat bugbot_sources.txt 2>/dev/null || echo "none")
+          REVIEW_MODE="${{ env.REVIEW_MODE }}"
+          
+          ANTHROPIC_WORDS=$(cat anthropic_review.txt 2>/dev/null | wc -w || echo "0")
+          OPENAI_WORDS=$(cat openai_review.txt 2>/dev/null | wc -w || echo "0")
+          FINAL_WORDS=$(cat final_review.txt 2>/dev/null | wc -w || echo "0")
+          
+          echo "Building PR comment..."
           
           if [ ! -s final_review.txt ] || grep -q "^API_ERROR$" final_review.txt; then
             {
-              echo "## Merglbot PR Assistant v3"
+              echo "## 🤖 Merglbot PR Assistant v3"
               echo ""
-              echo "Review generation failed. Please check workflow logs."
-              echo ""
-              echo "Triggered by: @merglbot review"
+              echo "❌ Review generation failed. Please check workflow logs."
             } > comment.md
           else
             {
-              echo "## Merglbot PR Assistant v3"
+              echo "## 🤖 Merglbot PR Assistant v3"
               echo ""
               cat final_review.txt
               echo ""
               echo "---"
               echo ""
               echo "<details>"
-              echo "<summary>Review Models and Configuration</summary>"
+              echo "<summary>🔧 Review Configuration and Stats</summary>"
+              echo ""
+              echo "### AI Models Used"
               echo ""
               echo "| Phase | Model | Config |"
               echo "|-------|-------|--------|"
-              echo "| Primary Analysis | Anthropic $ANTHROPIC_MODEL | temp=0.2 |"
-              echo "| Secondary Analysis | OpenAI $OPENAI_MODEL | reasoning=HIGH |"
-              echo "| Final Synthesis | OpenAI $OPENAI_MODEL | reasoning=HIGH |"
+              echo "| Primary Analysis | Anthropic \`$ANTHROPIC_MODEL\` | temp=0.2 |"
+              echo "| Secondary Analysis | OpenAI \`$OPENAI_MODEL\` | reasoning=HIGH 🧠 |"
+              echo "| Final Synthesis | OpenAI \`$OPENAI_MODEL\` | reasoning=HIGH 🧠 |"
               echo ""
-              echo "Context Used: PR Description, Full Diff, Bot Findings, Merglbot Appendix v2.5"
+              echo "### Review Statistics"
               echo ""
-              echo "Triggered by: @merglbot review command"
+              echo "| Metric | Value |"
+              echo "|--------|-------|"
+              echo "| Review Mode | \`$REVIEW_MODE\` |"
+              echo "| Anthropic Output | $ANTHROPIC_WORDS words |"
+              echo "| OpenAI Output | $OPENAI_WORDS words |"
+              echo "| Final Review | $FINAL_WORDS words |"
+              echo ""
+              echo "### Bugbot Sources Analyzed"
+              echo ""
+              if [ "$BUGBOT_COUNT" -gt 0 ]; then
+                echo "**$BUGBOT_COUNT source(s)**: $BUGBOT_SOURCES"
+              else
+                echo "No automated bot findings available."
+              fi
+              echo ""
+              echo "### Context Used"
+              echo ""
+              echo "- Full PR description"
+              echo "- Complete diff (up to 100KB)"
+              echo "- Changed files list"
+              echo "- Bugbot findings ($BUGBOT_COUNT sources)"
+              echo "- Merglbot Appendix v2.5 (WARP rules)"
               echo ""
               echo "</details>"
               echo ""
               echo "---"
               echo ""
-              echo "Multi-model AI review. Validate findings before applying."
+              if [ "$REVIEW_MODE" == "light" ]; then
+                echo "*Light mode. For detailed analysis: \`@merglbot review\`*"
+              else
+                echo "*Full analysis. For quick review: \`@merglbot review --light\`*"
+              fi
             } > comment.md
           fi
           
           gh pr comment "$PR_NUM" --body-file comment.md
           echo "Review posted to PR #$PR_NUM"
+          
+          if [ "${{ github.event_name }}" == "issue_comment" ]; then
+            gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+              -f content='rocket' || true
+          fi
       
       - name: Workflow Summary
         run: |
+          BUGBOT_COUNT=$(cat bugbot_count.txt 2>/dev/null || echo "0")
+          BUGBOT_SOURCES=$(cat bugbot_sources.txt 2>/dev/null || echo "none")
+          
           {
-            echo "## Merglbot PR Assistant v3"
+            echo "## 🤖 Merglbot PR Assistant v3 - Summary"
             echo ""
-            echo "- PR: #${{ env.PR_NUMBER }}"
-            echo "- Trigger: ${{ github.event_name == 'issue_comment' && '@merglbot review' || 'Manual dispatch' }}"
-            echo "- Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            echo "- Status: $([ -s final_review.txt ] && echo 'Success' || echo 'Failed')"
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| **PR** | #${{ env.PR_NUMBER }} |"
+            echo "| **Trigger** | ${{ github.event_name == 'issue_comment' && '@merglbot review' || 'Manual dispatch' }} |"
+            echo "| **Review Mode** | \`${{ env.REVIEW_MODE }}\` |"
+            echo "| **Timestamp** | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |"
+            echo "| **Status** | $([ -s final_review.txt ] && echo 'Success' || echo 'Failed') |"
             echo ""
-            echo "### Review Stats"
-            echo "- Anthropic: $(cat anthropic_review.txt 2>/dev/null | wc -w || echo 0) words"
-            echo "- OpenAI: $(cat openai_review.txt 2>/dev/null | wc -w || echo 0) words"
-            echo "- Final: $(cat final_review.txt 2>/dev/null | wc -w || echo 0) words"
+            echo "### Review Statistics"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|--------|-------|"
+            echo "| Anthropic | $(cat anthropic_review.txt 2>/dev/null | wc -w || echo 0) words |"
+            echo "| OpenAI | $(cat openai_review.txt 2>/dev/null | wc -w || echo 0) words |"
+            echo "| Final | $(cat final_review.txt 2>/dev/null | wc -w || echo 0) words |"
+            echo ""
+            echo "### Bugbot Sources"
+            echo ""
+            echo "**Count**: $BUGBOT_COUNT"
+            echo "**Sources**: $BUGBOT_SOURCES"
           } >> "$GITHUB_STEP_SUMMARY"
