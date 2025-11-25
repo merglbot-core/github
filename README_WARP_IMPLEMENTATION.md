@@ -142,9 +142,9 @@ gcloud run deploy metrics-dashboard \
 ## 🎓 Training Materials (Issue #21)
 
 ### Quick Start Guides
-1. **Security Standards** - See WARP_GITIGNORE_SECURITY.md
-2. **Bot Development** - See WARP_BOT_DRIVEN_DEVELOPMENT.md  
-3. **Release Management** - See WARP_RELEASE_MANAGEMENT.md
+1. **Security Standards** - See MERGLBOT_GITIGNORE_SECURITY.md
+2. **Bot Development** - See MERGLBOT_BOT_DRIVEN_DEVELOPMENT.md  
+3. **Release Management** - See MERGLBOT_RELEASE_MANAGEMENT.md
 
 ### Team Training Schedule
 - Week 1: Security standards workshop
@@ -248,9 +248,9 @@ After full implementation:
 
 ## 🔗 Related Documents
 
-- [WARP_GITIGNORE_SECURITY.md](https://github.com/merglbot-public/website/blob/main/WARP_GITIGNORE_SECURITY.md)
-- [WARP_BOT_DRIVEN_DEVELOPMENT.md](https://github.com/merglbot-public/website/blob/main/WARP_BOT_DRIVEN_DEVELOPMENT.md)
-- [WARP_RELEASE_MANAGEMENT.md](https://github.com/merglbot-public/website/blob/main/WARP_RELEASE_MANAGEMENT.md)
+- [MERGLBOT_GITIGNORE_SECURITY.md](https://github.com/merglbot-public/website/blob/main/MERGLBOT_GITIGNORE_SECURITY.md)
+- [MERGLBOT_BOT_DRIVEN_DEVELOPMENT.md](https://github.com/merglbot-public/website/blob/main/MERGLBOT_BOT_DRIVEN_DEVELOPMENT.md)
+- [MERGLBOT_RELEASE_MANAGEMENT.md](https://github.com/merglbot-public/website/blob/main/MERGLBOT_RELEASE_MANAGEMENT.md)
 
 ## 🆘 Support
 

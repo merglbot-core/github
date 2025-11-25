@@ -387,7 +387,7 @@ To pass this module:
 
 ## 📚 Additional Resources
 
-- [WARP Gitignore Security Standard](https://github.com/merglbot-public/docs/WARP_GITIGNORE_SECURITY.md)
+- [WARP Gitignore Security Standard](https://github.com/merglbot-public/docs/MERGLBOT_GITIGNORE_SECURITY.md)
 - [git-secrets Documentation](https://github.com/awslabs/git-secrets)
 - [GitHub Secret Scanning](https://docs.github.com/en/code-security/secret-scanning)
 - [TruffleHog - Find Secrets](https://github.com/trufflesecurity/trufflehog)

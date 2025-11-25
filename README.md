@@ -67,13 +67,13 @@ This repository follows the [Merglbot Rulebook v2](https://github.com/merglbot-p
 
 ### Comprehensive Guides
 
-**README_WARP_IMPLEMENTATION.md** (264 lines) - WARP implementation guide
+**README_MERGLBOT_IMPLEMENTATION.md** (264 lines) - WARP implementation guide
 
 **Related WARP Docs:**
-- [WARP_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md](https://github.com/merglbot-public/docs/blob/main/WARP_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md) - 491 lines
-- [WARP_GITHUB_ACTIONS_GLOBAL_RULES.md](https://github.com/merglbot-public/docs/blob/main/WARP_GITHUB_ACTIONS_GLOBAL_RULES.md) - Global rules
-- [WARP_GLOBAL_RULES.txt](https://github.com/merglbot-public/docs/blob/main/WARP_GLOBAL_RULES.txt) § GitHub Actions - Security best practices
-- [WARP_QUICK_REFERENCE.md](https://github.com/merglbot-public/docs/blob/main/WARP_QUICK_REFERENCE.md) §1, §9 - GitHub Actions rules
+- [MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md) - 491 lines
+- [MERGLBOT_GITHUB_ACTIONS_GLOBAL_RULES.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GITHUB_ACTIONS_GLOBAL_RULES.md) - Global rules
+- [MERGLBOT_GLOBAL_RULES.txt](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GLOBAL_RULES.txt) § GitHub Actions - Security best practices
+- [MERGLBOT_QUICK_REFERENCE.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_QUICK_REFERENCE.md) §1, §9 - GitHub Actions rules
 
 ---
 
@@ -94,7 +94,7 @@ This repository follows the [Merglbot Rulebook v2](https://github.com/merglbot-p
 4. **Concurrency groups** for deployments
 5. **SHA256 digests** for images (never tags)
 
-**See:** WARP_GLOBAL_RULES.txt § GitHub Actions
+**See:** MERGLBOT_GLOBAL_RULES.txt § GitHub Actions
 
 ---
 
@@ -157,7 +157,7 @@ if: ${{ secrets.API_KEY != '' }}
 6. Create PR
 
 **Workflow Standards:**
-- Follow WARP_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md
+- Follow MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md
 - Include error handling
 - Add deployment summary
 - Document rollback procedure
@@ -175,8 +175,8 @@ Visualization and management dashboard for GitHub workflows and CI/CD status.
 ## 📞 Support
 
 **Questions about workflows?**
-- Read: WARP_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md (comprehensive)
-- Check: WARP_GLOBAL_RULES.txt § GitHub Actions
+- Read: MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md (comprehensive)
+- Check: MERGLBOT_GLOBAL_RULES.txt § GitHub Actions
 - Reference: merglbot-admin workflows (latest patterns)
 
 **For workflow issues:**

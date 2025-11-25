@@ -63,7 +63,7 @@ jobs:
 
 ## References
 
-- [WARP_GITHUB_ACTIONS_GLOBAL_RULES.md](https://github.com/merglbot-public/docs/blob/main/WARP_GITHUB_ACTIONS_GLOBAL_RULES.md)
+- [MERGLBOT_GITHUB_ACTIONS_GLOBAL_RULES.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GITHUB_ACTIONS_GLOBAL_RULES.md)
 - [AUTHENTICATION_AUTHORIZATION.md](https://github.com/merglbot-public/docs/blob/main/AUTHENTICATION_AUTHORIZATION.md)
 - [Google GitHub Actions Auth](https://github.com/google-github-actions/auth)
 
