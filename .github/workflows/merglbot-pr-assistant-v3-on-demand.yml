@@ -57,12 +57,11 @@ jobs:
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "pr_number=${{ github.event.inputs.pr_number }}" >> "$GITHUB_OUTPUT"
             echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "✅ Manual trigger for PR #${{ github.event.inputs.pr_number }}"
+            echo "Manual trigger for PR #${{ github.event.inputs.pr_number }}"
           else
             echo "pr_number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
             echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "✅ Comment trigger for PR #${{ github.event.issue.number }}"
-            echo "   Triggered by: @${{ github.event.comment.user.login }}"
+            echo "Comment trigger for PR #${{ github.event.issue.number }}"
           fi
 
   multi-model-review:
@@ -89,7 +88,6 @@ jobs:
         run: |
           gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
             -f content='+1' || true
-          echo "👍 Acknowledged comment"
       
       - name: Gather Full PR Context
         id: context
@@ -103,9 +101,8 @@ jobs:
           echo "========================================="
           
           PR_NUM="${{ env.PR_NUMBER }}"
-          echo "📋 PR Number: $PR_NUM"
+          echo "PR Number: $PR_NUM"
           
-          echo "📝 Fetching PR metadata..."
           gh pr view "$PR_NUM" --json title,body,author,baseRefName,headRefName,labels,additions,deletions,changedFiles > pr_metadata.json
           
           PR_TITLE=$(jq -r '.title // "No title"' pr_metadata.json)
@@ -115,35 +112,31 @@ jobs:
           PR_DELETIONS=$(jq -r '.deletions // 0' pr_metadata.json)
           PR_FILES=$(jq -r '.changedFiles // 0' pr_metadata.json)
           
-          echo "   Title: $PR_TITLE"
-          echo "   Author: $PR_AUTHOR"
-          echo "   Changes: +$PR_ADDITIONS -$PR_DELETIONS in $PR_FILES files"
+          echo "Title: $PR_TITLE"
+          echo "Author: $PR_AUTHOR"
+          echo "Changes: +$PR_ADDITIONS -$PR_DELETIONS in $PR_FILES files"
           
           echo "$PR_TITLE" > pr_title.txt
           echo "$PR_BODY" > pr_body.txt
           
-          echo "📄 Fetching PR diff..."
           gh pr diff "$PR_NUM" > pr_diff.txt
           DIFF_LINES=$(wc -l < pr_diff.txt)
-          echo "   Diff: $DIFF_LINES lines"
+          echo "Diff: $DIFF_LINES lines"
           
-          echo "📁 Getting changed files..."
           gh pr view "$PR_NUM" --json files -q '.files[].path' > changed_files.txt 2>/dev/null || echo "" > changed_files.txt
           
-          echo "💬 Fetching PR comments..."
           gh api "repos/${{ github.repository }}/issues/$PR_NUM/comments" --paginate > issue_comments.json 2>/dev/null || echo "[]" > issue_comments.json
           
-          echo "🤖 Extracting bugbot findings..."
+          echo "Extracting bugbot findings..."
           echo "" > bugbot_findings.txt
           
-          # Extract various bot findings
           for BOT_PATTERN in "cursor" "gemini" "copilot" "coderabbit" "qodo" "pr-agent" "snyk"; do
             FINDINGS=$(jq -r --arg pat "$BOT_PATTERN" '.[] | select(.user.login | test($pat; "i")) | .body' issue_comments.json 2>/dev/null || echo "")
             if [ -n "$FINDINGS" ] && [ "$FINDINGS" != "null" ]; then
-              echo "### $BOT_PATTERN Bot Findings" >> bugbot_findings.txt
+              echo "=== $BOT_PATTERN Bot Findings ===" >> bugbot_findings.txt
               echo "$FINDINGS" >> bugbot_findings.txt
               echo "" >> bugbot_findings.txt
-              echo "   ✅ Found $BOT_PATTERN findings"
+              echo "Found $BOT_PATTERN findings"
             fi
           done
           
@@ -170,91 +163,158 @@ jobs:
           echo "========================================="
           
           PR_TITLE=$(cat pr_title.txt)
-          PR_BODY=$(cat pr_body.txt | head -c 5000)
-          PR_DIFF=$(cat pr_diff.txt | head -c 45000)
-          CHANGED_FILES=$(cat changed_files.txt | head -30 | tr '\n' ', ')
-          BUGBOT_FINDINGS=$(cat bugbot_findings.txt | head -c 15000)
+          PR_BODY=$(cat pr_body.txt)
+          PR_DIFF=$(cat pr_diff.txt | head -c 80000)
+          CHANGED_FILES=$(cat changed_files.txt | head -50 | tr '\n' ', ')
+          BUGBOT_FINDINGS=$(cat bugbot_findings.txt)
           
-          # Build prompt using printf for YAML safety
-          PROMPT_HEADER="# Merglbot Multi-Model Code Review v3
+          echo "Context sizes:"
+          echo "  PR Body: $(echo "$PR_BODY" | wc -c) chars"
+          echo "  PR Diff: $(echo "$PR_DIFF" | wc -c) chars"
+          echo "  Bugbot Findings: $(echo "$BUGBOT_FINDINGS" | wc -c) chars"
+          
+          # Create prompt file using cat heredoc
+          cat > /tmp/full_prompt.txt << 'PROMPT_EOF'
+          # Merglbot Multi-Model Code Review v3
           
           You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence.
           
-          ## Your Mission
+          ## MERGLBOT AI AGENT APPENDIX v2.5
+          
+          This is your authoritative reference for all Merglbot standards. Follow these rules strictly.
+          
+          ### Critical Rules (MUST FOLLOW)
+          
+          1. PR Hygiene: Push na STEJNY PR/branch, nevytvarej duplikaty
+          2. Production: Vse pres PR + schvaleni, nikdy push na main
+          3. Security: Zadne secrets v kodu; jen GitHub secrets; zadne SA JSON - vzdy WIF/OIDC
+          4. Auth: Session-based v1 (OAuth+Firestore)
+          5. Workflow: Plan - Act - Verify (studuj docs, implementuj, validuj)
+          6. PR Size: Pod 400 radku (vyjimka jen u cistych docs)
+          7. Commits: Conventional (feat:, fix:, docs:, chore:, ci:)
+          8. Branch: feat/, fix/, docs/, ci/ - vzdy squash merge do main
+          9. SSOT: Dokumentacni reference miri do merglbot-public/docs/
+          10. Destructive: Double-confirm pred destruktivni akci
+          11. CI Idempotency: CI kroky musi byt idempotentni
+          12. Security Gating: Trivy/CodeQL gaty se NEzmekuji
+          
+          ### SSOT Documentation (GitHub Links)
+          
+          Core Governance:
+          - https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md - Platform rules READ FIRST
+          - https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md - PR requirements
+          - https://github.com/merglbot-public/docs/blob/main/BRANCH_PROTECTION.md - Branch rules
+          - https://github.com/merglbot-public/docs/blob/main/GOVERNANCE.md - RACI decision-making
+          - https://github.com/merglbot-public/docs/blob/main/CONTRIBUTING.md - Contribution guide
+          - https://github.com/merglbot-public/docs/blob/main/WARP_PR_SIZE_AND_REVIEW_HYGIENE.md - PR size best practices
+          
+          Security:
+          - https://github.com/merglbot-public/docs/blob/main/SECURITY.md - Vulnerability reporting
+          - https://github.com/merglbot-public/docs/blob/main/SECURITY_AUTOMATION_TOOLS.md - GHAS CodeQL
+          - https://github.com/merglbot-public/docs/blob/main/WARP_SECRETS_NAMING_AND_LOGGING.md - Secrets management
+          - https://github.com/merglbot-public/docs/blob/main/WARP_SECURITY_INCIDENT_RESPONSE.md - Incident handling
+          - https://github.com/merglbot-public/docs/blob/main/WARP_CONTAINER_HARDENING.md - Docker security Trivy gating
+          
+          Infrastructure/CI:
+          - https://github.com/merglbot-public/docs/blob/main/IAC_STANDARDS.md - Terraform best practices
+          - https://github.com/merglbot-public/docs/blob/main/WARP_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md - Reusable workflows
+          - https://github.com/merglbot-public/docs/blob/main/WARP_GITHUB_ACTIONS_GLOBAL_RULES.md - GHA standards
+          
+          Architecture:
+          - https://github.com/merglbot-public/docs/blob/main/ARCHITECTURE_OVERVIEW.md - System design C4 model
+          - https://github.com/merglbot-public/docs/blob/main/AUTHENTICATION_AUTHORIZATION.md - Auth v1/v2 CRITICAL
+          - https://github.com/merglbot-public/docs/blob/main/API_GOVERNANCE.md - OpenAPI versioning
+          - https://github.com/merglbot-public/docs/blob/main/REPOSITORY_MAP.md - 13 repos overview
+          
+          WARP Agent Rules:
+          - https://github.com/merglbot-public/docs/blob/main/WARP_GLOBAL_RULES.txt - Global rules
+          - https://github.com/merglbot-public/docs/blob/main/WARP_QUICK_REFERENCE.md - Quick reference
+          - https://github.com/merglbot-public/docs/blob/main/WARP_TECHNOLOGY_INDEX.md - Technology index
+          
+          ### Quick Decision Trees
+          
+          - Production/Infra/Docs change? -> PR povinne
+          - Auth prace? -> AUTHENTICATION_AUTHORIZATION.md
+          - CI/CD? -> WARP_GITHUB_ACTIONS_GLOBAL_RULES.md
+          - Security/Trivy? -> WARP_CONTAINER_HARDENING.md
+          - Nejasne? -> RULEBOOK_V2.md jako start
+          
+          ### Current Status (2025-11-24)
+          
+          - CI/CD 100% Functional across all orgs
+          - Trivy gating on HIGH/CRITICAL mandatory
+          - CodeQL v4 everywhere
+          - PR Assistant 100% coverage
+          
+          ## YOUR MISSION
+          
           Perform a thorough, professional code review that:
           1. Focuses on what matters - security, bugs, architecture
           2. Respects the PRs stated goal - dont suggest unrelated changes
-          3. Leverages existing bot findings - validate/filter/prioritize them
-          4. Follows Merglbot standards - WARP rules, security-first, OIDC/WIF
+          3. Analyzes ALL bugbot findings below - validate, filter false positives, prioritize
+          4. Follows Merglbot standards above - WARP rules, security-first, OIDC/WIF
           
-          ## Context Rules
+          ## Output Rules
+          
           - Language: Czech for explanations, English for code comments
-          - Output Structure: Sumar (3-5 lines), Findings (prioritized), Zaver
-          - Severity Levels: Critical, High, Medium, Low
+          - Structure: Sumar (3-5 lines), Findings (prioritized by severity), Zaver
+          - Severity Levels: Critical (must fix), High, Medium, Low
           - Be Concise: No filler, only actionable insights
+          - Reference WARP rules when applicable
           
-          ## Merglbot Platform Rules (MUST FOLLOW)
-          - Security: No hardcoded secrets, prefer WIF/OIDC over SA JSON
-          - PR Hygiene: <400 lines, conventional commits (feat/fix/docs/ci), squash merge
-          - CI: Idempotent steps, no Trivy/CodeQL gate softening, SHA-pinned actions
-          - WARP: Plan-Act-Verify workflow, double-confirm destructive actions
+          PROMPT_EOF
           
-          ---
+          # Append dynamic content
+          {
+            echo ""
+            echo "## PR INFORMATION"
+            echo ""
+            echo "Title: $PR_TITLE"
+            echo "PR Number: #${{ env.PR_NUMBER }}"
+            echo "Changed Files: $CHANGED_FILES"
+            echo ""
+            echo "### PR Description (FULL)"
+            echo ""
+            echo "$PR_BODY"
+            echo ""
+            echo "## BUGBOT FINDINGS (ANALYZE ALL)"
+            echo ""
+            echo "Read each finding carefully. Validate which are real issues, filter out false positives."
+            echo ""
+            echo "$BUGBOT_FINDINGS"
+            echo ""
+            echo "## PR DIFF"
+            echo ""
+            echo '```diff'
+            echo "$PR_DIFF"
+            echo '```'
+            echo ""
+            echo "## YOUR TASK"
+            echo ""
+            echo "1. Read the Merglbot Appendix above - understand platform standards"
+            echo "2. Analyze the PR description - understand authors intent"
+            echo "3. Process ALL bugbot findings - validate each one"
+            echo "4. Find NEW issues bots might have missed"
+            echo "5. Respect PR scope - only flag relevant issues"
+            echo "6. Output structured review in Czech"
+            echo ""
+            echo "IMPORTANT: Focus on substance. A PR with no issues should get approved quickly."
+            echo "If bugbots found issues, explicitly state whether you agree or disagree with each."
+          } >> /tmp/full_prompt.txt
           
-          ## PR Information
-          
-          **Title**: $PR_TITLE
-          **PR Number**: #${{ env.PR_NUMBER }}
-          **Changed Files**: $CHANGED_FILES
-          
-          ### PR Description (Authors Intent)
-          \`\`\`
-          $PR_BODY
-          \`\`\`
-          
-          ---
-          
-          ## Existing Bot Findings
-          
-          The following findings were reported by other automated tools.
-          Your job: Validate these findings, filter out false positives, and prioritize whats actually important.
-          
-          $BUGBOT_FINDINGS
-          
-          ---
-          
-          ## PR Diff (Code Changes)
-          
-          \`\`\`diff
-          $PR_DIFF
-          \`\`\`
-          
-          ---
-          
-          ## Your Task
-          
-          1. Analyze the diff against Merglbot platform standards
-          2. Validate bugbot findings - which are real issues? which are noise?
-          3. Find NEW issues the bots might have missed (security, edge cases, race conditions)
-          4. Respect PR scope - only flag issues relevant to this PRs goal
-          5. Output structured review in Czech with prioritized findings
-          
-          IMPORTANT: Focus on substance over quantity. A PR with no real issues should get approved quickly."
-          
-          echo "$PROMPT_HEADER" > /tmp/full_prompt.txt
           FULL_PROMPT=$(cat /tmp/full_prompt.txt)
           PROMPT_SIZE=$(echo "$FULL_PROMPT" | wc -c)
-          echo "📝 Prompt size: $PROMPT_SIZE chars"
+          echo "Prompt size: $PROMPT_SIZE chars"
           
-          # === ANTHROPIC CALL ===
-          echo "🔵 Calling Anthropic ($ANTHROPIC_MODEL)..."
+          # ANTHROPIC CALL
+          echo "Calling Anthropic ($ANTHROPIC_MODEL)..."
           
           jq -n \
             --arg model "$ANTHROPIC_MODEL" \
             --arg prompt "$FULL_PROMPT" \
             '{
               model: $model,
-              max_tokens: 6000,
+              max_tokens: 8000,
               temperature: 0.2,
               messages: [{role: "user", content: $prompt}]
             }' > /tmp/anthropic_payload.json
@@ -265,20 +325,20 @@ jobs:
             -H "anthropic-version: $ANTHROPIC_API_VERSION" \
             -d @/tmp/anthropic_payload.json)
           
-          echo "📊 Anthropic Response: $(echo "$ANTHROPIC_RESP" | wc -c) chars"
+          echo "Anthropic Response: $(echo "$ANTHROPIC_RESP" | wc -c) chars"
           
           if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
-            echo "   ❌ ERROR: $(echo "$ANTHROPIC_RESP" | jq -r '.error.message')"
+            echo "ERROR: $(echo "$ANTHROPIC_RESP" | jq -r '.error.message')"
             echo "API_ERROR" > anthropic_review.txt
           else
-            echo "   ✅ Success"
+            echo "Success"
             ANTHROPIC_CONTENT=$(echo "$ANTHROPIC_RESP" | jq -r '.content[0].text // "EMPTY"')
-            echo "   Words: $(echo "$ANTHROPIC_CONTENT" | wc -w)"
+            echo "Words: $(echo "$ANTHROPIC_CONTENT" | wc -w)"
             echo "$ANTHROPIC_CONTENT" > anthropic_review.txt
           fi
           
-          # === OPENAI CALL ===
-          echo "🟢 Calling OpenAI ($OPENAI_MODEL)..."
+          # OPENAI CALL
+          echo "Calling OpenAI ($OPENAI_MODEL)..."
           
           jq -n \
             --arg model "$OPENAI_MODEL" \
@@ -295,18 +355,18 @@ jobs:
             -H "Authorization: Bearer $OPENAI_API_KEY" \
             -d @/tmp/openai_payload.json)
           
-          echo "📊 OpenAI Response: $(echo "$OPENAI_RESP" | wc -c) chars"
+          echo "OpenAI Response: $(echo "$OPENAI_RESP" | wc -c) chars"
           
           if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
-            echo "   ❌ ERROR: $(echo "$OPENAI_RESP" | jq -r '.error.message')"
+            echo "ERROR: $(echo "$OPENAI_RESP" | jq -r '.error.message')"
             echo "API_ERROR" > openai_review.txt
           else
-            echo "   ✅ Success"
+            echo "Success"
             CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
             if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
               CONTENT="EMPTY"
             fi
-            echo "   Words: $(echo "$CONTENT" | wc -w)"
+            echo "Words: $(echo "$CONTENT" | wc -w)"
             echo "$CONTENT" > openai_review.txt
           fi
           
@@ -329,84 +389,77 @@ jobs:
           ANTHROPIC_REVIEW=$(cat anthropic_review.txt)
           OPENAI_REVIEW=$(cat openai_review.txt)
           PR_TITLE=$(cat pr_title.txt)
-          PR_BODY=$(cat pr_body.txt | head -c 2000)
+          PR_BODY=$(cat pr_body.txt | head -c 3000)
           
-          echo "📋 Input Reviews:"
-          echo "   Anthropic: $(echo "$ANTHROPIC_REVIEW" | wc -w) words"
-          echo "   OpenAI: $(echo "$OPENAI_REVIEW" | wc -w) words"
+          echo "Input Reviews:"
+          echo "  Anthropic: $(echo "$ANTHROPIC_REVIEW" | wc -w) words"
+          echo "  OpenAI: $(echo "$OPENAI_REVIEW" | wc -w) words"
           
-          SYNTHESIS_PROMPT="# Final Review Synthesis Task
+          # Create synthesis prompt
+          cat > /tmp/synthesis_prompt.txt << 'SYNTH_EOF'
+          # Final Review Synthesis Task
           
           You are synthesizing two independent AI code reviews into ONE final, high-quality review.
           
           ## Synthesis Rules
           1. Eliminate Duplicates: If both reviews mention the same issue, keep the better explanation
           2. Prioritize by Impact: Security > Bugs > Architecture > Style
-          3. Filter False Positives: Remove findings that dont apply to this PRs actual changes
-          4. Respect PR Scope: Dont include suggestions unrelated to the PRs stated goal
+          3. Filter False Positives: Remove findings that dont apply to actual changes
+          4. Respect PR Scope: Dont include suggestions unrelated to PRs goal
           5. Be Decisive: End with clear APPROVE or CHANGES NEEDED verdict
           
           ## Output Format (STRICT)
           
           # Code Review Sumar
-          [3-5 sentences: What this PR does, overall quality assessment, key concerns if any]
-          
-          ---
+          [3-5 sentences about what PR does, overall quality, key concerns]
           
           ## Findings
           
           ### Critical (Must Fix)
-          [List critical issues or None]
+          [List or None]
           
           ### High Priority
-          [List high priority issues or None]
+          [List or None]
           
           ### Medium Priority
-          [List medium priority issues or None]
+          [List or None]
           
           ### Low Priority / Suggestions
-          [List low priority items or None]
-          
-          ---
+          [List or None]
           
           ## Whats Good
-          [2-3 positive aspects of the PR]
-          
-          ---
+          [2-3 positive aspects]
           
           ## Zaver
           
-          **Verdict**: [APPROVE or CHANGES NEEDED]
-          [1-2 sentences explaining the verdict and next steps]
+          Verdict: [APPROVE or CHANGES NEEDED]
+          [1-2 sentences explaining verdict]
           
           ## IMPORTANT
           - Output ONLY the review content above
-          - DO NOT add any Review Models section - thats added automatically
-          - Use Czech for text, English for code terms
+          - DO NOT add Review Models section
+          - Use Czech for text, English for code
           - Be concise but thorough
           
-          ---
+          SYNTH_EOF
           
-          ## PR Context
+          # Append context
+          {
+            echo ""
+            echo "## PR Context"
+            echo "Title: $PR_TITLE"
+            echo "Description: $PR_BODY"
+            echo ""
+            echo "## Review from Anthropic ($ANTHROPIC_MODEL)"
+            echo "$ANTHROPIC_REVIEW"
+            echo ""
+            echo "## Review from OpenAI ($OPENAI_MODEL with HIGH reasoning)"
+            echo "$OPENAI_REVIEW"
+            echo ""
+            echo "Now synthesize into FINAL review."
+          } >> /tmp/synthesis_prompt.txt
           
-          **Title**: $PR_TITLE
-          **Description**: $PR_BODY
-          
-          ---
-          
-          ## Review from Anthropic ($ANTHROPIC_MODEL)
-          
-          $ANTHROPIC_REVIEW
-          
-          ---
-          
-          ## Review from OpenAI ($OPENAI_MODEL with HIGH reasoning)
-          
-          $OPENAI_REVIEW
-          
-          ---
-          
-          Now synthesize these into the FINAL review following the format above."
+          SYNTHESIS_PROMPT=$(cat /tmp/synthesis_prompt.txt)
           
           jq -n \
             --arg model "$OPENAI_MODEL" \
@@ -414,40 +467,38 @@ jobs:
             '{
               model: $model,
               messages: [
-                {role: "system", content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative, well-structured final review."},
+                {role: "system", content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
                 {role: "user", content: $prompt}
               ],
               max_completion_tokens: 12000,
               reasoning_effort: "high"
             }' > /tmp/synthesis_payload.json
           
-          echo "🟢 Calling OpenAI for synthesis ($OPENAI_MODEL)..."
+          echo "Calling OpenAI for synthesis..."
           
           SYNTHESIS_RESP=$(curl -s https://api.openai.com/v1/chat/completions \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $OPENAI_API_KEY" \
             -d @/tmp/synthesis_payload.json)
           
-          echo "📊 Synthesis Response: $(echo "$SYNTHESIS_RESP" | wc -c) chars"
+          echo "Synthesis Response: $(echo "$SYNTHESIS_RESP" | wc -c) chars"
           
           if echo "$SYNTHESIS_RESP" | jq -e ".error" > /dev/null 2>&1; then
-            echo "   ❌ ERROR: $(echo "$SYNTHESIS_RESP" | jq -r '.error.message')"
+            echo "ERROR: $(echo "$SYNTHESIS_RESP" | jq -r '.error.message')"
             cp anthropic_review.txt final_review.txt
           else
-            echo "   ✅ Success"
+            echo "Success"
             CONTENT=$(echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.content // empty')
             if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
               cp anthropic_review.txt final_review.txt
             else
-              echo "   Words: $(echo "$CONTENT" | wc -w)"
+              echo "Words: $(echo "$CONTENT" | wc -w)"
               echo "$CONTENT" > final_review.txt
             fi
           fi
           
-          # Quality Check
-          FINAL_CONTENT=$(cat final_review.txt)
-          WORD_COUNT=$(echo "$FINAL_CONTENT" | wc -w)
-          echo "📊 Quality: $WORD_COUNT words"
+          WORD_COUNT=$(cat final_review.txt | wc -w)
+          echo "Final review: $WORD_COUNT words"
           
           echo "========================================="
           echo "STEP 2 COMPLETE"
@@ -465,53 +516,53 @@ jobs:
           
           if [ ! -s final_review.txt ] || grep -q "^API_ERROR$" final_review.txt; then
             {
-              echo "## 🤖 Merglbot PR Assistant v3"
+              echo "## Merglbot PR Assistant v3"
               echo ""
-              echo "❌ Review generation failed. Please check workflow logs."
+              echo "Review generation failed. Please check workflow logs."
               echo ""
-              echo "Triggered by: \`@merglbot review\`"
+              echo "Triggered by: @merglbot review"
             } > comment.md
           else
             {
-              echo "## 🤖 Merglbot PR Assistant v3"
+              echo "## Merglbot PR Assistant v3"
               echo ""
               cat final_review.txt
               echo ""
               echo "---"
               echo ""
               echo "<details>"
-              echo "<summary>🤖 Review Models & Configuration</summary>"
+              echo "<summary>Review Models and Configuration</summary>"
               echo ""
               echo "| Phase | Model | Config |"
               echo "|-------|-------|--------|"
-              echo "| Primary Analysis | Anthropic \`$ANTHROPIC_MODEL\` | temp=0.2 |"
-              echo "| Secondary Analysis | OpenAI \`$OPENAI_MODEL\` | reasoning=HIGH 🧠 |"
-              echo "| Final Synthesis | OpenAI \`$OPENAI_MODEL\` | reasoning=HIGH 🧠 |"
+              echo "| Primary Analysis | Anthropic $ANTHROPIC_MODEL | temp=0.2 |"
+              echo "| Secondary Analysis | OpenAI $OPENAI_MODEL | reasoning=HIGH |"
+              echo "| Final Synthesis | OpenAI $OPENAI_MODEL | reasoning=HIGH |"
               echo ""
-              echo "**Context Used**: PR Description, Full Diff, Bot Findings, Platform Rules"
+              echo "Context Used: PR Description, Full Diff, Bot Findings, Merglbot Appendix v2.5"
               echo ""
-              echo "**Triggered by**: \`@merglbot review\` command"
+              echo "Triggered by: @merglbot review command"
               echo ""
               echo "</details>"
               echo ""
               echo "---"
               echo ""
-              echo "*Multi-model AI review. Validate findings before applying.*"
+              echo "Multi-model AI review. Validate findings before applying."
             } > comment.md
           fi
           
           gh pr comment "$PR_NUM" --body-file comment.md
-          echo "✅ Review posted to PR #$PR_NUM"
+          echo "Review posted to PR #$PR_NUM"
       
       - name: Workflow Summary
         run: |
           {
-            echo "## 🤖 Merglbot PR Assistant v3"
+            echo "## Merglbot PR Assistant v3"
             echo ""
-            echo "- **PR**: #${{ env.PR_NUMBER }}"
-            echo "- **Trigger**: ${{ github.event_name == 'issue_comment' && '@merglbot review' || 'Manual dispatch' }}"
-            echo "- **Timestamp**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-            echo "- **Status**: $([ -s final_review.txt ] && echo '✅ Success' || echo '❌ Failed')"
+            echo "- PR: #${{ env.PR_NUMBER }}"
+            echo "- Trigger: ${{ github.event_name == 'issue_comment' && '@merglbot review' || 'Manual dispatch' }}"
+            echo "- Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "- Status: $([ -s final_review.txt ] && echo 'Success' || echo 'Failed')"
             echo ""
             echo "### Review Stats"
             echo "- Anthropic: $(cat anthropic_review.txt 2>/dev/null | wc -w || echo 0) words"
