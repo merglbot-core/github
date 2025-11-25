@@ -400,7 +400,7 @@ jobs:
             --title "Security Audit Report - ${AUDIT_QUARTER:-Manual} - ${{ needs.prepare.outputs.audit_id }}" \
             --body-file reports/consolidated-audit.html \
             --label "security-audit,automated" \
-            --assignee "@me"
+            
 
   auto-remediation:
     name: Automatic Remediation
