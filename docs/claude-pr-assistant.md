@@ -1,7 +1,7 @@
 # ⚠️ DEPRECATED: Claude PR Assistant v2
 
 > **This document is deprecated.** PR Assistant v3 is now the standard.
-> See [WARP_PR_ASSISTANT_V3.md](https://github.com/merglbot-public/docs/blob/main/WARP_PR_ASSISTANT_V3.md)
+> See [MERGLBOT_PR_ASSISTANT_V3.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_PR_ASSISTANT_V3.md)
 
 ---
 
