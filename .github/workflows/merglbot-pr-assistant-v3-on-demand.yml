@@ -234,13 +234,13 @@ jobs:
           if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
             REVIEW_DEPTH="LIGHT"
             OUTPUT_INSTRUCTIONS="Output a CONCISE review (max 500 words). Focus only on critical and high priority issues."
-            MAX_TOKENS_ANTHROPIC=4000
-            MAX_TOKENS_OPENAI=16000
+            MAX_TOKENS_ANTHROPIC=8000
+            MAX_TOKENS_OPENAI=32000
           else
             REVIEW_DEPTH="FULL"
             OUTPUT_INSTRUCTIONS="Output a COMPREHENSIVE review with detailed analysis, code examples, WARP rule references, and actionable checkboxes."
-            MAX_TOKENS_ANTHROPIC=8000
-            MAX_TOKENS_OPENAI=32000
+            MAX_TOKENS_ANTHROPIC=16000
+            MAX_TOKENS_OPENAI=65000
           fi
           
           echo "Review depth: $REVIEW_DEPTH"
@@ -492,9 +492,9 @@ jobs:
           echo "  OpenAI: $(echo "$OPENAI_REVIEW" | wc -w) words"
           
           if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
-            MAX_SYNTH_TOKENS=12000
+            MAX_SYNTH_TOKENS=25000
           else
-            MAX_SYNTH_TOKENS=24000
+            MAX_SYNTH_TOKENS=50000
           fi
           
           # Build synthesis prompt
