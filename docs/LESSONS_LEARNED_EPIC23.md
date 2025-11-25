@@ -58,6 +58,6 @@ status: stable
 ---
 
 # Next Steps
-- Přenést vybrané části do kanonické dokumentace v `merglbot-public/docs` (WARP_*.md)
+- Přenést vybrané části do kanonické dokumentace v `merglbot-public/docs` (MERGLBOT_*.md)
 - Nastavit CODEOWNERS pro `training/security/certification-quiz-answers.md`
 - Přidat GitHub Actions check na grep `--force --all` v markdown příkladech (lint)

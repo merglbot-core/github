@@ -4,7 +4,7 @@
 - Code logic, algorithms, refactor requests
 - File names, function signatures
 - Secret NAMES only (e.g., ANTHROPIC_API_KEY) – never values
-- Public docs, WARP_*.md, anonymized data
+- Public docs, MERGLBOT_*.md, anonymized data
 
 ## ❌ NEVER share
 - Secret VALUES (API keys, tokens, passwords)

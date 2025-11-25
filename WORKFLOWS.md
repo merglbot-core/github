@@ -1,7 +1,7 @@
 # Workflow Catalogue
 
 This repository hosts all reusable and scheduled GitHub Actions workflows for the Merglbot platform.  
-Every consumer **must** follow [Rulebook v2](https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md), [PR Policy](https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md), [Branch Protection](https://github.com/merglbot-public/docs/blob/main/BRANCH_PROTECTION.md), and [WARP_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md](https://github.com/merglbot-public/docs/blob/main/WARP_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md).
+Every consumer **must** follow [Rulebook v2](https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md), [PR Policy](https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md), [Branch Protection](https://github.com/merglbot-public/docs/blob/main/BRANCH_PROTECTION.md), and [MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md).
 
 | Workflow | Purpose | Trigger / How to use | Required Inputs & Notes | Required Secrets / Status |
 | --- | --- | --- | --- | --- |

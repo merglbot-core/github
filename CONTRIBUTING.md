@@ -11,8 +11,8 @@ This repository contains reusable GitHub Actions workflows. When contributing:
 
 ### Workflow Standards
 
-- Follow [WARP_GITHUB_ACTIONS_GLOBAL_RULES.md](https://github.com/merglbot-public/docs/blob/main/WARP_GITHUB_ACTIONS_GLOBAL_RULES.md)
-- Use [WARP_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md](https://github.com/merglbot-public/docs/blob/main/WARP_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md) patterns
+- Follow [MERGLBOT_GITHUB_ACTIONS_GLOBAL_RULES.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GITHUB_ACTIONS_GLOBAL_RULES.md)
+- Use [MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md) patterns
 - Validate YAML with `yamllint` and `actionlint` before committing
 - Test workflows in a sandbox repo before opening PR
 
