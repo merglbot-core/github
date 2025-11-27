@@ -1,0 +1,177 @@
+name: Monthly Enterprise Audit
+
+on:
+  schedule:
+    # Run on 1st of each month at 08:00 UTC
+    - cron: "0 8 1 * *"
+  workflow_dispatch:
+    inputs:
+      create_issues:
+        description: "Create GitHub issues for violations"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: monthly-enterprise-audit
+  cancel-in-progress: false
+
+env:
+  ORGS: "merglbot-core merglbot-public merglbot-denatura merglbot-extractors merglbot-proteinaco merglbot-ruzovyslon merglbot-milan-private merglbot-autodoplnky merglbot-hodinarstvibechyne merglbot-kiteboarding"
+
+jobs:
+  audit-settings:
+    name: Audit Organization Settings
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      has_issues: ${{ steps.audit.outputs.has_issues }}
+      audit_id: ${{ steps.setup.outputs.audit_id }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Setup audit environment
+        id: setup
+        run: |
+          AUDIT_ID="enterprise-audit-$(date +%Y%m%d-%H%M%S)"
+          echo "audit_id=$AUDIT_ID" >> "$GITHUB_OUTPUT"
+          mkdir -p reports
+          echo "## 🏢 Monthly Enterprise Audit" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Audit ID**: $AUDIT_ID" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Date**: $(date -u +%Y-%m-%d)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Organizations**: 10" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Audit organization settings
+        id: audit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          
+          echo "### Organization Settings" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Organization | allowed_actions | workflow_perms | public_repos |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------------|-----------------|----------------|--------------|" >> "$GITHUB_STEP_SUMMARY"
+          
+          ISSUES_FOUND=0
+          
+          for org in $ORGS; do
+            echo "Auditing: $org"
+            
+            # Get Actions permissions
+            ACTIONS=$(gh api "/orgs/${org}/actions/permissions" 2>/dev/null || echo '{}')
+            ALLOWED=$(echo "$ACTIONS" | jq -r '.allowed_actions // "unknown"')
+            
+            # Get workflow permissions
+            WORKFLOW=$(gh api "/orgs/${org}/actions/permissions/workflow" 2>/dev/null || echo '{}')
+            PERMS=$(echo "$WORKFLOW" | jq -r '.default_workflow_permissions // "unknown"')
+            
+            # Get org settings
+            ORG_SETTINGS=$(gh api "/orgs/${org}" 2>/dev/null || echo '{}')
+            PUBLIC=$(echo "$ORG_SETTINGS" | jq -r '.members_can_create_public_repositories // "unknown"')
+            
+            # Check for issues
+            ALLOWED_OK="✅"
+            PERMS_OK="✅"
+            PUBLIC_OK="✅"
+            
+            if [ "$ALLOWED" != "selected" ]; then
+              ALLOWED_OK="❌"
+              ISSUES_FOUND=$((ISSUES_FOUND + 1))
+            fi
+            
+            if [ "$PERMS" != "read" ]; then
+              PERMS_OK="❌"
+              ISSUES_FOUND=$((ISSUES_FOUND + 1))
+            fi
+            
+            if [ "$PUBLIC" == "true" ]; then
+              PUBLIC_OK="❌"
+              ISSUES_FOUND=$((ISSUES_FOUND + 1))
+            fi
+            
+            echo "| $org | $ALLOWED_OK $ALLOWED | $PERMS_OK $PERMS | $PUBLIC_OK $PUBLIC |" >> "$GITHUB_STEP_SUMMARY"
+            
+            # Save to JSON
+            echo "{\"org\":\"$org\",\"allowed_actions\":\"$ALLOWED\",\"workflow_permissions\":\"$PERMS\",\"public_repos\":\"$PUBLIC\"}" >> reports/org-settings.jsonl
+          done
+          
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          
+          if [ $ISSUES_FOUND -gt 0 ]; then
+            echo "⚠️ **Found $ISSUES_FOUND configuration issues!**" >> "$GITHUB_STEP_SUMMARY"
+            echo "has_issues=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "✅ **All organizations configured correctly!**" >> "$GITHUB_STEP_SUMMARY"
+            echo "has_issues=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Audit Actions runners
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Self-Hosted Runners" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          
+          TOTAL_RUNNERS=0
+          
+          for org in $ORGS; do
+            RUNNERS=$(gh api "/orgs/${org}/actions/runners" 2>/dev/null | jq '.total_count // 0')
+            if [ "$RUNNERS" -gt 0 ]; then
+              echo "- **$org**: $RUNNERS runners" >> "$GITHUB_STEP_SUMMARY"
+              TOTAL_RUNNERS=$((TOTAL_RUNNERS + RUNNERS))
+            fi
+          done
+          
+          if [ $TOTAL_RUNNERS -eq 0 ]; then
+            echo "No self-hosted runners configured (using GitHub-hosted only)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload audit report
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4.4.3
+        with:
+          name: enterprise-audit-${{ steps.setup.outputs.audit_id }}
+          path: reports/
+          retention-days: 90
+
+  create-issue:
+    name: Create Tracking Issue
+    needs: audit-settings
+    if: needs.audit-settings.outputs.has_issues == 'true' && inputs.create_issues != false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create issue for violations
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "🔒 Enterprise Audit Alert - ${{ needs.audit-settings.outputs.audit_id }}" \
+            --body "## Enterprise Configuration Issues Detected
+
+The monthly enterprise audit found configuration issues that need attention.
+
+**Audit ID**: ${{ needs.audit-settings.outputs.audit_id }}
+**Date**: $(date -u +%Y-%m-%d)
+
+Please review the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
+
+### Expected Settings
+
+| Setting | Expected Value |
+|---------|----------------|
+| allowed_actions | selected |
+| workflow_permissions | read |
+| public_repos | false |
+
+---
+*This issue was created automatically by the Monthly Enterprise Audit workflow.*" \
+            --label "security-audit,automated"
+

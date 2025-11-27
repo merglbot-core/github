@@ -1,0 +1,157 @@
+name: Org Settings Watch
+
+on:
+  schedule:
+    # Run daily at 06:00 UTC
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: org-settings-watch
+  cancel-in-progress: false
+
+jobs:
+  check-drift:
+    name: Check Organization Settings Drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+
+      - name: Load expected settings
+        id: baseline
+        run: |
+          # Load organizations from baseline
+          ORGS=$(jq -r '.organizations[]' config/expected-org-settings.json | tr '\n' ' ')
+          echo "orgs=$ORGS" >> "$GITHUB_OUTPUT"
+          
+          # Load expected values
+          EXPECTED_ACTIONS=$(jq -r '.expected_settings.actions.allowed_actions' config/expected-org-settings.json)
+          EXPECTED_PERMS=$(jq -r '.expected_settings.workflow.default_workflow_permissions' config/expected-org-settings.json)
+          EXPECTED_PUBLIC=$(jq -r '.expected_settings.organization.members_can_create_public_repositories' config/expected-org-settings.json)
+          
+          echo "expected_actions=$EXPECTED_ACTIONS" >> "$GITHUB_OUTPUT"
+          echo "expected_perms=$EXPECTED_PERMS" >> "$GITHUB_OUTPUT"
+          echo "expected_public=$EXPECTED_PUBLIC" >> "$GITHUB_OUTPUT"
+
+      - name: Check for configuration drift
+        id: drift
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          
+          DRIFT_FOUND=0
+          DRIFT_DETAILS=""
+          
+          echo "## 🔍 Organization Settings Watch" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Date**: $(date -u +%Y-%m-%d)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          
+          for org in ${{ steps.baseline.outputs.orgs }}; do
+            echo "Checking: $org"
+            
+            # Get current Actions permissions
+            ACTIONS=$(gh api "/orgs/${org}/actions/permissions" 2>/dev/null || echo '{}')
+            CURRENT_ACTIONS=$(echo "$ACTIONS" | jq -r '.allowed_actions // "unknown"')
+            
+            # Get current workflow permissions
+            WORKFLOW=$(gh api "/orgs/${org}/actions/permissions/workflow" 2>/dev/null || echo '{}')
+            CURRENT_PERMS=$(echo "$WORKFLOW" | jq -r '.default_workflow_permissions // "unknown"')
+            
+            # Get current org settings
+            ORG_SETTINGS=$(gh api "/orgs/${org}" 2>/dev/null || echo '{}')
+            CURRENT_PUBLIC=$(echo "$ORG_SETTINGS" | jq -r '.members_can_create_public_repositories // "unknown"')
+            
+            # Compare with expected
+            if [ "$CURRENT_ACTIONS" != "${{ steps.baseline.outputs.expected_actions }}" ]; then
+              DRIFT_FOUND=$((DRIFT_FOUND + 1))
+              DRIFT_DETAILS="${DRIFT_DETAILS}\n- **$org**: allowed_actions is '$CURRENT_ACTIONS' (expected: '${{ steps.baseline.outputs.expected_actions }}')"
+            fi
+            
+            if [ "$CURRENT_PERMS" != "${{ steps.baseline.outputs.expected_perms }}" ]; then
+              DRIFT_FOUND=$((DRIFT_FOUND + 1))
+              DRIFT_DETAILS="${DRIFT_DETAILS}\n- **$org**: workflow_permissions is '$CURRENT_PERMS' (expected: '${{ steps.baseline.outputs.expected_perms }}')"
+            fi
+            
+            if [ "$CURRENT_PUBLIC" = "true" ] && [ "${{ steps.baseline.outputs.expected_public }}" = "false" ]; then
+              DRIFT_FOUND=$((DRIFT_FOUND + 1))
+              DRIFT_DETAILS="${DRIFT_DETAILS}\n- **$org**: public_repos is enabled (should be disabled)"
+            fi
+          done
+          
+          if [ $DRIFT_FOUND -gt 0 ]; then
+            echo "### ⚠️ Configuration Drift Detected!" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Found **$DRIFT_FOUND** settings that differ from baseline:" >> "$GITHUB_STEP_SUMMARY"
+            echo -e "$DRIFT_DETAILS" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "drift_found=true" >> "$GITHUB_OUTPUT"
+            echo "drift_count=$DRIFT_FOUND" >> "$GITHUB_OUTPUT"
+            echo -e "$DRIFT_DETAILS" > /tmp/drift_details.txt
+          else
+            echo "### ✅ No Configuration Drift" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "All 10 organizations match the expected baseline configuration." >> "$GITHUB_STEP_SUMMARY"
+            echo "drift_found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create alert issue
+        if: steps.drift.outputs.drift_found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DRIFT_DETAILS=$(cat /tmp/drift_details.txt || echo "See workflow run for details")
+          
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "🚨 Org Settings Drift Alert - $(date -u +%Y-%m-%d)" \
+            --body "## Organization Settings Drift Detected
+
+**${{ steps.drift.outputs.drift_count }}** configuration settings differ from the expected baseline.
+
+### Drift Details
+$DRIFT_DETAILS
+
+### Expected Baseline
+
+| Setting | Expected Value |
+|---------|----------------|
+| allowed_actions | selected |
+| workflow_permissions | read |
+| public_repos | false |
+
+### Action Required
+
+1. Review the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+2. Determine if the change was intentional
+3. Either:
+   - Fix the settings using \`gh api\` commands
+   - Or update the baseline in \`config/expected-org-settings.json\`
+
+### Remediation Commands
+
+\`\`\`bash
+# Fix allowed_actions
+gh api --method PUT \"/orgs/ORG_NAME/actions/permissions\" \\
+  -f enabled_repositories=all -f allowed_actions=selected
+
+# Fix workflow_permissions  
+gh api --method PUT \"/orgs/ORG_NAME/actions/permissions/workflow\" \\
+  -f default_workflow_permissions=read
+
+# Fix public_repos
+gh api --method PATCH \"/orgs/ORG_NAME\" \\
+  -F members_can_create_public_repositories=false
+\`\`\`
+
+---
+*This issue was created automatically by the Org Settings Watch workflow.*" \
+            --label "security-alert,automated,config-drift"
+
