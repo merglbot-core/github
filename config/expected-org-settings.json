@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Merglbot Enterprise Expected Organization Settings",
+  "description": "Baseline configuration for all Merglbot organizations. Used by org-settings-watch.yml to detect drift.",
+  "version": "1.0.0",
+  "last_updated": "2025-11-27",
+  
+  "organizations": [
+    "merglbot-core",
+    "merglbot-public", 
+    "merglbot-denatura",
+    "merglbot-extractors",
+    "merglbot-proteinaco",
+    "merglbot-ruzovyslon",
+    "merglbot-milan-private",
+    "merglbot-autodoplnky",
+    "merglbot-hodinarstvibechyne",
+    "merglbot-kiteboarding"
+  ],
+  
+  "expected_settings": {
+    "actions": {
+      "allowed_actions": "selected",
+      "github_owned_allowed": true,
+      "verified_allowed": true,
+      "patterns_allowed": []
+    },
+    "workflow": {
+      "default_workflow_permissions": "read",
+      "can_approve_pull_request_reviews": false
+    },
+    "organization": {
+      "members_can_create_public_repositories": false,
+      "two_factor_requirement_enabled": true
+    }
+  },
+  
+  "severity_levels": {
+    "allowed_actions_all": "HIGH",
+    "workflow_permissions_write": "MEDIUM",
+    "public_repos_enabled": "MEDIUM",
+    "two_factor_disabled": "HIGH"
+  }
+}
+
