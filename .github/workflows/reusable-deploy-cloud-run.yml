@@ -153,10 +153,16 @@ jobs:
       
       - name: Upload SBOM to release (if tag)
         # Avoid publishing SBOMs to public repos by default; remove the guard if transparency to public is desired.
+        # Using gh CLI instead of softprops/action-gh-release (not allowed in enterprise)
         if: startsWith(github.ref, 'refs/tags/') && github.repository_visibility != 'public'
-        uses: softprops/action-gh-release@e5f48c3b7b613b7a911e58a617b757074c4c790d  # v2.0.2
-        with:
-          files: sbom.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          # Create release if it doesn't exist, then upload SBOM
+          gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" 2>/dev/null || \
+            gh release create "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --title "$TAG_NAME" --generate-notes
+          gh release upload "$TAG_NAME" sbom.json --repo "$GITHUB_REPOSITORY" --clobber
       
       # Container Security: Cosign Signing
       - name: Install Cosign
