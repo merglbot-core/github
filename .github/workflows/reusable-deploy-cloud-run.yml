@@ -133,21 +133,19 @@ jobs:
           echo "✅ Image pushed: ${FULL_IMAGE_WITH_DIGEST}"
       
       # Container Security: Trivy Scanning
-      # Note: exit-code: '0' means vulnerabilities are reported but don't block deploy
-      # Security issues are tracked via SARIF upload to Code Scanning
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8  # v0.33.1
         with:
           image-ref: ${{ steps.build.outputs.full_image }}
           format: 'sarif'
           output: 'trivy-results.sarif'
-          severity: 'HIGH,CRITICAL'
-          exit-code: '0'  # Report only, don't block deploy
+          severity: 'CRITICAL'  # Only block on CRITICAL, HIGH reported
+          exit-code: '1'
       
       - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@v4
         if: always()
-        continue-on-error: true  # Don't fail if SARIF upload fails
+        continue-on-error: true  # Don't fail if SARIF upload has permission issues
         with:
           sarif_file: 'trivy-results.sarif'
       
