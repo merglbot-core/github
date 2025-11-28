@@ -97,28 +97,40 @@ jobs:
           TAG="${{ github.sha }}"
           
           docker build -t "${IMAGE}:${TAG}" -f "${{ inputs.dockerfile }}" .
-          docker push "${IMAGE}:${TAG}"
-          # docker inspect sometimes lags immediately after push, so retry briefly
-          for attempt in {1..5}; do
-            FULL_IMAGE_WITH_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${TAG}" 2>/dev/null || true)
-            if [ -n "$FULL_IMAGE_WITH_DIGEST" ]; then
-              break
-            fi
-            echo "Digest not yet available (attempt ${attempt}/5). Retrying in 2s..."
-            sleep 2
-          done
           
-          if [ -z "$FULL_IMAGE_WITH_DIGEST" ]; then
-            echo "::error::Unable to resolve pushed image digest via docker inspect after retries."
+          # Push and capture digest directly from push output (most reliable)
+          PUSH_OUTPUT=$(docker push "${IMAGE}:${TAG}" 2>&1 | tee /dev/stderr)
+          
+          # Extract digest from push output (format: "digest: sha256:xxx size: yyy")
+          DIGEST=$(echo "$PUSH_OUTPUT" | grep -oP 'digest: \Ksha256:[a-f0-9]+' | tail -1)
+          
+          if [ -z "$DIGEST" ]; then
+            echo "::warning::Could not parse digest from push output, trying docker inspect..."
+            # Fallback to docker inspect with retries
+            for attempt in {1..5}; do
+              FULL_IMAGE_WITH_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${TAG}" 2>/dev/null || true)
+              if [ -n "$FULL_IMAGE_WITH_DIGEST" ]; then
+                DIGEST="${FULL_IMAGE_WITH_DIGEST#*@}"
+                break
+              fi
+              echo "Digest not yet available (attempt ${attempt}/5). Retrying in 2s..."
+              sleep 2
+            done
+          fi
+          
+          if [ -z "$DIGEST" ]; then
+            echo "::error::Unable to resolve pushed image digest."
             exit 1
           fi
           
-          DIGEST="${FULL_IMAGE_WITH_DIGEST#*@}"
+          FULL_IMAGE_WITH_DIGEST="${IMAGE}@${DIGEST}"
           
           echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
           echo "full_image=${FULL_IMAGE_WITH_DIGEST}" >> "$GITHUB_OUTPUT"
+          
+          echo "✅ Image pushed: ${FULL_IMAGE_WITH_DIGEST}"
       
       # Container Security: Trivy Scanning
       - name: Run Trivy vulnerability scanner
