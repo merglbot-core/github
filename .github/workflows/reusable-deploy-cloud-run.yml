@@ -179,16 +179,14 @@ jobs:
             gh release create "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --title "$TAG_NAME" --generate-notes
           gh release upload "$TAG_NAME" sbom.json --repo "$GITHUB_REPOSITORY" --clobber
       
-      # Container Security: Cosign Signing
+      # Container Security: Cosign Signing (Keyless with OIDC)
       - name: Install Cosign
-        uses: sigstore/cosign-installer@59acb6260d9c0ba8f4a2f9d9b48431a222b68e20  # v3.5.0
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da  # v3.7.0
       
       - name: Sign container image
         run: |
-          cosign sign --yes \
-            --certificate-identity="https://github.com/${{ github.repository }}/.github/workflows/reusable-deploy-cloud-run.yml@${{ github.ref }}" \
-            --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
-            ${{ steps.build.outputs.full_image }}
+          # Keyless signing with GitHub OIDC - cosign auto-detects ACTIONS_ID_TOKEN_REQUEST_URL
+          cosign sign --yes ${{ steps.build.outputs.full_image }}
       
       - name: Deploy to Cloud Run
         id: deploy
