@@ -50,24 +50,26 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # Build, scan, and deploy usually <15m; buffer for registry latency
     permissions:
       contents: read
       id-token: write  # Required for WIF OIDC token
+      security-events: write  # Needed for SARIF upload
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Authenticate to GCP (WIF)
         id: auth
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed  # v2
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
           token_format: 'access_token'
 
       - name: Setup gcloud CLI
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f  # v2
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
@@ -81,6 +83,25 @@ jobs:
           docker build -t $IMAGE -f ${{ inputs.dockerfile }} .
           docker push $IMAGE
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      # Container Security: Trivy scan with SARIF upload
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8  # v0.33.1
+        continue-on-error: true  # Allow deploy while we tune blocking thresholds
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL'
+          exit-code: '0'         # Do not fail deploy on scan; surfaced via SARIF
+          ignore-unfixed: true
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@2152c31696c8409983789c80ab57c4d91465a2fc  # v4
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-results.sarif'
 
       - name: Deploy to Cloud Run
         run: |

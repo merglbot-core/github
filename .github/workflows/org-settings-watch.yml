@@ -106,52 +106,43 @@ jobs:
         if: steps.drift.outputs.drift_found == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRIFT_COUNT: ${{ steps.drift.outputs.drift_count }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           DRIFT_DETAILS=$(cat /tmp/drift_details.txt || echo "See workflow run for details")
+          
+          BODY=$(cat << 'EOF'
+          ## Organization Settings Drift Detected
+
+          **DRIFT_COUNT_PLACEHOLDER** configuration settings differ from the expected baseline.
+
+          ### Drift Details
+          DRIFT_DETAILS_PLACEHOLDER
+
+          ### Expected Baseline
+
+          | Setting | Expected Value |
+          |---------|----------------|
+          | allowed_actions | selected |
+          | workflow_permissions | read |
+          | public_repos | false |
+
+          ### Action Required
+
+          1. Review the [workflow run](RUN_URL_PLACEHOLDER)
+          2. Determine if the change was intentional
+          3. Either fix the settings or update the baseline
+
+          ---
+          *This issue was created automatically by the Org Settings Watch workflow.*
+          EOF
+          )
+          BODY="${BODY//DRIFT_COUNT_PLACEHOLDER/$DRIFT_COUNT}"
+          BODY="${BODY//DRIFT_DETAILS_PLACEHOLDER/$DRIFT_DETAILS}"
+          BODY="${BODY//RUN_URL_PLACEHOLDER/$RUN_URL}"
           
           gh issue create \
             --repo "${{ github.repository }}" \
             --title "🚨 Org Settings Drift Alert - $(date -u +%Y-%m-%d)" \
-            --body "## Organization Settings Drift Detected
-
-**${{ steps.drift.outputs.drift_count }}** configuration settings differ from the expected baseline.
-
-### Drift Details
-$DRIFT_DETAILS
-
-### Expected Baseline
-
-| Setting | Expected Value |
-|---------|----------------|
-| allowed_actions | selected |
-| workflow_permissions | read |
-| public_repos | false |
-
-### Action Required
-
-1. Review the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-2. Determine if the change was intentional
-3. Either:
-   - Fix the settings using \`gh api\` commands
-   - Or update the baseline in \`config/expected-org-settings.json\`
-
-### Remediation Commands
-
-\`\`\`bash
-# Fix allowed_actions
-gh api --method PUT \"/orgs/ORG_NAME/actions/permissions\" \\
-  -f enabled_repositories=all -f allowed_actions=selected
-
-# Fix workflow_permissions  
-gh api --method PUT \"/orgs/ORG_NAME/actions/permissions/workflow\" \\
-  -f default_workflow_permissions=read
-
-# Fix public_repos
-gh api --method PATCH \"/orgs/ORG_NAME\" \\
-  -F members_can_create_public_repositories=false
-\`\`\`
-
----
-*This issue was created automatically by the Org Settings Watch workflow.*" \
+            --body "$BODY" \
             --label "security-alert,automated,config-drift"
-

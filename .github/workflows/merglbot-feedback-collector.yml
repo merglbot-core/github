@@ -25,10 +25,11 @@ jobs:
   collect-feedback:
     name: Collect Review Feedback
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # Typical run 5-10m; buffer for API pagination/rate limits
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       
       - name: Collect Feedback from PRs
         env:
@@ -193,7 +194,7 @@ jobs:
           cat feedback/FEEDBACK_REPORT.md
       
       - name: Upload Feedback Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4.4.3
         with:
           name: merglbot-feedback-${{ github.run_id }}
           path: feedback/
@@ -220,6 +221,5 @@ jobs:
               echo "Full report available in artifacts."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
-
 
 
