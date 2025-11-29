@@ -146,6 +146,7 @@ jobs:
     needs: audit-settings
     if: needs.audit-settings.outputs.has_issues == 'true' && inputs.create_issues != false
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Create issue for violations
         env:
@@ -184,4 +185,3 @@ jobs:
             --title "🔒 Enterprise Audit Alert - ${AUDIT_ID}" \
             --body "$BODY" \
             --label "security-audit,automated"
-

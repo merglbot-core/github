@@ -50,10 +50,11 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 30  # Build, scan, and deploy usually <15m; buffer for registry latency
     permissions:
       contents: read
       id-token: write  # Required for WIF OIDC token
+      security-events: write  # Needed for SARIF upload
 
     steps:
       - name: Checkout
@@ -82,6 +83,25 @@ jobs:
           docker build -t $IMAGE -f ${{ inputs.dockerfile }} .
           docker push $IMAGE
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      # Container Security: Trivy scan with SARIF upload
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8  # v0.33.1
+        continue-on-error: true  # Allow deploy while we tune blocking thresholds
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL'
+          exit-code: '0'         # Do not fail deploy on scan; surfaced via SARIF
+          ignore-unfixed: true
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@2152c31696c8409983789c80ab57c4d91465a2fc  # v4
+        if: always()
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-results.sarif'
 
       - name: Deploy to Cloud Run
         run: |

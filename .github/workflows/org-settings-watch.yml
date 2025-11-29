@@ -129,7 +129,7 @@ jobs:
 
           ### Action Required
 
-          1. Review the workflow run
+          1. Review the [workflow run](RUN_URL_PLACEHOLDER)
           2. Determine if the change was intentional
           3. Either fix the settings or update the baseline
 
@@ -139,10 +139,10 @@ jobs:
           )
           BODY="${BODY//DRIFT_COUNT_PLACEHOLDER/$DRIFT_COUNT}"
           BODY="${BODY//DRIFT_DETAILS_PLACEHOLDER/$DRIFT_DETAILS}"
+          BODY="${BODY//RUN_URL_PLACEHOLDER/$RUN_URL}"
           
           gh issue create \
             --repo "${{ github.repository }}" \
             --title "🚨 Org Settings Drift Alert - $(date -u +%Y-%m-%d)" \
             --body "$BODY" \
             --label "security-alert,automated,config-drift"
-

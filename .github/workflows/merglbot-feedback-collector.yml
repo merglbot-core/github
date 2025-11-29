@@ -25,7 +25,7 @@ jobs:
   collect-feedback:
     name: Collect Review Feedback
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 30  # Typical run 5-10m; buffer for API pagination/rate limits
     
     steps:
       - name: Checkout
@@ -221,6 +221,5 @@ jobs:
               echo "Full report available in artifacts."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
-
 
 
