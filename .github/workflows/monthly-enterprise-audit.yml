@@ -150,28 +150,38 @@ jobs:
       - name: Create issue for violations
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AUDIT_ID: ${{ needs.audit-settings.outputs.audit_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          BODY=$(cat << 'EOF'
+          ## Enterprise Configuration Issues Detected
+
+          The monthly enterprise audit found configuration issues that need attention.
+
+          **Audit ID**: AUDIT_ID_PLACEHOLDER
+          **Date**: DATE_PLACEHOLDER
+
+          Please review the [workflow run](RUN_URL_PLACEHOLDER) for details.
+
+          ### Expected Settings
+
+          | Setting | Expected Value |
+          |---------|----------------|
+          | allowed_actions | selected |
+          | workflow_permissions | read |
+          | public_repos | false |
+
+          ---
+          *This issue was created automatically by the Monthly Enterprise Audit workflow.*
+          EOF
+          )
+          BODY="${BODY//AUDIT_ID_PLACEHOLDER/$AUDIT_ID}"
+          BODY="${BODY//DATE_PLACEHOLDER/$(date -u +%Y-%m-%d)}"
+          BODY="${BODY//RUN_URL_PLACEHOLDER/$RUN_URL}"
+          
           gh issue create \
             --repo "${{ github.repository }}" \
-            --title "🔒 Enterprise Audit Alert - ${{ needs.audit-settings.outputs.audit_id }}" \
-            --body "## Enterprise Configuration Issues Detected
-
-The monthly enterprise audit found configuration issues that need attention.
-
-**Audit ID**: ${{ needs.audit-settings.outputs.audit_id }}
-**Date**: $(date -u +%Y-%m-%d)
-
-Please review the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
-
-### Expected Settings
-
-| Setting | Expected Value |
-|---------|----------------|
-| allowed_actions | selected |
-| workflow_permissions | read |
-| public_repos | false |
-
----
-*This issue was created automatically by the Monthly Enterprise Audit workflow.*" \
+            --title "🔒 Enterprise Audit Alert - ${AUDIT_ID}" \
+            --body "$BODY" \
             --label "security-audit,automated"
 

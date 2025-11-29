@@ -50,6 +50,7 @@ jobs:
   check-trigger:
     name: Check Trigger
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     if: |
       (github.event_name == 'issue_comment' && 
        github.event.issue.pull_request && 
@@ -107,7 +108,7 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           fetch-depth: 0
       
@@ -795,7 +796,7 @@ jobs:
       
       - name: Upload Metrics Artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4.4.3
         with:
           name: review-metrics-${{ env.PR_NUMBER }}-${{ github.run_id }}
           path: metrics/
