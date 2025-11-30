@@ -1,0 +1,245 @@
+# Terraform Drift Scan Workflow
+# 
+# Purpose: Weekly scan for infrastructure drift between Terraform state and actual resources
+# Schedule: Every Monday at 08:00 UTC
+# 
+# Reference: merglbot-public/docs/IAC_STANDARDS.md
+
+name: Terraform Drift Scan
+
+on:
+  schedule:
+    # Run every Monday at 08:00 UTC
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+    inputs:
+      workspace:
+        description: 'Terraform workspace to scan'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - bootstrap
+          - core
+          - public
+          - clients
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+
+env:
+  TF_VERSION: '1.6.0'
+  WORKING_DIR: 'merglbot-core/infra/terraform/v2'
+
+jobs:
+  scan-bootstrap:
+    name: Scan Bootstrap
+    runs-on: ubuntu-latest
+    if: inputs.workspace == 'all' || inputs.workspace == 'bootstrap' || github.event_name == 'schedule'
+    outputs:
+      drift_detected: ${{ steps.plan.outputs.drift_detected }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@55bd3a7c6e2ae7cf1877fd1ccb9d54c0503c457c # v2.1.2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@a1502cd9e758c50496cc9ac5308c4843bcd56d36 # v3.0.0
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init (Bootstrap)
+        working-directory: ${{ env.WORKING_DIR }}/bootstrap
+        run: terraform init -backend-config="prefix=v2/bootstrap"
+
+      - name: Terraform Plan (Drift Detection)
+        id: plan
+        working-directory: ${{ env.WORKING_DIR }}/bootstrap
+        run: |
+          terraform plan -detailed-exitcode -no-color -out=tfplan 2>&1 | tee plan-output.txt
+          EXIT_CODE=$?
+          
+          if [ $EXIT_CODE -eq 2 ]; then
+            echo "drift_detected=true" >> $GITHUB_OUTPUT
+            echo "## Bootstrap Drift Detected 🚨" >> $GITHUB_STEP_SUMMARY
+          elif [ $EXIT_CODE -eq 0 ]; then
+            echo "drift_detected=false" >> $GITHUB_OUTPUT
+            echo "## Bootstrap: No Drift ✅" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## Bootstrap: Plan Failed ❌" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+        continue-on-error: true
+
+      - name: Upload Plan Output
+        if: always()
+        uses: actions/upload-artifact@a8a3f3ad30e3422c9c7b888a15615d19a852ae32 # v3.1.3
+        with:
+          name: drift-scan-bootstrap
+          path: ${{ env.WORKING_DIR }}/bootstrap/plan-output.txt
+          retention-days: 30
+
+  scan-core:
+    name: Scan Core
+    runs-on: ubuntu-latest
+    if: inputs.workspace == 'all' || inputs.workspace == 'core' || github.event_name == 'schedule'
+    outputs:
+      drift_detected: ${{ steps.plan.outputs.drift_detected }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@55bd3a7c6e2ae7cf1877fd1ccb9d54c0503c457c # v2.1.2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@a1502cd9e758c50496cc9ac5308c4843bcd56d36 # v3.0.0
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform Init (Core)
+        working-directory: ${{ env.WORKING_DIR }}/core
+        run: terraform init -backend-config="prefix=v2/core"
+
+      - name: Terraform Plan (Drift Detection)
+        id: plan
+        working-directory: ${{ env.WORKING_DIR }}/core
+        run: |
+          terraform plan -detailed-exitcode -no-color -out=tfplan 2>&1 | tee plan-output.txt
+          EXIT_CODE=$?
+          
+          if [ $EXIT_CODE -eq 2 ]; then
+            echo "drift_detected=true" >> $GITHUB_OUTPUT
+            echo "## Core Drift Detected 🚨" >> $GITHUB_STEP_SUMMARY
+          elif [ $EXIT_CODE -eq 0 ]; then
+            echo "drift_detected=false" >> $GITHUB_OUTPUT
+            echo "## Core: No Drift ✅" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## Core: Plan Failed ❌" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+        continue-on-error: true
+
+      - name: Upload Plan Output
+        if: always()
+        uses: actions/upload-artifact@a8a3f3ad30e3422c9c7b888a15615d19a852ae32 # v3.1.3
+        with:
+          name: drift-scan-core
+          path: ${{ env.WORKING_DIR }}/core/plan-output.txt
+          retention-days: 30
+
+  report:
+    name: Generate Report
+    runs-on: ubuntu-latest
+    needs: [scan-bootstrap, scan-core]
+    if: always()
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v3.0.2
+        with:
+          path: drift-reports
+
+      - name: Generate Summary
+        id: summary
+        run: |
+          echo "## Terraform Drift Scan Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Date:** $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Workspace | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          DRIFT_COUNT=0
+          
+          if [ "${{ needs.scan-bootstrap.outputs.drift_detected }}" == "true" ]; then
+            echo "| Bootstrap | 🚨 Drift Detected |" >> $GITHUB_STEP_SUMMARY
+            DRIFT_COUNT=$((DRIFT_COUNT + 1))
+          else
+            echo "| Bootstrap | ✅ No Drift |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [ "${{ needs.scan-core.outputs.drift_detected }}" == "true" ]; then
+            echo "| Core | 🚨 Drift Detected |" >> $GITHUB_STEP_SUMMARY
+            DRIFT_COUNT=$((DRIFT_COUNT + 1))
+          else
+            echo "| Core | ✅ No Drift |" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ $DRIFT_COUNT -gt 0 ]; then
+            echo "⚠️ **$DRIFT_COUNT workspace(s) have drift. Review and run \`terraform apply\` to reconcile.**" >> $GITHUB_STEP_SUMMARY
+            echo "drift_found=true" >> $GITHUB_OUTPUT
+          else
+            echo "✅ **All workspaces are in sync.**" >> $GITHUB_STEP_SUMMARY
+            echo "drift_found=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Issue for Drift
+        if: steps.summary.outputs.drift_found == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const title = `Terraform Drift Detected - ${new Date().toISOString().split('T')[0]}`;
+            const body = `## Infrastructure Drift Detected
+            
+            The weekly drift scan found differences between Terraform state and actual infrastructure.
+            
+            ### Affected Workspaces
+            - Bootstrap: ${{ needs.scan-bootstrap.outputs.drift_detected == 'true' && '🚨 Drift' || '✅ OK' }}
+            - Core: ${{ needs.scan-core.outputs.drift_detected == 'true' && '🚨 Drift' || '✅ OK' }}
+            
+            ### Action Required
+            1. Review the plan output in workflow artifacts
+            2. Identify if changes are expected (manual modifications) or unexpected
+            3. Run \`terraform apply\` to reconcile state, or update Terraform config
+            
+            ### Workflow Run
+            [View workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            
+            /cc @platform-team
+            `;
+            
+            // Check for existing open issue
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'drift,infrastructure'
+            });
+            
+            if (issues.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['drift', 'infrastructure', 'priority:high']
+              });
+            } else {
+              // Add comment to existing issue
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues.data[0].number,
+                body: `## Update: ${new Date().toISOString()}\n\n${body}`
+              });
+            }
+
