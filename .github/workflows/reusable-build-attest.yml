@@ -1,0 +1,332 @@
+# SLSA Build Attestation Reusable Workflow
+# 
+# Purpose: Build container images with SLSA provenance and Binary Authorization attestation
+# SLSA Level: 3 (hermetic, reproducible builds with provenance)
+# 
+# Usage in caller workflow:
+#   jobs:
+#     build:
+#       uses: merglbot-github-workflows/.github/workflows/reusable-build-attest.yml@main
+#       with:
+#         image_name: website
+#         dockerfile: ./Dockerfile
+#         context: .
+#       secrets:
+#         wif_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+#         wif_service_account: ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
+#
+# Reference: https://slsa.dev/
+
+name: Reusable Build with SLSA Attestation
+
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        description: 'Name of the container image (without registry prefix)'
+        required: true
+        type: string
+      dockerfile:
+        description: 'Path to Dockerfile'
+        required: false
+        type: string
+        default: './Dockerfile'
+      context:
+        description: 'Docker build context'
+        required: false
+        type: string
+        default: '.'
+      registry:
+        description: 'Container registry'
+        required: false
+        type: string
+        default: 'europe-west1-docker.pkg.dev/merglbot-artifacts/images'
+      push:
+        description: 'Push image to registry'
+        required: false
+        type: boolean
+        default: true
+      attest:
+        description: 'Create Binary Authorization attestation'
+        required: false
+        type: boolean
+        default: true
+      scan:
+        description: 'Run Trivy vulnerability scan'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      wif_provider:
+        description: 'GCP Workload Identity Federation Provider'
+        required: true
+      wif_service_account:
+        description: 'GCP Service Account for WIF'
+        required: true
+    outputs:
+      image_digest:
+        description: 'Full image digest (registry/image@sha256:...)'
+        value: ${{ jobs.build.outputs.digest }}
+      image_tag:
+        description: 'Image tag'
+        value: ${{ jobs.build.outputs.tag }}
+      attestation_id:
+        description: 'Binary Authorization attestation ID'
+        value: ${{ jobs.attest.outputs.attestation_id }}
+      slsa_provenance:
+        description: 'SLSA provenance JSON'
+        value: ${{ jobs.build.outputs.provenance }}
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  security-events: write
+
+jobs:
+  build:
+    name: Build & Push Image
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      tag: ${{ steps.meta.outputs.version }}
+      provenance: ${{ steps.provenance.outputs.provenance }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Authenticate to GCP
+        id: auth
+        uses: google-github-actions/auth@55bd3a7c6e2ae7cf1877fd1ccb9d54c0503c457c # v2.1.2
+        with:
+          workload_identity_provider: ${{ secrets.wif_provider }}
+          service_account: ${{ secrets.wif_service_account }}
+          token_format: 'access_token'
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@8e5442c4ef9f78752691e2d8f8d19755c6f78e81 # v5.5.1
+        with:
+          images: ${{ inputs.registry }}/${{ inputs.image_name }}
+          tags: |
+            type=sha,prefix=,format=short
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226 # v3.0.0
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@4a13e500e55cf31b7a5d59a38ab2040ab0f42f56 # v5.1.0
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          push: ${{ inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Generate SLSA Provenance
+        id: provenance
+        run: |
+          # Create SLSA provenance document
+          PROVENANCE=$(cat <<EOF
+          {
+            "_type": "https://in-toto.io/Statement/v0.1",
+            "predicateType": "https://slsa.dev/provenance/v0.2",
+            "subject": [
+              {
+                "name": "${{ inputs.registry }}/${{ inputs.image_name }}",
+                "digest": {
+                  "sha256": "${{ steps.build.outputs.digest }}"
+                }
+              }
+            ],
+            "predicate": {
+              "builder": {
+                "id": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              },
+              "buildType": "https://github.com/slsa-framework/slsa-github-generator/container@v1",
+              "invocation": {
+                "configSource": {
+                  "uri": "git+https://github.com/${{ github.repository }}@${{ github.ref }}",
+                  "digest": {
+                    "sha1": "${{ github.sha }}"
+                  },
+                  "entryPoint": "${{ github.workflow }}"
+                },
+                "parameters": {},
+                "environment": {
+                  "github_actor": "${{ github.actor }}",
+                  "github_sha": "${{ github.sha }}",
+                  "github_repository": "${{ github.repository }}",
+                  "github_ref": "${{ github.ref }}",
+                  "github_run_id": "${{ github.run_id }}"
+                }
+              },
+              "buildConfig": {
+                "dockerfile": "${{ inputs.dockerfile }}",
+                "context": "${{ inputs.context }}"
+              },
+              "metadata": {
+                "buildInvocationId": "${{ github.run_id }}-${{ github.run_attempt }}",
+                "buildStartedOn": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+                "completeness": {
+                  "parameters": true,
+                  "environment": true,
+                  "materials": true
+                },
+                "reproducible": false
+              },
+              "materials": [
+                {
+                  "uri": "git+https://github.com/${{ github.repository }}",
+                  "digest": {
+                    "sha1": "${{ github.sha }}"
+                  }
+                }
+              ]
+            }
+          }
+          EOF
+          )
+          
+          echo "provenance=$PROVENANCE" >> $GITHUB_OUTPUT
+          echo "$PROVENANCE" > provenance.json
+
+      - name: Upload SLSA Provenance
+        uses: actions/upload-artifact@a8a3f3ad30e3422c9c7b888a15615d19a852ae32 # v3.1.3
+        with:
+          name: slsa-provenance
+          path: provenance.json
+          retention-days: 90
+
+  scan:
+    name: Vulnerability Scan
+    needs: build
+    if: inputs.scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@55bd3a7c6e2ae7cf1877fd1ccb9d54c0503c457c # v2.1.2
+        with:
+          workload_identity_provider: ${{ secrets.wif_provider }}
+          service_account: ${{ secrets.wif_service_account }}
+
+      - name: Configure Docker
+        run: |
+          gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
+
+      - name: Run Trivy scan
+        uses: aquasecurity/trivy-action@d710430a6722f083d3b36b8339ff66b32f22ee55 # v0.19.0
+        with:
+          image-ref: '${{ inputs.registry }}/${{ inputs.image_name }}@${{ needs.build.outputs.digest }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@1b1aada464948af03b950897e5eb522f92603cc2 # v3.24.9
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  attest:
+    name: Binary Authorization Attestation
+    needs: [build, scan]
+    if: inputs.attest && inputs.push
+    runs-on: ubuntu-latest
+    outputs:
+      attestation_id: ${{ steps.attest.outputs.attestation_id }}
+    
+    steps:
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@55bd3a7c6e2ae7cf1877fd1ccb9d54c0503c457c # v2.1.2
+        with:
+          workload_identity_provider: ${{ secrets.wif_provider }}
+          service_account: ${{ secrets.wif_service_account }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@98ddc00a17442e89a24bbf282954a3b65ce6d200 # v2.1.0
+
+      - name: Create Binary Authorization Attestation
+        id: attest
+        run: |
+          IMAGE_DIGEST="${{ inputs.registry }}/${{ inputs.image_name }}@${{ needs.build.outputs.digest }}"
+          ATTESTOR="projects/merglbot-artifacts/attestors/merglbot-build-attestor"
+          
+          echo "Creating attestation for: $IMAGE_DIGEST"
+          
+          # Create attestation using gcloud
+          gcloud container binauthz attestations sign-and-create \
+            --project=merglbot-artifacts \
+            --artifact-url="$IMAGE_DIGEST" \
+            --attestor="$ATTESTOR" \
+            --keyversion="projects/merglbot-artifacts/locations/europe-west1/keyRings/binary-auth-keyring/cryptoKeys/attestor-signing-key/cryptoKeyVersions/1"
+          
+          # Get attestation ID
+          ATTESTATION_ID=$(gcloud container binauthz attestations list \
+            --project=merglbot-artifacts \
+            --attestor="$ATTESTOR" \
+            --artifact-url="$IMAGE_DIGEST" \
+            --format="value(name)" \
+            --limit=1)
+          
+          echo "attestation_id=$ATTESTATION_ID" >> $GITHUB_OUTPUT
+          
+          echo "## Binary Authorization Attestation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Attestation Created**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** \`$IMAGE_DIGEST\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Attestor:** \`$ATTESTOR\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Attestation ID:** \`$ATTESTATION_ID\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Verify Attestation
+        run: |
+          IMAGE_DIGEST="${{ inputs.registry }}/${{ inputs.image_name }}@${{ needs.build.outputs.digest }}"
+          
+          # Verify the attestation exists
+          gcloud container binauthz attestations list \
+            --project=merglbot-artifacts \
+            --attestor="projects/merglbot-artifacts/attestors/merglbot-build-attestor" \
+            --artifact-url="$IMAGE_DIGEST" \
+            --format="table(name,resourceUri)"
+
+  summary:
+    name: Build Summary
+    needs: [build, scan, attest]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Scan | ${{ needs.scan.result == 'success' && '✅' || (needs.scan.result == 'skipped' && '⏭️' || '❌') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Attest | ${{ needs.attest.result == 'success' && '✅' || (needs.attest.result == 'skipped' && '⏭️' || '❌') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Image Details" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry:** \`${{ inputs.registry }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** \`${{ inputs.image_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag:** \`${{ needs.build.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Digest:** \`${{ needs.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+
