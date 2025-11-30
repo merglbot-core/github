@@ -1,0 +1,215 @@
+# OSSF Scorecard Reusable Workflow
+# 
+# Purpose: Security supply chain assessment using OSSF Scorecard
+# Minimum Score: 7.0 (configurable)
+# 
+# Usage in caller workflow:
+#   jobs:
+#     scorecard:
+#       uses: merglbot-github-workflows/.github/workflows/reusable-security-scorecard.yml@main
+#       with:
+#         minimum_score: 7.0
+#       secrets:
+#         scorecard_token: ${{ secrets.SCORECARD_TOKEN }}
+#
+# Reference: https://securityscorecards.dev/
+
+name: Reusable Security Scorecard
+
+on:
+  workflow_call:
+    inputs:
+      minimum_score:
+        description: 'Minimum required Scorecard score (0-10)'
+        required: false
+        type: number
+        default: 7.0
+      fail_on_low_score:
+        description: 'Fail workflow if score is below minimum'
+        required: false
+        type: boolean
+        default: true
+      publish_results:
+        description: 'Publish results to Security tab'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      scorecard_token:
+        description: 'Token for Scorecard API (usually GITHUB_TOKEN)'
+        required: false
+
+permissions:
+  # Required for Scorecard
+  security-events: write
+  # Required for repository checks
+  contents: read
+  # Required for dependency review
+  actions: read
+
+jobs:
+  scorecard:
+    name: Scorecard Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@0864cf19026789058feabb7e87baa5f140aac736 # v2.3.1
+        with:
+          results_file: scorecard-results.json
+          results_format: json
+          publish_results: ${{ inputs.publish_results }}
+          repo_token: ${{ secrets.scorecard_token || github.token }}
+
+      - name: Parse Scorecard Results
+        id: parse
+        run: |
+          # Extract overall score
+          SCORE=$(jq -r '.score' scorecard-results.json)
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+          
+          # Extract individual check scores
+          echo "## Scorecard Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Overall Score: $SCORE / 10**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Check minimum score
+          MIN_SCORE=${{ inputs.minimum_score }}
+          if (( $(echo "$SCORE < $MIN_SCORE" | bc -l) )); then
+            echo "pass=false" >> $GITHUB_OUTPUT
+            echo "⚠️ **Score below minimum threshold ($MIN_SCORE)**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "pass=true" >> $GITHUB_OUTPUT
+            echo "✅ **Score meets minimum threshold ($MIN_SCORE)**" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Individual Checks" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Score | Reason |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          # Parse each check
+          jq -r '.checks[] | "| \(.name) | \(.score)/10 | \(.reason // "N/A") |"' scorecard-results.json >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Scorecard Results
+        uses: actions/upload-artifact@a8a3f3ad30e3422c9c7b888a15615d19a852ae32 # v3.1.3
+        with:
+          name: scorecard-results
+          path: scorecard-results.json
+          retention-days: 30
+
+      - name: Upload to Code Scanning (SARIF)
+        if: inputs.publish_results
+        uses: ossf/scorecard-action@0864cf19026789058feabb7e87baa5f140aac736 # v2.3.1
+        with:
+          results_file: scorecard-results.sarif
+          results_format: sarif
+          publish_results: true
+          repo_token: ${{ secrets.scorecard_token || github.token }}
+
+      - name: Upload SARIF
+        if: inputs.publish_results
+        uses: github/codeql-action/upload-sarif@1b1aada464948af03b950897e5eb522f92603cc2 # v3.24.9
+        with:
+          sarif_file: scorecard-results.sarif
+
+      - name: Check Score Threshold
+        if: inputs.fail_on_low_score && steps.parse.outputs.pass == 'false'
+        run: |
+          echo "❌ Scorecard score (${{ steps.parse.outputs.score }}) is below minimum (${{ inputs.minimum_score }})"
+          exit 1
+
+  sha-pinning-check:
+    name: SHA Pinning Verification
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Check SHA Pinning in Workflows
+        id: sha_check
+        run: |
+          echo "## SHA Pinning Audit" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          ISSUES=0
+          WORKFLOWS_DIR=".github/workflows"
+          
+          if [ ! -d "$WORKFLOWS_DIR" ]; then
+            echo "No workflows directory found, skipping SHA pinning check."
+            echo "✅ No workflows to check" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+          
+          echo "### Workflow Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          for WORKFLOW in "$WORKFLOWS_DIR"/*.yml "$WORKFLOWS_DIR"/*.yaml; do
+            [ -f "$WORKFLOW" ] || continue
+            
+            WORKFLOW_NAME=$(basename "$WORKFLOW")
+            echo "#### $WORKFLOW_NAME" >> $GITHUB_STEP_SUMMARY
+            
+            # Find uses statements
+            while IFS= read -r line; do
+              # Extract action reference
+              ACTION=$(echo "$line" | grep -oP 'uses:\s*\K[^\s]+' || true)
+              
+              if [ -z "$ACTION" ]; then
+                continue
+              fi
+              
+              # Skip local actions
+              if [[ "$ACTION" == "./"* ]]; then
+                continue
+              fi
+              
+              # Check if pinned to SHA
+              if [[ "$ACTION" =~ @[a-f0-9]{40}$ ]]; then
+                echo "- ✅ \`$ACTION\` - SHA pinned" >> $GITHUB_STEP_SUMMARY
+              elif [[ "$ACTION" =~ @v[0-9]+ ]] || [[ "$ACTION" =~ @main ]] || [[ "$ACTION" =~ @master ]]; then
+                echo "- ⚠️ \`$ACTION\` - **Not SHA pinned (mutable tag)**" >> $GITHUB_STEP_SUMMARY
+                ISSUES=$((ISSUES + 1))
+              else
+                echo "- ℹ️ \`$ACTION\` - Unknown format" >> $GITHUB_STEP_SUMMARY
+              fi
+            done < <(grep -E '^\s*-?\s*uses:' "$WORKFLOW" 2>/dev/null || true)
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          echo "issues=$ISSUES" >> $GITHUB_OUTPUT
+          
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          if [ $ISSUES -gt 0 ]; then
+            echo "⚠️ **$ISSUES action(s) not SHA-pinned**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "To fix, use the full SHA hash instead of version tags:" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`yaml" >> $GITHUB_STEP_SUMMARY
+            echo "# ❌ Bad: Mutable tag" >> $GITHUB_STEP_SUMMARY
+            echo "uses: actions/checkout@v4" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "# ✅ Good: SHA pinned" >> $GITHUB_STEP_SUMMARY
+            echo "uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **All actions are SHA-pinned**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Fail on SHA Pinning Issues
+        if: inputs.fail_on_low_score && steps.sha_check.outputs.issues != '0'
+        run: |
+          echo "❌ ${{ steps.sha_check.outputs.issues }} action(s) are not SHA-pinned"
+          echo "See workflow summary for details"
+          exit 1
+
