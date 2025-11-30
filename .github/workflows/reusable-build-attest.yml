@@ -16,6 +16,9 @@
 #         wif_service_account: ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
 #
 # Reference: https://slsa.dev/
+#
+# Note: Trivy scan is integrated into the build job per policy requirements
+# (Trivy scan must be in the same job as Docker build)
 
 name: Reusable Build with SLSA Attestation
 
@@ -76,6 +79,9 @@ on:
       slsa_provenance:
         description: 'SLSA provenance JSON'
         value: ${{ jobs.build.outputs.provenance }}
+      scan_passed:
+        description: 'Whether vulnerability scan passed'
+        value: ${{ jobs.build.outputs.scan_passed }}
 
 permissions:
   contents: read
@@ -85,13 +91,14 @@ permissions:
 
 jobs:
   build:
-    name: Build & Push Image
+    name: Build, Scan & Push Image
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
       digest: ${{ steps.build.outputs.digest }}
       tag: ${{ steps.meta.outputs.version }}
       provenance: ${{ steps.provenance.outputs.provenance }}
+      scan_passed: ${{ steps.trivy.outcome == 'success' }}
     
     steps:
       - name: Checkout repository
@@ -137,6 +144,24 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: true
           sbom: true
+
+      # Trivy vulnerability scan - integrated into build job per policy requirements
+      - name: Run Trivy vulnerability scan
+        id: trivy
+        if: inputs.scan
+        uses: aquasecurity/trivy-action@d710430a6722f083d3b36b8339ff66b32f22ee55 # v0.19.0
+        with:
+          image-ref: '${{ inputs.registry }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+
+      - name: Upload Trivy SARIF
+        if: inputs.scan && always()
+        uses: github/codeql-action/upload-sarif@1b1aada464948af03b950897e5eb522f92603cc2 # v3.24.9
+        with:
+          sarif_file: 'trivy-results.sarif'
 
       - name: Generate SLSA Provenance
         id: provenance
@@ -213,42 +238,9 @@ jobs:
           path: provenance.json
           retention-days: 90
 
-  scan:
-    name: Vulnerability Scan
-    needs: build
-    if: inputs.scan
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    
-    steps:
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@55bd3a7c6e2ae7cf1877fd1ccb9d54c0503c457c # v2.1.2
-        with:
-          workload_identity_provider: ${{ secrets.wif_provider }}
-          service_account: ${{ secrets.wif_service_account }}
-
-      - name: Configure Docker
-        run: |
-          gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
-
-      - name: Run Trivy scan
-        uses: aquasecurity/trivy-action@d710430a6722f083d3b36b8339ff66b32f22ee55 # v0.19.0
-        with:
-          image-ref: '${{ inputs.registry }}/${{ inputs.image_name }}@${{ needs.build.outputs.digest }}'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '1'
-
-      - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@1b1aada464948af03b950897e5eb522f92603cc2 # v3.24.9
-        if: always()
-        with:
-          sarif_file: 'trivy-results.sarif'
-
   attest:
     name: Binary Authorization Attestation
-    needs: [build, scan]
+    needs: build
     if: inputs.attest && inputs.push
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -311,7 +303,7 @@ jobs:
 
   summary:
     name: Build Summary
-    needs: [build, scan, attest]
+    needs: [build, attest]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -323,8 +315,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Step | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Build | ${{ needs.build.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Scan | ${{ needs.scan.result == 'success' && '✅' || (needs.scan.result == 'skipped' && '⏭️' || '❌') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build & Scan | ${{ needs.build.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Attest | ${{ needs.attest.result == 'success' && '✅' || (needs.attest.result == 'skipped' && '⏭️' || '❌') }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Image Details" >> $GITHUB_STEP_SUMMARY
@@ -333,4 +324,4 @@ jobs:
           echo "- **Image:** \`${{ inputs.image_name }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Tag:** \`${{ needs.build.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Digest:** \`${{ needs.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
-
+          echo "- **Scan Passed:** \`${{ needs.build.outputs.scan_passed }}\`" >> $GITHUB_STEP_SUMMARY
