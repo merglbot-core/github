@@ -1,0 +1,312 @@
+# OpenAPI Lint Reusable Workflow
+# 
+# Purpose: Validate OpenAPI specifications against Merglbot API standards
+# Ruleset: Spectral with RFC7807, rate limiting, and versioning rules
+# 
+# Usage in caller workflow:
+#   jobs:
+#     lint:
+#       uses: merglbot-github-workflows/.github/workflows/reusable-openapi-lint.yml@main
+#       with:
+#         spec_path: openapi.yml
+#
+# Reference: merglbot-public/docs/API_GOVERNANCE.md
+
+name: Reusable OpenAPI Lint
+
+on:
+  workflow_call:
+    inputs:
+      spec_path:
+        description: 'Path to OpenAPI specification file(s)'
+        required: false
+        type: string
+        default: 'openapi.yml'
+      fail_on_warning:
+        description: 'Fail workflow on warnings (not just errors)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  lint:
+    name: Lint OpenAPI Specification
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8 # v4.0.2
+        with:
+          node-version: '20'
+
+      - name: Install Spectral
+        run: npm install -g @stoplight/spectral-cli@6.11.0
+
+      - name: Create Merglbot Spectral Ruleset
+        run: |
+          cat > .spectral-merglbot.yml << 'EOF'
+          extends:
+            - spectral:oas
+          
+          rules:
+            # =====================================================
+            # RFC7807 Problem Details Enforcement
+            # =====================================================
+            
+            # Error responses should reference Problem schema
+            error-response-schema:
+              description: "Error responses (4xx, 5xx) should use RFC7807 Problem Details"
+              message: "{{description}}"
+              severity: warn
+              given: "$.paths.*.*.responses[?(@property >= '400' && @property < '600')]"
+              then:
+                field: content.application/problem+json
+                function: truthy
+            
+            # Problem schema must have required fields
+            problem-schema-required-fields:
+              description: "Problem schema must include type, title, status"
+              message: "{{description}}"
+              severity: error
+              given: "$.components.schemas.Problem"
+              then:
+                - field: properties.type
+                  function: truthy
+                - field: properties.title
+                  function: truthy
+                - field: properties.status
+                  function: truthy
+            
+            # =====================================================
+            # Rate Limiting Headers
+            # =====================================================
+            
+            rate-limit-header-limit:
+              description: "Success responses should include X-RateLimit-Limit header"
+              message: "Consider adding X-RateLimit-Limit header to success responses"
+              severity: hint
+              given: "$.paths.*.*.responses.200.headers"
+              then:
+                field: X-RateLimit-Limit
+                function: truthy
+            
+            # 429 response should include Retry-After
+            rate-limit-429-retry-after:
+              description: "429 responses must include Retry-After header"
+              message: "{{description}}"
+              severity: error
+              given: "$.paths.*.*.responses.429"
+              then:
+                field: headers.Retry-After
+                function: truthy
+            
+            # =====================================================
+            # API Versioning
+            # =====================================================
+            
+            api-path-versioning:
+              description: "API paths should include version prefix /api/v{n}/"
+              message: "Path {{property}} should start with /api/v{version}/"
+              severity: warn
+              given: "$.paths"
+              then:
+                field: "@key"
+                function: pattern
+                functionOptions:
+                  match: "^/api/v[0-9]+/"
+            
+            # =====================================================
+            # Security
+            # =====================================================
+            
+            security-defined:
+              description: "API should define security schemes"
+              message: "No security schemes defined. Add securitySchemes to components."
+              severity: error
+              given: "$"
+              then:
+                field: components.securitySchemes
+                function: truthy
+            
+            operation-security:
+              description: "Operations should have security requirements"
+              message: "Operation should define security requirements or be explicitly marked as public"
+              severity: warn
+              given: "$.paths.*.*.security"
+              then:
+                function: truthy
+            
+            # =====================================================
+            # Documentation
+            # =====================================================
+            
+            operation-description:
+              description: "Operations should have descriptions"
+              message: "Operation {{path}} should have a description"
+              severity: warn
+              given: "$.paths.*.*"
+              then:
+                field: description
+                function: truthy
+            
+            operation-operationId:
+              description: "Operations must have operationId"
+              message: "Operation at {{path}} must have an operationId"
+              severity: error
+              given: "$.paths.*[get,post,put,patch,delete]"
+              then:
+                field: operationId
+                function: truthy
+            
+            # =====================================================
+            # Naming Conventions
+            # =====================================================
+            
+            camelCase-property-names:
+              description: "Property names should be camelCase"
+              message: "Property name {{property}} should be camelCase"
+              severity: warn
+              given: "$.components.schemas..properties.*~"
+              then:
+                function: casing
+                functionOptions:
+                  type: camel
+            
+            snake_case-query-params:
+              description: "Query parameters should be snake_case"
+              message: "Query parameter {{property}} should be snake_case"
+              severity: warn
+              given: "$.paths.*.*.parameters[?(@.in == 'query')].name"
+              then:
+                function: casing
+                functionOptions:
+                  type: snake
+          EOF
+
+      - name: Check spec file exists
+        id: check_spec
+        run: |
+          if [[ -f "${{ inputs.spec_path }}" ]]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ OpenAPI spec not found at: ${{ inputs.spec_path }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Run Spectral Lint
+        id: spectral
+        if: steps.check_spec.outputs.exists == 'true'
+        run: |
+          echo "## OpenAPI Lint Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Run spectral and capture output
+          set +e
+          OUTPUT=$(spectral lint "${{ inputs.spec_path }}" \
+            --ruleset .spectral-merglbot.yml \
+            --format stylish 2>&1)
+          EXIT_CODE=$?
+          set -e
+          
+          echo "$OUTPUT"
+          echo ""
+          
+          # Count issues
+          ERRORS=$(echo "$OUTPUT" | grep -c "error" || echo "0")
+          WARNINGS=$(echo "$OUTPUT" | grep -c "warning" || echo "0")
+          HINTS=$(echo "$OUTPUT" | grep -c "hint" || echo "0")
+          
+          echo "### Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Severity | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| ❌ Errors | $ERRORS |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⚠️ Warnings | $WARNINGS |" >> $GITHUB_STEP_SUMMARY
+          echo "| ℹ️ Hints | $HINTS |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Output for next step
+          echo "errors=$ERRORS" >> $GITHUB_OUTPUT
+          echo "warnings=$WARNINGS" >> $GITHUB_OUTPUT
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          
+          # Add detailed output
+          if [[ $ERRORS -gt 0 || $WARNINGS -gt 0 ]]; then
+            echo "### Details" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$OUTPUT" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ All checks passed!" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Validate JSON Schema
+        if: steps.check_spec.outputs.exists == 'true'
+        run: |
+          # Install ajv for JSON Schema validation
+          npm install -g ajv-cli@5.0.0
+          
+          echo "### JSON Schema Validation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Basic YAML syntax check
+          if python3 -c "import yaml; yaml.safe_load(open('${{ inputs.spec_path }}'))"; then
+            echo "✅ Valid YAML syntax" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Invalid YAML syntax" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+      - name: Check for breaking changes
+        if: steps.check_spec.outputs.exists == 'true' && github.event_name == 'pull_request'
+        run: |
+          # Install oasdiff for breaking change detection
+          npm install -g oasdiff@1.5.0 || true
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Breaking Changes" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Get base branch spec
+          git fetch origin ${{ github.base_ref }} --depth=1 || true
+          
+          if git show origin/${{ github.base_ref }}:${{ inputs.spec_path }} > base-spec.yml 2>/dev/null; then
+            # Compare specs
+            if command -v oasdiff &> /dev/null; then
+              BREAKING=$(oasdiff breaking base-spec.yml ${{ inputs.spec_path }} 2>&1 || echo "")
+              
+              if [[ -n "$BREAKING" ]]; then
+                echo "⚠️ **Potential breaking changes detected:**" >> $GITHUB_STEP_SUMMARY
+                echo '```' >> $GITHUB_STEP_SUMMARY
+                echo "$BREAKING" >> $GITHUB_STEP_SUMMARY
+                echo '```' >> $GITHUB_STEP_SUMMARY
+              else
+                echo "✅ No breaking changes detected" >> $GITHUB_STEP_SUMMARY
+              fi
+            else
+              echo "ℹ️ oasdiff not available, skipping breaking change detection" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "ℹ️ No base spec found, skipping breaking change detection" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Fail on errors
+        if: steps.spectral.outputs.exit_code != '0'
+        run: |
+          echo "❌ OpenAPI lint failed with errors"
+          exit 1
+
+      - name: Fail on warnings (if configured)
+        if: inputs.fail_on_warning && steps.spectral.outputs.warnings > 0
+        run: |
+          echo "❌ OpenAPI lint has warnings and fail_on_warning is enabled"
+          exit 1
+
