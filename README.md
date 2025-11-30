@@ -187,3 +187,8 @@ Visualization and management dashboard for GitHub workflows and CI/CD status.
 ---
 
 **Central hub for CI/CD across Merglbot organization!** 🔄
+
+
+---
+
+*This repository follows the standards defined in the [Merglbot Platform Rulebook](https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md).*
