@@ -36,6 +36,7 @@ jobs:
   lint:
     name: Lint OpenAPI Specification
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     
     steps:
       - name: Checkout repository
