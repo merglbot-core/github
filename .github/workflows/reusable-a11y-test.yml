@@ -1,0 +1,199 @@
+# Accessibility Testing Reusable Workflow
+# 
+# Purpose: Automated WCAG 2.2 AA compliance testing using axe-core
+# Standard: WCAG 2.2 Level AA
+# 
+# Usage in caller workflow:
+#   jobs:
+#     a11y:
+#       uses: merglbot-github-workflows/.github/workflows/reusable-a11y-test.yml@main
+#       with:
+#         url: https://staging.merglbot.ai
+#         standard: WCAG2AA
+#
+# Reference: merglbot-public/docs/MERGLBOT_ACCESSIBILITY.md
+
+name: Reusable Accessibility Test
+
+on:
+  workflow_call:
+    inputs:
+      url:
+        description: 'URL to test for accessibility'
+        required: true
+        type: string
+      standard:
+        description: 'Accessibility standard (WCAG2A, WCAG2AA, WCAG2AAA)'
+        required: false
+        type: string
+        default: 'WCAG2AA'
+      fail_on_violations:
+        description: 'Fail workflow on accessibility violations'
+        required: false
+        type: boolean
+        default: true
+      pages:
+        description: 'JSON array of pages to test (e.g., ["/", "/login", "/dashboard"])'
+        required: false
+        type: string
+        default: '["/"]'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  axe-core:
+    name: axe-core Accessibility Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8 # v4.0.2
+        with:
+          node-version: '20'
+
+      - name: Install axe-core CLI
+        run: npm install -g @axe-core/cli@4.8.0
+
+      - name: Run Accessibility Tests
+        id: axe
+        run: |
+          echo "## Accessibility Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Standard:** ${{ inputs.standard }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Base URL:** ${{ inputs.url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          TOTAL_VIOLATIONS=0
+          PAGES='${{ inputs.pages }}'
+          
+          echo "| Page | Violations | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|------------|--------|" >> $GITHUB_STEP_SUMMARY
+          
+          for PAGE in $(echo "$PAGES" | jq -r '.[]'); do
+            FULL_URL="${{ inputs.url }}${PAGE}"
+            echo "Testing: $FULL_URL"
+            
+            # Run axe-core
+            set +e
+            OUTPUT=$(axe "$FULL_URL" \
+              --tags ${{ inputs.standard }} \
+              --exit \
+              --reporter json 2>&1)
+            EXIT_CODE=$?
+            set -e
+            
+            # Count violations
+            VIOLATIONS=$(echo "$OUTPUT" | jq '.violations | length' 2>/dev/null || echo "0")
+            TOTAL_VIOLATIONS=$((TOTAL_VIOLATIONS + VIOLATIONS))
+            
+            if [ "$VIOLATIONS" -eq 0 ]; then
+              echo "| $PAGE | 0 | ✅ |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| $PAGE | $VIOLATIONS | ❌ |" >> $GITHUB_STEP_SUMMARY
+              
+              # Log violation details
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "### Violations on $PAGE" >> $GITHUB_STEP_SUMMARY
+              echo '```json' >> $GITHUB_STEP_SUMMARY
+              echo "$OUTPUT" | jq '.violations[] | {id, impact, description, nodes: (.nodes | length)}' >> $GITHUB_STEP_SUMMARY 2>/dev/null || true
+              echo '```' >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            # Save report
+            echo "$OUTPUT" > "a11y-report-$(echo $PAGE | tr '/' '-').json"
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "**Total Violations:** $TOTAL_VIOLATIONS" >> $GITHUB_STEP_SUMMARY
+          echo "violations=$TOTAL_VIOLATIONS" >> $GITHUB_OUTPUT
+
+      - name: Upload Reports
+        uses: actions/upload-artifact@a8a3f3ad30e3422c9c7b888a15615d19a852ae32 # v3.1.3
+        if: always()
+        with:
+          name: a11y-reports
+          path: a11y-report-*.json
+          retention-days: 30
+
+      - name: Fail on Violations
+        if: inputs.fail_on_violations && steps.axe.outputs.violations != '0'
+        run: |
+          echo "❌ ${{ steps.axe.outputs.violations }} accessibility violations found"
+          exit 1
+
+  pa11y:
+    name: Pa11y Accessibility Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@60edb5dd545a775178f52524783378180af0d1f8 # v4.0.2
+        with:
+          node-version: '20'
+
+      - name: Install Pa11y
+        run: npm install -g pa11y@6.2.3 pa11y-reporter-html@2.0.0
+
+      - name: Run Pa11y Tests
+        id: pa11y
+        run: |
+          PAGES='${{ inputs.pages }}'
+          TOTAL_ISSUES=0
+          
+          for PAGE in $(echo "$PAGES" | jq -r '.[]'); do
+            FULL_URL="${{ inputs.url }}${PAGE}"
+            echo "Testing with Pa11y: $FULL_URL"
+            
+            # Run Pa11y
+            set +e
+            pa11y "$FULL_URL" \
+              --standard ${{ inputs.standard }} \
+              --reporter json > "pa11y-$(echo $PAGE | tr '/' '-').json" 2>&1
+            EXIT_CODE=$?
+            set -e
+            
+            # Count issues
+            ISSUES=$(jq '.issues | length' "pa11y-$(echo $PAGE | tr '/' '-').json" 2>/dev/null || echo "0")
+            TOTAL_ISSUES=$((TOTAL_ISSUES + ISSUES))
+          done
+          
+          echo "pa11y_issues=$TOTAL_ISSUES" >> $GITHUB_OUTPUT
+
+      - name: Upload Pa11y Reports
+        uses: actions/upload-artifact@a8a3f3ad30e3422c9c7b888a15615d19a852ae32 # v3.1.3
+        if: always()
+        with:
+          name: pa11y-reports
+          path: pa11y-*.json
+          retention-days: 30
+
+  summary:
+    name: Accessibility Summary
+    runs-on: ubuntu-latest
+    needs: [axe-core, pa11y]
+    if: always()
+    
+    steps:
+      - name: Generate Combined Summary
+        run: |
+          echo "## Combined Accessibility Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Tool | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| axe-core | ${{ needs.axe-core.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Pa11y | ${{ needs.pa11y.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### WCAG 2.2 Compliance" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Standard: **${{ inputs.standard }}**" >> $GITHUB_STEP_SUMMARY
+          echo "- Target: WCAG 2.2 Level AA" >> $GITHUB_STEP_SUMMARY
+
