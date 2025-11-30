@@ -38,6 +38,7 @@ jobs:
   scan-bootstrap:
     name: Scan Bootstrap
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     if: inputs.workspace == 'all' || inputs.workspace == 'bootstrap' || github.event_name == 'schedule'
     outputs:
       drift_detected: ${{ steps.plan.outputs.drift_detected }}
@@ -91,6 +92,7 @@ jobs:
   scan-core:
     name: Scan Core
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     if: inputs.workspace == 'all' || inputs.workspace == 'core' || github.event_name == 'schedule'
     outputs:
       drift_detected: ${{ steps.plan.outputs.drift_detected }}
@@ -144,6 +146,7 @@ jobs:
   report:
     name: Generate Report
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [scan-bootstrap, scan-core]
     if: always()
     
