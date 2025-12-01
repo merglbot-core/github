@@ -91,7 +91,7 @@ jobs:
       
       - name: Setup TFLint
         if: inputs.run-tflint
-        uses: terraform-linters/setup-tflint@19a52fbac37dacb22a09518e4ef6ee234f2d4987  # v4.0.0
+        uses: terraform-linters/setup-tflint@4cb9feea73331a35b422df102992a03a44a3bb33  # v6.2.1
         with:
           tflint_version: v0.51.1
       
