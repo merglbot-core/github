@@ -231,17 +231,32 @@ jobs:
               # Deploy without secrets first
               "${gcloud_cmd[@]}"
               
-              # Then add cross-project secrets one by one using update
+              # Export current service config
+              gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format=export > /tmp/service.yaml
+              
+              # Create python script for secret injection using printf
+              printf '%s\n' 'import yaml, sys' > /tmp/inject_secret.py
+              printf '%s\n' 'env_name, secret_name, secret_version = sys.argv[1:4]' >> /tmp/inject_secret.py
+              printf '%s\n' 'with open("/tmp/service.yaml") as f: svc = yaml.safe_load(f)' >> /tmp/inject_secret.py
+              printf '%s\n' 'env_list = svc["spec"]["template"]["spec"]["containers"][0].get("env", [])' >> /tmp/inject_secret.py
+              printf '%s\n' 'env_list = [e for e in env_list if e.get("name") != env_name]' >> /tmp/inject_secret.py
+              printf '%s\n' 'env_list.append({"name": env_name, "valueFrom": {"secretKeyRef": {"name": secret_name, "key": secret_version}}})' >> /tmp/inject_secret.py
+              printf '%s\n' 'svc["spec"]["template"]["spec"]["containers"][0]["env"] = env_list' >> /tmp/inject_secret.py
+              printf '%s\n' 'with open("/tmp/service.yaml", "w") as f: yaml.dump(svc, f, default_flow_style=False)' >> /tmp/inject_secret.py
+              
+              # Process each secret
               echo "$SECRETS_INPUT" | while IFS= read -r line; do
                 [ -z "$line" ] && continue
                 ENV_NAME="${line%%=*}"
                 SECRET_REF="${line#*=}"
-                echo "Adding secret: $ENV_NAME"
-                gcloud run services update "$SERVICE" \
-                  --region="$REGION" \
-                  --project="$PROJECT_ID" \
-                  --update-secrets="$ENV_NAME=$SECRET_REF"
+                SECRET_NAME="${SECRET_REF%%:*}"
+                SECRET_VERSION="${SECRET_REF##*:}"
+                [ "$SECRET_VERSION" = "$SECRET_NAME" ] && SECRET_VERSION="latest"
+                python3 /tmp/inject_secret.py "$ENV_NAME" "$SECRET_NAME" "$SECRET_VERSION"
               done
+              
+              # Apply updated config
+              gcloud run services replace /tmp/service.yaml --region="$REGION" --project="$PROJECT_ID"
             else
               # Standard secrets (same project) - use --set-secrets
               SECRET_LIST=$(echo "$SECRETS_INPUT" | sed '/^$/d' | tr '\n' ',' | sed 's/,$//')
