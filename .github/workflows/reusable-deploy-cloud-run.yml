@@ -192,6 +192,8 @@ jobs:
       
       - name: Deploy to Cloud Run
         id: deploy
+        env:
+          SECRETS_INPUT: ${{ inputs.secrets }}
         run: |
           set -euo pipefail
           
