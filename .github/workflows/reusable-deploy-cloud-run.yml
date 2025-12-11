@@ -219,14 +219,60 @@ jobs:
             gcloud_cmd+=("--set-env-vars=${{ inputs.env_vars }}")
           fi
           
-          if [ -n "${{ inputs.secrets }}" ]; then
-            # Convert newline-separated to comma-separated list (ignore blank lines)
-            SECRET_LIST=$(echo "${{ inputs.secrets }}" | sed '/^$/d' | tr '\n' ',' | sed 's/,$//')
-            gcloud_cmd+=("--set-secrets=${SECRET_LIST}")
-          fi
           
-          # Execute the command
-          "${gcloud_cmd[@]}"
+          if [ -n "${{ inputs.secrets }}" ]; then
+            # Handle secrets - cross-project secrets require gcloud run services replace
+            # Format: ENV_VAR=secret-name:version OR ENV_VAR=projects/PROJECT/secrets/NAME:version
+            SECRETS_INPUT="${{ inputs.secrets }}"
+            
+            # Check if any secret uses cross-project format (projects/...)
+            if echo "$SECRETS_INPUT" | grep -q "projects/"; then
+              echo "::notice::Cross-project secrets detected, using gcloud run services replace"
+              
+              # Deploy without secrets first
+              "${gcloud_cmd[@]}"
+              
+              # Export current service config
+              gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format=export > /tmp/service.yaml
+              
+              # Process each secret and inject into YAML
+              while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                ENV_NAME="${line%%=*}"
+                SECRET_REF="${line#*=}"
+                SECRET_NAME="${SECRET_REF%%:*}"
+                SECRET_VERSION="${SECRET_REF##*:}"
+                [ "$SECRET_VERSION" = "$SECRET_NAME" ] && SECRET_VERSION="latest"
+                
+                # Use python for reliable YAML manipulation
+                python3 << PYINJECT
+import yaml
+with open("/tmp/service.yaml") as f:
+    svc = yaml.safe_load(f)
+env_list = svc["spec"]["template"]["spec"]["containers"][0].get("env", [])
+env_list = [e for e in env_list if e.get("name") != "$ENV_NAME"]
+env_list.append({
+    "name": "$ENV_NAME",
+    "valueFrom": {"secretKeyRef": {"name": "$SECRET_NAME", "key": "$SECRET_VERSION"}}
+})
+svc["spec"]["template"]["spec"]["containers"][0]["env"] = env_list
+with open("/tmp/service.yaml", "w") as f:
+    yaml.dump(svc, f, default_flow_style=False)
+PYINJECT
+              done <<< "$SECRETS_INPUT"
+              
+              # Apply updated config
+              gcloud run services replace /tmp/service.yaml --region="$REGION" --project="$PROJECT_ID"
+            else
+              # Standard secrets (same project) - use --set-secrets
+              SECRET_LIST=$(echo "$SECRETS_INPUT" | sed '/^$/d' | tr '\n' ',' | sed 's/,$//')
+              gcloud_cmd+=("--set-secrets=${SECRET_LIST}")
+              "${gcloud_cmd[@]}"
+            fi
+          else
+            # No secrets - just deploy
+            "${gcloud_cmd[@]}"
+          fi
 
           URL=$(gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format="value(status.url)")
           echo "url=$URL" >> $GITHUB_OUTPUT
@@ -234,9 +280,9 @@ jobs:
       - name: Update deployment summary
         if: always()
         run: |
-          cat >> $GITHUB_STEP_SUMMARY << EOF
+          cat >> $GITHUB_STEP_SUMMARY << EOFSUM
           ## 🚀 Reusable Deployment
           - **Service**: $SERVICE
           - **URL**: ${{ steps.deploy.outputs.url }}
           - **Status**: ${{ job.status }}
-          EOF
+          EOFSUM
