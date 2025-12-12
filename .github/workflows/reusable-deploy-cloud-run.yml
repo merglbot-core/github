@@ -224,16 +224,38 @@ jobs:
           
           if [ -n "$SECRETS_INPUT" ]; then
             # Split secrets into same-project vs cross-project
-            SAME_PROJECT_SECRETS=""
-            CROSS_PROJECT_SECRETS=""
+            SAME_PROJECT_SECRET_LINES=()
+            CROSS_PROJECT_SECRET_LINES=()
 
-            while IFS= read -r line; do
-              # Trim whitespace
-              line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            trim() {
+              printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+            }
+
+            # Read newline-separated secrets input into an array (safe from injection)
+            mapfile -t secret_lines < <(printf '%s\n' "$SECRETS_INPUT")
+
+            for raw_line in "${secret_lines[@]}"; do
+              line="$(trim "$raw_line")"
               [ -z "$line" ] && continue
+
+              if [[ "$line" != *"="* ]]; then
+                echo "::error::Invalid secrets input line (missing '='): $line"
+                exit 1
+              fi
 
               env_name="${line%%=*}"
               value="${line#*=}"
+
+              # Validate env var name (alphanumeric + underscore, start with letter or _)
+              if ! [[ "$env_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+                echo "::error::Invalid env var name in secrets input: $env_name"
+                exit 1
+              fi
+
+              if [ -z "$value" ]; then
+                echo "::error::Empty secret reference for $env_name"
+                exit 1
+              fi
 
               secret_ref="${value%%:*}"
               secret_version="${value#*:}"
@@ -241,16 +263,17 @@ jobs:
                 secret_version="latest"
               fi
 
+              entry="${env_name}=${secret_ref}:${secret_version}"
               if [[ "$secret_ref" == projects/* ]]; then
-                CROSS_PROJECT_SECRETS+="${env_name}=${secret_ref}:${secret_version}\\n"
+                CROSS_PROJECT_SECRET_LINES+=("$entry")
               else
-                SAME_PROJECT_SECRETS+="${env_name}=${secret_ref}:${secret_version}\\n"
+                SAME_PROJECT_SECRET_LINES+=("$entry")
               fi
-            done <<< "$SECRETS_INPUT"
+            done
 
             # Apply same-project secrets via gcloud deploy
-            if [ -n "$SAME_PROJECT_SECRETS" ]; then
-              SECRET_LIST=$(echo -e "$SAME_PROJECT_SECRETS" | sed '/^$/d' | tr '\n' ',' | sed 's/,$//')
+            if [ "${#SAME_PROJECT_SECRET_LINES[@]}" -gt 0 ]; then
+              (IFS=,; SECRET_LIST="${SAME_PROJECT_SECRET_LINES[*]}")
               gcloud_cmd+=("--set-secrets=${SECRET_LIST}")
             fi
 
@@ -258,10 +281,18 @@ jobs:
             "${gcloud_cmd[@]}"
 
             # Patch cross-project secrets via service YAML replace (alias mapping)
-            if [ -n "$CROSS_PROJECT_SECRETS" ]; then
+            if [ "${#CROSS_PROJECT_SECRET_LINES[@]}" -gt 0 ]; then
               echo "::notice::Cross-project secrets detected, patching via gcloud run services replace"
 
-              gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format=export > /tmp/service.yaml
+              if ! gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format=export > /tmp/service.yaml; then
+                echo "::error::Failed to export service YAML for $SERVICE"
+                exit 1
+              fi
+
+              if [ ! -s /tmp/service.yaml ]; then
+                echo "::error::Exported service YAML is empty"
+                exit 1
+              fi
 
               # Python patcher: adds run.googleapis.com/secrets mapping on template + sets env var to alias
               printf '%s\n' 'import yaml, sys' > /tmp/inject_xproj_secret.py
@@ -286,8 +317,7 @@ jobs:
               printf '%s\n' 'containers[0]["env"] = env_list' >> /tmp/inject_xproj_secret.py
               printf '%s\n' 'with open("/tmp/service.yaml", "w") as f: yaml.safe_dump(svc, f, sort_keys=False)' >> /tmp/inject_xproj_secret.py
 
-              echo -e "$CROSS_PROJECT_SECRETS" | while IFS= read -r line; do
-                [ -z "$line" ] && continue
+              for line in "${CROSS_PROJECT_SECRET_LINES[@]}"; do
                 ENV_NAME="${line%%=*}"
                 REST="${line#*=}"
                 SECRET_RESOURCE="${REST%%:*}"
@@ -295,16 +325,24 @@ jobs:
                 if [ -z "$SECRET_VERSION" ] || [ "$SECRET_VERSION" = "$REST" ]; then
                   SECRET_VERSION="latest"
                 fi
-                python3 /tmp/inject_xproj_secret.py "$ENV_NAME" "$SECRET_RESOURCE" "$SECRET_VERSION"
+
+                if ! python3 /tmp/inject_xproj_secret.py "$ENV_NAME" "$SECRET_RESOURCE" "$SECRET_VERSION"; then
+                  echo "::error::Failed to inject cross-project secret $ENV_NAME"
+                  exit 1
+                fi
               done
 
-              gcloud run services replace /tmp/service.yaml --region="$REGION" --project="$PROJECT_ID"
+              if ! gcloud run services replace /tmp/service.yaml --region="$REGION" --project="$PROJECT_ID"; then
+                echo "::error::Failed to apply patched service YAML for $SERVICE"
+                exit 1
+              fi
+
+              rm -f /tmp/service.yaml /tmp/inject_xproj_secret.py
             fi
           else
             # No secrets - just deploy
             "${gcloud_cmd[@]}"
           fi
-
           URL=$(gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format="value(status.url)")
           echo "url=$URL" >> $GITHUB_OUTPUT
       
