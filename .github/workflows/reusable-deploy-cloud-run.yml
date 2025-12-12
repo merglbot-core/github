@@ -256,6 +256,7 @@ jobs:
             for raw_line in "${secret_lines[@]}"; do
               line="$(trim "$raw_line")"
               [ -z "$line" ] && continue
+              [[ "$line" == \#* ]] && continue
 
               if [[ "$line" != *"="* ]]; then
                 echo "::error::Invalid secrets input line (missing '='): $line"
