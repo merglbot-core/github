@@ -284,6 +284,10 @@ jobs:
 
               entry="${env_name}=${secret_ref}:${secret_version}"
               if [[ "$secret_ref" == projects/* ]]; then
+                if ! [[ "$secret_ref" =~ ^projects/[0-9]+/secrets/[A-Za-z0-9_-]+$ ]]; then
+                  echo "::error::Invalid cross-project secret reference for $env_name: $secret_ref (expected projects/<project-number>/secrets/<secret-id>)"
+                  exit 1
+                fi
                 CROSS_PROJECT_SECRET_LINES+=("$entry")
               else
                 SAME_PROJECT_SECRET_LINES+=("$entry")
@@ -294,6 +298,58 @@ jobs:
             if [ "${#SAME_PROJECT_SECRET_LINES[@]}" -gt 0 ]; then
               { IFS=,; SECRET_LIST="${SAME_PROJECT_SECRET_LINES[*]}"; }
               gcloud_cmd+=("--set-secrets=${SECRET_LIST}")
+            fi
+
+            # If the service already exists and has an invalid `run.googleapis.com/secrets` mapping,
+            # `gcloud run deploy` can crash before we get a chance to patch. Pre-patch the service
+            # to the SSOT alias mapping first (best-effort, only when cross-project secrets exist).
+            if [ "${#CROSS_PROJECT_SECRET_LINES[@]}" -gt 0 ]; then
+              if gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format=export > /tmp/service.yaml 2>/dev/null; then
+                if [ -s /tmp/service.yaml ]; then
+                  printf '%s\n' 'import yaml, sys' > /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'env_var, secret_resource, secret_version = sys.argv[1:4]' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'with open("/tmp/service.yaml") as f: svc = yaml.safe_load(f)' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'tmpl_meta = svc.setdefault("spec", {}).setdefault("template", {}).setdefault("metadata", {})' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'ann = tmpl_meta.setdefault("annotations", {})' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'k = "run.googleapis.com/secrets"' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'raw = str(ann.get(k, "") or "")' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'mp = {}' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'for ln in raw.splitlines():' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' '    ln = ln.strip()' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' '    if not ln or ":" not in ln: continue' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' '    a, b = ln.split(":", 1)' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' '    mp[a.strip()] = b.strip()' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'mp[env_var] = secret_resource' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'ann[k] = "\n".join([f"{a}:{b}" for a,b in mp.items()])' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'containers = svc["spec"]["template"]["spec"]["containers"]' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'env_list = containers[0].get("env", [])' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'env_list = [e for e in env_list if e.get("name") != env_var]' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'env_list.append({"name": env_var, "valueFrom": {"secretKeyRef": {"name": env_var, "key": secret_version}}})' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'containers[0]["env"] = env_list' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'with open("/tmp/service.yaml", "w") as f: yaml.safe_dump(svc, f, sort_keys=False)' >> /tmp/inject_xproj_secret.py
+
+                  for line in "${CROSS_PROJECT_SECRET_LINES[@]}"; do
+                    ENV_NAME="${line%%=*}"
+                    REST="${line#*=}"
+                    SECRET_RESOURCE="${REST%%:*}"
+                    SECRET_VERSION="${REST#*:}"
+                    if [ -z "$SECRET_VERSION" ] || [ "$SECRET_VERSION" = "$REST" ]; then
+                      SECRET_VERSION="latest"
+                    fi
+
+                    if ! python3 /tmp/inject_xproj_secret.py "$ENV_NAME" "$SECRET_RESOURCE" "$SECRET_VERSION"; then
+                      echo "::error::Failed to pre-patch cross-project secret $ENV_NAME"
+                      exit 1
+                    fi
+                  done
+
+                  if ! gcloud run services replace /tmp/service.yaml --region="$REGION" --project="$PROJECT_ID"; then
+                    echo "::error::Failed to pre-apply patched service YAML for $SERVICE"
+                    exit 1
+                  fi
+                fi
+              fi
+              rm -f /tmp/service.yaml /tmp/inject_xproj_secret.py 2>/dev/null || true
             fi
 
             # Deploy base revision
