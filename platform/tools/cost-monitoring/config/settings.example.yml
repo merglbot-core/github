@@ -11,24 +11,29 @@ github:
 gcp:
   billing_account_id: "XXXX-XXXX-XXXX"
   billing_export:
-    project_id: "mb-seed"
+    project_id: "merglbot-platform-prd"
     dataset: "billing_export"
     table_pattern: "gcp_billing_export_v1_*"
   projects:
     core:
-      - "mb-seed"
-      - "mb-portal-stg"
-      - "mb-portal-prd"
-      - "mb-artifacts-prd"
+      - "merglbot-seed"
+      - "merglbot-artifacts"
+      - "merglbot-networking"
+      - "merglbot-logging"
+      - "merglbot-platform-stg"
+      - "merglbot-platform-prd"
+      - "merglbot-admin-stg"
+      - "merglbot-admin-prd"
     public:
-      - "mb-website-stg"
-      - "mb-website-prd"
+      - "merglbot-website-stg"
+      - "merglbot-website-prd"
     clients:
       denatura:
-        - "denatura-btf-stg"
-        - "denatura-btf-prd"
-        - "denatura-aaas-stg"
-        - "denatura-aaas-prd"
+        - "merglbot-denatura-extract"
+        - "merglbot-denatura-main"
+      proteinaco:
+        - "merglbot-proteinaco-extract"
+        - "merglbot-proteinaco-main"
 
 alerts:
   slack_webhook_env: "SLACK_WEBHOOK_URL"

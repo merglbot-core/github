@@ -1,165 +1,88 @@
-# GCP Workload Identity Federation (WIF) Setup
+# GCP Workload Identity Federation (WIF) Setup (SSOT)
 
-> **Purpose**: Keyless authentication from GitHub Actions to GCP using OIDC.
+> **Purpose**: Keyless authentication from GitHub Actions to GCP using OIDC and the **central, Terraform-managed WIF pool**.
 
-## Why WIF?
+## SSOT Summary (Merglbot)
 
-| Method | Security | Maintenance | Audit |
-|--------|----------|-------------|-------|
-| Service Account JSON Key | ❌ Risk of leak | Manual rotation | Limited |
-| **Workload Identity Federation** | ✅ Keyless | Automatic | Full IAM logs |
+**Do not create per-project pools.** SSOT is a single central pool+provider in `merglbot-seed`:
 
-## Setup Steps
+- **Seed project**: `merglbot-seed` (project number: `671585034644`)
+- **Pool**: `projects/671585034644/locations/global/workloadIdentityPools/github-actions`
+- **Provider**: `projects/671585034644/locations/global/workloadIdentityPools/github-actions/providers/github-oidc`
+- **Terraform source**: `merglbot-core/infra` → `terraform/v2/bootstrap/wif.tf`
 
-### 1. Create Workload Identity Pool (run once per GCP project)
+## Per-Repo Setup (What you create)
 
-```bash
-# Set variables
-PROJECT_ID="your-gcp-project-id"
-POOL_NAME="github"
-PROVIDER_NAME="github"
-GITHUB_ORG="merglbot-core"  # or other org
+For each repo/workflow that needs GCP access:
 
-# Create pool
-gcloud iam workload-identity-pools create $POOL_NAME \
-  --project=$PROJECT_ID \
-  --location="global" \
-  --display-name="GitHub Actions Pool"
+1. Create a **dedicated deploy service account** in the **target** GCP project (active project, not legacy/DELETE_REQUESTED).
+2. Add **WIF impersonation** binding restricted to that repo:
+   - `roles/iam.workloadIdentityUser`
+   - `principalSet://iam.googleapis.com/projects/671585034644/locations/global/workloadIdentityPools/github-actions/attribute.repository/<org>/<repo>`
+3. Grant the service account least-privilege IAM roles (Cloud Run deploy, Artifact Registry push, etc.).
 
-# Create provider
-gcloud iam workload-identity-pools providers create-oidc $PROVIDER_NAME \
-  --project=$PROJECT_ID \
-  --location="global" \
-  --workload-identity-pool=$POOL_NAME \
-  --display-name="GitHub OIDC" \
-  --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" \
-  --issuer-uri="https://token.actions.githubusercontent.com"
-```
-
-### 2. Create Service Account and Bind to WIF
+### Example (gcloud)
 
 ```bash
-SA_NAME="github-actions"
-SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+SEED_PROJECT_NUMBER="671585034644"
+POOL="github-actions"
+REPO="merglbot-proteinaco/viz-api"
 
-# Create service account
-gcloud iam service-accounts create $SA_NAME \
-  --project=$PROJECT_ID \
-  --display-name="GitHub Actions SA"
+TARGET_PROJECT_ID="merglbot-proteinaco-main"
+SA_ID="github-vizapi-deploy"
+SA_EMAIL="${SA_ID}@${TARGET_PROJECT_ID}.iam.gserviceaccount.com"
 
-# Grant SA necessary roles (adjust as needed)
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:${SA_EMAIL}" \
-  --role="roles/run.developer"
+# Create deploy SA
+gcloud iam service-accounts create "${SA_ID}" \
+  --project="${TARGET_PROJECT_ID}" \
+  --display-name="viz-api Deploy (GitHub Actions)"
 
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:${SA_EMAIL}" \
-  --role="roles/artifactregistry.writer"
-
-# Allow GitHub to impersonate SA
-gcloud iam service-accounts add-iam-policy-binding $SA_EMAIL \
-  --project=$PROJECT_ID \
+# Allow GitHub repo to impersonate the SA (repo-restricted)
+gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" \
+  --project="${TARGET_PROJECT_ID}" \
   --role="roles/iam.workloadIdentityUser" \
-  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_NAME}/attribute.repository_owner/${GITHUB_ORG}"
+  --member="principalSet://iam.googleapis.com/projects/${SEED_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL}/attribute.repository/${REPO}"
 ```
 
-### 3. Get WIF Provider Resource Name
+## GitHub Variables (Recommended)
 
-```bash
-# Get the full provider resource name
-gcloud iam workload-identity-pools providers describe $PROVIDER_NAME \
-  --project=$PROJECT_ID \
-  --location="global" \
-  --workload-identity-pool=$POOL_NAME \
-  --format="value(name)"
-```
+Prefer org-level variables (and override repo-level only when necessary):
 
-Output format:
-```
-projects/123456789/locations/global/workloadIdentityPools/github/providers/github
-```
+| Variable | Value |
+|---|---|
+| `GCP_WIF_PROVIDER` | `projects/671585034644/locations/global/workloadIdentityPools/github-actions/providers/github-oidc` |
+| `GCP_WIF_SERVICE_ACCOUNT` | `<deploy-sa>@<target-project>.iam.gserviceaccount.com` |
+| `GCP_PROJECT_ID` | `<target-project-id>` |
 
-### 4. Add to GitHub Org Secrets
-
-Add these secrets at org level:
-
-| Secret | Value |
-|--------|-------|
-| `WIF_PROVIDER` | `projects/123456789/locations/global/workloadIdentityPools/github/providers/github` |
-| `WIF_SERVICE_ACCOUNT` | `github-actions@your-project.iam.gserviceaccount.com` |
-| `GCP_PROJECT_ID` | `your-gcp-project-id` |
-
-## Usage in Workflows
+## Workflow Usage
 
 ```yaml
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write  # Required for WIF
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Authenticate to GCP
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
-          
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
-        
-      - name: Deploy to Cloud Run
-        run: |
-          gcloud run deploy my-service \
-            --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/my-image \
-            --region europe-west1
-```
+permissions:
+  contents: read
+  id-token: write
 
-## Reusable Workflow
+steps:
+  - uses: actions/checkout@v4
 
-Use the reusable workflow from `merglbot-core/github`:
-
-```yaml
-jobs:
-  deploy:
-    uses: merglbot-core/github/.github/workflows/reusable-deploy-cloud-run.yml@main
+  - name: Authenticate to GCP (WIF)
+    uses: google-github-actions/auth@v2
     with:
-      service_name: my-service
-      region: europe-west1
-      image: my-image
-    secrets:
-      WIF_PROVIDER: ${{ secrets.WIF_PROVIDER }}
-      WIF_SERVICE_ACCOUNT: ${{ secrets.WIF_SERVICE_ACCOUNT }}
-      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-```
-
-## Per-Repo Restrictions (Optional)
-
-For fine-grained access, restrict WIF to specific repos:
-
-```bash
-# Instead of org-wide access, restrict to specific repo
-gcloud iam service-accounts add-iam-policy-binding $SA_EMAIL \
-  --project=$PROJECT_ID \
-  --role="roles/iam.workloadIdentityUser" \
-  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_NAME}/attribute.repository/${GITHUB_ORG}/${REPO_NAME}"
+      workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+      service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
 ```
 
 ## Troubleshooting
 
-### Error: "Unable to acquire OIDC token"
-- Check `permissions.id-token: write` is set
-- Verify WIF_PROVIDER format is correct
+### `invalid_target` (auth)
+Your `workload_identity_provider` points to a provider that is disabled/deleted (often a legacy project in `DELETE_REQUESTED`).
 
-### Error: "Permission denied"
-- Check SA has required IAM roles
-- Verify WIF binding matches repo/org
+Fix: use the SSOT provider from `merglbot-seed` (above).
+
+### `permission denied` (impersonation)
+The deploy SA is missing the `roles/iam.workloadIdentityUser` binding to the seed pool principalSet for your repo.
 
 ## References
 
-- [google-github-actions/auth](https://github.com/google-github-actions/auth)
-- [GCP Workload Identity Federation](https://cloud.google.com/iam/docs/workload-identity-federation)
-- [MERGLBOT IAC Standards](../../../merglbot-public/docs/IAC_STANDARDS.md)
+- `merglbot-public/docs/IAC_STANDARDS.md` (SSOT rules)
+- `merglbot-public/docs/GCP_ARCHITECTURE_V2_CANONICAL.md` (SSOT architecture)
+- https://github.com/google-github-actions/auth
