@@ -292,7 +292,7 @@ jobs:
 
             # Apply same-project secrets via gcloud deploy
             if [ "${#SAME_PROJECT_SECRET_LINES[@]}" -gt 0 ]; then
-              (IFS=,; SECRET_LIST="${SAME_PROJECT_SECRET_LINES[*]}")
+              { IFS=,; SECRET_LIST="${SAME_PROJECT_SECRET_LINES[*]}"; }
               gcloud_cmd+=("--set-secrets=${SECRET_LIST}")
             fi
 
