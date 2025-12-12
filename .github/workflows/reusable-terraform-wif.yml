@@ -43,6 +43,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
 
+      - name: Validate WIF provider (SSOT)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SSOT_WIF_PROVIDER="projects/671585034644/locations/global/workloadIdentityPools/github-actions/providers/github-oidc"
+
+          if [ "${{ secrets.WIF_PROVIDER }}" != "${SSOT_WIF_PROVIDER}" ]; then
+            echo "::error::WIF_PROVIDER must point to the SSOT provider in merglbot-seed (${SSOT_WIF_PROVIDER})."
+            exit 1
+          fi
+
+          if [[ "${{ secrets.WIF_SERVICE_ACCOUNT }}" == *@merglbot.iam.gserviceaccount.com ]]; then
+            echo "::error::WIF_SERVICE_ACCOUNT points to a legacy service account in the DELETE_REQUESTED 'merglbot' project."
+            exit 1
+          fi
+
       - name: Authenticate to GCP (WIF)
         uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed  # v2
         with:

@@ -75,6 +75,25 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v5.0.0
+
+      - name: Validate WIF provider (SSOT)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SSOT_WIF_PROVIDER="projects/671585034644/locations/global/workloadIdentityPools/github-actions/providers/github-oidc"
+
+          if [ "${{ secrets.GCP_WIF_PROVIDER }}" != "${SSOT_WIF_PROVIDER}" ]; then
+            echo "::error::GCP_WIF_PROVIDER must point to the SSOT provider in merglbot-seed (${SSOT_WIF_PROVIDER})."
+            echo "::error::Fix by updating the caller repo/org variable passed into this reusable workflow."
+            exit 1
+          fi
+
+          if [[ "${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}" == *@merglbot.iam.gserviceaccount.com ]]; then
+            echo "::error::GCP_WIF_SERVICE_ACCOUNT points to a legacy service account in the DELETE_REQUESTED 'merglbot' project."
+            echo "::error::Create a dedicated deploy SA in an active target project and update the repo variable."
+            exit 1
+          fi
      
       - name: Authenticate to Google Cloud (WIF)
         id: auth
