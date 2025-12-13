@@ -166,7 +166,7 @@ jobs:
       - name: Run Trivy vulnerability scan
         id: trivy
         if: inputs.scan
-        uses: aquasecurity/trivy-action@d710430a6722f083d3b36b8339ff66b32f22ee55 # v0.19.0
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
         with:
           image-ref: '${{ inputs.registry }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}'
           format: 'sarif'
