@@ -195,16 +195,16 @@ Brief overview of the release outcome, highlighting key successes and any issues
 ## Release Artifacts
 
 ### Documentation
-- [Release Notes](link)
-- [Changelog](link)
-- [Migration Guide](link)
-- [API Documentation](link)
+- Release Notes: <ADD_URL_HERE>
+- Changelog: <ADD_URL_HERE>
+- Migration Guide: <ADD_URL_HERE>
+- API Documentation: <ADD_URL_HERE>
 
 ### Recordings & Logs
-- [Deployment Recording](link)
-- [Incident Logs](link)
-- [Performance Reports](link)
-- [Security Scan Results](link)
+- Deployment Recording: <ADD_URL_HERE>
+- Incident Logs: <ADD_URL_HERE>
+- Performance Reports: <ADD_URL_HERE>
+- Security Scan Results: <ADD_URL_HERE>
 
 ## Sign-off
 

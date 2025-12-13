@@ -93,10 +93,10 @@ Special thanks to our contributors:
 - Improved API documentation
 
 ## 🔗 Useful Links
-- [Full Changelog](link-to-changelog)
-- [Documentation](link-to-docs)
-- [Migration Guide](link-to-migration-guide)
-- [API Reference](link-to-api-docs)
+- Full Changelog: <ADD_URL_HERE>
+- Documentation: <ADD_URL_HERE>
+- Migration Guide: <ADD_URL_HERE>
+- API Reference: <ADD_URL_HERE>
 
 ## 📈 Release Statistics
 - **Total Commits**: [X]
@@ -143,7 +143,7 @@ helm upgrade --install [release-name] merglbot/[chart] --version [VERSION]
 ## Upgrade Instructions
 
 ### From v[PREVIOUS_MAJOR].x
-See [Migration Guide](link) for detailed upgrade instructions.
+See Migration Guide: <ADD_URL_HERE> for detailed upgrade instructions.
 
 ### From v[CURRENT_MAJOR].[PREVIOUS_MINOR].x
 No special steps required. Standard upgrade process applies.
@@ -158,7 +158,7 @@ We'd love to hear your feedback! Please report any issues or suggestions:
 
 ## Support
 - 📧 Email: support@merglbot.ai
-- 💬 Slack: [#support](slack-link)
+- 💬 Slack: #support
 - 📚 Documentation: [docs.merglbot.ai](https://docs.merglbot.ai)
 
 ---

@@ -10,16 +10,16 @@ Welcome to the merglbot.ai Team Training Hub! This directory contains comprehens
 **Duration:** 2 hours | **Level:** Required for All
 
 - **Module 1.1:** [WARP Gitignore Security](./security/01-gitignore-security.md) ✅
-- **Module 1.2:** Secret Management Best Practices (WIP - Coming Soon)
-- **Module 1.3:** IAM & Access Control (WIP - Coming Soon)
-- **Module 1.4:** Security Incident Response (WIP - Coming Soon)
+- **Module 1.2:** [Secret Management Best Practices](./security/02-secret-management.md) ✅
+- **Module 1.3:** [IAM & Access Control](./security/03-iam-access-control.md) ✅
+- **Module 1.4:** [Security Incident Response](../docs/security/incidents/README.md) ✅
 
 **Certification:** [Security Quiz](./security/certification-quiz.md) ✅
 
 ### 2. Bot-Driven Development Track (Work in Progress)
 **Duration:** 3 hours | **Level:** Required for Developers
 
-- **Module 2.1:** AI Coding Assistants Overview (WIP - Coming Soon)
+- **Module 2.1:** [AI Coding Assistants Overview](./bots/01-ai-assistants-overview.md) ✅
 - **Module 2.2:** GitHub Copilot Best Practices (WIP - Coming Soon)
 - **Module 2.3:** Cursor IDE Workshop (WIP - Coming Soon)
 - **Module 2.4:** Code Review with AI (WIP - Coming Soon)
@@ -30,7 +30,7 @@ Welcome to the merglbot.ai Team Training Hub! This directory contains comprehens
 ### 3. Release Management Track (Work in Progress)
 **Duration:** 2 hours | **Level:** Required for Platform Team
 
-- **Module 3.1:** Release Process Overview (WIP - Coming Soon)
+- **Module 3.1:** [Release Process Overview](./release/01-process-overview.md) ✅
 - **Module 3.2:** Cloud Run Deployment (WIP - Coming Soon)
 - **Module 3.3:** Rollback Procedures (WIP - Coming Soon)
 - **Module 3.4:** Monitoring & Observability (WIP - Coming Soon)
@@ -60,10 +60,10 @@ All video tutorials are available on our internal training platform:
 
 Print-friendly cheat sheets for daily use:
 
-- [Security Quick Reference](./quick-reference/security-cheatsheet.pdf)
-- [Bot Commands Cheatsheet](./quick-reference/bot-commands.pdf)
-- [Release Checklist](./quick-reference/release-checklist.pdf)
-- [Emergency Contacts](./quick-reference/emergency-contacts.pdf)
+- [Security Quick Reference](./quick-reference/security-cheatsheet.md)
+- [Bot Commands Cheatsheet](./quick-reference/bot-commands.md)
+- [Release Checklist](./quick-reference/release-checklist.md)
+- [Emergency Contacts](./quick-reference/emergency-contacts.md)
 
 ## 📅 Training Schedule
 
@@ -135,7 +135,7 @@ We continuously improve our training materials based on your feedback:
 
 ## 🔗 Additional Resources
 
-- [WARP Standards Repository](https://github.com/merglbot-public/docs)
+- [Merglbot Docs (SSOT)](https://github.com/merglbot-public/docs)
 - [merglbot.ai Platform Documentation](https://docs.merglbot.ai)
 - [Security Incident Reports Archive](../docs/security/incidents)
 - [Release Notes History](../docs/releases)
@@ -168,7 +168,7 @@ All training materials adhere to:
 ## Getting Started
 
 1. **New to merglbot?** Start with [New Developer Onboarding](./quick-start/new-developer-day1.md)
-2. **Need certification?** Check your required [Training Tracks](#-training-tracks)
+2. **Need certification?** Check your required [Training Tracks](#training-tracks)
 3. **Questions?** Join us in #training-questions on Slack
 4. **Ready to learn?** Pick a track above and get started! 🚀
 

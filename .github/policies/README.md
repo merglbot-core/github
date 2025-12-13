@@ -149,4 +149,4 @@ If a policy incorrectly flags valid code:
 - [Open Policy Agent](https://www.openpolicyagent.org/)
 - [Conftest](https://www.conftest.dev/)
 - [GitHub Actions Security](https://docs.github.com/en/actions/security-guides)
-- [WARP CI/CD Standards](../../docs/MERGLBOT_GITHUB_ACTIONS_GLOBAL_RULES.md)
+- [Merglbot CI/CD Standards (SSOT)](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GITHUB_ACTIONS_GLOBAL_RULES.md)
