@@ -174,7 +174,7 @@ jobs:
       
       # Container Security: SBOM Generation
       - name: Generate SBOM
-        uses: anchore/sbom-action@d94f46e13c6c62f59525ac9a1e147a99dc0b9bf5  # v0.17.0
+        uses: anchore/sbom-action@43a17d6e7add2b5535efe4dcae9952337c479a93  # v0.20.11
         with:
           image: ${{ steps.build.outputs.full_image }}
           format: 'cyclonedx-json'
