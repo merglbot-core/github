@@ -18,12 +18,22 @@ on:
         options:
           - full
           - light
+      diff_scope:
+        description: "Diff scope (auto = since last Merglbot review when possible)"
+        required: false
+        type: choice
+        default: "auto"
+        options:
+          - auto
+          - delta
+          - full
       anthropic_model:
         description: "Anthropic model"
         required: false
         type: choice
-        default: "claude-sonnet-4-5-20250929"
+        default: "claude-opus-4-5-20250929"
         options:
+          - claude-opus-4-5-20250929
           - claude-sonnet-4-5-20250929
           - claude-opus-4-1-20250805
           - claude-3-5-haiku-20241022
@@ -31,8 +41,9 @@ on:
         description: "OpenAI model"
         required: false
         type: choice
-        default: "gpt-5.1"
+        default: "gpt-5.2"
         options:
+          - gpt-5.2
           - gpt-5.1
           - gpt-5
           - gpt-4-turbo
@@ -60,15 +71,18 @@ jobs:
       pr_number: ${{ steps.get_pr.outputs.pr_number }}
       should_run: ${{ steps.get_pr.outputs.should_run }}
       review_mode: ${{ steps.get_pr.outputs.review_mode }}
+      diff_scope: ${{ steps.get_pr.outputs.diff_scope }}
     steps:
       - name: Get PR Number and Mode
         id: get_pr
         env:
           # Security: Use env var to avoid command injection from comment body
           COMMENT_CONTAINS_LIGHT: ${{ contains(github.event.comment.body, '--light') }}
+          COMMENT_CONTAINS_FULL_DIFF: ${{ contains(github.event.comment.body, '--full-diff') }}
           IS_WORKFLOW_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
           INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
           INPUT_REVIEW_MODE: ${{ github.event.inputs.review_mode }}
+          INPUT_DIFF_SCOPE: ${{ github.event.inputs.diff_scope }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           if [ "$IS_WORKFLOW_DISPATCH" == "true" ]; then
@@ -77,22 +91,35 @@ jobs:
               echo "::error::Invalid PR number: must be numeric"
               exit 1
             fi
-            echo "pr_number=$INPUT_PR_NUMBER" >> "$GITHUB_OUTPUT"
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "review_mode=${INPUT_REVIEW_MODE:-full}" >> "$GITHUB_OUTPUT"
+            PR_NUMBER_OUT="$INPUT_PR_NUMBER"
+            REVIEW_MODE_OUT="${INPUT_REVIEW_MODE:-full}"
+            DIFF_SCOPE_OUT="${INPUT_DIFF_SCOPE:-auto}"
             echo "✅ Manual trigger for PR #$INPUT_PR_NUMBER (mode: ${INPUT_REVIEW_MODE:-full})"
           else
-            echo "pr_number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            PR_NUMBER_OUT="$ISSUE_NUMBER"
             # Security: Use GitHub native contains() instead of shell grep
             if [ "$COMMENT_CONTAINS_LIGHT" == "true" ]; then
-              echo "review_mode=light" >> "$GITHUB_OUTPUT"
+              REVIEW_MODE_OUT="light"
               echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: LIGHT)"
             else
-              echo "review_mode=full" >> "$GITHUB_OUTPUT"
+              REVIEW_MODE_OUT="full"
               echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: FULL)"
             fi
+            
+            if [ "$COMMENT_CONTAINS_FULL_DIFF" == "true" ]; then
+              DIFF_SCOPE_OUT="full"
+              echo "✅ Diff scope: FULL (requested via --full-diff)"
+            else
+              DIFF_SCOPE_OUT="auto"
+            fi
           fi
+          
+          {
+            echo "pr_number=$PR_NUMBER_OUT"
+            echo "should_run=true"
+            echo "review_mode=$REVIEW_MODE_OUT"
+            echo "diff_scope=$DIFF_SCOPE_OUT"
+          } >> "$GITHUB_OUTPUT"
 
   multi-model-review:
     name: Multi-Model PR Review v3
@@ -105,10 +132,11 @@ jobs:
       ANTHROPIC_API_VERSION: "2023-06-01"
       PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
       REVIEW_MODE: ${{ needs.check-trigger.outputs.review_mode }}
+      DIFF_SCOPE_MODE: ${{ needs.check-trigger.outputs.diff_scope }}
     
     steps:
       - name: Checkout
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1 (tag: v6.0.1)
         with:
           fetch-depth: 0
       
@@ -134,8 +162,9 @@ jobs:
           PR_NUM="${{ env.PR_NUMBER }}"
           echo "PR Number: $PR_NUM"
           echo "Review Mode: ${{ env.REVIEW_MODE }}"
+          echo "Diff Scope Mode: ${{ env.DIFF_SCOPE_MODE }}"
           
-          gh pr view "$PR_NUM" --json title,body,author,baseRefName,headRefName,labels,additions,deletions,changedFiles > pr_metadata.json
+          gh pr view "$PR_NUM" --json title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles > pr_metadata.json
           
           PR_TITLE=$(jq -r '.title // "No title"' pr_metadata.json)
           PR_BODY=$(jq -r '.body // "No description"' pr_metadata.json)
@@ -143,25 +172,114 @@ jobs:
           PR_ADDITIONS=$(jq -r '.additions // 0' pr_metadata.json)
           PR_DELETIONS=$(jq -r '.deletions // 0' pr_metadata.json)
           PR_FILES=$(jq -r '.changedFiles // 0' pr_metadata.json)
+          PR_BASE_SHA=$(jq -r '.baseRefOid // empty' pr_metadata.json)
+          PR_HEAD_SHA=$(jq -r '.headRefOid // empty' pr_metadata.json)
           
           echo "Title: $PR_TITLE"
           echo "Author: $PR_AUTHOR"
           echo "Changes: +$PR_ADDITIONS -$PR_DELETIONS in $PR_FILES files"
+          echo "Base SHA: ${PR_BASE_SHA:0:12}"
+          echo "Head SHA: ${PR_HEAD_SHA:0:12}"
           
-          echo "$PR_TITLE" > pr_title.txt
-          echo "$PR_BODY" > pr_body.txt
-          echo "$PR_AUTHOR" > pr_author.txt
-          echo "$PR_ADDITIONS" > pr_additions.txt
-          echo "$PR_DELETIONS" > pr_deletions.txt
-          echo "$PR_FILES" > pr_files_count.txt
+          # Use printf to avoid echo interpreting user-controlled content as flags (-n/-e)
+          printf '%s\n' "$PR_TITLE" > pr_title.txt
+          printf '%s\n' "$PR_BODY" > pr_body.txt
+          printf '%s\n' "$PR_AUTHOR" > pr_author.txt
+          printf '%s\n' "$PR_ADDITIONS" > pr_additions.txt
+          printf '%s\n' "$PR_DELETIONS" > pr_deletions.txt
+          printf '%s\n' "$PR_FILES" > pr_files_count.txt
+          printf '%s\n' "$PR_BASE_SHA" > pr_base_sha.txt
+          printf '%s\n' "$PR_HEAD_SHA" > pr_head_sha.txt
           
-          gh pr diff "$PR_NUM" > pr_diff.txt
-          DIFF_LINES=$(wc -l < pr_diff.txt)
-          echo "Diff: $DIFF_LINES lines"
+          echo "PR_BASE_SHA=$PR_BASE_SHA" >> "$GITHUB_ENV"
+          echo "PR_HEAD_SHA=$PR_HEAD_SHA" >> "$GITHUB_ENV"
           
           gh pr view "$PR_NUM" --json files -q '.files[].path' > changed_files.txt 2>/dev/null || echo "" > changed_files.txt
           
           gh api "repos/${{ github.repository }}/issues/$PR_NUM/comments" --paginate > issue_comments.json 2>/dev/null || echo "[]" > issue_comments.json
+          
+          echo "Detecting previous Merglbot review..."
+          LAST_REVIEW_BODY=$(jq -r '[.[] | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .body // empty' issue_comments.json 2>/dev/null || echo "")
+          LAST_REVIEW_CREATED_AT=$(jq -r '[.[] | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .created_at // empty' issue_comments.json 2>/dev/null || echo "")
+          
+          if [ -z "$LAST_REVIEW_BODY" ]; then
+            LAST_REVIEW_BODY=$(jq -r '[.[] | select(.body | contains("## 🤖 Merglbot PR Assistant v3"))] | sort_by(.created_at) | last | .body // empty' issue_comments.json 2>/dev/null || echo "")
+            LAST_REVIEW_CREATED_AT=$(jq -r '[.[] | select(.body | contains("## 🤖 Merglbot PR Assistant v3"))] | sort_by(.created_at) | last | .created_at // empty' issue_comments.json 2>/dev/null || echo "")
+          fi
+          
+          printf '%s' "$LAST_REVIEW_BODY" > prev_merglbot_review.txt
+          echo "$LAST_REVIEW_CREATED_AT" > prev_merglbot_review_created_at.txt
+          
+          PREV_REVIEW_HEAD_SHA=""
+          if [ -n "$LAST_REVIEW_BODY" ]; then
+            PREV_REVIEW_HEAD_SHA=$(printf '%s' "$LAST_REVIEW_BODY" | sed -n 's/.*MERGLBOT_REVIEW_HEAD_SHA: \([0-9a-f]\{7,40\}\).*/\1/p' | head -n 1 || true)
+          fi
+          
+          DIFF_SCOPE_MODE="${DIFF_SCOPE_MODE:-auto}"
+          if [ "$DIFF_SCOPE_MODE" == "full" ]; then
+            PREV_REVIEW_HEAD_SHA=""
+            LAST_REVIEW_CREATED_AT=""
+            echo "" > prev_merglbot_review_created_at.txt
+          fi
+          
+          echo "$PREV_REVIEW_HEAD_SHA" > prev_review_head_sha.txt
+          echo "PREV_REVIEW_HEAD_SHA=$PREV_REVIEW_HEAD_SHA" >> "$GITHUB_ENV"
+          
+          SKIP_REVIEW="false"
+          if [ "$DIFF_SCOPE_MODE" != "full" ] && [ -n "$PREV_REVIEW_HEAD_SHA" ] && [ "$PREV_REVIEW_HEAD_SHA" == "$PR_HEAD_SHA" ]; then
+            SKIP_REVIEW="true"
+          fi
+          echo "skip_review=$SKIP_REVIEW" >> "$GITHUB_OUTPUT"
+          
+          if [ "$SKIP_REVIEW" == "true" ]; then
+            echo "⏭️ No new commits since last Merglbot review ($PREV_REVIEW_HEAD_SHA)"
+            echo "none" > pr_diff_scope.txt
+            echo "$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" > pr_diff_range.txt
+            echo "" > new_commits.txt
+            echo "" > pr_diff.txt
+          else
+            DIFF_SCOPE="full"
+            DIFF_RANGE="$PR_BASE_SHA...$PR_HEAD_SHA"
+            echo "" > new_commits.txt
+            
+            if [ "$DIFF_SCOPE_MODE" == "delta" ] && [ -z "$PREV_REVIEW_HEAD_SHA" ]; then
+              echo "Requested DELTA diff but no previous Merglbot review exists; falling back to full PR diff."
+            fi
+            
+            if [ "$DIFF_SCOPE_MODE" != "full" ] && [ -n "$PREV_REVIEW_HEAD_SHA" ] && [ "$PREV_REVIEW_HEAD_SHA" != "$PR_HEAD_SHA" ]; then
+              COMPARE_STATUS=$(gh api "/repos/${{ github.repository }}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" --jq '.status' 2>/dev/null || echo "")
+              if [ "$COMPARE_STATUS" == "ahead" ]; then
+                echo "Using DELTA diff since last review: $PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA"
+                DIFF_SCOPE="delta"
+                DIFF_RANGE="$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA"
+                
+                if ! gh api -H "Accept: application/vnd.github.v3.diff" "/repos/${{ github.repository }}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" > pr_diff.txt 2>/dev/null; then
+                  echo "Delta diff fetch failed; falling back to full PR diff."
+                  DIFF_SCOPE="full"
+                  DIFF_RANGE="$PR_BASE_SHA...$PR_HEAD_SHA"
+                else
+                  gh api "/repos/${{ github.repository }}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" --jq '.commits[] | "- " + (.sha[0:7]) + " " + (.commit.message | split("\n")[0])' 2>/dev/null > new_commits.txt || echo "" > new_commits.txt
+                fi
+              elif [ "$DIFF_SCOPE_MODE" == "delta" ]; then
+                echo "Requested DELTA diff but compare status is '$COMPARE_STATUS'; falling back to full PR diff."
+              fi
+            fi
+            
+            if [ "$DIFF_SCOPE" != "delta" ]; then
+              echo "Using FULL PR diff (base→head)."
+              gh pr diff "$PR_NUM" > pr_diff.txt
+            fi
+            
+            echo "$DIFF_SCOPE" > pr_diff_scope.txt
+            echo "$DIFF_RANGE" > pr_diff_range.txt
+            echo "DIFF_SCOPE=$DIFF_SCOPE" >> "$GITHUB_ENV"
+            echo "DIFF_RANGE=$DIFF_RANGE" >> "$GITHUB_ENV"
+          fi
+          
+          DIFF_LINES=$(wc -l < pr_diff.txt 2>/dev/null || echo "0")
+          echo "Diff: $DIFF_LINES lines"
+          
+          echo "REVIEW_CUTOFF=$LAST_REVIEW_CREATED_AT" >> "$GITHUB_ENV"
           
           echo "Extracting bugbot findings..."
           echo "" > bugbot_findings.txt
@@ -169,7 +287,7 @@ jobs:
           BUGBOT_SOURCES=""
           
           for BOT_PATTERN in cursor gemini copilot coderabbit qodo pr-agent snyk sonar codacy deepsource; do
-            FINDINGS=$(jq -r --arg pat "$BOT_PATTERN" '.[] | select(.user.login | test($pat; "i")) | .body' issue_comments.json 2>/dev/null || echo "")
+            FINDINGS=$(jq -r --arg pat "$BOT_PATTERN" --arg cutoff "$LAST_REVIEW_CREATED_AT" '.[] | select(.user.login | test($pat; "i")) | select(($cutoff == "") or (.created_at > $cutoff)) | .body' issue_comments.json 2>/dev/null || echo "")
             if [ -n "$FINDINGS" ] && [ "$FINDINGS" != "null" ]; then
               {
                 echo "### $BOT_PATTERN Bot Findings"
@@ -190,12 +308,12 @@ jobs:
           done
           
           gh api "repos/${{ github.repository }}/pulls/$PR_NUM/comments" --paginate > review_comments.json 2>/dev/null || echo "[]" > review_comments.json
-          REVIEW_COMMENT_COUNT=$(jq 'length' review_comments.json)
+          REVIEW_COMMENT_COUNT=$(jq -r --arg cutoff "$LAST_REVIEW_CREATED_AT" '[.[] | select(($cutoff == "") or (.created_at > $cutoff))] | length' review_comments.json 2>/dev/null || echo "0")
           if [ "$REVIEW_COMMENT_COUNT" -gt 0 ]; then
             {
               echo "### Existing Review Comments"
               echo ""
-              jq -r '.[] | "**\(.user.login)** on \(.path): \(.body)"' review_comments.json 2>/dev/null || echo "None"
+              jq -r --arg cutoff "$LAST_REVIEW_CREATED_AT" '.[] | select(($cutoff == "") or (.created_at > $cutoff)) | "**\(.user.login)** on \(.path): \(.body)"' review_comments.json 2>/dev/null || echo "None"
               echo ""
             } >> bugbot_findings.txt
           fi
@@ -213,13 +331,44 @@ jobs:
           echo "========================================="
           echo "CONTEXT GATHERING COMPLETE"
           echo "========================================="
+
+      - name: Skip Review (No New Commits)
+        if: steps.context.outputs.skip_review == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          
+          PR_NUM="${{ env.PR_NUMBER }}"
+          PREV_SHA="${{ env.PREV_REVIEW_HEAD_SHA }}"
+          HEAD_SHA="${{ env.PR_HEAD_SHA }}"
+          
+          if [ -z "$PREV_SHA" ] || [ -z "$HEAD_SHA" ]; then
+            echo "Skip requested but missing SHA context."
+            exit 0
+          fi
+          
+          {
+            printf '%s\n' "## 🤖 Merglbot PR Assistant v3"
+            printf '%s\n' ""
+            printf '%s\n' "⏭️ No new commits since last Merglbot review (\`${PREV_SHA:0:12}\`).  "
+            printf '%s\n' "Current head: \`${HEAD_SHA:0:12}\`."
+          } > comment.md
+          
+          gh pr comment "$PR_NUM" --body-file comment.md
+          
+          if [ "${{ github.event_name }}" == "issue_comment" ]; then
+            gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+              -f content='hooray' || true
+          fi
       
       - name: Step 1 - Parallel API Calls
+        if: success() && steps.context.outputs.skip_review != 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}
-          OPENAI_MODEL: ${{ github.event.inputs.openai_model || 'gpt-5.1' }}
+          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
+          OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
         run: |
           set -euo pipefail
           
@@ -227,21 +376,64 @@ jobs:
           echo "STEP 1: PARALLEL AI ANALYSIS"
           echo "========================================="
           
-          PR_TITLE=$(cat pr_title.txt)
-          PR_BODY=$(cat pr_body.txt)
-          PR_AUTHOR=$(cat pr_author.txt)
-          PR_ADDITIONS=$(cat pr_additions.txt)
-          PR_DELETIONS=$(cat pr_deletions.txt)
-          PR_FILES_COUNT=$(cat pr_files_count.txt)
-          PR_DIFF=$(cat pr_diff.txt | head -c 100000)
-          CHANGED_FILES=$(cat changed_files.txt | head -100 | tr '\n' ', ')
-          BUGBOT_FINDINGS=$(cat bugbot_findings.txt)
-          BUGBOT_COUNT=$(cat bugbot_count.txt)
-          BUGBOT_SOURCES=$(cat bugbot_sources.txt)
+          PR_TITLE=$(< pr_title.txt)
+          PR_BODY=$(python3 -c 'from pathlib import Path; import sys; s=Path("pr_body.txt").read_text(encoding="utf-8", errors="replace"); sys.stdout.write(s[:3000])')
+          PR_AUTHOR=$(< pr_author.txt)
+          PR_ADDITIONS=$(< pr_additions.txt)
+          PR_DELETIONS=$(< pr_deletions.txt)
+          PR_FILES_COUNT=$(< pr_files_count.txt)
+          
+          DIFF_SCOPE="full"
+          if [ -f pr_diff_scope.txt ]; then
+            DIFF_SCOPE=$(< pr_diff_scope.txt)
+          fi
+          
+          DIFF_RANGE=""
+          if [ -f pr_diff_range.txt ]; then
+            DIFF_RANGE=$(< pr_diff_range.txt)
+          fi
+          
+            PR_DIFF_RAW=""
+            if [ -f pr_diff.txt ]; then
+              PR_DIFF_RAW=$(< pr_diff.txt)
+            fi
+            PR_DIFF_SIZE=${#PR_DIFF_RAW}
+            if [ "$PR_DIFF_SIZE" -gt 100000 ]; then
+              PR_DIFF="$(python3 -c 'import sys; s=sys.stdin.buffer.read().decode("utf-8", "replace"); sys.stdout.write(s[:50000] + "\n\n... (snip) ...\n\n" + s[-50000:])' <<< "$PR_DIFF_RAW")"
+            else
+              PR_DIFF="$PR_DIFF_RAW"
+            fi
+            
+            PREV_REVIEW=""
+            if [ -f prev_merglbot_review.txt ]; then
+              PREV_REVIEW=$(python3 -c 'from pathlib import Path; import sys; p=Path("prev_merglbot_review.txt"); sys.stdout.write(p.read_text(encoding="utf-8", errors="replace")[:20000])' 2>/dev/null || true)
+            fi
+            
+            NEW_COMMITS=""
+            if [ -f new_commits.txt ]; then
+              NEW_COMMITS=$(python3 -c 'from pathlib import Path; import sys; p=Path("new_commits.txt"); sys.stdout.write(p.read_text(encoding="utf-8", errors="replace")[:5000])' 2>/dev/null || true)
+            fi
+          
+          CHANGED_FILES=$(head -100 changed_files.txt 2>/dev/null | tr '\n' ', ')
+          
+          BUGBOT_FINDINGS=""
+          if [ -f bugbot_findings.txt ]; then
+            BUGBOT_FINDINGS=$(< bugbot_findings.txt)
+          fi
+          
+          BUGBOT_COUNT="0"
+          if [ -f bugbot_count.txt ]; then
+            BUGBOT_COUNT=$(< bugbot_count.txt)
+          fi
+          
+          BUGBOT_SOURCES="none"
+          if [ -f bugbot_sources.txt ]; then
+            BUGBOT_SOURCES=$(< bugbot_sources.txt)
+          fi
           
           echo "Context loaded:"
-          echo "  PR Body: $(echo "$PR_BODY" | wc -c) chars"
-          echo "  PR Diff: $(echo "$PR_DIFF" | wc -c) chars"
+          echo "  PR Body: ${#PR_BODY} chars"
+          echo "  PR Diff: ${#PR_DIFF} chars"
           echo "  Bugbot Sources: $BUGBOT_SOURCES ($BUGBOT_COUNT)"
           
           if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
@@ -258,201 +450,326 @@ jobs:
           
           echo "Review depth: $REVIEW_DEPTH"
           
-          # Build prompt using printf to file
-          printf '%s\n' "# Merglbot Multi-Model Code Review v3.1" > /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence." >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## MERGLBOT AI AGENT APPENDIX v2.5" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "This is your authoritative reference for all Merglbot standards." >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### Critical Rules (MUST FOLLOW)" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "1. PR Hygiene: Push na STEJNY PR/branch, nevytvarej duplikaty" >> /tmp/full_prompt.txt
-          printf '%s\n' "2. Production: Vse pres PR + schvaleni, nikdy push na main" >> /tmp/full_prompt.txt
-          printf '%s\n' "3. Security: Zadne secrets v kodu; jen GitHub secrets; zadne SA JSON - vzdy WIF/OIDC" >> /tmp/full_prompt.txt
-          printf '%s\n' "4. Auth: Session-based v1 (OAuth+Firestore)" >> /tmp/full_prompt.txt
-          printf '%s\n' "5. Workflow: Plan - Act - Verify" >> /tmp/full_prompt.txt
-          printf '%s\n' "6. PR Size: Pod 400 radku (vyjimka jen u cistych docs) - WARP-PR-001" >> /tmp/full_prompt.txt
-          printf '%s\n' "7. Commits: Conventional (feat:, fix:, docs:, chore:, ci:)" >> /tmp/full_prompt.txt
-          printf '%s\n' "8. Branch: feat/, fix/, docs/, ci/ - vzdy squash merge do main" >> /tmp/full_prompt.txt
-          printf '%s\n' "9. SSOT: Dokumentace v merglbot-public/docs/" >> /tmp/full_prompt.txt
-          printf '%s\n' "10. Destructive: Double-confirm pred destruktivni akci" >> /tmp/full_prompt.txt
-          printf '%s\n' "11. CI Idempotency: CI kroky musi byt idempotentni" >> /tmp/full_prompt.txt
-          printf '%s\n' "12. Security Gating: Trivy/CodeQL gaty se NEzmekuji" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### WARP Rule Reference" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-SEC-001: No hardcoded secrets - use env vars or Secret Manager" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-SEC-002: Container hardening - Trivy HIGH/CRITICAL must pass" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-SEC-003: OIDC/WIF over SA JSON keys" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-SEC-004: No secrets in logs" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-CI-001: GHA standards - pinned actions, minimal permissions" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-CI-002: Idempotent CI steps" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-PR-001: PR size under 400 lines" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-PR-002: Conventional commits" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-ARCH-001: Auth via AUTHENTICATION_AUTHORIZATION.md" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### SSOT Documentation Links" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md - Platform rules" >> /tmp/full_prompt.txt
-          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md - PR requirements" >> /tmp/full_prompt.txt
-          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/SECURITY.md - Security" >> /tmp/full_prompt.txt
-          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/WARP_SECRETS_NAMING_AND_LOGGING.md - Secrets" >> /tmp/full_prompt.txt
-          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/WARP_GITHUB_ACTIONS_GLOBAL_RULES.md - GHA" >> /tmp/full_prompt.txt
-          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/AUTHENTICATION_AUTHORIZATION.md - Auth" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "---" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## YOUR MISSION" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "Perform a thorough, professional code review that:" >> /tmp/full_prompt.txt
-          printf '%s\n' "1. Focuses on what matters - security, bugs, architecture" >> /tmp/full_prompt.txt
-          printf '%s\n' "2. Respects PRs stated goal - dont suggest unrelated changes" >> /tmp/full_prompt.txt
-          printf '%s\n' "3. Analyzes ALL bugbot findings - validate, filter false positives" >> /tmp/full_prompt.txt
-          printf '%s\n' "4. Follows Merglbot standards - cite WARP rules" >> /tmp/full_prompt.txt
-          printf '%s\n' "5. Provides actionable feedback with code examples" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## OUTPUT REQUIREMENTS" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "Review Mode: $REVIEW_DEPTH" >> /tmp/full_prompt.txt
-          printf '%s\n' "$OUTPUT_INSTRUCTIONS" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### Output Structure" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "# Code Review Sumar" >> /tmp/full_prompt.txt
-          printf '%s\n' "[3-5 sentences about PR, quality, concerns]" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## Findings" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### Critical (Must Fix)" >> /tmp/full_prompt.txt
-          printf '%s\n' "[List with code examples and WARP rule citations]" >> /tmp/full_prompt.txt
-          printf '%s\n' "- [ ] Finding: Description (WARP-XXX)" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### High Priority" >> /tmp/full_prompt.txt
-          printf '%s\n' "[List]" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### Medium Priority" >> /tmp/full_prompt.txt
-          printf '%s\n' "[List]" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### Low Priority" >> /tmp/full_prompt.txt
-          printf '%s\n' "[List]" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## Whats Good" >> /tmp/full_prompt.txt
-          printf '%s\n' "[2-4 positive aspects]" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## Bugbot Findings Analysis" >> /tmp/full_prompt.txt
-          printf '%s\n' "[For EACH bugbot finding state: Agree/Disagree/Partially with reason]" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## Zaver" >> /tmp/full_prompt.txt
-          printf '%s\n' "Verdict: [APPROVE or CHANGES NEEDED]" >> /tmp/full_prompt.txt
-          printf '%s\n' "[1-2 sentences]" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### Rules" >> /tmp/full_prompt.txt
-          printf '%s\n' "- Czech for explanations, English for code" >> /tmp/full_prompt.txt
-          printf '%s\n' "- Include line numbers" >> /tmp/full_prompt.txt
-          printf '%s\n' "- Cite WARP rules" >> /tmp/full_prompt.txt
-          printf '%s\n' "- Code examples for fixes" >> /tmp/full_prompt.txt
-          printf '%s\n' "- Use checkboxes for actions" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "---" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## PR INFORMATION" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "Title: $PR_TITLE" >> /tmp/full_prompt.txt
-          printf '%s\n' "PR Number: #${{ env.PR_NUMBER }}" >> /tmp/full_prompt.txt
-          printf '%s\n' "Author: @$PR_AUTHOR" >> /tmp/full_prompt.txt
-          printf '%s\n' "Changes: +$PR_ADDITIONS / -$PR_DELETIONS in $PR_FILES_COUNT files" >> /tmp/full_prompt.txt
-          printf '%s\n' "Changed Files: $CHANGED_FILES" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### PR Description" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "$PR_BODY" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "---" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## BUGBOT FINDINGS ($BUGBOT_COUNT sources: $BUGBOT_SOURCES)" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "For EACH finding below, state: Agree/Disagree/Partially" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "$BUGBOT_FINDINGS" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "---" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## PR DIFF" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          echo '```diff' >> /tmp/full_prompt.txt
-          printf '%s\n' "$PR_DIFF" >> /tmp/full_prompt.txt
-          echo '```' >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "---" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "Now provide your review following the structure above." >> /tmp/full_prompt.txt
+          # Build prompt using printf to file (single redirect)
+          {
+          printf '%s\n' "# Merglbot Multi-Model Code Review v3.2"
+          printf '%s\n' ""
+          printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence."
+          printf '%s\n' ""
+          printf '%s\n' "## MERGLBOT AI AGENT APPENDIX v2.15"
+          printf '%s\n' ""
+          printf '%s\n' "This is your authoritative reference for all Merglbot standards."
+          printf '%s\n' ""
+          printf '%s\n' "### Critical Rules (MUST FOLLOW)"
+          printf '%s\n' ""
+          printf '%s\n' "1. PR Hygiene: Push na STEJNY PR/branch, nevytvarej duplikaty"
+          printf '%s\n' "2. Production: Vse pres PR + schvaleni, nikdy push na main"
+          printf '%s\n' "3. Security: Zadne secrets v kodu; jen GitHub secrets; zadne SA JSON - vzdy WIF/OIDC"
+          printf '%s\n' "4. Auth: Auth V2 Multi-Segment (platform_admin/client/demo) - viz AUTHENTICATION_AUTHORIZATION.md"
+          printf '%s\n' "5. Workflow: Plan - Act - Verify"
+          printf '%s\n' "6. PR Size: Pod 400 radku (vyjimka jen u cistych docs) - WARP-PR-001"
+          printf '%s\n' "7. Commits: Conventional (feat:, fix:, docs:, chore:, ci:)"
+          printf '%s\n' "8. Branch: feat/, fix/, docs/, ci/ - vzdy squash merge do main"
+          printf '%s\n' "9. SSOT: Dokumentace v merglbot-public/docs/"
+          printf '%s\n' "10. Destructive: Double-confirm pred destruktivni akci"
+          printf '%s\n' "11. CI Idempotency: CI kroky musi byt idempotentni"
+          printf '%s\n' "12. Security Gating: Trivy/CodeQL gaty se NEzmekuji"
+          printf '%s\n' ""
+          printf '%s\n' "### WARP Rule Reference"
+          printf '%s\n' ""
+          printf '%s\n' "WARP-SEC-001: No hardcoded secrets - use env vars or Secret Manager"
+          printf '%s\n' "WARP-SEC-002: Container hardening - Trivy HIGH/CRITICAL must pass"
+          printf '%s\n' "WARP-SEC-003: OIDC/WIF over SA JSON keys"
+          printf '%s\n' "WARP-SEC-004: No secrets in logs"
+          printf '%s\n' "WARP-CI-001: GHA standards - pinned actions, minimal permissions"
+          printf '%s\n' "WARP-CI-002: Idempotent CI steps"
+          printf '%s\n' "WARP-PR-001: PR size under 400 lines"
+          printf '%s\n' "WARP-PR-002: Conventional commits"
+          printf '%s\n' "WARP-ARCH-001: Auth via AUTHENTICATION_AUTHORIZATION.md"
+          printf '%s\n' ""
+          printf '%s\n' "### SSOT Documentation Links"
+          printf '%s\n' ""
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md - Platform rules"
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md - PR requirements"
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/SECURITY.md - Security"
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/MERGLBOT_SECRETS_NAMING_AND_LOGGING.md - Secrets"
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GITHUB_ACTIONS_GLOBAL_RULES.md - GHA"
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/AUTHENTICATION_AUTHORIZATION.md - Auth"
+          printf '%s\n' ""
+          printf '%s\n' "---"
+          printf '%s\n' ""
+          printf '%s\n' "## REVIEW SCOPE"
+          printf '%s\n' ""
+          printf '%s\n' "Scope: $DIFF_SCOPE"
+          printf '%s\n' "Commit Range: $DIFF_RANGE"
+          if [ "$DIFF_SCOPE" == "delta" ]; then
+            printf '%s\n' ""
+            printf '%s\n' "IMPORTANT: This is a DELTA review. Focus ONLY on changes introduced in this diff."
+            printf '%s\n' "Do NOT repeat findings about unchanged code unless the new changes re-introduce the issue."
+            printf '%s\n' "Use Previous Review section to mark what is resolved vs still relevant."
+          fi
+          printf '%s\n' ""
+          printf '%s\n' "---"
+          printf '%s\n' ""
+          printf '%s\n' "## YOUR MISSION"
+          printf '%s\n' ""
+          printf '%s\n' "Perform a thorough, professional code review that:"
+          printf '%s\n' "1. Focuses on what matters - security, bugs, architecture"
+          printf '%s\n' "2. Respects PRs stated goal - dont suggest unrelated changes"
+          printf '%s\n' "3. Analyzes ALL bugbot findings - validate, filter false positives"
+          printf '%s\n' "4. Follows Merglbot standards - cite WARP rules"
+          printf '%s\n' "5. Provides actionable feedback with code examples"
+          printf '%s\n' ""
+          printf '%s\n' "## OUTPUT REQUIREMENTS"
+          printf '%s\n' ""
+          printf '%s\n' "Review Mode: $REVIEW_DEPTH"
+          printf '%s\n' "$OUTPUT_INSTRUCTIONS"
+          printf '%s\n' ""
+          printf '%s\n' "### Output Structure"
+          printf '%s\n' ""
+          printf '%s\n' "# Code Review Sumar"
+          printf '%s\n' "[3-5 sentences about PR, quality, concerns]"
+          printf '%s\n' ""
+          printf '%s\n' "## Findings"
+          printf '%s\n' ""
+          printf '%s\n' "### Critical (Must Fix)"
+          printf '%s\n' "[List with code examples and WARP rule citations]"
+          printf '%s\n' "- [ ] Finding: Description (WARP-XXX)"
+          printf '%s\n' ""
+          printf '%s\n' "### High Priority"
+          printf '%s\n' "[List]"
+          printf '%s\n' ""
+          printf '%s\n' "### Medium Priority"
+          printf '%s\n' "[List]"
+          printf '%s\n' ""
+          printf '%s\n' "### Low Priority"
+          printf '%s\n' "[List]"
+          printf '%s\n' ""
+          printf '%s\n' "## Whats Good"
+          printf '%s\n' "[2-4 positive aspects]"
+          printf '%s\n' ""
+          printf '%s\n' "## Bugbot Findings Analysis"
+          printf '%s\n' "[For EACH bugbot finding state: Agree/Disagree/Partially with reason]"
+          printf '%s\n' ""
+          printf '%s\n' "## Zaver"
+          printf '%s\n' "Verdict: [APPROVE or CHANGES NEEDED]"
+          printf '%s\n' "[1-2 sentences]"
+          printf '%s\n' ""
+          printf '%s\n' "### Rules"
+          printf '%s\n' "- Czech for explanations, English for code"
+          printf '%s\n' "- Include line numbers"
+          printf '%s\n' "- Cite WARP rules"
+          printf '%s\n' "- Code examples for fixes"
+          printf '%s\n' "- Use checkboxes for actions"
+          printf '%s\n' ""
+          printf '%s\n' "---"
+          printf '%s\n' ""
+          printf '%s\n' "## PR INFORMATION"
+          printf '%s\n' ""
+          printf '%s\n' "Title: $PR_TITLE"
+          printf '%s\n' "PR Number: #${{ env.PR_NUMBER }}"
+          printf '%s\n' "Author: @$PR_AUTHOR"
+          printf '%s\n' "Changes: +$PR_ADDITIONS / -$PR_DELETIONS in $PR_FILES_COUNT files"
+          printf '%s\n' "Changed Files: $CHANGED_FILES"
+          printf '%s\n' ""
+          printf '%s\n' "### PR Description"
+          printf '%s\n' ""
+          printf '%s\n' "$PR_BODY"
+          printf '%s\n' ""
+          printf '%s\n' "---"
+          printf '%s\n' ""
+          printf '%s\n' "## BUGBOT FINDINGS ($BUGBOT_COUNT sources: $BUGBOT_SOURCES)"
+          printf '%s\n' ""
+          printf '%s\n' "For EACH finding below, state: Agree/Disagree/Partially"
+          if [ -n "${REVIEW_CUTOFF:-}" ]; then
+            printf '%s\n' "(Note: bugbot findings are filtered to comments after: ${REVIEW_CUTOFF:-unknown})"
+          fi
+          printf '%s\n' ""
+          printf '%s\n' "$BUGBOT_FINDINGS"
+          printf '%s\n' ""
+          printf '%s\n' "---"
+          printf '%s\n' ""
           
-          FULL_PROMPT=$(cat /tmp/full_prompt.txt)
-          PROMPT_SIZE=$(echo "$FULL_PROMPT" | wc -c)
+          if [ "$DIFF_SCOPE" == "delta" ] && [ -n "$PREV_REVIEW" ]; then
+            printf '%s\n' "## PREVIOUS MERGLBOT REVIEW (for delta context)"
+            printf '%s\n' ""
+            printf '%s\n' "$PREV_REVIEW"
+            printf '%s\n' ""
+            printf '%s\n' "---"
+            printf '%s\n' ""
+            printf '%s\n' "## NEW COMMITS SINCE PREVIOUS REVIEW"
+            printf '%s\n' ""
+            printf '%s\n' "$NEW_COMMITS"
+            printf '%s\n' ""
+            printf '%s\n' "---"
+            printf '%s\n' ""
+          fi
+          printf '%s\n' "## PR DIFF"
+          printf '%s\n' ""
+          echo '```diff'
+          printf '%s\n' "$PR_DIFF"
+          echo '```'
+          printf '%s\n' ""
+          printf '%s\n' "---"
+          printf '%s\n' ""
+          printf '%s\n' "Now provide your review following the structure above."
+          
+          } > /tmp/full_prompt.txt
+          FULL_PROMPT=$(< /tmp/full_prompt.txt)
+          PROMPT_SIZE=${#FULL_PROMPT}
           echo "Prompt size: $PROMPT_SIZE chars"
           
           # ANTHROPIC CALL
-          echo "Calling Anthropic ($ANTHROPIC_MODEL)..."
+          echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
           
-          jq -n \
-            --arg model "$ANTHROPIC_MODEL" \
-            --arg prompt "$FULL_PROMPT" \
-            --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
-            '{
-              model: $model,
-              max_tokens: $max_tokens,
-              temperature: 0.2,
-              messages: [{role: "user", content: $prompt}]
-            }' > /tmp/anthropic_payload.json
+          ANTHROPIC_MODEL_USED=""
+          ANTHROPIC_MODELS_TRIED="|"
+          for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
+            if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
+              continue
+            fi
+            case "$ANTHROPIC_MODELS_TRIED" in
+              *"|$MODEL_TO_TRY|"*) continue ;;
+            esac
+            ANTHROPIC_MODELS_TRIED="${ANTHROPIC_MODELS_TRIED}${MODEL_TO_TRY}|"
+            echo "  → Trying Anthropic model: $MODEL_TO_TRY"
           
-          ANTHROPIC_RESP=$(curl -s https://api.anthropic.com/v1/messages \
-            -H "content-type: application/json" \
-            -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: $ANTHROPIC_API_VERSION" \
-            -d @/tmp/anthropic_payload.json)
-          
-          echo "Anthropic Response: $(echo "$ANTHROPIC_RESP" | wc -c) chars"
-          
-          if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
-            echo "ERROR: $(echo "$ANTHROPIC_RESP" | jq -r '.error.message')"
-            echo "API_ERROR" > anthropic_review.txt
-          else
-            echo "Success"
-            ANTHROPIC_CONTENT=$(echo "$ANTHROPIC_RESP" | jq -r '.content[0].text // "EMPTY"')
+            jq -n \
+              --arg model "$MODEL_TO_TRY" \
+              --arg prompt "$FULL_PROMPT" \
+              --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
+              '{
+                model: $model,
+                max_tokens: $max_tokens,
+                temperature: 0.2,
+                messages: [{role: "user", content: $prompt}]
+              }' > /tmp/anthropic_payload.json
+            
+            set +e
+            ANTHROPIC_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.anthropic.com/v1/messages \
+              -H "content-type: application/json" \
+              -H "x-api-key: $ANTHROPIC_API_KEY" \
+              -H "anthropic-version: $ANTHROPIC_API_VERSION" \
+              -d @/tmp/anthropic_payload.json)
+            CURL_EXIT=$?
+            set -e
+            
+            if [ "$CURL_EXIT" -ne 0 ] || ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
+              echo "  ERROR: Anthropic request failed or returned non-JSON (curl exit=$CURL_EXIT)"
+              continue
+            fi
+            
+            if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
+              echo "  ERROR: $(echo "$ANTHROPIC_RESP" | jq -r '.error.message')"
+              continue
+            fi
+            
+            ANTHROPIC_CONTENT=$(echo "$ANTHROPIC_RESP" | jq -r '.content[0].text // empty')
+            if [ -z "$ANTHROPIC_CONTENT" ] || [ "$ANTHROPIC_CONTENT" = "null" ]; then
+              echo "  ERROR: Anthropic response contained no content"
+              continue
+            fi
+            
+            ANTHROPIC_MODEL_USED="$MODEL_TO_TRY"
+            echo "Success (model: $ANTHROPIC_MODEL_USED)"
             echo "Words: $(echo "$ANTHROPIC_CONTENT" | wc -w)"
             echo "$ANTHROPIC_CONTENT" > anthropic_review.txt
+            break
+          done
+          
+          if [ ! -s anthropic_review.txt ]; then
+            echo "API_ERROR" > anthropic_review.txt
           fi
           
+          if [ -z "$ANTHROPIC_MODEL_USED" ]; then
+            ANTHROPIC_MODEL_USED="$ANTHROPIC_MODEL"
+          fi
+          echo "ANTHROPIC_MODEL_USED=$ANTHROPIC_MODEL_USED" >> "$GITHUB_ENV"
+          
           # OPENAI CALL
-          echo "Calling OpenAI ($OPENAI_MODEL)..."
+          echo "Calling OpenAI (requested: $OPENAI_MODEL)..."
           
-          jq -n \
-            --arg model "$OPENAI_MODEL" \
-            --arg prompt "$FULL_PROMPT" \
-            --argjson max_tokens "$MAX_TOKENS_OPENAI" \
-            '{
-              model: $model,
-              messages: [{role: "user", content: $prompt}],
-              max_completion_tokens: $max_tokens,
-              reasoning_effort: "high"
-            }' > /tmp/openai_payload.json
+          OPENAI_MODEL_USED=""
+          OPENAI_MODELS_TRIED="|"
+          for MODEL_TO_TRY in "$OPENAI_MODEL" "gpt-5.2" "gpt-5.1" "gpt-5" "gpt-4-turbo"; do
+            if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
+              continue
+            fi
+            case "$OPENAI_MODELS_TRIED" in
+              *"|$MODEL_TO_TRY|"*) continue ;;
+            esac
+            OPENAI_MODELS_TRIED="${OPENAI_MODELS_TRIED}${MODEL_TO_TRY}|"
+            echo "  → Trying OpenAI model: $MODEL_TO_TRY"
           
-          OPENAI_RESP=$(curl -s https://api.openai.com/v1/chat/completions \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $OPENAI_API_KEY" \
-            -d @/tmp/openai_payload.json)
-          
-          echo "OpenAI Response: $(echo "$OPENAI_RESP" | wc -c) chars"
-          
-          if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
-            echo "ERROR: $(echo "$OPENAI_RESP" | jq -r '.error.message')"
-            echo "API_ERROR" > openai_review.txt
-          else
-            echo "Success"
-            # Debug: show usage stats
+              if [ "$MODEL_TO_TRY" = "gpt-4-turbo" ]; then
+                MAX_TOKENS_TURBO="$MAX_TOKENS_OPENAI"
+                if [ "$MAX_TOKENS_TURBO" -gt 4096 ]; then
+                  MAX_TOKENS_TURBO=4096
+                fi
+                jq -n \
+                  --arg model "$MODEL_TO_TRY" \
+                  --arg prompt "$FULL_PROMPT" \
+                  --argjson max_tokens "$MAX_TOKENS_TURBO" \
+                  '{
+                    model: $model,
+                    messages: [{role: "user", content: $prompt}],
+                    max_tokens: $max_tokens
+                  }' > /tmp/openai_payload.json
+              elif echo "$MODEL_TO_TRY" | grep -Eqi '^o[13]'; then
+                jq -n \
+                  --arg model "$MODEL_TO_TRY" \
+                  --arg prompt "$FULL_PROMPT" \
+                  --argjson max_tokens "$MAX_TOKENS_OPENAI" \
+                  '{
+                    model: $model,
+                    messages: [{role: "user", content: $prompt}],
+                    max_completion_tokens: $max_tokens
+                  }' > /tmp/openai_payload.json
+              else
+                jq -n \
+                  --arg model "$MODEL_TO_TRY" \
+                  --arg prompt "$FULL_PROMPT" \
+                  --argjson max_tokens "$MAX_TOKENS_OPENAI" \
+                  '{
+                    model: $model,
+                    messages: [{role: "user", content: $prompt}],
+                    max_completion_tokens: $max_tokens,
+                    reasoning_effort: "high"
+                  }' > /tmp/openai_payload.json
+              fi
+            
+            set +e
+            OPENAI_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.openai.com/v1/chat/completions \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $OPENAI_API_KEY" \
+              -d @/tmp/openai_payload.json)
+            CURL_EXIT=$?
+            set -e
+            
+            if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+              echo "  ERROR: OpenAI request failed or returned non-JSON (curl exit=$CURL_EXIT)"
+              continue
+            fi
+            
+            if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
+              echo "  ERROR: $(echo "$OPENAI_RESP" | jq -r '.error.message')"
+              continue
+            fi
+            
+              CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
+              REFUSAL=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.refusal // empty')
+              if [ -n "$REFUSAL" ] && [ "$REFUSAL" != "null" ]; then
+                echo "  ERROR: OpenAI response refusal"
+                continue
+              fi
+              if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
+                echo "  ERROR: OpenAI response contained no content"
+                continue
+              fi
+            
+            OPENAI_MODEL_USED="$MODEL_TO_TRY"
+            echo "Success (model: $OPENAI_MODEL_USED)"
+            
             TOTAL_TOKENS=$(echo "$OPENAI_RESP" | jq -r '.usage.total_tokens // 0')
             PROMPT_TOKENS=$(echo "$OPENAI_RESP" | jq -r '.usage.prompt_tokens // 0')
             COMPLETION_TOKENS=$(echo "$OPENAI_RESP" | jq -r '.usage.completion_tokens // 0')
@@ -463,29 +780,30 @@ jobs:
             echo "    Completion: $COMPLETION_TOKENS (reasoning: $REASONING_TOKENS, output: $OUTPUT_TOKENS)"
             echo "    Total: $TOTAL_TOKENS"
             
-            CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
-            if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
-              echo "  WARNING: No content in response, checking for refusal..."
-              CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.refusal // empty')
-              if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
-                echo "  No refusal either. Response structure:"
-                echo "$OPENAI_RESP" | jq '.choices[0].message | keys' 2>/dev/null || true
-                CONTENT="EMPTY"
-              fi
-            fi
             echo "Words: $(echo "$CONTENT" | wc -w)"
             echo "$CONTENT" > openai_review.txt
+            break
+          done
+          
+          if [ ! -s openai_review.txt ]; then
+            echo "API_ERROR" > openai_review.txt
           fi
+          
+          if [ -z "$OPENAI_MODEL_USED" ]; then
+            OPENAI_MODEL_USED="$OPENAI_MODEL"
+          fi
+          echo "OPENAI_MODEL_USED=$OPENAI_MODEL_USED" >> "$GITHUB_ENV"
           
           echo "========================================="
           echo "STEP 1 COMPLETE"
           echo "========================================="
       
       - name: Step 2 - Intelligent Synthesis
+        if: success() && steps.context.outputs.skip_review != 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ github.event.inputs.openai_model || 'gpt-5.1' }}
-          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}
+          OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
+          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
         run: |
           set -euo pipefail
           
@@ -493,16 +811,32 @@ jobs:
           echo "STEP 2: INTELLIGENT SYNTHESIS"
           echo "========================================="
           
-          ANTHROPIC_REVIEW=$(cat anthropic_review.txt)
-          OPENAI_REVIEW=$(cat openai_review.txt)
-          PR_TITLE=$(cat pr_title.txt)
-          PR_BODY=$(cat pr_body.txt | head -c 3000)
-          BUGBOT_COUNT=$(cat bugbot_count.txt)
-          BUGBOT_SOURCES=$(cat bugbot_sources.txt)
+          ANTHROPIC_REVIEW=$(< anthropic_review.txt)
+          OPENAI_REVIEW=$(< openai_review.txt)
+          PR_TITLE=$(< pr_title.txt)
+          PR_BODY=$(python3 -c 'from pathlib import Path; import sys; s=Path("pr_body.txt").read_text(encoding="utf-8", errors="replace"); sys.stdout.write(s[:3000])')
           
           echo "Input Reviews:"
           echo "  Anthropic: $(echo "$ANTHROPIC_REVIEW" | wc -w) words"
           echo "  OpenAI: $(echo "$OPENAI_REVIEW" | wc -w) words"
+          
+            if grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null && grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
+              echo "ERROR: Both primary reviews failed; skipping synthesis"
+              echo "API_ERROR" > final_review.txt
+              exit 0
+            fi
+            
+            if grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null && ! grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
+              echo "WARN: Anthropic review failed; using OpenAI review directly (skipping synthesis)"
+              cp openai_review.txt final_review.txt
+              exit 0
+            fi
+            
+            if grep -qx "API_ERROR" openai_review.txt 2>/dev/null && ! grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null; then
+              echo "WARN: OpenAI review failed; using Anthropic review directly (skipping synthesis)"
+              cp anthropic_review.txt final_review.txt
+              exit 0
+            fi
           
           if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
             MAX_SYNTH_TOKENS=25000
@@ -510,112 +844,219 @@ jobs:
             MAX_SYNTH_TOKENS=50000
           fi
           
-          # Build synthesis prompt
-          printf '%s\n' "# Final Review Synthesis" > /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "Synthesize two AI reviews into ONE final review." >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## Rules" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "1. Eliminate duplicates - keep better explanation" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "2. Prioritize: Security > Bugs > Architecture > Style" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "3. Filter false positives" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "4. Preserve code examples and WARP citations" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "5. End with clear APPROVE or CHANGES NEEDED" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## Output Format" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "# Code Review Sumar" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "[3-5 sentences]" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## Findings" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "### Critical (Must Fix)" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "### High Priority" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "### Medium Priority" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "### Low Priority" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## Whats Good" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## Zaver" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "Verdict: [APPROVE or CHANGES NEEDED]" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "DO NOT add Review Models section." >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "Use Czech for text, English for code." >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "---" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## PR Context" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "Title: $PR_TITLE" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## Anthropic Review ($ANTHROPIC_MODEL)" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "$ANTHROPIC_REVIEW" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## OpenAI Review ($OPENAI_MODEL - HIGH reasoning)" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "$OPENAI_REVIEW" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "Now synthesize into FINAL review." >> /tmp/synthesis_prompt.txt
+          # Build synthesis prompt (single redirect)
+          {
+          printf '%s\n' "# Final Review Synthesis"
+          printf '%s\n' ""
+          printf '%s\n' "Synthesize two AI reviews into ONE final review."
+          printf '%s\n' ""
+          printf '%s\n' "## Rules"
+          printf '%s\n' "1. Eliminate duplicates - keep better explanation"
+          printf '%s\n' "2. Prioritize: Security > Bugs > Architecture > Style"
+          printf '%s\n' "3. Filter false positives"
+          printf '%s\n' "4. Preserve code examples and WARP citations"
+          printf '%s\n' "5. End with clear APPROVE or CHANGES NEEDED"
+          printf '%s\n' ""
+          printf '%s\n' "## Output Format"
+          printf '%s\n' ""
+          printf '%s\n' "# Code Review Sumar"
+          printf '%s\n' "[3-5 sentences]"
+          printf '%s\n' ""
+          printf '%s\n' "## Findings"
+          printf '%s\n' "### Critical (Must Fix)"
+          printf '%s\n' "### High Priority"
+          printf '%s\n' "### Medium Priority"
+          printf '%s\n' "### Low Priority"
+          printf '%s\n' ""
+          printf '%s\n' "## Whats Good"
+          printf '%s\n' ""
+          printf '%s\n' "## Zaver"
+          printf '%s\n' "Verdict: [APPROVE or CHANGES NEEDED]"
+          printf '%s\n' ""
+          printf '%s\n' "DO NOT add Review Models section."
+          printf '%s\n' "Use Czech for text, English for code."
+          printf '%s\n' ""
+          printf '%s\n' "---"
+          printf '%s\n' ""
+          printf '%s\n' "## PR Context"
+          printf '%s\n' "Title: $PR_TITLE"
+          printf '%s\n' ""
+          printf '%s\n' "Description:"
+          printf '%s\n' "$PR_BODY"
+          printf '%s\n' ""
+          OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
+          ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
           
-          SYNTHESIS_PROMPT=$(cat /tmp/synthesis_prompt.txt)
+          printf '%s\n' "## Anthropic Review ($ANTHROPIC_MODEL_FINAL)"
+          printf '%s\n' ""
+          printf '%s\n' "$ANTHROPIC_REVIEW"
+          printf '%s\n' ""
+          printf '%s\n' "## OpenAI Review ($OPENAI_MODEL_FINAL)"
+          printf '%s\n' ""
+          printf '%s\n' "$OPENAI_REVIEW"
+          printf '%s\n' ""
+          printf '%s\n' "Now synthesize into FINAL review."
           
-          jq -n \
-            --arg model "$OPENAI_MODEL" \
-            --arg prompt "$SYNTHESIS_PROMPT" \
-            --argjson max_tokens "$MAX_SYNTH_TOKENS" \
-            '{
-              model: $model,
-              messages: [
-                {role: "system", content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
-                {role: "user", content: $prompt}
-              ],
-              max_completion_tokens: $max_tokens,
-              reasoning_effort: "high"
-            }' > /tmp/synthesis_payload.json
+          } > /tmp/synthesis_prompt.txt
+          SYNTHESIS_PROMPT=$(< /tmp/synthesis_prompt.txt)
+          
+          OPENAI_SYSTEM_ROLE="system"
+          if echo "$OPENAI_MODEL_FINAL" | grep -Eqi '^o[13]'; then
+            OPENAI_SYSTEM_ROLE="developer"
+          fi
+          
+            if [ "$OPENAI_MODEL_FINAL" = "gpt-4-turbo" ]; then
+              MAX_TOKENS_TURBO="$MAX_SYNTH_TOKENS"
+              if [ "$MAX_TOKENS_TURBO" -gt 4096 ]; then
+                MAX_TOKENS_TURBO=4096
+              fi
+              jq -n \
+                --arg model "$OPENAI_MODEL_FINAL" \
+                --arg sys_role "$OPENAI_SYSTEM_ROLE" \
+                --arg prompt "$SYNTHESIS_PROMPT" \
+                --argjson max_tokens "$MAX_TOKENS_TURBO" \
+                '{
+                  model: $model,
+                  messages: [
+                    {role: $sys_role, content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
+                    {role: "user", content: $prompt}
+                  ],
+                  max_tokens: $max_tokens
+                }' > /tmp/synthesis_payload.json
+            elif echo "$OPENAI_MODEL_FINAL" | grep -Eqi '^o[13]'; then
+              jq -n \
+                --arg model "$OPENAI_MODEL_FINAL" \
+                --arg sys_role "$OPENAI_SYSTEM_ROLE" \
+                --arg prompt "$SYNTHESIS_PROMPT" \
+                --argjson max_tokens "$MAX_SYNTH_TOKENS" \
+                '{
+                  model: $model,
+                  messages: [
+                    {role: $sys_role, content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
+                    {role: "user", content: $prompt}
+                  ],
+                  max_completion_tokens: $max_tokens
+                }' > /tmp/synthesis_payload.json
+            else
+              jq -n \
+                --arg model "$OPENAI_MODEL_FINAL" \
+                --arg sys_role "$OPENAI_SYSTEM_ROLE" \
+                --arg prompt "$SYNTHESIS_PROMPT" \
+                --argjson max_tokens "$MAX_SYNTH_TOKENS" \
+                '{
+                  model: $model,
+                  messages: [
+                    {role: $sys_role, content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
+                    {role: "user", content: $prompt}
+                  ],
+                  max_completion_tokens: $max_tokens,
+                  reasoning_effort: "high"
+                }' > /tmp/synthesis_payload.json
+            fi
           
           echo "Calling OpenAI for synthesis..."
           
-          SYNTHESIS_RESP=$(curl -s https://api.openai.com/v1/chat/completions \
+          set +e
+          SYNTHESIS_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.openai.com/v1/chat/completions \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $OPENAI_API_KEY" \
             -d @/tmp/synthesis_payload.json)
+          CURL_EXIT=$?
+          set -e
           
-          echo "Synthesis Response: $(echo "$SYNTHESIS_RESP" | wc -c) chars"
+          echo "Synthesis Response: ${#SYNTHESIS_RESP} chars"
           
-          if echo "$SYNTHESIS_RESP" | jq -e ".error" > /dev/null 2>&1; then
-            echo "ERROR: $(echo "$SYNTHESIS_RESP" | jq -r '.error.message')"
-            cp anthropic_review.txt final_review.txt
-          else
-            echo "Success"
-            CONTENT=$(echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.content // empty')
-            if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
-              cp anthropic_review.txt final_review.txt
-            else
-              echo "Words: $(echo "$CONTENT" | wc -w)"
-              echo "$CONTENT" > final_review.txt
+          FALLBACK_REVIEW_FILE="anthropic_review.txt"
+          if [ ! -s anthropic_review.txt ] || grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null; then
+            if [ -s openai_review.txt ] && ! grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
+              FALLBACK_REVIEW_FILE="openai_review.txt"
             fi
           fi
           
-          echo "Final review: $(cat final_review.txt | wc -w) words"
+          if [ "$CURL_EXIT" -ne 0 ] || ! echo "$SYNTHESIS_RESP" | jq -e . > /dev/null 2>&1; then
+            echo "ERROR: Synthesis request failed or returned non-JSON (curl exit=$CURL_EXIT)"
+            cp "$FALLBACK_REVIEW_FILE" final_review.txt
+          elif echo "$SYNTHESIS_RESP" | jq -e ".error" > /dev/null 2>&1; then
+            echo "ERROR: $(echo "$SYNTHESIS_RESP" | jq -r '.error.message')"
+            cp "$FALLBACK_REVIEW_FILE" final_review.txt
+            else
+              echo "Success"
+              CONTENT=$(echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.content // empty')
+              REFUSAL=$(echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.refusal // empty')
+              if [ -n "$REFUSAL" ] && [ "$REFUSAL" != "null" ]; then
+                echo "ERROR: Synthesis refusal received"
+                cp "$FALLBACK_REVIEW_FILE" final_review.txt
+              elif [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
+                echo "ERROR: Synthesis response contained no content"
+                cp "$FALLBACK_REVIEW_FILE" final_review.txt
+              else
+                echo "Words: $(echo "$CONTENT" | wc -w)"
+                echo "$CONTENT" > final_review.txt
+              fi
+            fi
+          
+          FINAL_WORDS=$(wc -w < final_review.txt 2>/dev/null || echo 0)
+          echo "Final review: $FINAL_WORDS words"
           echo "========================================="
           echo "STEP 2 COMPLETE"
           echo "========================================="
       
       - name: Post Review Comment
+        if: success() && steps.context.outputs.skip_review != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}
-          OPENAI_MODEL: ${{ github.event.inputs.openai_model || 'gpt-5.1' }}
+          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
+          OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
         run: |
           set -euo pipefail
           
           PR_NUM="${{ env.PR_NUMBER }}"
-          BUGBOT_COUNT=$(cat bugbot_count.txt 2>/dev/null || echo "0")
-          BUGBOT_SOURCES=$(cat bugbot_sources.txt 2>/dev/null || echo "none")
+          
+          BUGBOT_COUNT="0"
+          if [ -f bugbot_count.txt ]; then
+            BUGBOT_COUNT=$(< bugbot_count.txt)
+          fi
+          
+          BUGBOT_SOURCES="none"
+          if [ -f bugbot_sources.txt ]; then
+            BUGBOT_SOURCES=$(< bugbot_sources.txt)
+          fi
+          
           REVIEW_MODE="${{ env.REVIEW_MODE }}"
           
-          ANTHROPIC_WORDS=$(cat anthropic_review.txt 2>/dev/null | wc -w || echo "0")
-          OPENAI_WORDS=$(cat openai_review.txt 2>/dev/null | wc -w || echo "0")
-          FINAL_WORDS=$(cat final_review.txt 2>/dev/null | wc -w || echo "0")
+          DIFF_SCOPE="full"
+          if [ -f pr_diff_scope.txt ]; then
+            DIFF_SCOPE=$(< pr_diff_scope.txt)
+          fi
+          
+          DIFF_RANGE=""
+          if [ -f pr_diff_range.txt ]; then
+            DIFF_RANGE=$(< pr_diff_range.txt)
+          fi
+          
+          PR_HEAD_SHA=""
+          if [ -f pr_head_sha.txt ]; then
+            PR_HEAD_SHA=$(< pr_head_sha.txt)
+          fi
+          
+          PREV_REVIEW_HEAD_SHA=""
+          if [ -f prev_review_head_sha.txt ]; then
+            PREV_REVIEW_HEAD_SHA=$(< prev_review_head_sha.txt)
+          fi
+          
+          OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
+          ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
+          
+          OPENAI_CONFIG_DESC="reasoning_effort=high 🧠"
+          if [ "$OPENAI_MODEL_FINAL" = "gpt-4-turbo" ]; then
+            OPENAI_CONFIG_DESC="max_tokens (no reasoning_effort)"
+          elif echo "$OPENAI_MODEL_FINAL" | grep -Eqi '^o[13]'; then
+            OPENAI_CONFIG_DESC="max_completion_tokens (no reasoning_effort)"
+          fi
+          
+          ANTHROPIC_WORDS=$(wc -w < anthropic_review.txt 2>/dev/null || echo "0")
+          OPENAI_WORDS=$(wc -w < openai_review.txt 2>/dev/null || echo "0")
+          FINAL_WORDS=$(wc -w < final_review.txt 2>/dev/null || echo "0")
           
           echo "Building PR comment..."
           
@@ -640,15 +1081,18 @@ jobs:
               echo ""
               echo "| Phase | Model | Config |"
               echo "|-------|-------|--------|"
-              echo "| Primary Analysis | Anthropic \`$ANTHROPIC_MODEL\` | temp=0.2 |"
-              echo "| Secondary Analysis | OpenAI \`$OPENAI_MODEL\` | reasoning=HIGH 🧠 |"
-              echo "| Final Synthesis | OpenAI \`$OPENAI_MODEL\` | reasoning=HIGH 🧠 |"
+              echo "| Primary Analysis | Anthropic \`$ANTHROPIC_MODEL_FINAL\` | temp=0.2 |"
+                echo "| Secondary Analysis | OpenAI \`$OPENAI_MODEL_FINAL\` | $OPENAI_CONFIG_DESC |"
+                echo "| Final Synthesis | OpenAI \`$OPENAI_MODEL_FINAL\` | $OPENAI_CONFIG_DESC |"
               echo ""
               echo "### Review Statistics"
               echo ""
               echo "| Metric | Value |"
               echo "|--------|-------|"
               echo "| Review Mode | \`$REVIEW_MODE\` |"
+              echo "| Diff Scope | \`$DIFF_SCOPE\` |"
+              echo "| Diff Range | \`$DIFF_RANGE\` |"
+              echo "| Head SHA | \`${PR_HEAD_SHA:0:12}\` |"
               echo "| Anthropic Output | $ANTHROPIC_WORDS words |"
               echo "| OpenAI Output | $OPENAI_WORDS words |"
               echo "| Final Review | $FINAL_WORDS words |"
@@ -664,12 +1108,19 @@ jobs:
               echo "### Context Used"
               echo ""
               echo "- Full PR description"
-              echo "- Complete diff (up to 100KB)"
+              echo "- Diff scope: \`$DIFF_SCOPE\` (\`$DIFF_RANGE\`)"
               echo "- Changed files list"
               echo "- Bugbot findings ($BUGBOT_COUNT sources)"
-              echo "- Merglbot Appendix v2.5 (WARP rules)"
+              echo "- Merglbot Appendix v2.15 (WARP rules)"
               echo ""
               echo "</details>"
+              echo ""
+              echo "<!-- MERGLBOT_PR_ASSISTANT_V3 -->"
+              echo "<!-- MERGLBOT_REVIEW_HEAD_SHA: $PR_HEAD_SHA -->"
+              echo "<!-- MERGLBOT_PREV_REVIEW_HEAD_SHA: $PREV_REVIEW_HEAD_SHA -->"
+              echo "<!-- MERGLBOT_DIFF_SCOPE: $DIFF_SCOPE -->"
+              echo "<!-- MERGLBOT_DIFF_RANGE: $DIFF_RANGE -->"
+              echo "<!-- MERGLBOT_RUN_ID: ${{ github.run_id }} -->"
               echo ""
               echo "---"
               echo ""
@@ -701,8 +1152,31 @@ jobs:
       
       - name: Workflow Summary
         run: |
-          BUGBOT_COUNT=$(cat bugbot_count.txt 2>/dev/null || echo "0")
-          BUGBOT_SOURCES=$(cat bugbot_sources.txt 2>/dev/null || echo "none")
+          SKIPPED="${{ steps.context.outputs.skip_review }}"
+          if [ "$SKIPPED" == "true" ]; then
+            {
+              echo "## 🤖 Merglbot PR Assistant v3 - Summary"
+              echo ""
+              echo "- **PR**: #${{ env.PR_NUMBER }}"
+              echo "- **Status**: Skipped (no new commits since last review)"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          
+          BUGBOT_COUNT="0"
+          if [ -f bugbot_count.txt ]; then
+            BUGBOT_COUNT=$(< bugbot_count.txt)
+          fi
+          
+          BUGBOT_SOURCES="none"
+          if [ -f bugbot_sources.txt ]; then
+            BUGBOT_SOURCES=$(< bugbot_sources.txt)
+          fi
+          
+          REVIEW_STATUS="Failed"
+          if [ -s final_review.txt ] && ! grep -qx "API_ERROR" final_review.txt 2>/dev/null; then
+            REVIEW_STATUS="Success"
+          fi
           
           {
             echo "## 🤖 Merglbot PR Assistant v3 - Summary"
@@ -713,15 +1187,15 @@ jobs:
             echo "| **Trigger** | ${{ github.event_name == 'issue_comment' && '@merglbot review' || 'Manual dispatch' }} |"
             echo "| **Review Mode** | \`${{ env.REVIEW_MODE }}\` |"
             echo "| **Timestamp** | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |"
-            echo "| **Status** | $([ -s final_review.txt ] && echo 'Success' || echo 'Failed') |"
+            echo "| **Status** | $REVIEW_STATUS |"
             echo ""
             echo "### Review Statistics"
             echo ""
             echo "| Metric | Value |"
             echo "|--------|-------|"
-            echo "| Anthropic | $(cat anthropic_review.txt 2>/dev/null | wc -w || echo 0) words |"
-            echo "| OpenAI | $(cat openai_review.txt 2>/dev/null | wc -w || echo 0) words |"
-            echo "| Final | $(cat final_review.txt 2>/dev/null | wc -w || echo 0) words |"
+            echo "| Anthropic | $(wc -w < anthropic_review.txt 2>/dev/null || echo 0) words |"
+            echo "| OpenAI | $(wc -w < openai_review.txt 2>/dev/null || echo 0) words |"
+            echo "| Final | $(wc -w < final_review.txt 2>/dev/null || echo 0) words |"
             echo ""
             echo "### Bugbot Sources"
             echo ""
@@ -730,38 +1204,68 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       
       - name: Save Review Metrics (Feedback Loop)
-        if: always()
+        if: always() && steps.context.outputs.skip_review != 'true'
         env:
-          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}
-          OPENAI_MODEL: ${{ github.event.inputs.openai_model || 'gpt-5.1' }}
+          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
+          OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
         run: |
           # Create metrics JSON for feedback loop analysis
           TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
           PR_NUM="${{ env.PR_NUMBER }}"
           REVIEW_MODE="${{ env.REVIEW_MODE }}"
           
-          ANTHROPIC_WORDS=$(cat anthropic_review.txt 2>/dev/null | wc -w || echo 0)
-          OPENAI_WORDS=$(cat openai_review.txt 2>/dev/null | wc -w || echo 0)
-          FINAL_WORDS=$(cat final_review.txt 2>/dev/null | wc -w || echo 0)
-          BUGBOT_COUNT=$(cat bugbot_count.txt 2>/dev/null || echo 0)
+          ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
+          OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
           
-          # Count findings by severity
-          CRITICAL_COUNT=$(grep -c "Critical\|🔴" final_review.txt 2>/dev/null || echo 0)
-          HIGH_COUNT=$(grep -c "High Priority\|🟠" final_review.txt 2>/dev/null || echo 0)
-          MEDIUM_COUNT=$(grep -c "Medium Priority\|🟡" final_review.txt 2>/dev/null || echo 0)
-          LOW_COUNT=$(grep -c "Low Priority\|🟢" final_review.txt 2>/dev/null || echo 0)
+          ANTHROPIC_WORDS=$(wc -w < anthropic_review.txt 2>/dev/null || echo 0)
+          OPENAI_WORDS=$(wc -w < openai_review.txt 2>/dev/null || echo 0)
+          FINAL_WORDS=$(wc -w < final_review.txt 2>/dev/null || echo 0)
           
-          # Detect verdict
-          if grep -qi "APPROVE" final_review.txt 2>/dev/null; then
-            VERDICT="APPROVE"
-          elif grep -qi "CHANGES NEEDED" final_review.txt 2>/dev/null; then
-            VERDICT="CHANGES_NEEDED"
-          else
-            VERDICT="UNKNOWN"
+          BUGBOT_COUNT="0"
+          if [ -f bugbot_count.txt ]; then
+            BUGBOT_COUNT=$(< bugbot_count.txt)
+          fi
+          
+            count_section_checkboxes() {
+              local section_prefix="$1"
+              awk -v prefix="$section_prefix" '
+                BEGIN { IGNORECASE=1; in_section=0; count=0 }
+                /^###[[:space:]]/ {
+                  in_section = ($0 ~ ("^###[[:space:]]+" prefix "([[:space:]]|$)"))
+                  next
+                }
+              /^##[[:space:]]/ || /^#[[:space:]]/ {
+                in_section = 0
+                next
+              }
+              in_section && $0 ~ /^[[:space:]]*[-*][[:space:]]*\[[ xX]\]/ { count++ }
+              END { print count+0 }
+            ' final_review.txt 2>/dev/null || echo 0
+          }
+          
+          CRITICAL_COUNT=$(count_section_checkboxes "Critical")
+          HIGH_COUNT=$(count_section_checkboxes "High Priority")
+          MEDIUM_COUNT=$(count_section_checkboxes "Medium Priority")
+          LOW_COUNT=$(count_section_checkboxes "Low Priority")
+          
+          VERDICT="UNKNOWN"
+          VERDICT_LINE=$(grep -im1 '^Verdict:' final_review.txt 2>/dev/null || true)
+          if [ -n "$VERDICT_LINE" ]; then
+            VERDICT_VALUE=$(printf '%s' "$VERDICT_LINE" | sed -E 's/^Verdict:[[:space:]]*//I')
+            if echo "$VERDICT_VALUE" | grep -Eqi '^changes[[:space:]]+needed'; then
+              VERDICT="CHANGES_NEEDED"
+            elif echo "$VERDICT_VALUE" | grep -qi '^approve'; then
+              VERDICT="APPROVE"
+            fi
           fi
           
           # Create metrics file
           mkdir -p metrics
+          BUGBOT_SOURCES="none"
+          if [ -f bugbot_sources.txt ]; then
+            BUGBOT_SOURCES=$(< bugbot_sources.txt)
+          fi
+          
           cat > metrics/review-metrics.json << METRICS_EOF
           {
             "timestamp": "$TIMESTAMP",
@@ -771,8 +1275,8 @@ jobs:
             "trigger": "${{ github.event_name }}",
             "run_id": "${{ github.run_id }}",
             "models": {
-              "anthropic": "$ANTHROPIC_MODEL",
-              "openai": "$OPENAI_MODEL"
+              "anthropic": "$ANTHROPIC_MODEL_FINAL",
+              "openai": "$OPENAI_MODEL_FINAL"
             },
             "output": {
               "anthropic_words": $ANTHROPIC_WORDS,
@@ -786,7 +1290,10 @@ jobs:
               "low": $LOW_COUNT
             },
             "verdict": "$VERDICT",
-            "bugbot_sources": $BUGBOT_COUNT,
+            "bugbot": {
+              "source_count": $BUGBOT_COUNT,
+              "sources": "$BUGBOT_SOURCES"
+            },
             "status": "${{ job.status }}"
           }
           METRICS_EOF
@@ -795,8 +1302,8 @@ jobs:
           cat metrics/review-metrics.json
       
       - name: Upload Metrics Artifact
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        if: always() && steps.context.outputs.skip_review != 'true'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: review-metrics-${{ env.PR_NUMBER }}-${{ github.run_id }}
           path: metrics/
