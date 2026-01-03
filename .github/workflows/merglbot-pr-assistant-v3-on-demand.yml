@@ -453,170 +453,171 @@ jobs:
           
           echo "Review depth: $REVIEW_DEPTH"
           
-          # shellcheck disable=SC2129
-          # Build prompt using printf to file
-          printf '%s\n' "# Merglbot Multi-Model Code Review v3.2" > /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence." >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## MERGLBOT AI AGENT APPENDIX v2.15" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "This is your authoritative reference for all Merglbot standards." >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### Critical Rules (MUST FOLLOW)" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "1. PR Hygiene: Push na STEJNY PR/branch, nevytvarej duplikaty" >> /tmp/full_prompt.txt
-          printf '%s\n' "2. Production: Vse pres PR + schvaleni, nikdy push na main" >> /tmp/full_prompt.txt
-          printf '%s\n' "3. Security: Zadne secrets v kodu; jen GitHub secrets; zadne SA JSON - vzdy WIF/OIDC" >> /tmp/full_prompt.txt
-          printf '%s\n' "4. Auth: Auth V2 Multi-Segment (platform_admin/client/demo) - viz AUTHENTICATION_AUTHORIZATION.md" >> /tmp/full_prompt.txt
-          printf '%s\n' "5. Workflow: Plan - Act - Verify" >> /tmp/full_prompt.txt
-          printf '%s\n' "6. PR Size: Pod 400 radku (vyjimka jen u cistych docs) - WARP-PR-001" >> /tmp/full_prompt.txt
-          printf '%s\n' "7. Commits: Conventional (feat:, fix:, docs:, chore:, ci:)" >> /tmp/full_prompt.txt
-          printf '%s\n' "8. Branch: feat/, fix/, docs/, ci/ - vzdy squash merge do main" >> /tmp/full_prompt.txt
-          printf '%s\n' "9. SSOT: Dokumentace v merglbot-public/docs/" >> /tmp/full_prompt.txt
-          printf '%s\n' "10. Destructive: Double-confirm pred destruktivni akci" >> /tmp/full_prompt.txt
-          printf '%s\n' "11. CI Idempotency: CI kroky musi byt idempotentni" >> /tmp/full_prompt.txt
-          printf '%s\n' "12. Security Gating: Trivy/CodeQL gaty se NEzmekuji" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### WARP Rule Reference" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-SEC-001: No hardcoded secrets - use env vars or Secret Manager" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-SEC-002: Container hardening - Trivy HIGH/CRITICAL must pass" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-SEC-003: OIDC/WIF over SA JSON keys" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-SEC-004: No secrets in logs" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-CI-001: GHA standards - pinned actions, minimal permissions" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-CI-002: Idempotent CI steps" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-PR-001: PR size under 400 lines" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-PR-002: Conventional commits" >> /tmp/full_prompt.txt
-          printf '%s\n' "WARP-ARCH-001: Auth via AUTHENTICATION_AUTHORIZATION.md" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### SSOT Documentation Links" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md - Platform rules" >> /tmp/full_prompt.txt
-          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md - PR requirements" >> /tmp/full_prompt.txt
-          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/SECURITY.md - Security" >> /tmp/full_prompt.txt
-          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/MERGLBOT_SECRETS_NAMING_AND_LOGGING.md - Secrets" >> /tmp/full_prompt.txt
-          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GITHUB_ACTIONS_GLOBAL_RULES.md - GHA" >> /tmp/full_prompt.txt
-          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/AUTHENTICATION_AUTHORIZATION.md - Auth" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "---" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## REVIEW SCOPE" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "Scope: $DIFF_SCOPE" >> /tmp/full_prompt.txt
-          printf '%s\n' "Commit Range: $DIFF_RANGE" >> /tmp/full_prompt.txt
+          # Build prompt using printf to file (single redirect)
+          {
+          printf '%s\n' "# Merglbot Multi-Model Code Review v3.2"
+          printf '%s\n' ""
+          printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence."
+          printf '%s\n' ""
+          printf '%s\n' "## MERGLBOT AI AGENT APPENDIX v2.15"
+          printf '%s\n' ""
+          printf '%s\n' "This is your authoritative reference for all Merglbot standards."
+          printf '%s\n' ""
+          printf '%s\n' "### Critical Rules (MUST FOLLOW)"
+          printf '%s\n' ""
+          printf '%s\n' "1. PR Hygiene: Push na STEJNY PR/branch, nevytvarej duplikaty"
+          printf '%s\n' "2. Production: Vse pres PR + schvaleni, nikdy push na main"
+          printf '%s\n' "3. Security: Zadne secrets v kodu; jen GitHub secrets; zadne SA JSON - vzdy WIF/OIDC"
+          printf '%s\n' "4. Auth: Auth V2 Multi-Segment (platform_admin/client/demo) - viz AUTHENTICATION_AUTHORIZATION.md"
+          printf '%s\n' "5. Workflow: Plan - Act - Verify"
+          printf '%s\n' "6. PR Size: Pod 400 radku (vyjimka jen u cistych docs) - WARP-PR-001"
+          printf '%s\n' "7. Commits: Conventional (feat:, fix:, docs:, chore:, ci:)"
+          printf '%s\n' "8. Branch: feat/, fix/, docs/, ci/ - vzdy squash merge do main"
+          printf '%s\n' "9. SSOT: Dokumentace v merglbot-public/docs/"
+          printf '%s\n' "10. Destructive: Double-confirm pred destruktivni akci"
+          printf '%s\n' "11. CI Idempotency: CI kroky musi byt idempotentni"
+          printf '%s\n' "12. Security Gating: Trivy/CodeQL gaty se NEzmekuji"
+          printf '%s\n' ""
+          printf '%s\n' "### WARP Rule Reference"
+          printf '%s\n' ""
+          printf '%s\n' "WARP-SEC-001: No hardcoded secrets - use env vars or Secret Manager"
+          printf '%s\n' "WARP-SEC-002: Container hardening - Trivy HIGH/CRITICAL must pass"
+          printf '%s\n' "WARP-SEC-003: OIDC/WIF over SA JSON keys"
+          printf '%s\n' "WARP-SEC-004: No secrets in logs"
+          printf '%s\n' "WARP-CI-001: GHA standards - pinned actions, minimal permissions"
+          printf '%s\n' "WARP-CI-002: Idempotent CI steps"
+          printf '%s\n' "WARP-PR-001: PR size under 400 lines"
+          printf '%s\n' "WARP-PR-002: Conventional commits"
+          printf '%s\n' "WARP-ARCH-001: Auth via AUTHENTICATION_AUTHORIZATION.md"
+          printf '%s\n' ""
+          printf '%s\n' "### SSOT Documentation Links"
+          printf '%s\n' ""
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md - Platform rules"
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md - PR requirements"
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/SECURITY.md - Security"
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/MERGLBOT_SECRETS_NAMING_AND_LOGGING.md - Secrets"
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GITHUB_ACTIONS_GLOBAL_RULES.md - GHA"
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/AUTHENTICATION_AUTHORIZATION.md - Auth"
+          printf '%s\n' ""
+          printf '%s\n' "---"
+          printf '%s\n' ""
+          printf '%s\n' "## REVIEW SCOPE"
+          printf '%s\n' ""
+          printf '%s\n' "Scope: $DIFF_SCOPE"
+          printf '%s\n' "Commit Range: $DIFF_RANGE"
           if [ "$DIFF_SCOPE" == "delta" ]; then
-            printf '%s\n' "" >> /tmp/full_prompt.txt
-            printf '%s\n' "IMPORTANT: This is a DELTA review. Focus ONLY on changes introduced in this diff." >> /tmp/full_prompt.txt
-            printf '%s\n' "Do NOT repeat findings about unchanged code unless the new changes re-introduce the issue." >> /tmp/full_prompt.txt
-            printf '%s\n' "Use Previous Review section to mark what is resolved vs still relevant." >> /tmp/full_prompt.txt
+            printf '%s\n' ""
+            printf '%s\n' "IMPORTANT: This is a DELTA review. Focus ONLY on changes introduced in this diff."
+            printf '%s\n' "Do NOT repeat findings about unchanged code unless the new changes re-introduce the issue."
+            printf '%s\n' "Use Previous Review section to mark what is resolved vs still relevant."
           fi
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "---" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## YOUR MISSION" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "Perform a thorough, professional code review that:" >> /tmp/full_prompt.txt
-          printf '%s\n' "1. Focuses on what matters - security, bugs, architecture" >> /tmp/full_prompt.txt
-          printf '%s\n' "2. Respects PRs stated goal - dont suggest unrelated changes" >> /tmp/full_prompt.txt
-          printf '%s\n' "3. Analyzes ALL bugbot findings - validate, filter false positives" >> /tmp/full_prompt.txt
-          printf '%s\n' "4. Follows Merglbot standards - cite WARP rules" >> /tmp/full_prompt.txt
-          printf '%s\n' "5. Provides actionable feedback with code examples" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## OUTPUT REQUIREMENTS" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "Review Mode: $REVIEW_DEPTH" >> /tmp/full_prompt.txt
-          printf '%s\n' "$OUTPUT_INSTRUCTIONS" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### Output Structure" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "# Code Review Sumar" >> /tmp/full_prompt.txt
-          printf '%s\n' "[3-5 sentences about PR, quality, concerns]" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## Findings" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### Critical (Must Fix)" >> /tmp/full_prompt.txt
-          printf '%s\n' "[List with code examples and WARP rule citations]" >> /tmp/full_prompt.txt
-          printf '%s\n' "- [ ] Finding: Description (WARP-XXX)" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### High Priority" >> /tmp/full_prompt.txt
-          printf '%s\n' "[List]" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### Medium Priority" >> /tmp/full_prompt.txt
-          printf '%s\n' "[List]" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### Low Priority" >> /tmp/full_prompt.txt
-          printf '%s\n' "[List]" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## Whats Good" >> /tmp/full_prompt.txt
-          printf '%s\n' "[2-4 positive aspects]" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## Bugbot Findings Analysis" >> /tmp/full_prompt.txt
-          printf '%s\n' "[For EACH bugbot finding state: Agree/Disagree/Partially with reason]" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## Zaver" >> /tmp/full_prompt.txt
-          printf '%s\n' "Verdict: [APPROVE or CHANGES NEEDED]" >> /tmp/full_prompt.txt
-          printf '%s\n' "[1-2 sentences]" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### Rules" >> /tmp/full_prompt.txt
-          printf '%s\n' "- Czech for explanations, English for code" >> /tmp/full_prompt.txt
-          printf '%s\n' "- Include line numbers" >> /tmp/full_prompt.txt
-          printf '%s\n' "- Cite WARP rules" >> /tmp/full_prompt.txt
-          printf '%s\n' "- Code examples for fixes" >> /tmp/full_prompt.txt
-          printf '%s\n' "- Use checkboxes for actions" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "---" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## PR INFORMATION" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "Title: $PR_TITLE" >> /tmp/full_prompt.txt
-          printf '%s\n' "PR Number: #${{ env.PR_NUMBER }}" >> /tmp/full_prompt.txt
-          printf '%s\n' "Author: @$PR_AUTHOR" >> /tmp/full_prompt.txt
-          printf '%s\n' "Changes: +$PR_ADDITIONS / -$PR_DELETIONS in $PR_FILES_COUNT files" >> /tmp/full_prompt.txt
-          printf '%s\n' "Changed Files: $CHANGED_FILES" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "### PR Description" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "$PR_BODY" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "---" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## BUGBOT FINDINGS ($BUGBOT_COUNT sources: $BUGBOT_SOURCES)" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "For EACH finding below, state: Agree/Disagree/Partially" >> /tmp/full_prompt.txt
+          printf '%s\n' ""
+          printf '%s\n' "---"
+          printf '%s\n' ""
+          printf '%s\n' "## YOUR MISSION"
+          printf '%s\n' ""
+          printf '%s\n' "Perform a thorough, professional code review that:"
+          printf '%s\n' "1. Focuses on what matters - security, bugs, architecture"
+          printf '%s\n' "2. Respects PRs stated goal - dont suggest unrelated changes"
+          printf '%s\n' "3. Analyzes ALL bugbot findings - validate, filter false positives"
+          printf '%s\n' "4. Follows Merglbot standards - cite WARP rules"
+          printf '%s\n' "5. Provides actionable feedback with code examples"
+          printf '%s\n' ""
+          printf '%s\n' "## OUTPUT REQUIREMENTS"
+          printf '%s\n' ""
+          printf '%s\n' "Review Mode: $REVIEW_DEPTH"
+          printf '%s\n' "$OUTPUT_INSTRUCTIONS"
+          printf '%s\n' ""
+          printf '%s\n' "### Output Structure"
+          printf '%s\n' ""
+          printf '%s\n' "# Code Review Sumar"
+          printf '%s\n' "[3-5 sentences about PR, quality, concerns]"
+          printf '%s\n' ""
+          printf '%s\n' "## Findings"
+          printf '%s\n' ""
+          printf '%s\n' "### Critical (Must Fix)"
+          printf '%s\n' "[List with code examples and WARP rule citations]"
+          printf '%s\n' "- [ ] Finding: Description (WARP-XXX)"
+          printf '%s\n' ""
+          printf '%s\n' "### High Priority"
+          printf '%s\n' "[List]"
+          printf '%s\n' ""
+          printf '%s\n' "### Medium Priority"
+          printf '%s\n' "[List]"
+          printf '%s\n' ""
+          printf '%s\n' "### Low Priority"
+          printf '%s\n' "[List]"
+          printf '%s\n' ""
+          printf '%s\n' "## Whats Good"
+          printf '%s\n' "[2-4 positive aspects]"
+          printf '%s\n' ""
+          printf '%s\n' "## Bugbot Findings Analysis"
+          printf '%s\n' "[For EACH bugbot finding state: Agree/Disagree/Partially with reason]"
+          printf '%s\n' ""
+          printf '%s\n' "## Zaver"
+          printf '%s\n' "Verdict: [APPROVE or CHANGES NEEDED]"
+          printf '%s\n' "[1-2 sentences]"
+          printf '%s\n' ""
+          printf '%s\n' "### Rules"
+          printf '%s\n' "- Czech for explanations, English for code"
+          printf '%s\n' "- Include line numbers"
+          printf '%s\n' "- Cite WARP rules"
+          printf '%s\n' "- Code examples for fixes"
+          printf '%s\n' "- Use checkboxes for actions"
+          printf '%s\n' ""
+          printf '%s\n' "---"
+          printf '%s\n' ""
+          printf '%s\n' "## PR INFORMATION"
+          printf '%s\n' ""
+          printf '%s\n' "Title: $PR_TITLE"
+          printf '%s\n' "PR Number: #${{ env.PR_NUMBER }}"
+          printf '%s\n' "Author: @$PR_AUTHOR"
+          printf '%s\n' "Changes: +$PR_ADDITIONS / -$PR_DELETIONS in $PR_FILES_COUNT files"
+          printf '%s\n' "Changed Files: $CHANGED_FILES"
+          printf '%s\n' ""
+          printf '%s\n' "### PR Description"
+          printf '%s\n' ""
+          printf '%s\n' "$PR_BODY"
+          printf '%s\n' ""
+          printf '%s\n' "---"
+          printf '%s\n' ""
+          printf '%s\n' "## BUGBOT FINDINGS ($BUGBOT_COUNT sources: $BUGBOT_SOURCES)"
+          printf '%s\n' ""
+          printf '%s\n' "For EACH finding below, state: Agree/Disagree/Partially"
           if [ -n "${REVIEW_CUTOFF:-}" ]; then
-            printf '%s\n' "(Note: bugbot findings are filtered to comments after: ${REVIEW_CUTOFF:-unknown})" >> /tmp/full_prompt.txt
+            printf '%s\n' "(Note: bugbot findings are filtered to comments after: ${REVIEW_CUTOFF:-unknown})"
           fi
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "$BUGBOT_FINDINGS" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "---" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' ""
+          printf '%s\n' "$BUGBOT_FINDINGS"
+          printf '%s\n' ""
+          printf '%s\n' "---"
+          printf '%s\n' ""
           
           if [ "$DIFF_SCOPE" == "delta" ] && [ -n "$PREV_REVIEW" ]; then
-            printf '%s\n' "## PREVIOUS MERGLBOT REVIEW (for delta context)" >> /tmp/full_prompt.txt
-            printf '%s\n' "" >> /tmp/full_prompt.txt
-            printf '%s\n' "$PREV_REVIEW" >> /tmp/full_prompt.txt
-            printf '%s\n' "" >> /tmp/full_prompt.txt
-            printf '%s\n' "---" >> /tmp/full_prompt.txt
-            printf '%s\n' "" >> /tmp/full_prompt.txt
-            printf '%s\n' "## NEW COMMITS SINCE PREVIOUS REVIEW" >> /tmp/full_prompt.txt
-            printf '%s\n' "" >> /tmp/full_prompt.txt
-            printf '%s\n' "$NEW_COMMITS" >> /tmp/full_prompt.txt
-            printf '%s\n' "" >> /tmp/full_prompt.txt
-            printf '%s\n' "---" >> /tmp/full_prompt.txt
-            printf '%s\n' "" >> /tmp/full_prompt.txt
+            printf '%s\n' "## PREVIOUS MERGLBOT REVIEW (for delta context)"
+            printf '%s\n' ""
+            printf '%s\n' "$PREV_REVIEW"
+            printf '%s\n' ""
+            printf '%s\n' "---"
+            printf '%s\n' ""
+            printf '%s\n' "## NEW COMMITS SINCE PREVIOUS REVIEW"
+            printf '%s\n' ""
+            printf '%s\n' "$NEW_COMMITS"
+            printf '%s\n' ""
+            printf '%s\n' "---"
+            printf '%s\n' ""
           fi
-          printf '%s\n' "## PR DIFF" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          echo '```diff' >> /tmp/full_prompt.txt
-          printf '%s\n' "$PR_DIFF" >> /tmp/full_prompt.txt
-          echo '```' >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "---" >> /tmp/full_prompt.txt
-          printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "Now provide your review following the structure above." >> /tmp/full_prompt.txt
+          printf '%s\n' "## PR DIFF"
+          printf '%s\n' ""
+          echo '```diff'
+          printf '%s\n' "$PR_DIFF"
+          echo '```'
+          printf '%s\n' ""
+          printf '%s\n' "---"
+          printf '%s\n' ""
+          printf '%s\n' "Now provide your review following the structure above."
           
+          } > /tmp/full_prompt.txt
           FULL_PROMPT=$(< /tmp/full_prompt.txt)
           PROMPT_SIZE=${#FULL_PROMPT}
           echo "Prompt size: $PROMPT_SIZE chars"
@@ -795,56 +796,57 @@ jobs:
             MAX_SYNTH_TOKENS=50000
           fi
           
-          # shellcheck disable=SC2129
-          # Build synthesis prompt
-          printf '%s\n' "# Final Review Synthesis" > /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "Synthesize two AI reviews into ONE final review." >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## Rules" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "1. Eliminate duplicates - keep better explanation" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "2. Prioritize: Security > Bugs > Architecture > Style" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "3. Filter false positives" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "4. Preserve code examples and WARP citations" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "5. End with clear APPROVE or CHANGES NEEDED" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## Output Format" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "# Code Review Sumar" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "[3-5 sentences]" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## Findings" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "### Critical (Must Fix)" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "### High Priority" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "### Medium Priority" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "### Low Priority" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## Whats Good" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## Zaver" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "Verdict: [APPROVE or CHANGES NEEDED]" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "DO NOT add Review Models section." >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "Use Czech for text, English for code." >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "---" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## PR Context" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "Title: $PR_TITLE" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
+          # Build synthesis prompt (single redirect)
+          {
+          printf '%s\n' "# Final Review Synthesis"
+          printf '%s\n' ""
+          printf '%s\n' "Synthesize two AI reviews into ONE final review."
+          printf '%s\n' ""
+          printf '%s\n' "## Rules"
+          printf '%s\n' "1. Eliminate duplicates - keep better explanation"
+          printf '%s\n' "2. Prioritize: Security > Bugs > Architecture > Style"
+          printf '%s\n' "3. Filter false positives"
+          printf '%s\n' "4. Preserve code examples and WARP citations"
+          printf '%s\n' "5. End with clear APPROVE or CHANGES NEEDED"
+          printf '%s\n' ""
+          printf '%s\n' "## Output Format"
+          printf '%s\n' ""
+          printf '%s\n' "# Code Review Sumar"
+          printf '%s\n' "[3-5 sentences]"
+          printf '%s\n' ""
+          printf '%s\n' "## Findings"
+          printf '%s\n' "### Critical (Must Fix)"
+          printf '%s\n' "### High Priority"
+          printf '%s\n' "### Medium Priority"
+          printf '%s\n' "### Low Priority"
+          printf '%s\n' ""
+          printf '%s\n' "## Whats Good"
+          printf '%s\n' ""
+          printf '%s\n' "## Zaver"
+          printf '%s\n' "Verdict: [APPROVE or CHANGES NEEDED]"
+          printf '%s\n' ""
+          printf '%s\n' "DO NOT add Review Models section."
+          printf '%s\n' "Use Czech for text, English for code."
+          printf '%s\n' ""
+          printf '%s\n' "---"
+          printf '%s\n' ""
+          printf '%s\n' "## PR Context"
+          printf '%s\n' "Title: $PR_TITLE"
+          printf '%s\n' ""
           OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
           
-          printf '%s\n' "## Anthropic Review ($ANTHROPIC_MODEL_FINAL)" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "$ANTHROPIC_REVIEW" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## OpenAI Review ($OPENAI_MODEL_FINAL - HIGH reasoning)" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "$OPENAI_REVIEW" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "Now synthesize into FINAL review." >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "## Anthropic Review ($ANTHROPIC_MODEL_FINAL)"
+          printf '%s\n' ""
+          printf '%s\n' "$ANTHROPIC_REVIEW"
+          printf '%s\n' ""
+          printf '%s\n' "## OpenAI Review ($OPENAI_MODEL_FINAL - HIGH reasoning)"
+          printf '%s\n' ""
+          printf '%s\n' "$OPENAI_REVIEW"
+          printf '%s\n' ""
+          printf '%s\n' "Now synthesize into FINAL review."
           
+          } > /tmp/synthesis_prompt.txt
           SYNTHESIS_PROMPT=$(< /tmp/synthesis_prompt.txt)
           
           jq -n \
