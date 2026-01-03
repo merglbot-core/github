@@ -705,7 +705,7 @@ jobs:
             OPENAI_MODELS_TRIED="${OPENAI_MODELS_TRIED}${MODEL_TO_TRY}|"
             echo "  → Trying OpenAI model: $MODEL_TO_TRY"
           
-            if [ "$MODEL_TO_TRY" = "gpt-4-turbo" ]; then
+            if [ "$MODEL_TO_TRY" = "gpt-4-turbo" ] || echo "$MODEL_TO_TRY" | grep -Eqi '^o[13]'; then
               jq -n \
                 --arg model "$MODEL_TO_TRY" \
                 --arg prompt "$FULL_PROMPT" \
@@ -875,7 +875,7 @@ jobs:
             OPENAI_SYSTEM_ROLE="developer"
           fi
           
-          if [ "$OPENAI_MODEL_FINAL" = "gpt-4-turbo" ]; then
+          if [ "$OPENAI_MODEL_FINAL" = "gpt-4-turbo" ] || echo "$OPENAI_MODEL_FINAL" | grep -Eqi '^o[13]'; then
             jq -n \
               --arg model "$OPENAI_MODEL_FINAL" \
               --arg sys_role "$OPENAI_SYSTEM_ROLE" \
