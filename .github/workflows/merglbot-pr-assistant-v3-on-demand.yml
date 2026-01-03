@@ -218,6 +218,8 @@ jobs:
           DIFF_SCOPE_MODE="${DIFF_SCOPE_MODE:-auto}"
           if [ "$DIFF_SCOPE_MODE" == "full" ]; then
             PREV_REVIEW_HEAD_SHA=""
+            LAST_REVIEW_CREATED_AT=""
+            echo "" > prev_merglbot_review_created_at.txt
           fi
           
           echo "$PREV_REVIEW_HEAD_SHA" > prev_review_head_sha.txt
@@ -885,13 +887,6 @@ jobs:
           OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
           
-          OPENAI_CONFIG_DESC="reasoning_effort=high 🧠"
-          if [ "$OPENAI_MODEL_FINAL" = "gpt-4-turbo" ]; then
-            OPENAI_CONFIG_DESC="max_tokens (no reasoning_effort)"
-          elif echo "$OPENAI_MODEL_FINAL" | grep -Eqi '^o[13]'; then
-            OPENAI_CONFIG_DESC="max_completion_tokens (no reasoning_effort)"
-          fi
-          
           printf '%s\n' "## Anthropic Review ($ANTHROPIC_MODEL_FINAL)"
           printf '%s\n' ""
           printf '%s\n' "$ANTHROPIC_REVIEW"
@@ -1051,6 +1046,13 @@ jobs:
           
           OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
+          
+          OPENAI_CONFIG_DESC="reasoning_effort=high 🧠"
+          if [ "$OPENAI_MODEL_FINAL" = "gpt-4-turbo" ]; then
+            OPENAI_CONFIG_DESC="max_tokens (no reasoning_effort)"
+          elif echo "$OPENAI_MODEL_FINAL" | grep -Eqi '^o[13]'; then
+            OPENAI_CONFIG_DESC="max_completion_tokens (no reasoning_effort)"
+          fi
           
           ANTHROPIC_WORDS=$(wc -w < anthropic_review.txt 2>/dev/null || echo "0")
           OPENAI_WORDS=$(wc -w < openai_review.txt 2>/dev/null || echo "0")
@@ -1301,7 +1303,7 @@ jobs:
       
       - name: Upload Metrics Artifact
         if: always() && steps.context.outputs.skip_review != 'true'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: review-metrics-${{ env.PR_NUMBER }}-${{ github.run_id }}
           path: metrics/
