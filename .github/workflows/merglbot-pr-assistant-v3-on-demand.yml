@@ -391,32 +391,26 @@ jobs:
             DIFF_RANGE=$(< pr_diff_range.txt)
           fi
           
-          PR_DIFF_RAW=""
-          if [ -f pr_diff.txt ]; then
-            PR_DIFF_RAW=$(< pr_diff.txt)
-          fi
-          PR_DIFF_SIZE=${#PR_DIFF_RAW}
-          if [ "$PR_DIFF_SIZE" -gt 100000 ]; then
-            PR_DIFF="$(
-              {
-                printf '%s' "$PR_DIFF_RAW" | head -c 50000
-                printf '\n\n... (snip) ...\n\n'
-                printf '%s' "$PR_DIFF_RAW" | tail -c 50000
-              }
-            )"
-          else
-            PR_DIFF="$PR_DIFF_RAW"
-          fi
-          
-          PREV_REVIEW=""
-          if [ -f prev_merglbot_review.txt ]; then
-            PREV_REVIEW=$(head -c 20000 prev_merglbot_review.txt 2>/dev/null || true)
-          fi
-          
-          NEW_COMMITS=""
-          if [ -f new_commits.txt ]; then
-            NEW_COMMITS=$(head -c 5000 new_commits.txt 2>/dev/null || true)
-          fi
+	          PR_DIFF_RAW=""
+	          if [ -f pr_diff.txt ]; then
+	            PR_DIFF_RAW=$(< pr_diff.txt)
+	          fi
+	          PR_DIFF_SIZE=${#PR_DIFF_RAW}
+	          if [ "$PR_DIFF_SIZE" -gt 100000 ]; then
+	            PR_DIFF="$(python3 -c 'import sys; s=sys.stdin.buffer.read().decode("utf-8", "replace"); sys.stdout.write(s[:50000] + "\n\n... (snip) ...\n\n" + s[-50000:])' <<< "$PR_DIFF_RAW")"
+	          else
+	            PR_DIFF="$PR_DIFF_RAW"
+	          fi
+	          
+	          PREV_REVIEW=""
+	          if [ -f prev_merglbot_review.txt ]; then
+	            PREV_REVIEW=$(python3 -c 'from pathlib import Path; import sys; p=Path("prev_merglbot_review.txt"); sys.stdout.write(p.read_text(encoding="utf-8", errors="replace")[:20000])' 2>/dev/null || true)
+	          fi
+	          
+	          NEW_COMMITS=""
+	          if [ -f new_commits.txt ]; then
+	            NEW_COMMITS=$(python3 -c 'from pathlib import Path; import sys; p=Path("new_commits.txt"); sys.stdout.write(p.read_text(encoding="utf-8", errors="replace")[:5000])' 2>/dev/null || true)
+	          fi
           
           CHANGED_FILES=$(head -100 changed_files.txt 2>/dev/null | tr '\n' ', ')
           
@@ -706,10 +700,14 @@ jobs:
             echo "  → Trying OpenAI model: $MODEL_TO_TRY"
           
 	            if [ "$MODEL_TO_TRY" = "gpt-4-turbo" ]; then
+	              MAX_TOKENS_TURBO="$MAX_TOKENS_OPENAI"
+	              if [ "$MAX_TOKENS_TURBO" -gt 4096 ]; then
+	                MAX_TOKENS_TURBO=4096
+	              fi
 	              jq -n \
 	                --arg model "$MODEL_TO_TRY" \
 	                --arg prompt "$FULL_PROMPT" \
-	                --argjson max_tokens "$MAX_TOKENS_OPENAI" \
+	                --argjson max_tokens "$MAX_TOKENS_TURBO" \
 	                '{
 	                  model: $model,
 	                  messages: [{role: "user", content: $prompt}],
@@ -894,11 +892,15 @@ jobs:
           fi
           
 	          if [ "$OPENAI_MODEL_FINAL" = "gpt-4-turbo" ]; then
+	            MAX_TOKENS_TURBO="$MAX_SYNTH_TOKENS"
+	            if [ "$MAX_TOKENS_TURBO" -gt 4096 ]; then
+	              MAX_TOKENS_TURBO=4096
+	            fi
 	            jq -n \
 	              --arg model "$OPENAI_MODEL_FINAL" \
 	              --arg sys_role "$OPENAI_SYSTEM_ROLE" \
 	              --arg prompt "$SYNTHESIS_PROMPT" \
-	              --argjson max_tokens "$MAX_SYNTH_TOKENS" \
+	              --argjson max_tokens "$MAX_TOKENS_TURBO" \
 	              '{
 	                model: $model,
 	                messages: [
