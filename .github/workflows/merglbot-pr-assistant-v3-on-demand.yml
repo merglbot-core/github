@@ -136,7 +136,7 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
         with:
           fetch-depth: 0
       
@@ -349,8 +349,8 @@ jobs:
           {
             printf '%s\n' "## 🤖 Merglbot PR Assistant v3"
             printf '%s\n' ""
-            printf '%s\n' "⏭️ No new commits since last Merglbot review (\\`${PREV_SHA:0:12}\\`).  "
-            printf '%s\n' "Current head: \\`${HEAD_SHA:0:12}\\`."
+            printf '%s\n' "⏭️ No new commits since last Merglbot review (\`${PREV_SHA:0:12}\`).  "
+            printf '%s\n' "Current head: \`${HEAD_SHA:0:12}\`."
           } > comment.md
           
           gh pr comment "$PR_NUM" --body-file comment.md
@@ -375,7 +375,7 @@ jobs:
           echo "========================================="
           
           PR_TITLE=$(< pr_title.txt)
-          PR_BODY=$(< pr_body.txt)
+          PR_BODY=$(head -c 3000 < pr_body.txt)
           PR_AUTHOR=$(< pr_author.txt)
           PR_ADDITIONS=$(< pr_additions.txt)
           PR_DELETIONS=$(< pr_deletions.txt)
@@ -1109,6 +1109,11 @@ jobs:
             BUGBOT_SOURCES=$(< bugbot_sources.txt)
           fi
           
+          REVIEW_STATUS="Failed"
+          if [ -s final_review.txt ] && ! grep -qx "API_ERROR" final_review.txt 2>/dev/null; then
+            REVIEW_STATUS="Success"
+          fi
+          
           {
             echo "## 🤖 Merglbot PR Assistant v3 - Summary"
             echo ""
@@ -1118,7 +1123,7 @@ jobs:
             echo "| **Trigger** | ${{ github.event_name == 'issue_comment' && '@merglbot review' || 'Manual dispatch' }} |"
             echo "| **Review Mode** | \`${{ env.REVIEW_MODE }}\` |"
             echo "| **Timestamp** | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |"
-            echo "| **Status** | $([ -s final_review.txt ] && echo 'Success' || echo 'Failed') |"
+            echo "| **Status** | $REVIEW_STATUS |"
             echo ""
             echo "### Review Statistics"
             echo ""
@@ -1165,7 +1170,7 @@ jobs:
                 in_section = ($0 ~ ("^### " prefix))
                 next
               }
-              in_section && $0 ~ /^[[:space:]]*[-*][[:space:]]*\\[[ xX]\\]/ { count++ }
+              in_section && $0 ~ /^[[:space:]]*[-*][[:space:]]*\[[ xX]\]/ { count++ }
               END { print count+0 }
             ' final_review.txt 2>/dev/null || echo 0
           }
@@ -1179,7 +1184,7 @@ jobs:
           VERDICT_LINE=$(grep -im1 '^Verdict:' final_review.txt 2>/dev/null || true)
           if [ -n "$VERDICT_LINE" ]; then
             VERDICT_VALUE=$(printf '%s' "$VERDICT_LINE" | sed -E 's/^Verdict:[[:space:]]*//I')
-            if echo "$VERDICT_VALUE" | grep -qi '^changes[[:space:]]+needed'; then
+            if echo "$VERDICT_VALUE" | grep -Eqi '^changes[[:space:]]+needed'; then
               VERDICT="CHANGES_NEEDED"
             elif echo "$VERDICT_VALUE" | grep -qi '^approve'; then
               VERDICT="APPROVE"
