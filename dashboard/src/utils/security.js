@@ -12,14 +12,14 @@ export function getCsrfToken() {
   
   // In production, token should be injected by server
   // For development, use a placeholder that won't be '${CSRF_TOKEN}'
-  if (!token || token === '${CSRF_TOKEN}') {
-    // Development mode - check multiple conditions for better reliability
-    // Vite uses import.meta.env, webpack uses process.env, also check hostname
-    const isDevelopment = 
-      (typeof import !== 'undefined' && import.meta?.env?.MODE === 'development') ||
-      (typeof process !== 'undefined' && process.env?.NODE_ENV === 'development') ||
-      window.location.hostname === 'localhost' ||
-      window.location.hostname === '127.0.0.1';
+	  if (!token || token === '${CSRF_TOKEN}') {
+	    // Development mode - check multiple conditions for better reliability
+	    // Vite uses import.meta.env, webpack uses process.env, also check hostname
+	    const isDevelopment = 
+	      (import.meta?.env?.DEV === true) ||
+	      (typeof process !== 'undefined' && process.env?.NODE_ENV === 'development') ||
+	      window.location.hostname === 'localhost' ||
+	      window.location.hostname === '127.0.0.1';
     
     if (isDevelopment) {
       return 'dev_csrf_' + Math.random().toString(36).slice(2, 11);
