@@ -361,7 +361,7 @@ jobs:
           fi
       
       - name: Step 1 - Parallel API Calls
-        if: steps.context.outputs.skip_review != 'true'
+        if: success() && steps.context.outputs.skip_review != 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -756,14 +756,16 @@ jobs:
               continue
             fi
             
-            CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
-            if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
-              CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.refusal // empty')
-            fi
-            if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
-              echo "  ERROR: OpenAI response contained no content"
-              continue
-            fi
+	            CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
+	            REFUSAL=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.refusal // empty')
+	            if [ -n "$REFUSAL" ] && [ "$REFUSAL" != "null" ]; then
+	              echo "  ERROR: OpenAI response refusal"
+	              continue
+	            fi
+	            if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
+	              echo "  ERROR: OpenAI response contained no content"
+	              continue
+	            fi
             
             OPENAI_MODEL_USED="$MODEL_TO_TRY"
             echo "Success (model: $OPENAI_MODEL_USED)"
@@ -797,7 +799,7 @@ jobs:
           echo "========================================="
       
       - name: Step 2 - Intelligent Synthesis
-        if: steps.context.outputs.skip_review != 'true'
+        if: success() && steps.context.outputs.skip_review != 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
@@ -817,6 +819,12 @@ jobs:
           echo "Input Reviews:"
           echo "  Anthropic: $(echo "$ANTHROPIC_REVIEW" | wc -w) words"
           echo "  OpenAI: $(echo "$OPENAI_REVIEW" | wc -w) words"
+          
+          if grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null && grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
+            echo "ERROR: Both primary reviews failed; skipping synthesis"
+            echo "API_ERROR" > final_review.txt
+            exit 0
+          fi
           
           if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
             MAX_SYNTH_TOKENS=25000
@@ -955,19 +963,21 @@ jobs:
           elif echo "$SYNTHESIS_RESP" | jq -e ".error" > /dev/null 2>&1; then
             echo "ERROR: $(echo "$SYNTHESIS_RESP" | jq -r '.error.message')"
             cp "$FALLBACK_REVIEW_FILE" final_review.txt
-          else
-            echo "Success"
-            CONTENT=$(echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.content // empty')
-            if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
-              CONTENT=$(echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.refusal // empty')
-            fi
-            if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
-              cp "$FALLBACK_REVIEW_FILE" final_review.txt
-            else
-              echo "Words: $(echo "$CONTENT" | wc -w)"
-              echo "$CONTENT" > final_review.txt
-            fi
-          fi
+	          else
+	            echo "Success"
+	            CONTENT=$(echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.content // empty')
+	            REFUSAL=$(echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.refusal // empty')
+	            if [ -n "$REFUSAL" ] && [ "$REFUSAL" != "null" ]; then
+	              echo "ERROR: Synthesis refusal received"
+	              cp "$FALLBACK_REVIEW_FILE" final_review.txt
+	            elif [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
+	              echo "ERROR: Synthesis response contained no content"
+	              cp "$FALLBACK_REVIEW_FILE" final_review.txt
+	            else
+	              echo "Words: $(echo "$CONTENT" | wc -w)"
+	              echo "$CONTENT" > final_review.txt
+	            fi
+	          fi
           
           FINAL_WORDS=$(wc -w < final_review.txt 2>/dev/null || echo 0)
           echo "Final review: $FINAL_WORDS words"
@@ -976,7 +986,7 @@ jobs:
           echo "========================================="
       
       - name: Post Review Comment
-        if: steps.context.outputs.skip_review != 'true'
+        if: success() && steps.context.outputs.skip_review != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
