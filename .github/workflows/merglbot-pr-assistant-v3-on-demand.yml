@@ -705,28 +705,38 @@ jobs:
             OPENAI_MODELS_TRIED="${OPENAI_MODELS_TRIED}${MODEL_TO_TRY}|"
             echo "  → Trying OpenAI model: $MODEL_TO_TRY"
           
-            if [ "$MODEL_TO_TRY" = "gpt-4-turbo" ] || echo "$MODEL_TO_TRY" | grep -Eqi '^o[13]'; then
-              jq -n \
-                --arg model "$MODEL_TO_TRY" \
-                --arg prompt "$FULL_PROMPT" \
-                --argjson max_tokens "$MAX_TOKENS_OPENAI" \
-                '{
-                  model: $model,
-                  messages: [{role: "user", content: $prompt}],
-                  max_tokens: $max_tokens
-                }' > /tmp/openai_payload.json
-            else
-              jq -n \
-                --arg model "$MODEL_TO_TRY" \
-                --arg prompt "$FULL_PROMPT" \
-                --argjson max_tokens "$MAX_TOKENS_OPENAI" \
-                '{
-                  model: $model,
-                  messages: [{role: "user", content: $prompt}],
-                  max_completion_tokens: $max_tokens,
-                  reasoning_effort: "high"
-                }' > /tmp/openai_payload.json
-            fi
+	            if [ "$MODEL_TO_TRY" = "gpt-4-turbo" ]; then
+	              jq -n \
+	                --arg model "$MODEL_TO_TRY" \
+	                --arg prompt "$FULL_PROMPT" \
+	                --argjson max_tokens "$MAX_TOKENS_OPENAI" \
+	                '{
+	                  model: $model,
+	                  messages: [{role: "user", content: $prompt}],
+	                  max_tokens: $max_tokens
+	                }' > /tmp/openai_payload.json
+	            elif echo "$MODEL_TO_TRY" | grep -Eqi '^o[13]'; then
+	              jq -n \
+	                --arg model "$MODEL_TO_TRY" \
+	                --arg prompt "$FULL_PROMPT" \
+	                --argjson max_tokens "$MAX_TOKENS_OPENAI" \
+	                '{
+	                  model: $model,
+	                  messages: [{role: "user", content: $prompt}],
+	                  max_completion_tokens: $max_tokens
+	                }' > /tmp/openai_payload.json
+	            else
+	              jq -n \
+	                --arg model "$MODEL_TO_TRY" \
+	                --arg prompt "$FULL_PROMPT" \
+	                --argjson max_tokens "$MAX_TOKENS_OPENAI" \
+	                '{
+	                  model: $model,
+	                  messages: [{role: "user", content: $prompt}],
+	                  max_completion_tokens: $max_tokens,
+	                  reasoning_effort: "high"
+	                }' > /tmp/openai_payload.json
+	            fi
             
             set +e
             OPENAI_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.openai.com/v1/chat/completions \
@@ -875,36 +885,50 @@ jobs:
             OPENAI_SYSTEM_ROLE="developer"
           fi
           
-          if [ "$OPENAI_MODEL_FINAL" = "gpt-4-turbo" ] || echo "$OPENAI_MODEL_FINAL" | grep -Eqi '^o[13]'; then
-            jq -n \
-              --arg model "$OPENAI_MODEL_FINAL" \
-              --arg sys_role "$OPENAI_SYSTEM_ROLE" \
-              --arg prompt "$SYNTHESIS_PROMPT" \
-              --argjson max_tokens "$MAX_SYNTH_TOKENS" \
-              '{
-                model: $model,
-                messages: [
-                  {role: $sys_role, content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
-                  {role: "user", content: $prompt}
-                ],
-                max_tokens: $max_tokens
-              }' > /tmp/synthesis_payload.json
-          else
-            jq -n \
-              --arg model "$OPENAI_MODEL_FINAL" \
-              --arg sys_role "$OPENAI_SYSTEM_ROLE" \
-              --arg prompt "$SYNTHESIS_PROMPT" \
-              --argjson max_tokens "$MAX_SYNTH_TOKENS" \
-              '{
-                model: $model,
-                messages: [
-                  {role: $sys_role, content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
-                  {role: "user", content: $prompt}
-                ],
-                max_completion_tokens: $max_tokens,
-                reasoning_effort: "high"
-              }' > /tmp/synthesis_payload.json
-          fi
+	          if [ "$OPENAI_MODEL_FINAL" = "gpt-4-turbo" ]; then
+	            jq -n \
+	              --arg model "$OPENAI_MODEL_FINAL" \
+	              --arg sys_role "$OPENAI_SYSTEM_ROLE" \
+	              --arg prompt "$SYNTHESIS_PROMPT" \
+	              --argjson max_tokens "$MAX_SYNTH_TOKENS" \
+	              '{
+	                model: $model,
+	                messages: [
+	                  {role: $sys_role, content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
+	                  {role: "user", content: $prompt}
+	                ],
+	                max_tokens: $max_tokens
+	              }' > /tmp/synthesis_payload.json
+	          elif echo "$OPENAI_MODEL_FINAL" | grep -Eqi '^o[13]'; then
+	            jq -n \
+	              --arg model "$OPENAI_MODEL_FINAL" \
+	              --arg sys_role "$OPENAI_SYSTEM_ROLE" \
+	              --arg prompt "$SYNTHESIS_PROMPT" \
+	              --argjson max_tokens "$MAX_SYNTH_TOKENS" \
+	              '{
+	                model: $model,
+	                messages: [
+	                  {role: $sys_role, content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
+	                  {role: "user", content: $prompt}
+	                ],
+	                max_completion_tokens: $max_tokens
+	              }' > /tmp/synthesis_payload.json
+	          else
+	            jq -n \
+	              --arg model "$OPENAI_MODEL_FINAL" \
+	              --arg sys_role "$OPENAI_SYSTEM_ROLE" \
+	              --arg prompt "$SYNTHESIS_PROMPT" \
+	              --argjson max_tokens "$MAX_SYNTH_TOKENS" \
+	              '{
+	                model: $model,
+	                messages: [
+	                  {role: $sys_role, content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
+	                  {role: "user", content: $prompt}
+	                ],
+	                max_completion_tokens: $max_tokens,
+	                reasoning_effort: "high"
+	              }' > /tmp/synthesis_payload.json
+	          fi
           
           echo "Calling OpenAI for synthesis..."
           
