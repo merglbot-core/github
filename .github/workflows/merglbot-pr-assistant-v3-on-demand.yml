@@ -136,7 +136,7 @@ jobs:
     
     steps:
       - name: Checkout
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3  # v6.0.0
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1 (tag: v6.0.1)
         with:
           fetch-depth: 0
       
@@ -375,7 +375,7 @@ jobs:
           echo "========================================="
           
           PR_TITLE=$(< pr_title.txt)
-          PR_BODY=$(head -c 3000 < pr_body.txt)
+          PR_BODY=$(python3 -c 'from pathlib import Path; import sys; s=Path("pr_body.txt").read_text(encoding="utf-8", errors="replace"); sys.stdout.write(s[:3000])')
           PR_AUTHOR=$(< pr_author.txt)
           PR_ADDITIONS=$(< pr_additions.txt)
           PR_DELETIONS=$(< pr_deletions.txt)
@@ -802,7 +802,7 @@ jobs:
           ANTHROPIC_REVIEW=$(< anthropic_review.txt)
           OPENAI_REVIEW=$(< openai_review.txt)
           PR_TITLE=$(< pr_title.txt)
-          PR_BODY=$(< pr_body.txt)
+          PR_BODY=$(python3 -c 'from pathlib import Path; import sys; s=Path("pr_body.txt").read_text(encoding="utf-8", errors="replace"); sys.stdout.write(s[:3000])')
           
           echo "Input Reviews:"
           echo "  Anthropic: $(echo "$ANTHROPIC_REVIEW" | wc -w) words"
@@ -870,15 +870,21 @@ jobs:
           } > /tmp/synthesis_prompt.txt
           SYNTHESIS_PROMPT=$(< /tmp/synthesis_prompt.txt)
           
+          OPENAI_SYSTEM_ROLE="system"
+          if echo "$OPENAI_MODEL_FINAL" | grep -Eqi '^o[13]'; then
+            OPENAI_SYSTEM_ROLE="developer"
+          fi
+          
           if [ "$OPENAI_MODEL_FINAL" = "gpt-4-turbo" ]; then
             jq -n \
               --arg model "$OPENAI_MODEL_FINAL" \
+              --arg sys_role "$OPENAI_SYSTEM_ROLE" \
               --arg prompt "$SYNTHESIS_PROMPT" \
               --argjson max_tokens "$MAX_SYNTH_TOKENS" \
               '{
                 model: $model,
                 messages: [
-                  {role: "system", content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
+                  {role: $sys_role, content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
                   {role: "user", content: $prompt}
                 ],
                 max_tokens: $max_tokens
@@ -886,12 +892,13 @@ jobs:
           else
             jq -n \
               --arg model "$OPENAI_MODEL_FINAL" \
+              --arg sys_role "$OPENAI_SYSTEM_ROLE" \
               --arg prompt "$SYNTHESIS_PROMPT" \
               --argjson max_tokens "$MAX_SYNTH_TOKENS" \
               '{
                 model: $model,
                 messages: [
-                  {role: "system", content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
+                  {role: $sys_role, content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
                   {role: "user", content: $prompt}
                 ],
                 max_completion_tokens: $max_tokens,
@@ -1166,8 +1173,12 @@ jobs:
             local section_prefix="$1"
             awk -v prefix="$section_prefix" '
               BEGIN { IGNORECASE=1; in_section=0; count=0 }
-              /^### / {
-                in_section = ($0 ~ ("^### " prefix))
+              /^###[[:space:]]/ {
+                in_section = ($0 ~ prefix)
+                next
+              }
+              /^##[[:space:]]/ || /^#[[:space:]]/ {
+                in_section = 0
                 next
               }
               in_section && $0 ~ /^[[:space:]]*[-*][[:space:]]*\[[ xX]\]/ { count++ }
