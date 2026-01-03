@@ -18,12 +18,22 @@ on:
         options:
           - full
           - light
+      diff_scope:
+        description: "Diff scope (auto = since last Merglbot review when possible)"
+        required: false
+        type: choice
+        default: "auto"
+        options:
+          - auto
+          - delta
+          - full
       anthropic_model:
         description: "Anthropic model"
         required: false
         type: choice
-        default: "claude-sonnet-4-5-20250929"
+        default: "claude-opus-4-5-20250929"
         options:
+          - claude-opus-4-5-20250929
           - claude-sonnet-4-5-20250929
           - claude-opus-4-1-20250805
           - claude-3-5-haiku-20241022
@@ -31,8 +41,9 @@ on:
         description: "OpenAI model"
         required: false
         type: choice
-        default: "gpt-5.1"
+        default: "gpt-5.2"
         options:
+          - gpt-5.2
           - gpt-5.1
           - gpt-5
           - gpt-4-turbo
@@ -60,15 +71,18 @@ jobs:
       pr_number: ${{ steps.get_pr.outputs.pr_number }}
       should_run: ${{ steps.get_pr.outputs.should_run }}
       review_mode: ${{ steps.get_pr.outputs.review_mode }}
+      diff_scope: ${{ steps.get_pr.outputs.diff_scope }}
     steps:
       - name: Get PR Number and Mode
         id: get_pr
         env:
           # Security: Use env var to avoid command injection from comment body
           COMMENT_CONTAINS_LIGHT: ${{ contains(github.event.comment.body, '--light') }}
+          COMMENT_CONTAINS_FULL_DIFF: ${{ contains(github.event.comment.body, '--full-diff') }}
           IS_WORKFLOW_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
           INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
           INPUT_REVIEW_MODE: ${{ github.event.inputs.review_mode }}
+          INPUT_DIFF_SCOPE: ${{ github.event.inputs.diff_scope }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
           if [ "$IS_WORKFLOW_DISPATCH" == "true" ]; then
@@ -80,6 +94,7 @@ jobs:
             echo "pr_number=$INPUT_PR_NUMBER" >> "$GITHUB_OUTPUT"
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             echo "review_mode=${INPUT_REVIEW_MODE:-full}" >> "$GITHUB_OUTPUT"
+            echo "diff_scope=${INPUT_DIFF_SCOPE:-auto}" >> "$GITHUB_OUTPUT"
             echo "✅ Manual trigger for PR #$INPUT_PR_NUMBER (mode: ${INPUT_REVIEW_MODE:-full})"
           else
             echo "pr_number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
@@ -91,6 +106,13 @@ jobs:
             else
               echo "review_mode=full" >> "$GITHUB_OUTPUT"
               echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: FULL)"
+            fi
+            
+            if [ "$COMMENT_CONTAINS_FULL_DIFF" == "true" ]; then
+              echo "diff_scope=full" >> "$GITHUB_OUTPUT"
+              echo "✅ Diff scope: FULL (requested via --full-diff)"
+            else
+              echo "diff_scope=auto" >> "$GITHUB_OUTPUT"
             fi
           fi
 
@@ -105,6 +127,7 @@ jobs:
       ANTHROPIC_API_VERSION: "2023-06-01"
       PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
       REVIEW_MODE: ${{ needs.check-trigger.outputs.review_mode }}
+      DIFF_SCOPE_MODE: ${{ needs.check-trigger.outputs.diff_scope }}
     
     steps:
       - name: Checkout
@@ -134,8 +157,9 @@ jobs:
           PR_NUM="${{ env.PR_NUMBER }}"
           echo "PR Number: $PR_NUM"
           echo "Review Mode: ${{ env.REVIEW_MODE }}"
+          echo "Diff Scope Mode: ${{ env.DIFF_SCOPE_MODE }}"
           
-          gh pr view "$PR_NUM" --json title,body,author,baseRefName,headRefName,labels,additions,deletions,changedFiles > pr_metadata.json
+          gh pr view "$PR_NUM" --json title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles > pr_metadata.json
           
           PR_TITLE=$(jq -r '.title // "No title"' pr_metadata.json)
           PR_BODY=$(jq -r '.body // "No description"' pr_metadata.json)
@@ -143,10 +167,14 @@ jobs:
           PR_ADDITIONS=$(jq -r '.additions // 0' pr_metadata.json)
           PR_DELETIONS=$(jq -r '.deletions // 0' pr_metadata.json)
           PR_FILES=$(jq -r '.changedFiles // 0' pr_metadata.json)
+          PR_BASE_SHA=$(jq -r '.baseRefOid // empty' pr_metadata.json)
+          PR_HEAD_SHA=$(jq -r '.headRefOid // empty' pr_metadata.json)
           
           echo "Title: $PR_TITLE"
           echo "Author: $PR_AUTHOR"
           echo "Changes: +$PR_ADDITIONS -$PR_DELETIONS in $PR_FILES files"
+          echo "Base SHA: ${PR_BASE_SHA:0:12}"
+          echo "Head SHA: ${PR_HEAD_SHA:0:12}"
           
           echo "$PR_TITLE" > pr_title.txt
           echo "$PR_BODY" > pr_body.txt
@@ -154,14 +182,96 @@ jobs:
           echo "$PR_ADDITIONS" > pr_additions.txt
           echo "$PR_DELETIONS" > pr_deletions.txt
           echo "$PR_FILES" > pr_files_count.txt
+          echo "$PR_BASE_SHA" > pr_base_sha.txt
+          echo "$PR_HEAD_SHA" > pr_head_sha.txt
           
-          gh pr diff "$PR_NUM" > pr_diff.txt
-          DIFF_LINES=$(wc -l < pr_diff.txt)
-          echo "Diff: $DIFF_LINES lines"
+          echo "PR_BASE_SHA=$PR_BASE_SHA" >> "$GITHUB_ENV"
+          echo "PR_HEAD_SHA=$PR_HEAD_SHA" >> "$GITHUB_ENV"
           
           gh pr view "$PR_NUM" --json files -q '.files[].path' > changed_files.txt 2>/dev/null || echo "" > changed_files.txt
           
           gh api "repos/${{ github.repository }}/issues/$PR_NUM/comments" --paginate > issue_comments.json 2>/dev/null || echo "[]" > issue_comments.json
+          
+          echo "Detecting previous Merglbot review..."
+          LAST_REVIEW_BODY=$(jq -r '[.[] | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .body // empty' issue_comments.json 2>/dev/null || echo "")
+          LAST_REVIEW_CREATED_AT=$(jq -r '[.[] | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .created_at // empty' issue_comments.json 2>/dev/null || echo "")
+          
+          if [ -z "$LAST_REVIEW_BODY" ]; then
+            LAST_REVIEW_BODY=$(jq -r '[.[] | select(.body | contains("## 🤖 Merglbot PR Assistant v3"))] | sort_by(.created_at) | last | .body // empty' issue_comments.json 2>/dev/null || echo "")
+            LAST_REVIEW_CREATED_AT=$(jq -r '[.[] | select(.body | contains("## 🤖 Merglbot PR Assistant v3"))] | sort_by(.created_at) | last | .created_at // empty' issue_comments.json 2>/dev/null || echo "")
+          fi
+          
+          printf '%s' "$LAST_REVIEW_BODY" > prev_merglbot_review.txt
+          echo "$LAST_REVIEW_CREATED_AT" > prev_merglbot_review_created_at.txt
+          
+          PREV_REVIEW_HEAD_SHA=""
+          if [ -n "$LAST_REVIEW_BODY" ]; then
+            PREV_REVIEW_HEAD_SHA=$(printf '%s' "$LAST_REVIEW_BODY" | sed -n 's/.*MERGLBOT_REVIEW_HEAD_SHA: \\([0-9a-f]\\{7,40\\}\\).*/\\1/p' | head -n 1 || true)
+          fi
+          
+          DIFF_SCOPE_MODE="${DIFF_SCOPE_MODE:-auto}"
+          if [ "$DIFF_SCOPE_MODE" == "full" ]; then
+            PREV_REVIEW_HEAD_SHA=""
+          fi
+          
+          echo "$PREV_REVIEW_HEAD_SHA" > prev_review_head_sha.txt
+          echo "PREV_REVIEW_HEAD_SHA=$PREV_REVIEW_HEAD_SHA" >> "$GITHUB_ENV"
+          
+          SKIP_REVIEW="false"
+          if [ "$DIFF_SCOPE_MODE" != "full" ] && [ -n "$PREV_REVIEW_HEAD_SHA" ] && [ "$PREV_REVIEW_HEAD_SHA" == "$PR_HEAD_SHA" ]; then
+            SKIP_REVIEW="true"
+          fi
+          echo "skip_review=$SKIP_REVIEW" >> "$GITHUB_OUTPUT"
+          
+          if [ "$SKIP_REVIEW" == "true" ]; then
+            echo "⏭️ No new commits since last Merglbot review ($PREV_REVIEW_HEAD_SHA)"
+            echo "pr_diff_scope=none" > pr_diff_scope.txt
+            echo "$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" > pr_diff_range.txt
+            echo "" > new_commits.txt
+            echo "" > pr_diff.txt
+          else
+            DIFF_SCOPE="full"
+            DIFF_RANGE="$PR_BASE_SHA...$PR_HEAD_SHA"
+            echo "" > new_commits.txt
+            
+            if [ "$DIFF_SCOPE_MODE" == "delta" ] && [ -z "$PREV_REVIEW_HEAD_SHA" ]; then
+              echo "Requested DELTA diff but no previous Merglbot review exists; falling back to full PR diff."
+            fi
+            
+            if [ "$DIFF_SCOPE_MODE" != "full" ] && [ -n "$PREV_REVIEW_HEAD_SHA" ] && [ "$PREV_REVIEW_HEAD_SHA" != "$PR_HEAD_SHA" ]; then
+              COMPARE_STATUS=$(gh api "/repos/${{ github.repository }}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" --jq '.status' 2>/dev/null || echo "")
+              if [ "$COMPARE_STATUS" == "ahead" ]; then
+                echo "Using DELTA diff since last review: $PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA"
+                DIFF_SCOPE="delta"
+                DIFF_RANGE="$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA"
+                
+                if ! gh api -H "Accept: application/vnd.github.v3.diff" "/repos/${{ github.repository }}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" > pr_diff.txt 2>/dev/null; then
+                  echo "Delta diff fetch failed; falling back to full PR diff."
+                  DIFF_SCOPE="full"
+                  DIFF_RANGE="$PR_BASE_SHA...$PR_HEAD_SHA"
+                else
+                  gh api "/repos/${{ github.repository }}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" --jq '.commits[] | "- " + (.sha[0:7]) + " " + (.commit.message | split("\n")[0])' 2>/dev/null > new_commits.txt || echo "" > new_commits.txt
+                fi
+              elif [ "$DIFF_SCOPE_MODE" == "delta" ]; then
+                echo "Requested DELTA diff but compare status is '$COMPARE_STATUS'; falling back to full PR diff."
+              fi
+            fi
+            
+            if [ "$DIFF_SCOPE" != "delta" ]; then
+              echo "Using FULL PR diff (base→head)."
+              gh pr diff "$PR_NUM" > pr_diff.txt
+            fi
+            
+            echo "pr_diff_scope=$DIFF_SCOPE" > pr_diff_scope.txt
+            echo "$DIFF_RANGE" > pr_diff_range.txt
+            echo "DIFF_SCOPE=$DIFF_SCOPE" >> "$GITHUB_ENV"
+            echo "DIFF_RANGE=$DIFF_RANGE" >> "$GITHUB_ENV"
+          fi
+          
+          DIFF_LINES=$(wc -l < pr_diff.txt 2>/dev/null || echo "0")
+          echo "Diff: $DIFF_LINES lines"
+          
+          echo "REVIEW_CUTOFF=$LAST_REVIEW_CREATED_AT" >> "$GITHUB_ENV"
           
           echo "Extracting bugbot findings..."
           echo "" > bugbot_findings.txt
@@ -169,7 +279,7 @@ jobs:
           BUGBOT_SOURCES=""
           
           for BOT_PATTERN in cursor gemini copilot coderabbit qodo pr-agent snyk sonar codacy deepsource; do
-            FINDINGS=$(jq -r --arg pat "$BOT_PATTERN" '.[] | select(.user.login | test($pat; "i")) | .body' issue_comments.json 2>/dev/null || echo "")
+            FINDINGS=$(jq -r --arg pat "$BOT_PATTERN" --arg cutoff "$LAST_REVIEW_CREATED_AT" '.[] | select(.user.login | test($pat; "i")) | select(($cutoff == "") or (.created_at > $cutoff)) | .body' issue_comments.json 2>/dev/null || echo "")
             if [ -n "$FINDINGS" ] && [ "$FINDINGS" != "null" ]; then
               {
                 echo "### $BOT_PATTERN Bot Findings"
@@ -190,12 +300,12 @@ jobs:
           done
           
           gh api "repos/${{ github.repository }}/pulls/$PR_NUM/comments" --paginate > review_comments.json 2>/dev/null || echo "[]" > review_comments.json
-          REVIEW_COMMENT_COUNT=$(jq 'length' review_comments.json)
+          REVIEW_COMMENT_COUNT=$(jq -r --arg cutoff "$LAST_REVIEW_CREATED_AT" '[.[] | select(($cutoff == "") or (.created_at > $cutoff))] | length' review_comments.json 2>/dev/null || echo "0")
           if [ "$REVIEW_COMMENT_COUNT" -gt 0 ]; then
             {
               echo "### Existing Review Comments"
               echo ""
-              jq -r '.[] | "**\(.user.login)** on \(.path): \(.body)"' review_comments.json 2>/dev/null || echo "None"
+              jq -r --arg cutoff "$LAST_REVIEW_CREATED_AT" '.[] | select(($cutoff == "") or (.created_at > $cutoff)) | "**\(.user.login)** on \(.path): \(.body)"' review_comments.json 2>/dev/null || echo "None"
               echo ""
             } >> bugbot_findings.txt
           fi
@@ -213,13 +323,44 @@ jobs:
           echo "========================================="
           echo "CONTEXT GATHERING COMPLETE"
           echo "========================================="
+
+      - name: Skip Review (No New Commits)
+        if: steps.context.outputs.skip_review == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          
+          PR_NUM="${{ env.PR_NUMBER }}"
+          PREV_SHA="${{ env.PREV_REVIEW_HEAD_SHA }}"
+          HEAD_SHA="${{ env.PR_HEAD_SHA }}"
+          
+          if [ -z "$PREV_SHA" ] || [ -z "$HEAD_SHA" ]; then
+            echo "Skip requested but missing SHA context."
+            exit 0
+          fi
+          
+          cat > comment.md << EOF
+          ## 🤖 Merglbot PR Assistant v3
+          
+          ⏭️ No new commits since last Merglbot review (\`${PREV_SHA:0:12}\`).  
+          Current head: \`${HEAD_SHA:0:12}\`.
+          EOF
+          
+          gh pr comment "$PR_NUM" --body-file comment.md
+          
+          if [ "${{ github.event_name }}" == "issue_comment" ]; then
+            gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
+              -f content='hooray' || true
+          fi
       
       - name: Step 1 - Parallel API Calls
+        if: steps.context.outputs.skip_review != 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}
-          OPENAI_MODEL: ${{ github.event.inputs.openai_model || 'gpt-5.1' }}
+          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
+          OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
         run: |
           set -euo pipefail
           
@@ -233,7 +374,25 @@ jobs:
           PR_ADDITIONS=$(cat pr_additions.txt)
           PR_DELETIONS=$(cat pr_deletions.txt)
           PR_FILES_COUNT=$(cat pr_files_count.txt)
-          PR_DIFF=$(cat pr_diff.txt | head -c 100000)
+          DIFF_SCOPE=$(cat pr_diff_scope.txt 2>/dev/null || echo "full")
+          DIFF_RANGE=$(cat pr_diff_range.txt 2>/dev/null || echo "")
+          
+          PR_DIFF_RAW=$(cat pr_diff.txt 2>/dev/null || echo "")
+          PR_DIFF_SIZE=$(printf '%s' "$PR_DIFF_RAW" | wc -c)
+          if [ "$PR_DIFF_SIZE" -gt 100000 ]; then
+            PR_DIFF="$(
+              {
+                printf '%s' "$PR_DIFF_RAW" | head -c 50000
+                printf '\n\n... (snip) ...\n\n'
+                printf '%s' "$PR_DIFF_RAW" | tail -c 50000
+              }
+            )"
+          else
+            PR_DIFF="$PR_DIFF_RAW"
+          fi
+          
+          PREV_REVIEW=$(cat prev_merglbot_review.txt 2>/dev/null | head -c 20000 || echo "")
+          NEW_COMMITS=$(cat new_commits.txt 2>/dev/null | head -c 5000 || echo "")
           CHANGED_FILES=$(cat changed_files.txt | head -100 | tr '\n' ', ')
           BUGBOT_FINDINGS=$(cat bugbot_findings.txt)
           BUGBOT_COUNT=$(cat bugbot_count.txt)
@@ -259,11 +418,11 @@ jobs:
           echo "Review depth: $REVIEW_DEPTH"
           
           # Build prompt using printf to file
-          printf '%s\n' "# Merglbot Multi-Model Code Review v3.1" > /tmp/full_prompt.txt
+          printf '%s\n' "# Merglbot Multi-Model Code Review v3.2" > /tmp/full_prompt.txt
           printf '%s\n' "" >> /tmp/full_prompt.txt
           printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence." >> /tmp/full_prompt.txt
           printf '%s\n' "" >> /tmp/full_prompt.txt
-          printf '%s\n' "## MERGLBOT AI AGENT APPENDIX v2.5" >> /tmp/full_prompt.txt
+          printf '%s\n' "## MERGLBOT AI AGENT APPENDIX v2.15" >> /tmp/full_prompt.txt
           printf '%s\n' "" >> /tmp/full_prompt.txt
           printf '%s\n' "This is your authoritative reference for all Merglbot standards." >> /tmp/full_prompt.txt
           printf '%s\n' "" >> /tmp/full_prompt.txt
@@ -272,7 +431,7 @@ jobs:
           printf '%s\n' "1. PR Hygiene: Push na STEJNY PR/branch, nevytvarej duplikaty" >> /tmp/full_prompt.txt
           printf '%s\n' "2. Production: Vse pres PR + schvaleni, nikdy push na main" >> /tmp/full_prompt.txt
           printf '%s\n' "3. Security: Zadne secrets v kodu; jen GitHub secrets; zadne SA JSON - vzdy WIF/OIDC" >> /tmp/full_prompt.txt
-          printf '%s\n' "4. Auth: Session-based v1 (OAuth+Firestore)" >> /tmp/full_prompt.txt
+          printf '%s\n' "4. Auth: Auth V2 Multi-Segment (platform_admin/client/demo) - viz AUTHENTICATION_AUTHORIZATION.md" >> /tmp/full_prompt.txt
           printf '%s\n' "5. Workflow: Plan - Act - Verify" >> /tmp/full_prompt.txt
           printf '%s\n' "6. PR Size: Pod 400 radku (vyjimka jen u cistych docs) - WARP-PR-001" >> /tmp/full_prompt.txt
           printf '%s\n' "7. Commits: Conventional (feat:, fix:, docs:, chore:, ci:)" >> /tmp/full_prompt.txt
@@ -299,9 +458,22 @@ jobs:
           printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md - Platform rules" >> /tmp/full_prompt.txt
           printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md - PR requirements" >> /tmp/full_prompt.txt
           printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/SECURITY.md - Security" >> /tmp/full_prompt.txt
-          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/WARP_SECRETS_NAMING_AND_LOGGING.md - Secrets" >> /tmp/full_prompt.txt
-          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/WARP_GITHUB_ACTIONS_GLOBAL_RULES.md - GHA" >> /tmp/full_prompt.txt
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/MERGLBOT_SECRETS_NAMING_AND_LOGGING.md - Secrets" >> /tmp/full_prompt.txt
+          printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GITHUB_ACTIONS_GLOBAL_RULES.md - GHA" >> /tmp/full_prompt.txt
           printf '%s\n' "- https://github.com/merglbot-public/docs/blob/main/AUTHENTICATION_AUTHORIZATION.md - Auth" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "---" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "## REVIEW SCOPE" >> /tmp/full_prompt.txt
+          printf '%s\n' "" >> /tmp/full_prompt.txt
+          printf '%s\n' "Scope: $DIFF_SCOPE" >> /tmp/full_prompt.txt
+          printf '%s\n' "Commit Range: $DIFF_RANGE" >> /tmp/full_prompt.txt
+          if [ "$DIFF_SCOPE" == "delta" ]; then
+            printf '%s\n' "" >> /tmp/full_prompt.txt
+            printf '%s\n' "IMPORTANT: This is a DELTA review. Focus ONLY on changes introduced in this diff." >> /tmp/full_prompt.txt
+            printf '%s\n' "Do NOT repeat findings about unchanged code unless the new changes re-introduce the issue." >> /tmp/full_prompt.txt
+            printf '%s\n' "Use Previous Review section to mark what is resolved vs still relevant." >> /tmp/full_prompt.txt
+          fi
           printf '%s\n' "" >> /tmp/full_prompt.txt
           printf '%s\n' "---" >> /tmp/full_prompt.txt
           printf '%s\n' "" >> /tmp/full_prompt.txt
@@ -375,11 +547,29 @@ jobs:
           printf '%s\n' "## BUGBOT FINDINGS ($BUGBOT_COUNT sources: $BUGBOT_SOURCES)" >> /tmp/full_prompt.txt
           printf '%s\n' "" >> /tmp/full_prompt.txt
           printf '%s\n' "For EACH finding below, state: Agree/Disagree/Partially" >> /tmp/full_prompt.txt
+          if [ -n "${REVIEW_CUTOFF:-}" ]; then
+            printf '%s\n' "(Note: bugbot findings are filtered to comments after: ${REVIEW_CUTOFF:-unknown})" >> /tmp/full_prompt.txt
+          fi
           printf '%s\n' "" >> /tmp/full_prompt.txt
           printf '%s\n' "$BUGBOT_FINDINGS" >> /tmp/full_prompt.txt
           printf '%s\n' "" >> /tmp/full_prompt.txt
           printf '%s\n' "---" >> /tmp/full_prompt.txt
           printf '%s\n' "" >> /tmp/full_prompt.txt
+          
+          if [ "$DIFF_SCOPE" == "delta" ] && [ -n "$PREV_REVIEW" ]; then
+            printf '%s\n' "## PREVIOUS MERGLBOT REVIEW (for delta context)" >> /tmp/full_prompt.txt
+            printf '%s\n' "" >> /tmp/full_prompt.txt
+            printf '%s\n' "$PREV_REVIEW" >> /tmp/full_prompt.txt
+            printf '%s\n' "" >> /tmp/full_prompt.txt
+            printf '%s\n' "---" >> /tmp/full_prompt.txt
+            printf '%s\n' "" >> /tmp/full_prompt.txt
+            printf '%s\n' "## NEW COMMITS SINCE PREVIOUS REVIEW" >> /tmp/full_prompt.txt
+            printf '%s\n' "" >> /tmp/full_prompt.txt
+            printf '%s\n' "$NEW_COMMITS" >> /tmp/full_prompt.txt
+            printf '%s\n' "" >> /tmp/full_prompt.txt
+            printf '%s\n' "---" >> /tmp/full_prompt.txt
+            printf '%s\n' "" >> /tmp/full_prompt.txt
+          fi
           printf '%s\n' "## PR DIFF" >> /tmp/full_prompt.txt
           printf '%s\n' "" >> /tmp/full_prompt.txt
           echo '```diff' >> /tmp/full_prompt.txt
@@ -395,64 +585,124 @@ jobs:
           echo "Prompt size: $PROMPT_SIZE chars"
           
           # ANTHROPIC CALL
-          echo "Calling Anthropic ($ANTHROPIC_MODEL)..."
+          echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
           
-          jq -n \
-            --arg model "$ANTHROPIC_MODEL" \
-            --arg prompt "$FULL_PROMPT" \
-            --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
-            '{
-              model: $model,
-              max_tokens: $max_tokens,
-              temperature: 0.2,
-              messages: [{role: "user", content: $prompt}]
-            }' > /tmp/anthropic_payload.json
+          ANTHROPIC_MODEL_USED=""
+          for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
+            if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
+              continue
+            fi
+            if [ "$MODEL_TO_TRY" = "$ANTHROPIC_MODEL_USED" ]; then
+              continue
+            fi
+            echo "  → Trying Anthropic model: $MODEL_TO_TRY"
           
-          ANTHROPIC_RESP=$(curl -s https://api.anthropic.com/v1/messages \
-            -H "content-type: application/json" \
-            -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: $ANTHROPIC_API_VERSION" \
-            -d @/tmp/anthropic_payload.json)
-          
-          echo "Anthropic Response: $(echo "$ANTHROPIC_RESP" | wc -c) chars"
-          
-          if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
-            echo "ERROR: $(echo "$ANTHROPIC_RESP" | jq -r '.error.message')"
-            echo "API_ERROR" > anthropic_review.txt
-          else
-            echo "Success"
-            ANTHROPIC_CONTENT=$(echo "$ANTHROPIC_RESP" | jq -r '.content[0].text // "EMPTY"')
+            jq -n \
+              --arg model "$MODEL_TO_TRY" \
+              --arg prompt "$FULL_PROMPT" \
+              --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
+              '{
+                model: $model,
+                max_tokens: $max_tokens,
+                temperature: 0.2,
+                messages: [{role: "user", content: $prompt}]
+              }' > /tmp/anthropic_payload.json
+            
+            set +e
+            ANTHROPIC_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.anthropic.com/v1/messages \
+              -H "content-type: application/json" \
+              -H "x-api-key: $ANTHROPIC_API_KEY" \
+              -H "anthropic-version: $ANTHROPIC_API_VERSION" \
+              -d @/tmp/anthropic_payload.json)
+            CURL_EXIT=$?
+            set -e
+            
+            if [ "$CURL_EXIT" -ne 0 ] || ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
+              echo "  ERROR: Anthropic request failed or returned non-JSON (curl exit=$CURL_EXIT)"
+              continue
+            fi
+            
+            if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
+              echo "  ERROR: $(echo "$ANTHROPIC_RESP" | jq -r '.error.message')"
+              continue
+            fi
+            
+            ANTHROPIC_CONTENT=$(echo "$ANTHROPIC_RESP" | jq -r '.content[0].text // empty')
+            if [ -z "$ANTHROPIC_CONTENT" ] || [ "$ANTHROPIC_CONTENT" = "null" ]; then
+              echo "  ERROR: Anthropic response contained no content"
+              continue
+            fi
+            
+            ANTHROPIC_MODEL_USED="$MODEL_TO_TRY"
+            echo "Success (model: $ANTHROPIC_MODEL_USED)"
             echo "Words: $(echo "$ANTHROPIC_CONTENT" | wc -w)"
             echo "$ANTHROPIC_CONTENT" > anthropic_review.txt
+            break
+          done
+          
+          if [ ! -s anthropic_review.txt ]; then
+            echo "API_ERROR" > anthropic_review.txt
           fi
           
+          if [ -z "$ANTHROPIC_MODEL_USED" ]; then
+            ANTHROPIC_MODEL_USED="$ANTHROPIC_MODEL"
+          fi
+          echo "ANTHROPIC_MODEL_USED=$ANTHROPIC_MODEL_USED" >> "$GITHUB_ENV"
+          
           # OPENAI CALL
-          echo "Calling OpenAI ($OPENAI_MODEL)..."
+          echo "Calling OpenAI (requested: $OPENAI_MODEL)..."
           
-          jq -n \
-            --arg model "$OPENAI_MODEL" \
-            --arg prompt "$FULL_PROMPT" \
-            --argjson max_tokens "$MAX_TOKENS_OPENAI" \
-            '{
-              model: $model,
-              messages: [{role: "user", content: $prompt}],
-              max_completion_tokens: $max_tokens,
-              reasoning_effort: "high"
-            }' > /tmp/openai_payload.json
+          OPENAI_MODEL_USED=""
+          for MODEL_TO_TRY in "$OPENAI_MODEL" "gpt-5.2" "gpt-5.1" "gpt-5" "gpt-4-turbo"; do
+            if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
+              continue
+            fi
+            if [ "$MODEL_TO_TRY" = "$OPENAI_MODEL_USED" ]; then
+              continue
+            fi
+            echo "  → Trying OpenAI model: $MODEL_TO_TRY"
           
-          OPENAI_RESP=$(curl -s https://api.openai.com/v1/chat/completions \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $OPENAI_API_KEY" \
-            -d @/tmp/openai_payload.json)
-          
-          echo "OpenAI Response: $(echo "$OPENAI_RESP" | wc -c) chars"
-          
-          if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
-            echo "ERROR: $(echo "$OPENAI_RESP" | jq -r '.error.message')"
-            echo "API_ERROR" > openai_review.txt
-          else
-            echo "Success"
-            # Debug: show usage stats
+            jq -n \
+              --arg model "$MODEL_TO_TRY" \
+              --arg prompt "$FULL_PROMPT" \
+              --argjson max_tokens "$MAX_TOKENS_OPENAI" \
+              '{
+                model: $model,
+                messages: [{role: "user", content: $prompt}],
+                max_completion_tokens: $max_tokens,
+                reasoning_effort: "high"
+              }' > /tmp/openai_payload.json
+            
+            set +e
+            OPENAI_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.openai.com/v1/chat/completions \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $OPENAI_API_KEY" \
+              -d @/tmp/openai_payload.json)
+            CURL_EXIT=$?
+            set -e
+            
+            if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+              echo "  ERROR: OpenAI request failed or returned non-JSON (curl exit=$CURL_EXIT)"
+              continue
+            fi
+            
+            if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
+              echo "  ERROR: $(echo "$OPENAI_RESP" | jq -r '.error.message')"
+              continue
+            fi
+            
+            CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
+            if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
+              CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.refusal // empty')
+            fi
+            if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
+              echo "  ERROR: OpenAI response contained no content"
+              continue
+            fi
+            
+            OPENAI_MODEL_USED="$MODEL_TO_TRY"
+            echo "Success (model: $OPENAI_MODEL_USED)"
+            
             TOTAL_TOKENS=$(echo "$OPENAI_RESP" | jq -r '.usage.total_tokens // 0')
             PROMPT_TOKENS=$(echo "$OPENAI_RESP" | jq -r '.usage.prompt_tokens // 0')
             COMPLETION_TOKENS=$(echo "$OPENAI_RESP" | jq -r '.usage.completion_tokens // 0')
@@ -463,29 +713,30 @@ jobs:
             echo "    Completion: $COMPLETION_TOKENS (reasoning: $REASONING_TOKENS, output: $OUTPUT_TOKENS)"
             echo "    Total: $TOTAL_TOKENS"
             
-            CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
-            if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
-              echo "  WARNING: No content in response, checking for refusal..."
-              CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.refusal // empty')
-              if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
-                echo "  No refusal either. Response structure:"
-                echo "$OPENAI_RESP" | jq '.choices[0].message | keys' 2>/dev/null || true
-                CONTENT="EMPTY"
-              fi
-            fi
             echo "Words: $(echo "$CONTENT" | wc -w)"
             echo "$CONTENT" > openai_review.txt
+            break
+          done
+          
+          if [ ! -s openai_review.txt ]; then
+            echo "API_ERROR" > openai_review.txt
           fi
+          
+          if [ -z "$OPENAI_MODEL_USED" ]; then
+            OPENAI_MODEL_USED="$OPENAI_MODEL"
+          fi
+          echo "OPENAI_MODEL_USED=$OPENAI_MODEL_USED" >> "$GITHUB_ENV"
           
           echo "========================================="
           echo "STEP 1 COMPLETE"
           echo "========================================="
       
       - name: Step 2 - Intelligent Synthesis
+        if: steps.context.outputs.skip_review != 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ github.event.inputs.openai_model || 'gpt-5.1' }}
-          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}
+          OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
+          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
         run: |
           set -euo pipefail
           
@@ -546,11 +797,14 @@ jobs:
           printf '%s\n' "## PR Context" >> /tmp/synthesis_prompt.txt
           printf '%s\n' "Title: $PR_TITLE" >> /tmp/synthesis_prompt.txt
           printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## Anthropic Review ($ANTHROPIC_MODEL)" >> /tmp/synthesis_prompt.txt
+          OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
+          ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
+          
+          printf '%s\n' "## Anthropic Review ($ANTHROPIC_MODEL_FINAL)" >> /tmp/synthesis_prompt.txt
           printf '%s\n' "" >> /tmp/synthesis_prompt.txt
           printf '%s\n' "$ANTHROPIC_REVIEW" >> /tmp/synthesis_prompt.txt
           printf '%s\n' "" >> /tmp/synthesis_prompt.txt
-          printf '%s\n' "## OpenAI Review ($OPENAI_MODEL - HIGH reasoning)" >> /tmp/synthesis_prompt.txt
+          printf '%s\n' "## OpenAI Review ($OPENAI_MODEL_FINAL - HIGH reasoning)" >> /tmp/synthesis_prompt.txt
           printf '%s\n' "" >> /tmp/synthesis_prompt.txt
           printf '%s\n' "$OPENAI_REVIEW" >> /tmp/synthesis_prompt.txt
           printf '%s\n' "" >> /tmp/synthesis_prompt.txt
@@ -559,7 +813,7 @@ jobs:
           SYNTHESIS_PROMPT=$(cat /tmp/synthesis_prompt.txt)
           
           jq -n \
-            --arg model "$OPENAI_MODEL" \
+            --arg model "$OPENAI_MODEL_FINAL" \
             --arg prompt "$SYNTHESIS_PROMPT" \
             --argjson max_tokens "$MAX_SYNTH_TOKENS" \
             '{
@@ -601,10 +855,11 @@ jobs:
           echo "========================================="
       
       - name: Post Review Comment
+        if: steps.context.outputs.skip_review != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}
-          OPENAI_MODEL: ${{ github.event.inputs.openai_model || 'gpt-5.1' }}
+          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
+          OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
         run: |
           set -euo pipefail
           
@@ -612,6 +867,13 @@ jobs:
           BUGBOT_COUNT=$(cat bugbot_count.txt 2>/dev/null || echo "0")
           BUGBOT_SOURCES=$(cat bugbot_sources.txt 2>/dev/null || echo "none")
           REVIEW_MODE="${{ env.REVIEW_MODE }}"
+          DIFF_SCOPE=$(cat pr_diff_scope.txt 2>/dev/null || echo "full")
+          DIFF_RANGE=$(cat pr_diff_range.txt 2>/dev/null || echo "")
+          PR_HEAD_SHA=$(cat pr_head_sha.txt 2>/dev/null || echo "")
+          PREV_REVIEW_HEAD_SHA=$(cat prev_review_head_sha.txt 2>/dev/null || echo "")
+          
+          OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
+          ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
           
           ANTHROPIC_WORDS=$(cat anthropic_review.txt 2>/dev/null | wc -w || echo "0")
           OPENAI_WORDS=$(cat openai_review.txt 2>/dev/null | wc -w || echo "0")
@@ -640,15 +902,18 @@ jobs:
               echo ""
               echo "| Phase | Model | Config |"
               echo "|-------|-------|--------|"
-              echo "| Primary Analysis | Anthropic \`$ANTHROPIC_MODEL\` | temp=0.2 |"
-              echo "| Secondary Analysis | OpenAI \`$OPENAI_MODEL\` | reasoning=HIGH 🧠 |"
-              echo "| Final Synthesis | OpenAI \`$OPENAI_MODEL\` | reasoning=HIGH 🧠 |"
+              echo "| Primary Analysis | Anthropic \`$ANTHROPIC_MODEL_FINAL\` | temp=0.2 |"
+              echo "| Secondary Analysis | OpenAI \`$OPENAI_MODEL_FINAL\` | reasoning=HIGH 🧠 |"
+              echo "| Final Synthesis | OpenAI \`$OPENAI_MODEL_FINAL\` | reasoning=HIGH 🧠 |"
               echo ""
               echo "### Review Statistics"
               echo ""
               echo "| Metric | Value |"
               echo "|--------|-------|"
               echo "| Review Mode | \`$REVIEW_MODE\` |"
+              echo "| Diff Scope | \`$DIFF_SCOPE\` |"
+              echo "| Diff Range | \`$DIFF_RANGE\` |"
+              echo "| Head SHA | \`${PR_HEAD_SHA:0:12}\` |"
               echo "| Anthropic Output | $ANTHROPIC_WORDS words |"
               echo "| OpenAI Output | $OPENAI_WORDS words |"
               echo "| Final Review | $FINAL_WORDS words |"
@@ -664,12 +929,19 @@ jobs:
               echo "### Context Used"
               echo ""
               echo "- Full PR description"
-              echo "- Complete diff (up to 100KB)"
+              echo "- Diff scope: \`$DIFF_SCOPE\` (\`$DIFF_RANGE\`)"
               echo "- Changed files list"
               echo "- Bugbot findings ($BUGBOT_COUNT sources)"
-              echo "- Merglbot Appendix v2.5 (WARP rules)"
+              echo "- Merglbot Appendix v2.15 (WARP rules)"
               echo ""
               echo "</details>"
+              echo ""
+              echo "<!-- MERGLBOT_PR_ASSISTANT_V3 -->"
+              echo "<!-- MERGLBOT_REVIEW_HEAD_SHA: $PR_HEAD_SHA -->"
+              echo "<!-- MERGLBOT_PREV_REVIEW_HEAD_SHA: $PREV_REVIEW_HEAD_SHA -->"
+              echo "<!-- MERGLBOT_DIFF_SCOPE: $DIFF_SCOPE -->"
+              echo "<!-- MERGLBOT_DIFF_RANGE: $DIFF_RANGE -->"
+              echo "<!-- MERGLBOT_RUN_ID: ${{ github.run_id }} -->"
               echo ""
               echo "---"
               echo ""
@@ -701,6 +973,17 @@ jobs:
       
       - name: Workflow Summary
         run: |
+          SKIPPED="${{ steps.context.outputs.skip_review }}"
+          if [ "$SKIPPED" == "true" ]; then
+            {
+              echo "## 🤖 Merglbot PR Assistant v3 - Summary"
+              echo ""
+              echo "- **PR**: #${{ env.PR_NUMBER }}"
+              echo "- **Status**: Skipped (no new commits since last review)"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          
           BUGBOT_COUNT=$(cat bugbot_count.txt 2>/dev/null || echo "0")
           BUGBOT_SOURCES=$(cat bugbot_sources.txt 2>/dev/null || echo "none")
           
@@ -730,15 +1013,18 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       
       - name: Save Review Metrics (Feedback Loop)
-        if: always()
+        if: always() && steps.context.outputs.skip_review != 'true'
         env:
-          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || 'claude-sonnet-4-5-20250929' }}
-          OPENAI_MODEL: ${{ github.event.inputs.openai_model || 'gpt-5.1' }}
+          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
+          OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
         run: |
           # Create metrics JSON for feedback loop analysis
           TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
           PR_NUM="${{ env.PR_NUMBER }}"
           REVIEW_MODE="${{ env.REVIEW_MODE }}"
+          
+          ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
+          OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
           
           ANTHROPIC_WORDS=$(cat anthropic_review.txt 2>/dev/null | wc -w || echo 0)
           OPENAI_WORDS=$(cat openai_review.txt 2>/dev/null | wc -w || echo 0)
@@ -771,8 +1057,8 @@ jobs:
             "trigger": "${{ github.event_name }}",
             "run_id": "${{ github.run_id }}",
             "models": {
-              "anthropic": "$ANTHROPIC_MODEL",
-              "openai": "$OPENAI_MODEL"
+              "anthropic": "$ANTHROPIC_MODEL_FINAL",
+              "openai": "$OPENAI_MODEL_FINAL"
             },
             "output": {
               "anthropic_words": $ANTHROPIC_WORDS,
@@ -795,7 +1081,7 @@ jobs:
           cat metrics/review-metrics.json
       
       - name: Upload Metrics Artifact
-        if: always()
+        if: always() && steps.context.outputs.skip_review != 'true'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: review-metrics-${{ env.PR_NUMBER }}-${{ github.run_id }}
