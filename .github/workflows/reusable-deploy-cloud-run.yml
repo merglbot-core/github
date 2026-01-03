@@ -315,13 +315,13 @@ jobs:
                   printf '%s\n' 'k = "run.googleapis.com/secrets"' >> /tmp/inject_xproj_secret.py
                   printf '%s\n' 'raw = str(ann.get(k, "") or "")' >> /tmp/inject_xproj_secret.py
                   printf '%s\n' 'mp = {}' >> /tmp/inject_xproj_secret.py
-                  printf '%s\n' 'for ln in raw.splitlines():' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'for ln in raw.replace("\n", ",").split(","):' >> /tmp/inject_xproj_secret.py
                   printf '%s\n' '    ln = ln.strip()' >> /tmp/inject_xproj_secret.py
                   printf '%s\n' '    if not ln or ":" not in ln: continue' >> /tmp/inject_xproj_secret.py
                   printf '%s\n' '    a, b = ln.split(":", 1)' >> /tmp/inject_xproj_secret.py
                   printf '%s\n' '    mp[a.strip()] = b.strip()' >> /tmp/inject_xproj_secret.py
                   printf '%s\n' 'mp[env_var] = secret_resource' >> /tmp/inject_xproj_secret.py
-                  printf '%s\n' 'ann[k] = "\n".join([f"{a}:{b}" for a,b in mp.items()])' >> /tmp/inject_xproj_secret.py
+                  printf '%s\n' 'ann[k] = ",".join([f"{a}:{b}" for a,b in mp.items()])' >> /tmp/inject_xproj_secret.py
                   printf '%s\n' 'containers = svc["spec"]["template"]["spec"]["containers"]' >> /tmp/inject_xproj_secret.py
                   printf '%s\n' 'env_list = containers[0].get("env", [])' >> /tmp/inject_xproj_secret.py
                   printf '%s\n' 'env_list = [e for e in env_list if e.get("name") != env_var]' >> /tmp/inject_xproj_secret.py
@@ -379,13 +379,13 @@ jobs:
               printf '%s\n' 'k = "run.googleapis.com/secrets"' >> /tmp/inject_xproj_secret.py
               printf '%s\n' 'raw = str(ann.get(k, "") or "")' >> /tmp/inject_xproj_secret.py
               printf '%s\n' 'mp = {}' >> /tmp/inject_xproj_secret.py
-              printf '%s\n' 'for ln in raw.splitlines():' >> /tmp/inject_xproj_secret.py
+              printf '%s\n' 'for ln in raw.replace("\n", ",").split(","):' >> /tmp/inject_xproj_secret.py
               printf '%s\n' '    ln = ln.strip()' >> /tmp/inject_xproj_secret.py
               printf '%s\n' '    if not ln or ":" not in ln: continue' >> /tmp/inject_xproj_secret.py
               printf '%s\n' '    a, b = ln.split(":", 1)' >> /tmp/inject_xproj_secret.py
               printf '%s\n' '    mp[a.strip()] = b.strip()' >> /tmp/inject_xproj_secret.py
               printf '%s\n' 'mp[env_var] = secret_resource' >> /tmp/inject_xproj_secret.py
-              printf '%s\n' 'ann[k] = "\n".join([f"{a}:{b}" for a,b in mp.items()])' >> /tmp/inject_xproj_secret.py
+              printf '%s\n' 'ann[k] = ",".join([f"{a}:{b}" for a,b in mp.items()])' >> /tmp/inject_xproj_secret.py
               printf '%s\n' 'containers = svc["spec"]["template"]["spec"]["containers"]' >> /tmp/inject_xproj_secret.py
               printf '%s\n' 'env_list = containers[0].get("env", [])' >> /tmp/inject_xproj_secret.py
               printf '%s\n' 'env_list = [e for e in env_list if e.get("name") != env_var]' >> /tmp/inject_xproj_secret.py
