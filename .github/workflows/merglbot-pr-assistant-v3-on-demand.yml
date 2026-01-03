@@ -181,14 +181,15 @@ jobs:
           echo "Base SHA: ${PR_BASE_SHA:0:12}"
           echo "Head SHA: ${PR_HEAD_SHA:0:12}"
           
-          echo "$PR_TITLE" > pr_title.txt
-          echo "$PR_BODY" > pr_body.txt
-          echo "$PR_AUTHOR" > pr_author.txt
-          echo "$PR_ADDITIONS" > pr_additions.txt
-          echo "$PR_DELETIONS" > pr_deletions.txt
-          echo "$PR_FILES" > pr_files_count.txt
-          echo "$PR_BASE_SHA" > pr_base_sha.txt
-          echo "$PR_HEAD_SHA" > pr_head_sha.txt
+          # Use printf to avoid echo interpreting user-controlled content as flags (-n/-e)
+          printf '%s\n' "$PR_TITLE" > pr_title.txt
+          printf '%s\n' "$PR_BODY" > pr_body.txt
+          printf '%s\n' "$PR_AUTHOR" > pr_author.txt
+          printf '%s\n' "$PR_ADDITIONS" > pr_additions.txt
+          printf '%s\n' "$PR_DELETIONS" > pr_deletions.txt
+          printf '%s\n' "$PR_FILES" > pr_files_count.txt
+          printf '%s\n' "$PR_BASE_SHA" > pr_base_sha.txt
+          printf '%s\n' "$PR_HEAD_SHA" > pr_head_sha.txt
           
           echo "PR_BASE_SHA=$PR_BASE_SHA" >> "$GITHUB_ENV"
           echo "PR_HEAD_SHA=$PR_HEAD_SHA" >> "$GITHUB_ENV"
@@ -211,7 +212,7 @@ jobs:
           
           PREV_REVIEW_HEAD_SHA=""
           if [ -n "$LAST_REVIEW_BODY" ]; then
-            PREV_REVIEW_HEAD_SHA=$(printf '%s' "$LAST_REVIEW_BODY" | sed -n 's/.*MERGLBOT_REVIEW_HEAD_SHA: \\([0-9a-f]\\{7,40\\}\\).*/\\1/p' | head -n 1 || true)
+            PREV_REVIEW_HEAD_SHA=$(printf '%s' "$LAST_REVIEW_BODY" | sed -n 's/.*MERGLBOT_REVIEW_HEAD_SHA: \([0-9a-f]\{7,40\}\).*/\1/p' | head -n 1 || true)
           fi
           
           DIFF_SCOPE_MODE="${DIFF_SCOPE_MODE:-auto}"
@@ -230,7 +231,7 @@ jobs:
           
           if [ "$SKIP_REVIEW" == "true" ]; then
             echo "⏭️ No new commits since last Merglbot review ($PREV_REVIEW_HEAD_SHA)"
-            echo "pr_diff_scope=none" > pr_diff_scope.txt
+            echo "none" > pr_diff_scope.txt
             echo "$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" > pr_diff_range.txt
             echo "" > new_commits.txt
             echo "" > pr_diff.txt
@@ -267,7 +268,7 @@ jobs:
               gh pr diff "$PR_NUM" > pr_diff.txt
             fi
             
-            echo "pr_diff_scope=$DIFF_SCOPE" > pr_diff_scope.txt
+            echo "$DIFF_SCOPE" > pr_diff_scope.txt
             echo "$DIFF_RANGE" > pr_diff_range.txt
             echo "DIFF_SCOPE=$DIFF_SCOPE" >> "$GITHUB_ENV"
             echo "DIFF_RANGE=$DIFF_RANGE" >> "$GITHUB_ENV"
@@ -345,12 +346,12 @@ jobs:
             exit 0
           fi
           
-          cat > comment.md << EOF
-          ## 🤖 Merglbot PR Assistant v3
-          
-          ⏭️ No new commits since last Merglbot review (\`${PREV_SHA:0:12}\`).  
-          Current head: \`${HEAD_SHA:0:12}\`.
-          EOF
+          {
+            printf '%s\n' "## 🤖 Merglbot PR Assistant v3"
+            printf '%s\n' ""
+            printf '%s\n' "⏭️ No new commits since last Merglbot review (\\`${PREV_SHA:0:12}\\`).  "
+            printf '%s\n' "Current head: \\`${HEAD_SHA:0:12}\\`."
+          } > comment.md
           
           gh pr comment "$PR_NUM" --body-file comment.md
           
@@ -626,13 +627,15 @@ jobs:
           echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
           
           ANTHROPIC_MODEL_USED=""
+          ANTHROPIC_MODELS_TRIED="|"
           for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
             if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
               continue
             fi
-            if [ "$MODEL_TO_TRY" = "$ANTHROPIC_MODEL_USED" ]; then
-              continue
-            fi
+            case "$ANTHROPIC_MODELS_TRIED" in
+              *"|$MODEL_TO_TRY|"*) continue ;;
+            esac
+            ANTHROPIC_MODELS_TRIED="${ANTHROPIC_MODELS_TRIED}${MODEL_TO_TRY}|"
             echo "  → Trying Anthropic model: $MODEL_TO_TRY"
           
             jq -n \
@@ -691,25 +694,39 @@ jobs:
           echo "Calling OpenAI (requested: $OPENAI_MODEL)..."
           
           OPENAI_MODEL_USED=""
+          OPENAI_MODELS_TRIED="|"
           for MODEL_TO_TRY in "$OPENAI_MODEL" "gpt-5.2" "gpt-5.1" "gpt-5" "gpt-4-turbo"; do
             if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
               continue
             fi
-            if [ "$MODEL_TO_TRY" = "$OPENAI_MODEL_USED" ]; then
-              continue
-            fi
+            case "$OPENAI_MODELS_TRIED" in
+              *"|$MODEL_TO_TRY|"*) continue ;;
+            esac
+            OPENAI_MODELS_TRIED="${OPENAI_MODELS_TRIED}${MODEL_TO_TRY}|"
             echo "  → Trying OpenAI model: $MODEL_TO_TRY"
           
-            jq -n \
-              --arg model "$MODEL_TO_TRY" \
-              --arg prompt "$FULL_PROMPT" \
-              --argjson max_tokens "$MAX_TOKENS_OPENAI" \
-              '{
-                model: $model,
-                messages: [{role: "user", content: $prompt}],
-                max_completion_tokens: $max_tokens,
-                reasoning_effort: "high"
-              }' > /tmp/openai_payload.json
+            if [ "$MODEL_TO_TRY" = "gpt-4-turbo" ]; then
+              jq -n \
+                --arg model "$MODEL_TO_TRY" \
+                --arg prompt "$FULL_PROMPT" \
+                --argjson max_tokens "$MAX_TOKENS_OPENAI" \
+                '{
+                  model: $model,
+                  messages: [{role: "user", content: $prompt}],
+                  max_tokens: $max_tokens
+                }' > /tmp/openai_payload.json
+            else
+              jq -n \
+                --arg model "$MODEL_TO_TRY" \
+                --arg prompt "$FULL_PROMPT" \
+                --argjson max_tokens "$MAX_TOKENS_OPENAI" \
+                '{
+                  model: $model,
+                  messages: [{role: "user", content: $prompt}],
+                  max_completion_tokens: $max_tokens,
+                  reasoning_effort: "high"
+                }' > /tmp/openai_payload.json
+            fi
             
             set +e
             OPENAI_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.openai.com/v1/chat/completions \
@@ -785,6 +802,7 @@ jobs:
           ANTHROPIC_REVIEW=$(< anthropic_review.txt)
           OPENAI_REVIEW=$(< openai_review.txt)
           PR_TITLE=$(< pr_title.txt)
+          PR_BODY=$(< pr_body.txt)
           
           echo "Input Reviews:"
           echo "  Anthropic: $(echo "$ANTHROPIC_REVIEW" | wc -w) words"
@@ -833,6 +851,9 @@ jobs:
           printf '%s\n' "## PR Context"
           printf '%s\n' "Title: $PR_TITLE"
           printf '%s\n' ""
+          printf '%s\n' "Description:"
+          printf '%s\n' "$PR_BODY"
+          printf '%s\n' ""
           OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
           
@@ -849,37 +870,68 @@ jobs:
           } > /tmp/synthesis_prompt.txt
           SYNTHESIS_PROMPT=$(< /tmp/synthesis_prompt.txt)
           
-          jq -n \
-            --arg model "$OPENAI_MODEL_FINAL" \
-            --arg prompt "$SYNTHESIS_PROMPT" \
-            --argjson max_tokens "$MAX_SYNTH_TOKENS" \
-            '{
-              model: $model,
-              messages: [
-                {role: "system", content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
-                {role: "user", content: $prompt}
-              ],
-              max_completion_tokens: $max_tokens,
-              reasoning_effort: "high"
-            }' > /tmp/synthesis_payload.json
+          if [ "$OPENAI_MODEL_FINAL" = "gpt-4-turbo" ]; then
+            jq -n \
+              --arg model "$OPENAI_MODEL_FINAL" \
+              --arg prompt "$SYNTHESIS_PROMPT" \
+              --argjson max_tokens "$MAX_SYNTH_TOKENS" \
+              '{
+                model: $model,
+                messages: [
+                  {role: "system", content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
+                  {role: "user", content: $prompt}
+                ],
+                max_tokens: $max_tokens
+              }' > /tmp/synthesis_payload.json
+          else
+            jq -n \
+              --arg model "$OPENAI_MODEL_FINAL" \
+              --arg prompt "$SYNTHESIS_PROMPT" \
+              --argjson max_tokens "$MAX_SYNTH_TOKENS" \
+              '{
+                model: $model,
+                messages: [
+                  {role: "system", content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
+                  {role: "user", content: $prompt}
+                ],
+                max_completion_tokens: $max_tokens,
+                reasoning_effort: "high"
+              }' > /tmp/synthesis_payload.json
+          fi
           
           echo "Calling OpenAI for synthesis..."
           
-          SYNTHESIS_RESP=$(curl -s https://api.openai.com/v1/chat/completions \
+          set +e
+          SYNTHESIS_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.openai.com/v1/chat/completions \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $OPENAI_API_KEY" \
             -d @/tmp/synthesis_payload.json)
+          CURL_EXIT=$?
+          set -e
           
           echo "Synthesis Response: ${#SYNTHESIS_RESP} chars"
           
-          if echo "$SYNTHESIS_RESP" | jq -e ".error" > /dev/null 2>&1; then
+          FALLBACK_REVIEW_FILE="anthropic_review.txt"
+          if [ ! -s anthropic_review.txt ] || grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null; then
+            if [ -s openai_review.txt ] && ! grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
+              FALLBACK_REVIEW_FILE="openai_review.txt"
+            fi
+          fi
+          
+          if [ "$CURL_EXIT" -ne 0 ] || ! echo "$SYNTHESIS_RESP" | jq -e . > /dev/null 2>&1; then
+            echo "ERROR: Synthesis request failed or returned non-JSON (curl exit=$CURL_EXIT)"
+            cp "$FALLBACK_REVIEW_FILE" final_review.txt
+          elif echo "$SYNTHESIS_RESP" | jq -e ".error" > /dev/null 2>&1; then
             echo "ERROR: $(echo "$SYNTHESIS_RESP" | jq -r '.error.message')"
-            cp anthropic_review.txt final_review.txt
+            cp "$FALLBACK_REVIEW_FILE" final_review.txt
           else
             echo "Success"
             CONTENT=$(echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.content // empty')
             if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
-              cp anthropic_review.txt final_review.txt
+              CONTENT=$(echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.refusal // empty')
+            fi
+            if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
+              cp "$FALLBACK_REVIEW_FILE" final_review.txt
             else
               echo "Words: $(echo "$CONTENT" | wc -w)"
               echo "$CONTENT" > final_review.txt
@@ -1105,23 +1157,42 @@ jobs:
             BUGBOT_COUNT=$(< bugbot_count.txt)
           fi
           
-          # Count findings by severity
-          CRITICAL_COUNT=$(grep -c "Critical\|🔴" final_review.txt 2>/dev/null || echo 0)
-          HIGH_COUNT=$(grep -c "High Priority\|🟠" final_review.txt 2>/dev/null || echo 0)
-          MEDIUM_COUNT=$(grep -c "Medium Priority\|🟡" final_review.txt 2>/dev/null || echo 0)
-          LOW_COUNT=$(grep -c "Low Priority\|🟢" final_review.txt 2>/dev/null || echo 0)
+          count_section_checkboxes() {
+            local section_prefix="$1"
+            awk -v prefix="$section_prefix" '
+              BEGIN { IGNORECASE=1; in_section=0; count=0 }
+              /^### / {
+                in_section = ($0 ~ ("^### " prefix))
+                next
+              }
+              in_section && $0 ~ /^[[:space:]]*[-*][[:space:]]*\\[[ xX]\\]/ { count++ }
+              END { print count+0 }
+            ' final_review.txt 2>/dev/null || echo 0
+          }
           
-          # Detect verdict
-          if grep -qi "APPROVE" final_review.txt 2>/dev/null; then
-            VERDICT="APPROVE"
-          elif grep -qi "CHANGES NEEDED" final_review.txt 2>/dev/null; then
-            VERDICT="CHANGES_NEEDED"
-          else
-            VERDICT="UNKNOWN"
+          CRITICAL_COUNT=$(count_section_checkboxes "Critical")
+          HIGH_COUNT=$(count_section_checkboxes "High Priority")
+          MEDIUM_COUNT=$(count_section_checkboxes "Medium Priority")
+          LOW_COUNT=$(count_section_checkboxes "Low Priority")
+          
+          VERDICT="UNKNOWN"
+          VERDICT_LINE=$(grep -im1 '^Verdict:' final_review.txt 2>/dev/null || true)
+          if [ -n "$VERDICT_LINE" ]; then
+            VERDICT_VALUE=$(printf '%s' "$VERDICT_LINE" | sed -E 's/^Verdict:[[:space:]]*//I')
+            if echo "$VERDICT_VALUE" | grep -qi '^changes[[:space:]]+needed'; then
+              VERDICT="CHANGES_NEEDED"
+            elif echo "$VERDICT_VALUE" | grep -qi '^approve'; then
+              VERDICT="APPROVE"
+            fi
           fi
           
           # Create metrics file
           mkdir -p metrics
+          BUGBOT_SOURCES="none"
+          if [ -f bugbot_sources.txt ]; then
+            BUGBOT_SOURCES=$(< bugbot_sources.txt)
+          fi
+          
           cat > metrics/review-metrics.json << METRICS_EOF
           {
             "timestamp": "$TIMESTAMP",
@@ -1146,7 +1217,10 @@ jobs:
               "low": $LOW_COUNT
             },
             "verdict": "$VERDICT",
-            "bugbot_sources": $BUGBOT_COUNT,
+            "bugbot": {
+              "source_count": $BUGBOT_COUNT,
+              "sources": "$BUGBOT_SOURCES"
+            },
             "status": "${{ job.status }}"
           }
           METRICS_EOF
