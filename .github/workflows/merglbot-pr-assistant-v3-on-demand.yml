@@ -72,54 +72,59 @@ jobs:
       should_run: ${{ steps.get_pr.outputs.should_run }}
       review_mode: ${{ steps.get_pr.outputs.review_mode }}
       diff_scope: ${{ steps.get_pr.outputs.diff_scope }}
-    steps:
-      - name: Get PR Number and Mode
-        id: get_pr
-        env:
-          # Security: Use env var to avoid command injection from comment body
-          COMMENT_CONTAINS_LIGHT: ${{ contains(github.event.comment.body, '--light') }}
-          COMMENT_CONTAINS_FULL_DIFF: ${{ contains(github.event.comment.body, '--full-diff') }}
-          IS_WORKFLOW_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
-          INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
-          INPUT_REVIEW_MODE: ${{ github.event.inputs.review_mode }}
-          INPUT_DIFF_SCOPE: ${{ github.event.inputs.diff_scope }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-        run: |
-          if [ "$IS_WORKFLOW_DISPATCH" == "true" ]; then
-            # Validate PR number is numeric (security)
-            if ! [[ "$INPUT_PR_NUMBER" =~ ^[0-9]+$ ]]; then
-              echo "::error::Invalid PR number: must be numeric"
-              exit 1
-            fi
-            echo "pr_number=$INPUT_PR_NUMBER" >> "$GITHUB_OUTPUT"
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "review_mode=${INPUT_REVIEW_MODE:-full}" >> "$GITHUB_OUTPUT"
-            echo "diff_scope=${INPUT_DIFF_SCOPE:-auto}" >> "$GITHUB_OUTPUT"
-            echo "✅ Manual trigger for PR #$INPUT_PR_NUMBER (mode: ${INPUT_REVIEW_MODE:-full})"
-          else
-            echo "pr_number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-            # Security: Use GitHub native contains() instead of shell grep
-            if [ "$COMMENT_CONTAINS_LIGHT" == "true" ]; then
-              echo "review_mode=light" >> "$GITHUB_OUTPUT"
-              echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: LIGHT)"
-            else
-              echo "review_mode=full" >> "$GITHUB_OUTPUT"
-              echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: FULL)"
-            fi
-            
-            if [ "$COMMENT_CONTAINS_FULL_DIFF" == "true" ]; then
-              echo "diff_scope=full" >> "$GITHUB_OUTPUT"
-              echo "✅ Diff scope: FULL (requested via --full-diff)"
-            else
-              echo "diff_scope=auto" >> "$GITHUB_OUTPUT"
-            fi
-          fi
+	    steps:
+	      - name: Get PR Number and Mode
+	        id: get_pr
+	        env:
+	          # Security: Use env var to avoid command injection from comment body
+	          COMMENT_CONTAINS_LIGHT: ${{ contains(github.event.comment.body, '--light') }}
+	          COMMENT_CONTAINS_FULL_DIFF: ${{ contains(github.event.comment.body, '--full-diff') }}
+	          IS_WORKFLOW_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
+	          INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
+	          INPUT_REVIEW_MODE: ${{ github.event.inputs.review_mode }}
+	          INPUT_DIFF_SCOPE: ${{ github.event.inputs.diff_scope }}
+	          ISSUE_NUMBER: ${{ github.event.issue.number }}
+	        run: |
+	          if [ "$IS_WORKFLOW_DISPATCH" == "true" ]; then
+	            # Validate PR number is numeric (security)
+	            if ! [[ "$INPUT_PR_NUMBER" =~ ^[0-9]+$ ]]; then
+	              echo "::error::Invalid PR number: must be numeric"
+	              exit 1
+	            fi
+	            PR_NUMBER_OUT="$INPUT_PR_NUMBER"
+	            REVIEW_MODE_OUT="${INPUT_REVIEW_MODE:-full}"
+	            DIFF_SCOPE_OUT="${INPUT_DIFF_SCOPE:-auto}"
+	            echo "✅ Manual trigger for PR #$INPUT_PR_NUMBER (mode: ${INPUT_REVIEW_MODE:-full})"
+	          else
+	            PR_NUMBER_OUT="$ISSUE_NUMBER"
+	            # Security: Use GitHub native contains() instead of shell grep
+	            if [ "$COMMENT_CONTAINS_LIGHT" == "true" ]; then
+	              REVIEW_MODE_OUT="light"
+	              echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: LIGHT)"
+	            else
+	              REVIEW_MODE_OUT="full"
+	              echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: FULL)"
+	            fi
+	            
+	            if [ "$COMMENT_CONTAINS_FULL_DIFF" == "true" ]; then
+	              DIFF_SCOPE_OUT="full"
+	              echo "✅ Diff scope: FULL (requested via --full-diff)"
+	            else
+	              DIFF_SCOPE_OUT="auto"
+	            fi
+	          fi
+	          
+	          {
+	            echo "pr_number=$PR_NUMBER_OUT"
+	            echo "should_run=true"
+	            echo "review_mode=$REVIEW_MODE_OUT"
+	            echo "diff_scope=$DIFF_SCOPE_OUT"
+	          } >> "$GITHUB_OUTPUT"
 
-  multi-model-review:
-    name: Multi-Model PR Review v3
-    needs: check-trigger
-    if: needs.check-trigger.outputs.should_run == 'true'
+	  multi-model-review:
+	    name: Multi-Model PR Review v3
+	    needs: check-trigger
+	    if: needs.check-trigger.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30  # Context gather + LLM calls; typical 10-20m
     
@@ -354,54 +359,85 @@ jobs:
               -f content='hooray' || true
           fi
       
-      - name: Step 1 - Parallel API Calls
-        if: steps.context.outputs.skip_review != 'true'
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
-          OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
-        run: |
-          set -euo pipefail
-          
-          echo "========================================="
-          echo "STEP 1: PARALLEL AI ANALYSIS"
-          echo "========================================="
-          
-          PR_TITLE=$(cat pr_title.txt)
-          PR_BODY=$(cat pr_body.txt)
-          PR_AUTHOR=$(cat pr_author.txt)
-          PR_ADDITIONS=$(cat pr_additions.txt)
-          PR_DELETIONS=$(cat pr_deletions.txt)
-          PR_FILES_COUNT=$(cat pr_files_count.txt)
-          DIFF_SCOPE=$(cat pr_diff_scope.txt 2>/dev/null || echo "full")
-          DIFF_RANGE=$(cat pr_diff_range.txt 2>/dev/null || echo "")
-          
-          PR_DIFF_RAW=$(cat pr_diff.txt 2>/dev/null || echo "")
-          PR_DIFF_SIZE=$(printf '%s' "$PR_DIFF_RAW" | wc -c)
-          if [ "$PR_DIFF_SIZE" -gt 100000 ]; then
-            PR_DIFF="$(
-              {
-                printf '%s' "$PR_DIFF_RAW" | head -c 50000
-                printf '\n\n... (snip) ...\n\n'
-                printf '%s' "$PR_DIFF_RAW" | tail -c 50000
-              }
-            )"
-          else
-            PR_DIFF="$PR_DIFF_RAW"
-          fi
-          
-          PREV_REVIEW=$(cat prev_merglbot_review.txt 2>/dev/null | head -c 20000 || echo "")
-          NEW_COMMITS=$(cat new_commits.txt 2>/dev/null | head -c 5000 || echo "")
-          CHANGED_FILES=$(cat changed_files.txt | head -100 | tr '\n' ', ')
-          BUGBOT_FINDINGS=$(cat bugbot_findings.txt)
-          BUGBOT_COUNT=$(cat bugbot_count.txt)
-          BUGBOT_SOURCES=$(cat bugbot_sources.txt)
-          
-          echo "Context loaded:"
-          echo "  PR Body: $(echo "$PR_BODY" | wc -c) chars"
-          echo "  PR Diff: $(echo "$PR_DIFF" | wc -c) chars"
-          echo "  Bugbot Sources: $BUGBOT_SOURCES ($BUGBOT_COUNT)"
+	      - name: Step 1 - Parallel API Calls
+	        if: steps.context.outputs.skip_review != 'true'
+	        env:
+	          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+	          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+	          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
+	          OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
+	        run: |
+	          set -euo pipefail
+	          
+	          echo "========================================="
+	          echo "STEP 1: PARALLEL AI ANALYSIS"
+	          echo "========================================="
+	          
+	          PR_TITLE=$(< pr_title.txt)
+	          PR_BODY=$(< pr_body.txt)
+	          PR_AUTHOR=$(< pr_author.txt)
+	          PR_ADDITIONS=$(< pr_additions.txt)
+	          PR_DELETIONS=$(< pr_deletions.txt)
+	          PR_FILES_COUNT=$(< pr_files_count.txt)
+	          
+	          DIFF_SCOPE="full"
+	          if [ -f pr_diff_scope.txt ]; then
+	            DIFF_SCOPE=$(< pr_diff_scope.txt)
+	          fi
+	          
+	          DIFF_RANGE=""
+	          if [ -f pr_diff_range.txt ]; then
+	            DIFF_RANGE=$(< pr_diff_range.txt)
+	          fi
+	          
+	          PR_DIFF_RAW=""
+	          if [ -f pr_diff.txt ]; then
+	            PR_DIFF_RAW=$(< pr_diff.txt)
+	          fi
+	          PR_DIFF_SIZE=${#PR_DIFF_RAW}
+	          if [ "$PR_DIFF_SIZE" -gt 100000 ]; then
+	            PR_DIFF="$(
+	              {
+	                printf '%s' "$PR_DIFF_RAW" | head -c 50000
+	                printf '\n\n... (snip) ...\n\n'
+	                printf '%s' "$PR_DIFF_RAW" | tail -c 50000
+	              }
+	            )"
+	          else
+	            PR_DIFF="$PR_DIFF_RAW"
+	          fi
+	          
+	          PREV_REVIEW=""
+	          if [ -f prev_merglbot_review.txt ]; then
+	            PREV_REVIEW=$(head -c 20000 prev_merglbot_review.txt 2>/dev/null || true)
+	          fi
+	          
+	          NEW_COMMITS=""
+	          if [ -f new_commits.txt ]; then
+	            NEW_COMMITS=$(head -c 5000 new_commits.txt 2>/dev/null || true)
+	          fi
+	          
+	          CHANGED_FILES=$(head -100 changed_files.txt 2>/dev/null | tr '\n' ', ')
+	          
+	          BUGBOT_FINDINGS=""
+	          if [ -f bugbot_findings.txt ]; then
+	            BUGBOT_FINDINGS=$(< bugbot_findings.txt)
+	          fi
+	          
+	          BUGBOT_COUNT="0"
+	          if [ -f bugbot_count.txt ]; then
+	            BUGBOT_COUNT=$(< bugbot_count.txt)
+	          fi
+	          
+	          BUGBOT_SOURCES="none"
+	          if [ -f bugbot_sources.txt ]; then
+	            BUGBOT_SOURCES=$(< bugbot_sources.txt)
+	          fi
+	          
+	          echo "Context loaded:"
+	          echo "  PR Body: ${#PR_BODY} chars"
+	          echo "  PR Diff: ${#PR_DIFF} chars"
+	          echo "  Bugbot Sources: $BUGBOT_SOURCES ($BUGBOT_COUNT)"
           
           if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
             REVIEW_DEPTH="LIGHT"
@@ -417,8 +453,9 @@ jobs:
           
           echo "Review depth: $REVIEW_DEPTH"
           
-          # Build prompt using printf to file
-          printf '%s\n' "# Merglbot Multi-Model Code Review v3.2" > /tmp/full_prompt.txt
+	          # shellcheck disable=SC2129
+	          # Build prompt using printf to file
+	          printf '%s\n' "# Merglbot Multi-Model Code Review v3.2" > /tmp/full_prompt.txt
           printf '%s\n' "" >> /tmp/full_prompt.txt
           printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence." >> /tmp/full_prompt.txt
           printf '%s\n' "" >> /tmp/full_prompt.txt
@@ -580,9 +617,9 @@ jobs:
           printf '%s\n' "" >> /tmp/full_prompt.txt
           printf '%s\n' "Now provide your review following the structure above." >> /tmp/full_prompt.txt
           
-          FULL_PROMPT=$(cat /tmp/full_prompt.txt)
-          PROMPT_SIZE=$(echo "$FULL_PROMPT" | wc -c)
-          echo "Prompt size: $PROMPT_SIZE chars"
+	          FULL_PROMPT=$(< /tmp/full_prompt.txt)
+	          PROMPT_SIZE=${#FULL_PROMPT}
+	          echo "Prompt size: $PROMPT_SIZE chars"
           
           # ANTHROPIC CALL
           echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
@@ -731,38 +768,36 @@ jobs:
           echo "STEP 1 COMPLETE"
           echo "========================================="
       
-      - name: Step 2 - Intelligent Synthesis
-        if: steps.context.outputs.skip_review != 'true'
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
-          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
-        run: |
-          set -euo pipefail
-          
-          echo "========================================="
-          echo "STEP 2: INTELLIGENT SYNTHESIS"
-          echo "========================================="
-          
-          ANTHROPIC_REVIEW=$(cat anthropic_review.txt)
-          OPENAI_REVIEW=$(cat openai_review.txt)
-          PR_TITLE=$(cat pr_title.txt)
-          PR_BODY=$(cat pr_body.txt | head -c 3000)
-          BUGBOT_COUNT=$(cat bugbot_count.txt)
-          BUGBOT_SOURCES=$(cat bugbot_sources.txt)
-          
-          echo "Input Reviews:"
-          echo "  Anthropic: $(echo "$ANTHROPIC_REVIEW" | wc -w) words"
-          echo "  OpenAI: $(echo "$OPENAI_REVIEW" | wc -w) words"
+	      - name: Step 2 - Intelligent Synthesis
+	        if: steps.context.outputs.skip_review != 'true'
+	        env:
+	          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+	          OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
+	          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
+	        run: |
+	          set -euo pipefail
+	          
+	          echo "========================================="
+	          echo "STEP 2: INTELLIGENT SYNTHESIS"
+	          echo "========================================="
+	          
+	          ANTHROPIC_REVIEW=$(< anthropic_review.txt)
+	          OPENAI_REVIEW=$(< openai_review.txt)
+	          PR_TITLE=$(< pr_title.txt)
+	          
+	          echo "Input Reviews:"
+	          echo "  Anthropic: $(echo "$ANTHROPIC_REVIEW" | wc -w) words"
+	          echo "  OpenAI: $(echo "$OPENAI_REVIEW" | wc -w) words"
           
           if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
             MAX_SYNTH_TOKENS=25000
           else
             MAX_SYNTH_TOKENS=50000
-          fi
-          
-          # Build synthesis prompt
-          printf '%s\n' "# Final Review Synthesis" > /tmp/synthesis_prompt.txt
+	          fi
+	          
+	          # shellcheck disable=SC2129
+	          # Build synthesis prompt
+	          printf '%s\n' "# Final Review Synthesis" > /tmp/synthesis_prompt.txt
           printf '%s\n' "" >> /tmp/synthesis_prompt.txt
           printf '%s\n' "Synthesize two AI reviews into ONE final review." >> /tmp/synthesis_prompt.txt
           printf '%s\n' "" >> /tmp/synthesis_prompt.txt
@@ -810,7 +845,7 @@ jobs:
           printf '%s\n' "" >> /tmp/synthesis_prompt.txt
           printf '%s\n' "Now synthesize into FINAL review." >> /tmp/synthesis_prompt.txt
           
-          SYNTHESIS_PROMPT=$(cat /tmp/synthesis_prompt.txt)
+	          SYNTHESIS_PROMPT=$(< /tmp/synthesis_prompt.txt)
           
           jq -n \
             --arg model "$OPENAI_MODEL_FINAL" \
@@ -833,7 +868,7 @@ jobs:
             -H "Authorization: Bearer $OPENAI_API_KEY" \
             -d @/tmp/synthesis_payload.json)
           
-          echo "Synthesis Response: $(echo "$SYNTHESIS_RESP" | wc -c) chars"
+	          echo "Synthesis Response: ${#SYNTHESIS_RESP} chars"
           
           if echo "$SYNTHESIS_RESP" | jq -e ".error" > /dev/null 2>&1; then
             echo "ERROR: $(echo "$SYNTHESIS_RESP" | jq -r '.error.message')"
@@ -849,10 +884,11 @@ jobs:
             fi
           fi
           
-          echo "Final review: $(cat final_review.txt | wc -w) words"
-          echo "========================================="
-          echo "STEP 2 COMPLETE"
-          echo "========================================="
+	          FINAL_WORDS=$(wc -w < final_review.txt 2>/dev/null || echo 0)
+	          echo "Final review: $FINAL_WORDS words"
+	          echo "========================================="
+	          echo "STEP 2 COMPLETE"
+	          echo "========================================="
       
       - name: Post Review Comment
         if: steps.context.outputs.skip_review != 'true'
@@ -861,25 +897,50 @@ jobs:
           ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
           OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
         run: |
-          set -euo pipefail
-          
-          PR_NUM="${{ env.PR_NUMBER }}"
-          BUGBOT_COUNT=$(cat bugbot_count.txt 2>/dev/null || echo "0")
-          BUGBOT_SOURCES=$(cat bugbot_sources.txt 2>/dev/null || echo "none")
-          REVIEW_MODE="${{ env.REVIEW_MODE }}"
-          DIFF_SCOPE=$(cat pr_diff_scope.txt 2>/dev/null || echo "full")
-          DIFF_RANGE=$(cat pr_diff_range.txt 2>/dev/null || echo "")
-          PR_HEAD_SHA=$(cat pr_head_sha.txt 2>/dev/null || echo "")
-          PREV_REVIEW_HEAD_SHA=$(cat prev_review_head_sha.txt 2>/dev/null || echo "")
-          
-          OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
-          ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
-          
-          ANTHROPIC_WORDS=$(cat anthropic_review.txt 2>/dev/null | wc -w || echo "0")
-          OPENAI_WORDS=$(cat openai_review.txt 2>/dev/null | wc -w || echo "0")
-          FINAL_WORDS=$(cat final_review.txt 2>/dev/null | wc -w || echo "0")
-          
-          echo "Building PR comment..."
+	          set -euo pipefail
+	          
+	          PR_NUM="${{ env.PR_NUMBER }}"
+	          
+	          BUGBOT_COUNT="0"
+	          if [ -f bugbot_count.txt ]; then
+	            BUGBOT_COUNT=$(< bugbot_count.txt)
+	          fi
+	          
+	          BUGBOT_SOURCES="none"
+	          if [ -f bugbot_sources.txt ]; then
+	            BUGBOT_SOURCES=$(< bugbot_sources.txt)
+	          fi
+	          
+	          REVIEW_MODE="${{ env.REVIEW_MODE }}"
+	          
+	          DIFF_SCOPE="full"
+	          if [ -f pr_diff_scope.txt ]; then
+	            DIFF_SCOPE=$(< pr_diff_scope.txt)
+	          fi
+	          
+	          DIFF_RANGE=""
+	          if [ -f pr_diff_range.txt ]; then
+	            DIFF_RANGE=$(< pr_diff_range.txt)
+	          fi
+	          
+	          PR_HEAD_SHA=""
+	          if [ -f pr_head_sha.txt ]; then
+	            PR_HEAD_SHA=$(< pr_head_sha.txt)
+	          fi
+	          
+	          PREV_REVIEW_HEAD_SHA=""
+	          if [ -f prev_review_head_sha.txt ]; then
+	            PREV_REVIEW_HEAD_SHA=$(< prev_review_head_sha.txt)
+	          fi
+	          
+	          OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
+	          ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
+	          
+	          ANTHROPIC_WORDS=$(wc -w < anthropic_review.txt 2>/dev/null || echo "0")
+	          OPENAI_WORDS=$(wc -w < openai_review.txt 2>/dev/null || echo "0")
+	          FINAL_WORDS=$(wc -w < final_review.txt 2>/dev/null || echo "0")
+	          
+	          echo "Building PR comment..."
           
           if [ ! -s final_review.txt ] || grep -q "^API_ERROR$" final_review.txt; then
             {
@@ -982,10 +1043,17 @@ jobs:
               echo "- **Status**: Skipped (no new commits since last review)"
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
-          fi
-          
-          BUGBOT_COUNT=$(cat bugbot_count.txt 2>/dev/null || echo "0")
-          BUGBOT_SOURCES=$(cat bugbot_sources.txt 2>/dev/null || echo "none")
+	          fi
+	          
+	          BUGBOT_COUNT="0"
+	          if [ -f bugbot_count.txt ]; then
+	            BUGBOT_COUNT=$(< bugbot_count.txt)
+	          fi
+	          
+	          BUGBOT_SOURCES="none"
+	          if [ -f bugbot_sources.txt ]; then
+	            BUGBOT_SOURCES=$(< bugbot_sources.txt)
+	          fi
           
           {
             echo "## 🤖 Merglbot PR Assistant v3 - Summary"
@@ -1002,9 +1070,9 @@ jobs:
             echo ""
             echo "| Metric | Value |"
             echo "|--------|-------|"
-            echo "| Anthropic | $(cat anthropic_review.txt 2>/dev/null | wc -w || echo 0) words |"
-            echo "| OpenAI | $(cat openai_review.txt 2>/dev/null | wc -w || echo 0) words |"
-            echo "| Final | $(cat final_review.txt 2>/dev/null | wc -w || echo 0) words |"
+	            echo "| Anthropic | $(wc -w < anthropic_review.txt 2>/dev/null || echo 0) words |"
+	            echo "| OpenAI | $(wc -w < openai_review.txt 2>/dev/null || echo 0) words |"
+	            echo "| Final | $(wc -w < final_review.txt 2>/dev/null || echo 0) words |"
             echo ""
             echo "### Bugbot Sources"
             echo ""
@@ -1023,13 +1091,17 @@ jobs:
           PR_NUM="${{ env.PR_NUMBER }}"
           REVIEW_MODE="${{ env.REVIEW_MODE }}"
           
-          ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
-          OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
-          
-          ANTHROPIC_WORDS=$(cat anthropic_review.txt 2>/dev/null | wc -w || echo 0)
-          OPENAI_WORDS=$(cat openai_review.txt 2>/dev/null | wc -w || echo 0)
-          FINAL_WORDS=$(cat final_review.txt 2>/dev/null | wc -w || echo 0)
-          BUGBOT_COUNT=$(cat bugbot_count.txt 2>/dev/null || echo 0)
+	          ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
+	          OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
+	          
+	          ANTHROPIC_WORDS=$(wc -w < anthropic_review.txt 2>/dev/null || echo 0)
+	          OPENAI_WORDS=$(wc -w < openai_review.txt 2>/dev/null || echo 0)
+	          FINAL_WORDS=$(wc -w < final_review.txt 2>/dev/null || echo 0)
+	          
+	          BUGBOT_COUNT="0"
+	          if [ -f bugbot_count.txt ]; then
+	            BUGBOT_COUNT=$(< bugbot_count.txt)
+	          fi
           
           # Count findings by severity
           CRITICAL_COUNT=$(grep -c "Critical\|🔴" final_review.txt 2>/dev/null || echo 0)
