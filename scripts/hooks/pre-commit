@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pre-commit hook for secret scanning
-# Based on WARP_GITIGNORE_SECURITY.md standards
+# Based on MERGLBOT_GITIGNORE_SECURITY.md standards
 
 set -euo pipefail
 

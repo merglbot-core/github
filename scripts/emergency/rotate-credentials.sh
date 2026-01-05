@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Emergency credential rotation script
-# Based on WARP_GITIGNORE_SECURITY.md standards
+# Based on MERGLBOT_GITIGNORE_SECURITY.md standards
 
 set -euo pipefail
 

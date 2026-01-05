@@ -410,8 +410,8 @@ jobs:
           
           # Check for MERGLBOT rules references
           if echo "$FINAL_CONTENT" | grep -q "MERGLBOT"; then
-            WARP_COUNT=$(echo "$FINAL_CONTENT" | grep -o "MERGLBOT" | wc -l)
-            echo "   ✅ MERGLBOT rules mentioned ($WARP_COUNT times)"
+            MERGLBOT_COUNT=$(echo "$FINAL_CONTENT" | grep -o "MERGLBOT" | wc -l)
+            echo "   ✅ MERGLBOT rules mentioned ($MERGLBOT_COUNT times)"
           else
             echo "   ⚠️ No MERGLBOT rules references"
           fi
@@ -492,4 +492,3 @@ jobs:
             echo "- **Secondary Analysis**: OpenAI + reasoning_effort: HIGH"
             echo "- **Synthesis**: OpenAI + reasoning_effort: HIGH"
           } >> "$GITHUB_STEP_SUMMARY"
-

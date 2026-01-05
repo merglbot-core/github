@@ -117,10 +117,9 @@ Output format:
 Key documentation:
 - `RULEBOOK_V2.md` - Platform rules
 - `SECURITY.md` - Security policy
-- `WARP_GLOBAL_RULES.txt` - Agent rules
+- `MERGLBOT_GLOBAL_RULES.txt` - Agent rules
 
 ---
 
 **Version**: 1.0  
 **Last Updated**: 2025-11-25
-
