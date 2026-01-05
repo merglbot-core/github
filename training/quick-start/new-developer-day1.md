@@ -189,7 +189,7 @@ merglbot-core/platform/
 
 ### 3.2 Key Concepts
 
-**WARP Standards:** Our internal guidelines for:
+**MERGLBOT Standards:** Our internal guidelines for:
 - Security best practices
 - Bot-assisted development
 - Release management
@@ -379,7 +379,7 @@ After completing Day 1:
 
 ## 🎓 Learning Resources
 
-- [WARP Standards Repository](https://github.com/merglbot-public/docs)
+- [MERGLBOT Standards Repository](https://github.com/merglbot-public/docs)
 - [Internal Documentation](https://docs.merglbot.ai)
 - [Team Wiki](https://wiki.merglbot.ai)
 - [Training Videos](https://training.merglbot.ai)

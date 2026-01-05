@@ -12,7 +12,7 @@ on:
         required: false
         type: string
         default: |
-          Proveď profesionální code review tohoto PR. Zaměř se na: (1) bezpečnost (secrets, OIDC/WIF), (2) architekturní konzistenci s WARP rules, (3) potenciální bugy a edge cases, (4) kvalitu kódu a idiomatičnost. Odpověz česky, kód komentuj anglicky. Výstup: krátký sumář (3-5 řádků), seznam konkrétních findings (každý s vysvětlením a doporučením), závěr (schválit/changes needed).
+          Proveď profesionální code review tohoto PR. Zaměř se na: (1) bezpečnost (secrets, OIDC/WIF), (2) architekturní konzistenci s MERGLBOT rules, (3) potenciální bugy a edge cases, (4) kvalitu kódu a idiomatičnost. Odpověz česky, kód komentuj anglicky. Výstup: krátký sumář (3-5 řádků), seznam konkrétních findings (každý s vysvětlením a doporučením), závěr (schválit/changes needed).
       model:
         description: 'AI model'
         required: false
@@ -86,7 +86,7 @@ on:
         required: false
         type: string
         default: |
-          Proveď profesionální code review tohoto PR. Zaměř se na: (1) bezpečnost (secrets, OIDC/WIF), (2) architekturní konzistenci s WARP rules, (3) potenciální bugy a edge cases, (4) kvalitu kódu a idiomatičnost. Odpověz česky, kód komentuj anglicky. Výstup: krátký sumář (3-5 řádků), seznam konkrétních findings (každý s vysvětlením a doporučením), závěr (schválit/changes needed).
+          Proveď profesionální code review tohoto PR. Zaměř se na: (1) bezpečnost (secrets, OIDC/WIF), (2) architekturní konzistenci s MERGLBOT rules, (3) potenciální bugy a edge cases, (4) kvalitu kódu a idiomatičnost. Odpověz česky, kód komentuj anglicky. Výstup: krátký sumář (3-5 řádků), seznam konkrétních findings (každý s vysvětlením a doporučením), závěr (schválit/changes needed).
       model:
         description: 'AI model - doporučeno: Sonnet 4.5 (vyvážený), Opus 4.1 (komplexní), Haiku 3.5 (rychlý)'
         required: false

@@ -1,5 +1,5 @@
 # Cursor Configuration Template
-# Based on WARP_BOT_DRIVEN_DEVELOPMENT.md and WARP_AI_TOOLS.md
+# Based on MERGLBOT_BOT_DRIVEN_DEVELOPMENT.md and MERGLBOT_AI_TOOLS.md
 
 rules:
   - Always use environment variables for configuration, never hardcode values

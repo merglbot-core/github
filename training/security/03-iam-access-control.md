@@ -52,4 +52,4 @@ gcloud config get project
 ## 📚 References
 - GCP Docs: Workload Identity Federation
 - GitHub Actions: OpenID Connect with Google Cloud
-- Internal WARP rules: mb-seed, WIF, labels, least-privilege
+- Internal MERGLBOT rules: mb-seed, WIF, labels, least-privilege

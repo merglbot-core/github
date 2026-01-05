@@ -20,7 +20,7 @@ on:
   workflow_call:
     inputs:
       max-pr-size:
-        description: 'Maximum PR size in LOC (GitHub additions+deletions; 0 to disable). See MERGLBOT_PR_SIZE_AND_REVIEW_HYGIENE.md (WARP-PR-001).'
+        description: 'Maximum PR size in LOC (GitHub additions+deletions; 0 to disable). See MERGLBOT_PR_SIZE_AND_REVIEW_HYGIENE.md (MERGLBOT-PR-001).'
         type: number
         default: 2000
         required: false

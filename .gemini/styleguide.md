@@ -156,10 +156,10 @@ For detailed standards, refer to:
 | Document | Purpose |
 |----------|---------|
 | `RULEBOOK_V2.md` | Platform rules (SSOT) |
-| `WARP_GLOBAL_RULES.txt` | Agent rules |
+| `MERGLBOT_GLOBAL_RULES.txt` | Agent rules |
 | `SECURITY.md` | Security policy |
 | `AUTHENTICATION_AUTHORIZATION.md` | Auth patterns |
-| `WARP_GITHUB_ACTIONS_GLOBAL_RULES.md` | CI/CD standards |
+| `MERGLBOT_GITHUB_ACTIONS_GLOBAL_RULES.md` | CI/CD standards |
 
 ---
 
@@ -218,4 +218,3 @@ When providing review feedback, use this structure:
 **Version**: 1.0  
 **Last Updated**: 2025-11-25  
 **Maintainer**: Platform Team
-

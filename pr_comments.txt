@@ -7,7 +7,7 @@ status:	none
 
 Hello @milhul6, I'm Gemini Code Assist[^1]! I'm currently reviewing this pull request and will post my feedback shortly. In the meantime, here's a summary to help you and other reviewers quickly get up to speed!
 
-This pull request significantly advances the Merglbot organization's operational standards by implementing a robust set of WARP (Work Architecture, Rules & Practices) guidelines. It introduces critical security measures, such as enhanced gitignore templates and pre-commit secret scanning, alongside structured configurations for AI development tools like GitHub Copilot and Cursor. Furthermore, it establishes an automated release workflow to streamline deployments and includes comprehensive documentation to guide the adoption of these new standards across the organization.
+This pull request significantly advances the Merglbot organization's operational standards by implementing a robust set of MERGLBOT (Work Architecture, Rules & Practices) guidelines. It introduces critical security measures, such as enhanced gitignore templates and pre-commit secret scanning, alongside structured configurations for AI development tools like GitHub Copilot and Cursor. Furthermore, it establishes an automated release workflow to streamline deployments and includes comprehensive documentation to guide the adoption of these new standards across the organization.
 
 ### Highlights
 
@@ -441,7 +441,7 @@ status:	commented
 --
 ## Code Review
 
-This pull request introduces a comprehensive set of WARP standards, which is an excellent initiative for improving security, consistency, and automation across the organization. The new documentation, gitignore templates, bot configurations, and scripts are well-structured and thorough. My review identifies a few important issues: a critical logic flaw in the emergency credential rotation script, an incorrect command in the documentation, and several medium-severity formatting issues related to missing newlines at the end of files.
+This pull request introduces a comprehensive set of MERGLBOT standards, which is an excellent initiative for improving security, consistency, and automation across the organization. The new documentation, gitignore templates, bot configurations, and scripts are well-structured and thorough. My review identifies a few important issues: a critical logic flaw in the emergency credential rotation script, an incorrect command in the documentation, and several medium-severity formatting issues related to missing newlines at the end of files.
 --
 author:	codiumai-pr-agent-free
 association:	contributor
@@ -883,7 +883,7 @@ status:	commented
 --
 ## Pull Request Overview
 
-This PR implements comprehensive WARP standards for security, bot development, and release management to address issues #17-22. It provides a complete security-first development framework with automated workflows, bot configurations, and emergency response tools.
+This PR implements comprehensive MERGLBOT standards for security, bot development, and release management to address issues #17-22. It provides a complete security-first development framework with automated workflows, bot configurations, and emergency response tools.
 
 ### Key Changes:
 - Security templates and automated secret scanning with pre-commit hooks
@@ -923,10 +923,10 @@ status:	none
 --
 ## 🤖 Claude Assistant
 
-# Code Review - Automated Release & WARP Implementation
+# Code Review - Automated Release & MERGLBOT Implementation
 
 ## Sumář
-PR přidává automatizovaný release workflow, WARP dokumentaci a bezpečnostní šablony. Obsahuje **kritické bezpečnostní problémy** v release workflow (deprecated action, chybějící validace vstupů) a v rotation skriptu (shell injection rizika). Dokumentace je kvalitní, ale workflow vyžaduje významné úpravy před nasazením. Architektura odpovídá WARP standardům, ale implementace má bezpečnostní mezery.
+PR přidává automatizovaný release workflow, MERGLBOT dokumentaci a bezpečnostní šablony. Obsahuje **kritické bezpečnostní problémy** v release workflow (deprecated action, chybějící validace vstupů) a v rotation skriptu (shell injection rizika). Dokumentace je kvalitní, ale workflow vyžaduje významné úpravy před nasazením. Architektura odpovídá MERGLBOT standardům, ale implementace má bezpečnostní mezery.
 
 ---
 

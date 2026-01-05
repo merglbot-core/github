@@ -98,7 +98,7 @@ jobs:
 
 ## Required Workflow: PR Text Length Check
 
-**Purpose:** Enforce WARP limits (PR title ≤ 100 chars, body ≤ 4000 bytes) across all repos.
+**Purpose:** Enforce MERGLBOT limits (PR title ≤ 100 chars, body ≤ 4000 bytes) across all repos.
 
 **How to enable (org-level):**
 
@@ -197,11 +197,11 @@ jobs:
 
 ---
 
-## Related WARP Rules
+## Related MERGLBOT Rules
 
-- `WARP: Text Length Limits` – PR/commit message length enforcement
-- `WARP: Git – Non-interactive commits` – No-editor git operations
-- `WARP: GitHub Actions Security` – Secrets, permissions, fork safety
+- `MERGLBOT: Text Length Limits` – PR/commit message length enforcement
+- `MERGLBOT: Git – Non-interactive commits` – No-editor git operations
+- `MERGLBOT: GitHub Actions Security` – Secrets, permissions, fork safety
 
 ---
 
