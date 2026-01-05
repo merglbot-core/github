@@ -12,7 +12,7 @@ on:
         required: false
         type: string
         default: |
-          Proveď profesionální code review tohoto PR. Zaměř se na: (1) bezpečnost (secrets, OIDC/WIF), (2) architekturní konzistenci s WARP rules, (3) potenciální bugy a edge cases, (4) kvalitu kódu a idiomatičnost. Odpověz česky, kód komentuj anglicky. Výstup: krátký sumář (3-5 řádků), seznam konkrétních findings (každý s vysvětlením a doporučením), závěr (schválit/changes needed).
+          Proveď profesionální code review tohoto PR. Zaměř se na: (1) bezpečnost (secrets, OIDC/WIF), (2) architekturní konzistenci s MERGLBOT rules, (3) potenciální bugy a edge cases, (4) kvalitu kódu a idiomatičnost. Odpověz česky, kód komentuj anglicky. Výstup: krátký sumář (3-5 řádků), seznam konkrétních findings (každý s vysvětlením a doporučením), závěr (schválit/changes needed).
       anthropic_model:
         description: "Anthropic model"
         required: false
@@ -408,12 +408,12 @@ jobs:
             echo "   ⚠️ Missing conclusion"
           fi
           
-          # Check for WARP rules references
-          if echo "$FINAL_CONTENT" | grep -q "WARP"; then
-            WARP_COUNT=$(echo "$FINAL_CONTENT" | grep -o "WARP" | wc -l)
-            echo "   ✅ WARP rules mentioned ($WARP_COUNT times)"
+          # Check for MERGLBOT rules references
+          if echo "$FINAL_CONTENT" | grep -q "MERGLBOT"; then
+            WARP_COUNT=$(echo "$FINAL_CONTENT" | grep -o "MERGLBOT" | wc -l)
+            echo "   ✅ MERGLBOT rules mentioned ($WARP_COUNT times)"
           else
-            echo "   ⚠️ No WARP rules references"
+            echo "   ⚠️ No MERGLBOT rules references"
           fi
           
           # Check for line numbers or code references

@@ -22,6 +22,6 @@ Every consumer **must** follow [Rulebook v2](https://github.com/merglbot-public/
 
 ### Adding a New Workflow
 1. Open an issue describing purpose + owners.
-2. Follow WARP reusable workflow guidelines (least-privilege permissions, WIF, concurrency).
+2. Follow MERGLBOT reusable workflow guidelines (least-privilege permissions, WIF, concurrency).
 3. Document the workflow in this table.
 4. Update consuming repos + branch protection rules if new statuses are required.

@@ -4,7 +4,7 @@ Centralized GCP authentication using Workload Identity Federation (WIF/OIDC).
 
 ## Purpose
 
-Eliminates duplicated GCP authentication steps across deployment workflows. Enforces WIF-only (no SA JSON keys) per WARP security policy.
+Eliminates duplicated GCP authentication steps across deployment workflows. Enforces WIF-only (no SA JSON keys) per MERGLBOT security policy.
 
 ## Usage
 

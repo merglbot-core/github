@@ -1,6 +1,6 @@
 ---
-title: "Lessons Learned – EPIC #23 (WARP Standards Implementation)"
-summary: "Shrnutí klíčových poučení a best practices z implementace WARP standardů (security, bot-driven, release) v rámci EPIC #23. Změny promítnuty do tréninkových materiálů a projektových pravidel."
+title: "Lessons Learned – EPIC #23 (MERGLBOT Standards Implementation)"
+summary: "Shrnutí klíčových poučení a best practices z implementace MERGLBOT standardů (security, bot-driven, release) v rámci EPIC #23. Změny promítnuty do tréninkových materiálů a projektových pravidel."
 owner: "platform"
 last_updated: 2025-10-12
 status: stable
@@ -50,10 +50,10 @@ status: stable
 
 ---
 
-# Doporučení pro WARP (globální)
-- Do globální WARP AI policy doplnit explicitní zákaz `git push --force --all`
-- Do WARP Security playbooku přidat krok „Audit logs BEFORE rotation“
-- Do WARP Container hardening guidelines přidat `su-exec` pattern a zákaz chown `/etc/*`
+# Doporučení pro MERGLBOT (globální)
+- Do globální MERGLBOT AI policy doplnit explicitní zákaz `git push --force --all`
+- Do MERGLBOT Security playbooku přidat krok „Audit logs BEFORE rotation“
+- Do MERGLBOT Container hardening guidelines přidat `su-exec` pattern a zákaz chown `/etc/*`
 
 ---
 

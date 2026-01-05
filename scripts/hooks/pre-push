@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pre-push hook for comprehensive validation
-# Based on WARP standards for security and code quality
+# Based on MERGLBOT standards for security and code quality
 
 set -euo pipefail
 

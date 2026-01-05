@@ -67,9 +67,9 @@ This repository follows the [Merglbot Rulebook v2](https://github.com/merglbot-p
 
 ### Comprehensive Guides
 
-**README_MERGLBOT_IMPLEMENTATION.md** (264 lines) - WARP implementation guide
+**README_MERGLBOT_IMPLEMENTATION.md** (264 lines) - MERGLBOT implementation guide
 
-**Related WARP Docs:**
+**Related MERGLBOT Docs:**
 - [MERGLBOT_CROSS_PROJECT_SECRETS_SSOT.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_CROSS_PROJECT_SECRETS_SSOT.md) - Cloud Run cross-project secrets SSOT (alias mapping)
 - [MERGLBOT_GITHUB_ACTIONS_GLOBAL_RULES.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GITHUB_ACTIONS_GLOBAL_RULES.md) - Global rules
 - [MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md) - 491 lines

@@ -9,7 +9,7 @@ Welcome to the merglbot.ai Team Training Hub! This directory contains comprehens
 ### 1. Security Standards Track
 **Duration:** 2 hours | **Level:** Required for All
 
-- **Module 1.1:** [WARP Gitignore Security](./security/01-gitignore-security.md) ✅
+- **Module 1.1:** [MERGLBOT Gitignore Security](./security/01-gitignore-security.md) ✅
 - **Module 1.2:** [Secret Management Best Practices](./security/02-secret-management.md) ✅
 - **Module 1.3:** [IAM & Access Control](./security/03-iam-access-control.md) ✅
 - **Module 1.4:** [Security Incident Response](../docs/security/incidents/README.md) ✅

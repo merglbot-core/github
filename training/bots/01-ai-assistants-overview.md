@@ -13,7 +13,7 @@
 
 ## Důležité pravidlo (platform scope)
 
-- GitHub org `Merglevsky-cz/*` je **out-of-scope** pro Merglbot platformu a musí se ignorovat (WARP-GH-IGNORE-001).
+- GitHub org `Merglevsky-cz/*` je **out-of-scope** pro Merglbot platformu a musí se ignorovat (MERGLBOT-GH-IGNORE-001).
 
 ## Reference (SSOT)
 

@@ -21,4 +21,4 @@
 
 - [MERGLBOT_SECRETS_NAMING_AND_LOGGING.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_SECRETS_NAMING_AND_LOGGING.md)
 - [MERGLBOT_CROSS_PROJECT_SECRETS_SSOT.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_CROSS_PROJECT_SECRETS_SSOT.md)
-- [MERGLBOT_AI_AGENT_APPENDIX_v2_15.md](https://github.com/merglbot-core/ai_prompts/blob/main/agent-appendix/MERGLBOT_AI_AGENT_APPENDIX_v2_15.md) (WARP-SECRET-XPROJ-001)
+- [MERGLBOT_AI_AGENT_APPENDIX_v2_15.md](https://github.com/merglbot-core/ai_prompts/blob/main/agent-appendix/MERGLBOT_AI_AGENT_APPENDIX_v2_15.md) (MERGLBOT-SECRET-XPROJ-001)
