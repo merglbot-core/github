@@ -20,9 +20,9 @@ on:
   workflow_call:
     inputs:
       max-pr-size:
-        description: 'Maximum PR size in lines of code (0 to disable)'
+        description: 'Maximum PR size in LOC (GitHub additions+deletions; 0 to disable). See MERGLBOT_PR_SIZE_AND_REVIEW_HYGIENE.md (WARP-PR-001).'
         type: number
-        default: 400
+        default: 2000
         required: false
       
       enforce-conventional-commits:
