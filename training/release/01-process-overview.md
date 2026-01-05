@@ -19,6 +19,6 @@ Jednotný, auditovatelný release proces pro Merglbot služby.
 
 ## Reference (SSOT)
 
-- `merglbot-public/docs/PR_POLICY.md`
-- `merglbot-public/docs/MERGLBOT_PRODUCTION_STATE_*.md`
-- `merglbot-public/docs/MERGLBOT_PR_SIZE_AND_REVIEW_HYGIENE.md`
+- [PR_POLICY.md](https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md)
+- `MERGLBOT_PRODUCTION_STATE_*.md` (in https://github.com/merglbot-public/docs)
+- [MERGLBOT_PR_SIZE_AND_REVIEW_HYGIENE.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_PR_SIZE_AND_REVIEW_HYGIENE.md)

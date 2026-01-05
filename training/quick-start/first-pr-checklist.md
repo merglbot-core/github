@@ -21,6 +21,6 @@
 
 ## Reference (SSOT)
 
-- `merglbot-public/docs/PR_POLICY.md`
-- `merglbot-public/docs/MERGLBOT_PR_REVIEW_AUTONOMOUS_V5.md` (v `merglbot-core/ai_prompts/pr-review/`)
-- `merglbot-public/docs/MERGLBOT_PR_SIZE_AND_REVIEW_HYGIENE.md`
+- [PR_POLICY.md](https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md)
+- [MERGLBOT_PR_REVIEW_AUTONOMOUS_V5.md](https://github.com/merglbot-core/ai_prompts/blob/main/pr-review/MERGLBOT_PR_REVIEW_AUTONOMOUS_V5.md)
+- [MERGLBOT_PR_SIZE_AND_REVIEW_HYGIENE.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_PR_SIZE_AND_REVIEW_HYGIENE.md)
