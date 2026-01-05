@@ -17,6 +17,6 @@
 
 ## Reference (SSOT)
 
-- `merglbot-public/docs/RULEBOOK_V2.md`
-- `merglbot-public/docs/DOCUMENTATION_INDEX.md`
-- `merglbot-public/docs/MERGLBOT_AI_AGENT_APPENDIX_v2_15.md`
+- [RULEBOOK_V2.md](https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md)
+- [DOCUMENTATION_INDEX.md](https://github.com/merglbot-public/docs/blob/main/DOCUMENTATION_INDEX.md)
+- [MERGLBOT_AI_AGENT_APPENDIX_v2_15.md](https://github.com/merglbot-core/ai_prompts/blob/main/agent-appendix/MERGLBOT_AI_AGENT_APPENDIX_v2_15.md)
