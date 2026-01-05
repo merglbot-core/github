@@ -51,7 +51,7 @@ status: stable
 ---
 
 # Doporučení pro MERGLBOT (globální)
-- Do globální MERGLBOT AI policy doplnit explicitní zákaz `git push --force --all`
+- Do globální MERGLBOT AI policy doplnit explicitní zákaz: **NEVER** používat `git push --force --all`
 - Do MERGLBOT Security playbooku přidat krok „Audit logs BEFORE rotation“
 - Do MERGLBOT Container hardening guidelines přidat `su-exec` pattern a zákaz chown `/etc/*`
 
