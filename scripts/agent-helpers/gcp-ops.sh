@@ -78,7 +78,7 @@ get_logs() {
 
     log_info "Getting last $limit logs for $service..."
     gcloud logging read \
-        "resource.type=cloud_run_revision AND resource.labels.service_name=$service" \
+        "resource.type=cloud_run_revision AND resource.labels.service_name=\"$service\"" \
         --project="$project" \
         --limit="$limit" \
         --format='table(timestamp,severity,textPayload)'
