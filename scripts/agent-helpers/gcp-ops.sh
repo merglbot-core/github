@@ -19,9 +19,13 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
-log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+readonly MERGLBOT_GCP_ORG_DISPLAY_NAME="merglevsky.cz"
+readonly DEFAULT_REGION="europe-west1"
+readonly HEALTHCHECK_MAX_TIME_SECONDS="5"
+
+log_info() { printf '%b[INFO]%b %s\n' "$GREEN" "$NC" "$*"; }
+log_warn() { printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "$*"; }
+log_error() { printf '%b[ERROR]%b %s\n' "$RED" "$NC" "$*" >&2; }
 
 # Check gcloud auth
 check_gcloud_auth() {
@@ -48,7 +52,7 @@ list_projects() {
 # List Cloud Run services
 cloud_run_list() {
     local project="${1:?Usage: cloud-run-list <project>}"
-    local region="${2:-europe-west1}"
+    local region="${2:-$DEFAULT_REGION}"
 
     log_info "Listing Cloud Run services in $project ($region)..."
     gcloud run services list \
@@ -61,7 +65,7 @@ cloud_run_list() {
 cloud_run_status() {
     local project="${1:?Usage: cloud-run-status <project> <service>}"
     local service="${2:?Usage: cloud-run-status <project> <service>}"
-    local region="${3:-europe-west1}"
+    local region="${3:-$DEFAULT_REGION}"
 
     log_info "Getting status for $service in $project..."
     gcloud run services describe "$service" \
@@ -78,7 +82,7 @@ get_logs() {
 
     log_info "Getting last $limit logs for $service..."
     gcloud logging read \
-        "resource.type=cloud_run_revision AND resource.labels.service_name=\"$service\"" \
+        "resource.type=cloud_run_revision AND resource.labels.service_name=\"${service}\"" \
         --project="$project" \
         --limit="$limit" \
         --format='table(timestamp,severity,textPayload)'
@@ -91,7 +95,7 @@ org_structure() {
     # Get org ID
     local org_id
     org_id=$(gcloud organizations list \
-        --filter='displayName="merglevsky.cz"' \
+        --filter="displayName=\"${MERGLBOT_GCP_ORG_DISPLAY_NAME}\"" \
         --format='value(ID)' \
         --limit=1 2>/dev/null || echo "")
 
@@ -102,7 +106,7 @@ org_structure() {
         return
     fi
 
-    echo "Organization: merglevsky.cz (ID: $org_id)"
+    echo "Organization: ${MERGLBOT_GCP_ORG_DISPLAY_NAME} (ID: $org_id)"
     echo ""
     echo "Top-level folders:"
     gcloud resource-manager folders list \
@@ -122,11 +126,11 @@ health_check() {
 
     for url in "${endpoints[@]}"; do
         local status
-        status=$(curl -fsS -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo "FAIL")
+        status=$(curl -fsS --max-time "$HEALTHCHECK_MAX_TIME_SECONDS" -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo "FAIL")
         if [ "$status" = "200" ]; then
-            echo -e "${GREEN}✅${NC} $url ($status)"
+            printf '%b✅%b %s (%s)\n' "$GREEN" "$NC" "$url" "$status"
         else
-            echo -e "${RED}❌${NC} $url ($status)"
+            printf '%b❌%b %s (%s)\n' "$RED" "$NC" "$url" "$status"
         fi
     done
 }

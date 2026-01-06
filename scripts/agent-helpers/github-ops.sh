@@ -19,17 +19,23 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $*"
-}
+readonly -a MERGLBOT_ORGS=(
+    "merglbot-core"
+    "merglbot-public"
+    "merglbot-denatura"
+    "merglbot-proteinaco"
+    "merglbot-ruzovyslon"
+    "merglbot-extractors"
+    "merglbot-autodoplnky"
+    "merglbot-hodinarstvibechyne"
+    "merglbot-kiteboarding"
+    "merglbot-milan-private"
+)
+readonly LIST_ALL_ORGS_REPO_LIMIT=1000
 
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $*"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $*" >&2
-}
+log_info() { printf '%b[INFO]%b %s\n' "$GREEN" "$NC" "$*"; }
+log_warn() { printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "$*"; }
+log_error() { printf '%b[ERROR]%b %s\n' "$RED" "$NC" "$*" >&2; }
 
 # Check if gh CLI is available and authenticated
 check_gh_auth() {
@@ -89,29 +95,16 @@ repo_info() {
 
 # List all Merglbot orgs
 list_all_orgs() {
-    local orgs=(
-        "merglbot-core"
-        "merglbot-public"
-        "merglbot-denatura"
-        "merglbot-proteinaco"
-        "merglbot-ruzovyslon"
-        "merglbot-extractors"
-        "merglbot-autodoplnky"
-        "merglbot-hodinarstvibechyne"
-        "merglbot-kiteboarding"
-        "merglbot-milan-private"
-    )
-
     local total=0
-    for org in "${orgs[@]}"; do
+    for org in "${MERGLBOT_ORGS[@]}"; do
         echo "=== $org ==="
-        count=$(gh repo list "$org" --limit 100 --json name 2>/dev/null | jq length)
+        count=$(gh repo list "$org" --limit "$LIST_ALL_ORGS_REPO_LIMIT" --json name 2>/dev/null | jq length 2>/dev/null || echo "0")
         echo "  Repos: $count"
         total=$((total + count))
     done
 
     echo ""
-    echo "TOTAL: $total repos across ${#orgs[@]} orgs"
+    echo "TOTAL: $total repos across ${#MERGLBOT_ORGS[@]} orgs"
 }
 
 # Main command dispatcher

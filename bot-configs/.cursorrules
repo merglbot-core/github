@@ -97,6 +97,7 @@ Agent Helper Scripts:
 For complex operations, use the helper scripts in scripts/agent-helpers/:
    - ./scripts/agent-helpers/github-ops.sh list-all-orgs
    - ./scripts/agent-helpers/gcp-ops.sh health-check
+See scripts/agent-helpers/README.md for full usage examples and the decision tree.
 
 Agent Type Detection:
 - If you have access to MCP tools → use them first
