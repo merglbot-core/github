@@ -70,3 +70,36 @@ When generating code:
 6. Add logging at key decision points
 7. Consider performance implications
 8. Ensure accessibility compliance (WCAG 2.1 AA)
+
+MCP + CLI FALLBACK STRATEGY:
+
+MCP servers (GitHub, Fetch, Filesystem) are configured in `~/.cursor/mcp.json`.
+Not all agents have MCP access. Use this fallback strategy:
+
+GitHub Operations (Priority Order):
+1. MCP: Use GitHub MCP tools if available
+2. CLI Fallback: Use `gh` CLI commands
+   - List repos: gh repo list merglbot-core --limit 50 --json nameWithOwner
+   - Get PR info: gh pr view 123 --repo merglbot-core/infra --json title,state,body
+   - Create PR: gh pr create --title "feat: ..." --body "..."
+
+Web Fetch Operations:
+1. MCP: Use Fetch MCP tools if available
+2. CLI Fallback: Use `curl`
+   - curl -fsS https://www.merglbot.ai/health
+
+GCP Operations (Always CLI):
+GCP operations always use `gcloud` CLI (no MCP):
+   - List projects: gcloud projects list --filter='projectId~"^merglbot-"'
+   - Cloud Run status: gcloud run services list --project=merglbot-admin-prd --region=europe-west1
+
+Agent Helper Scripts:
+For complex operations, use the helper scripts in scripts/agent-helpers/:
+   - ./scripts/agent-helpers/github-ops.sh list-all-orgs
+   - ./scripts/agent-helpers/gcp-ops.sh health-check
+See scripts/agent-helpers/README.md for full usage examples and the decision tree.
+
+Agent Type Detection:
+- If you have access to MCP tools → use them first
+- If MCP fails or unavailable → use CLI equivalents
+- NEVER get stuck - always have a CLI fallback plan
