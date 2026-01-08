@@ -192,9 +192,10 @@ jobs:
           echo ""
 
           # NOTE: --paginate is required; Search API returns max 100 items per page.
-          SEARCH_NUMBERS="$(gh api "search/issues" --paginate -f q="repo:$REPO is:pr is:merged merged:>=$SINCE_DAY \"$SIGNATURE\" in:comments" -F per_page=100 --jq '.items[].number // empty' 2>/dev/null || echo "")"
-          if [ -z "$SEARCH_NUMBERS" ]; then
-            echo "Search API returned no results (or request failed); proceeding with 0 PRs."
+          SEARCH_NUMBERS=""
+          if ! SEARCH_NUMBERS="$(gh api "search/issues" --paginate -f q="repo:$REPO is:pr is:merged merged:>=$SINCE_DAY \"$SIGNATURE\" in:comments" -F per_page=100 --jq '.items[].number // empty' 2>/dev/null)"; then
+            echo "⚠️  Search API failed; proceeding with 0 PRs." >&2
+            SEARCH_NUMBERS=""
           fi
           mapfile -t PR_NUMBERS < <(printf '%s\n' "$SEARCH_NUMBERS" | sed '/^$/d' | sort -n | uniq)
           if [ ${#PR_NUMBERS[@]} -eq 0 ] || [ -z "${PR_NUMBERS[0]:-}" ]; then
@@ -210,12 +211,22 @@ jobs:
 
           for PR_NUMBER in "${PR_NUMBERS[@]}"; do
             [ -z "$PR_NUMBER" ] && continue
+            if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+              continue
+            fi
 
             # Rate limit protection (avoid bursty loops on large PR sets)
+            if [ $((TOTAL % 50)) -eq 0 ] && [ "$TOTAL" -gt 0 ]; then
+              REMAINING="$(gh api rate_limit --jq '.rate.remaining' 2>/dev/null || echo '')"
+              if [ -n "$REMAINING" ] && [ "$REMAINING" -lt 100 ]; then
+                echo "⚠️  Rate limit low ($REMAINING remaining), sleeping 60s..." >&2
+                sleep 60
+              fi
+            fi
             sleep 0.5
 
             # Fetch PR comments and find the earliest Merglbot review comment timestamp
-            COMMENTS_JSON=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate | jq -s 'add')
+            COMMENTS_JSON="$({ gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate 2>/dev/null || echo '[]'; } | jq -s 'add // []' 2>/dev/null || echo '[]')"
             REVIEW_AT=$(echo "$COMMENTS_JSON" | jq -r --arg sig "$SIGNATURE" 'map(select(.body | contains($sig))) | min_by(.created_at) | .created_at // empty')
             if [ -z "$REVIEW_AT" ]; then
               continue
@@ -223,7 +234,7 @@ jobs:
 
             TOTAL=$((TOTAL + 1))
 
-            COMMITS_JSON=$(gh api "repos/$REPO/pulls/$PR_NUMBER/commits" --paginate | jq -s 'add')
+            COMMITS_JSON="$({ gh api "repos/$REPO/pulls/$PR_NUMBER/commits" --paginate 2>/dev/null || echo '[]'; } | jq -s 'add // []' 2>/dev/null || echo '[]')"
             COMMITS_AFTER=$(echo "$COMMITS_JSON" | jq -r --arg review_at "$REVIEW_AT" '[.[] | select((.commit.committer.date // .commit.author.date) > $review_at)] | length')
 
             CLASSIFICATION="accepted_as_is"
