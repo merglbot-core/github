@@ -191,13 +191,11 @@ jobs:
           echo "- significant_changes: 3+ commits"
           echo ""
 
-          SEARCH_NUMBERS="$(
-            gh api "search/issues" \
-              --paginate \
-              -f q="repo:$REPO is:pr is:merged merged:>=$SINCE_DAY \"$SIGNATURE\" in:comments" \
-              -F per_page=100 \
-              --jq '.items[].number // empty' 2>/dev/null || true
-          )"
+          # NOTE: --paginate is required; Search API returns max 100 items per page.
+          SEARCH_NUMBERS="$(gh api "search/issues" --paginate -f q="repo:$REPO is:pr is:merged merged:>=$SINCE_DAY \"$SIGNATURE\" in:comments" -F per_page=100 --jq '.items[].number // empty' 2>/dev/null || echo "")"
+          if [ -z "$SEARCH_NUMBERS" ]; then
+            echo "Search API returned no results (or request failed); proceeding with 0 PRs."
+          fi
           mapfile -t PR_NUMBERS < <(printf '%s\n' "$SEARCH_NUMBERS" | sed '/^$/d' | sort -n | uniq)
           if [ ${#PR_NUMBERS[@]} -eq 0 ] || [ -z "${PR_NUMBERS[0]:-}" ]; then
             echo "No PRs found matching criteria (this is OK; metrics will be zero)."
@@ -251,6 +249,7 @@ jobs:
           done
 
           TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          # NOTE: jq emits RFC8259-valid JSON numbers (e.g., 0.5, not .5).
           jq -n \
             --arg timestamp "$TIMESTAMP" \
             --arg repository "$REPO" \
@@ -282,6 +281,11 @@ jobs:
 
           echo ""
           echo "Acceptance metrics saved to feedback/acceptance-metrics.json"
+          if ! jq empty feedback/acceptance-metrics.json 2>/dev/null; then
+            echo "ERROR: Generated invalid JSON in feedback/acceptance-metrics.json" >&2
+            cat feedback/acceptance-metrics.json || true
+            exit 1
+          fi
           cat feedback/acceptance-metrics.json
       
       - name: Generate Feedback Report
@@ -335,6 +339,7 @@ jobs:
           EOF
           fi
           
+          # NOTE: This heredoc is quoted to prevent variable expansion (literal text).
           cat >> feedback/FEEDBACK_REPORT.md << 'REPORT_EOF'
           
           ## Insights
