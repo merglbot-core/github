@@ -244,16 +244,6 @@ jobs:
             echo "  PR #$PR_NUMBER: commits_after_review=$COMMITS_AFTER → $CLASSIFICATION"
           done
 
-          if [ "$TOTAL" -gt 0 ]; then
-            ACCEPTED_PCT=$(awk "BEGIN {printf \"%.1f\", $ACCEPTED * 100 / $TOTAL}")
-            MINOR_PCT=$(awk "BEGIN {printf \"%.1f\", $MINOR * 100 / $TOTAL}")
-            SIGNIFICANT_PCT=$(awk "BEGIN {printf \"%.1f\", $SIGNIFICANT * 100 / $TOTAL}")
-          else
-            ACCEPTED_PCT="0"
-            MINOR_PCT="0"
-            SIGNIFICANT_PCT="0"
-          fi
-
           TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
           jq -n \
             --arg timestamp "$TIMESTAMP" \
@@ -262,13 +252,12 @@ jobs:
             --arg since "$SINCE_DATE" \
             --argjson total_reviews "$TOTAL" \
             --argjson accepted_as_is "$ACCEPTED" \
-            --argjson accepted_as_is_percent "$ACCEPTED_PCT" \
             --argjson minor_changes "$MINOR" \
-            --argjson minor_changes_percent "$MINOR_PCT" \
             --argjson significant_changes "$SIGNIFICANT" \
-            --argjson significant_changes_percent "$SIGNIFICANT_PCT" \
             --argjson details "$DETAILS" \
-            '{
+            'def pct(n):
+              if $total_reviews > 0 then (((n * 1000) / $total_reviews + 0.5) | floor) / 10 else 0 end;
+            {
               timestamp: $timestamp,
               repository: $repository,
               period_days: $period_days,
@@ -276,11 +265,11 @@ jobs:
               total_reviews: $total_reviews,
               acceptance_rate: {
                 accepted_as_is: $accepted_as_is,
-                accepted_as_is_percent: $accepted_as_is_percent,
+                accepted_as_is_percent: pct($accepted_as_is),
                 minor_changes: $minor_changes,
-                minor_changes_percent: $minor_changes_percent,
+                minor_changes_percent: pct($minor_changes),
                 significant_changes: $significant_changes,
-                significant_changes_percent: $significant_changes_percent
+                significant_changes_percent: pct($significant_changes)
               },
               details: $details
             }' > feedback/acceptance-metrics.json
