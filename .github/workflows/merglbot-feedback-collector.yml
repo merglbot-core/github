@@ -191,8 +191,14 @@ jobs:
           echo "- significant_changes: 3+ commits"
           echo ""
 
-          PRS_JSON=$(gh api "search/issues" -f q="repo:$REPO is:pr is:merged merged:>=$SINCE_DAY \"$SIGNATURE\" in:comments" -F per_page=100)
-          mapfile -t PR_NUMBERS < <(echo "$PRS_JSON" | jq -r '.items[].number // empty' | sort -n | uniq)
+          SEARCH_NUMBERS="$(
+            gh api "search/issues" \
+              --paginate \
+              -f q="repo:$REPO is:pr is:merged merged:>=$SINCE_DAY \"$SIGNATURE\" in:comments" \
+              -F per_page=100 \
+              --jq '.items[].number // empty' 2>/dev/null || true
+          )"
+          mapfile -t PR_NUMBERS < <(printf '%s\n' "$SEARCH_NUMBERS" | sed '/^$/d' | sort -n | uniq)
           if [ ${#PR_NUMBERS[@]} -eq 0 ] || [ -z "${PR_NUMBERS[0]:-}" ]; then
             echo "No PRs found matching criteria (this is OK; metrics will be zero)."
             PR_NUMBERS=()
@@ -207,7 +213,7 @@ jobs:
           for PR_NUMBER in "${PR_NUMBERS[@]}"; do
             [ -z "$PR_NUMBER" ] && continue
 
-            # Basic rate limit protection (avoid bursty loops on large PR sets)
+            # Rate limit protection (avoid bursty loops on large PR sets)
             sleep 0.5
 
             # Fetch PR comments and find the earliest Merglbot review comment timestamp
@@ -281,6 +287,7 @@ jobs:
       - name: Generate Feedback Report
         run: |
           # Create markdown report
+          # NOTE: This heredoc is intentionally unquoted to allow $(date ...) expansion.
           cat > feedback/FEEDBACK_REPORT.md << REPORT_EOF
           # 📊 Merglbot PR Assistant - Feedback Report
           
