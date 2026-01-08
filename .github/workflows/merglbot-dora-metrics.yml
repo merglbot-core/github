@@ -35,8 +35,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          if ! [[ "$PERIOD_DAYS" =~ ^[0-9]+$ ]]; then
-            echo "Invalid PERIOD_DAYS: $PERIOD_DAYS (must be an integer)" >&2
+          if ! [[ "$PERIOD_DAYS" =~ ^[0-9]+$ ]] || [ "$PERIOD_DAYS" -lt 1 ]; then
+            echo "Invalid PERIOD_DAYS: $PERIOD_DAYS (must be a positive integer >= 1)" >&2
             exit 1
           fi
 
@@ -58,9 +58,13 @@ jobs:
           echo "📦 Calculating Deployment Frequency since $SINCE_DAY..."
 
           # Heuristic: count successful runs of workflows whose name/path contains "deploy".
+          WORKFLOW_OUTPUT=$(gh workflow list --all --json name,path,state 2>&1) || {
+            echo "::error::Failed to list workflows: $WORKFLOW_OUTPUT"
+            exit 1
+          }
+
           mapfile -t DEPLOY_WORKFLOW_PATHS < <(
-            gh workflow list --all --json name,path,state \
-              --jq '.[] | select(.state == "active") | select((.name | test("deploy"; "i")) or (.path | test("deploy"; "i"))) | .path'
+            echo "$WORKFLOW_OUTPUT" | jq -r '.[] | select(.state == "active") | select((.name | test("deploy"; "i")) or (.path | test("deploy"; "i"))) | .path'
           )
           if [ ${#DEPLOY_WORKFLOW_PATHS[@]} -eq 0 ] || [ -z "${DEPLOY_WORKFLOW_PATHS[0]:-}" ]; then
             echo "No deploy workflows matched; using DEPLOY_COUNT=0."
@@ -109,17 +113,23 @@ jobs:
 
           echo "⏱️ Calculating Lead Time since $SINCE_DAY..."
 
-          PRS_JSON=$(gh pr list --state merged --search "merged:>=$SINCE_DAY" --limit 500 --json number,createdAt,mergedAt)
+          PRS_JSON=$(gh pr list --state merged --search "merged:>=$SINCE_DAY" --limit 500 --json number,createdAt,mergedAt 2>/dev/null || echo "[]")
+          if ! echo "$PRS_JSON" | jq empty 2>/dev/null; then
+            echo "::warning::Invalid JSON from gh pr list; using empty array"
+            PRS_JSON="[]"
+          fi
 
-          echo "$PRS_JSON" | python3 - "$GITHUB_OUTPUT" <<'PY'
+          export PRS_JSON
+          python3 - "$GITHUB_OUTPUT" <<'PY'
           import json
           import math
           import statistics
+          import os
           import sys
           from datetime import datetime
 
           out_path = sys.argv[1]
-          prs = json.load(sys.stdin)
+          prs = json.loads(os.environ.get("PRS_JSON", "[]"))
 
           def parse_iso(ts: str) -> datetime:
             return datetime.fromisoformat(ts.replace("Z", "+00:00"))
@@ -184,15 +194,21 @@ jobs:
 
           echo "🛠️ Calculating MTTR since $SINCE_DAY..."
 
-          ISSUES_JSON=$(gh issue list --state closed --label incident --search "closed:>=$SINCE_DAY" --limit 500 --json number,createdAt,closedAt)
+          ISSUES_JSON=$(gh issue list --state closed --label incident --search "closed:>=$SINCE_DAY" --limit 500 --json number,createdAt,closedAt 2>/dev/null || echo "[]")
+          if ! echo "$ISSUES_JSON" | jq empty 2>/dev/null; then
+            echo "::warning::Invalid JSON from gh issue list; using empty array"
+            ISSUES_JSON="[]"
+          fi
 
-          echo "$ISSUES_JSON" | python3 - "$GITHUB_OUTPUT" <<'PY'
+          export ISSUES_JSON
+          python3 - "$GITHUB_OUTPUT" <<'PY'
           import json
+          import os
           import sys
           from datetime import datetime
 
           out_path = sys.argv[1]
-          issues = json.load(sys.stdin)
+          issues = json.loads(os.environ.get("ISSUES_JSON", "[]"))
 
           def parse_iso(ts: str) -> datetime:
             return datetime.fromisoformat(ts.replace("Z", "+00:00"))
