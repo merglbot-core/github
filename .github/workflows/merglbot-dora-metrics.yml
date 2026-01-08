@@ -1,0 +1,292 @@
+name: Merglbot DORA Metrics Collector
+
+on:
+  schedule:
+    - cron: '0 8 * * 1' # Weekly Monday 08:00 UTC
+  workflow_dispatch:
+    inputs:
+      period_days:
+        description: "Period to analyze (days)"
+        default: 30
+        required: false
+        type: number
+
+permissions:
+  contents: read
+  actions: read
+  issues: read
+  pull-requests: read
+
+env:
+  PERIOD_DAYS: ${{ inputs.period_days || 30 }}
+
+jobs:
+  collect-dora:
+    name: Collect DORA Metrics
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Compute Period
+        id: period
+        run: |
+          set -euo pipefail
+
+          if ! [[ "$PERIOD_DAYS" =~ ^[0-9]+$ ]]; then
+            echo "Invalid PERIOD_DAYS: $PERIOD_DAYS (must be an integer)" >&2
+            exit 1
+          fi
+
+          SINCE_DAY=$(date -u -d "-$PERIOD_DAYS days" '+%Y-%m-%d' 2>/dev/null || date -u -v-${PERIOD_DAYS}d '+%Y-%m-%d')
+          SINCE_ISO=$(date -u -d "-$PERIOD_DAYS days" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -v-${PERIOD_DAYS}d '+%Y-%m-%dT%H:%M:%SZ')
+
+          echo "since_day=$SINCE_DAY" >> "$GITHUB_OUTPUT"
+          echo "since_iso=$SINCE_ISO" >> "$GITHUB_OUTPUT"
+
+      # 1) DEPLOYMENT FREQUENCY (heuristic)
+      - name: Calculate Deployment Frequency
+        id: deploy_freq
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SINCE_DAY: ${{ steps.period.outputs.since_day }}
+        run: |
+          set -euo pipefail
+
+          echo "📦 Calculating Deployment Frequency since $SINCE_DAY..."
+
+          # Heuristic: count successful runs of workflows whose name/path contains "deploy".
+          mapfile -t DEPLOY_WORKFLOW_PATHS < <(
+            gh workflow list --all --json name,path,state \
+              --jq '.[] | select(.state == "active") | select((.name | test("deploy"; "i")) or (.path | test("deploy"; "i"))) | .path'
+          )
+
+          DEPLOY_COUNT=0
+          for wf_path in "${DEPLOY_WORKFLOW_PATHS[@]}"; do
+            COUNT=$(gh run list --workflow="$wf_path" --status=success --created=">=$SINCE_DAY" --limit 200 --json databaseId --jq 'length' 2>/dev/null || echo 0)
+            DEPLOY_COUNT=$((DEPLOY_COUNT + COUNT))
+          done
+
+          FREQ_PER_DAY=$(echo "scale=2; $DEPLOY_COUNT / $PERIOD_DAYS" | bc)
+
+          echo "count=$DEPLOY_COUNT" >> "$GITHUB_OUTPUT"
+          echo "per_day=$FREQ_PER_DAY" >> "$GITHUB_OUTPUT"
+
+          # DORA classification (Deployment Frequency)
+          if (( $(echo "$FREQ_PER_DAY >= 1" | bc -l) )); then
+            echo "classification=elite" >> "$GITHUB_OUTPUT"
+          elif (( $(echo "$FREQ_PER_DAY >= 0.14" | bc -l) )); then
+            echo "classification=high" >> "$GITHUB_OUTPUT"
+          elif (( $(echo "$FREQ_PER_DAY >= 0.03" | bc -l) )); then
+            echo "classification=medium" >> "$GITHUB_OUTPUT"
+          else
+            echo "classification=low" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 2) LEAD TIME FOR CHANGES (heuristic: PR createdAt → mergedAt)
+      - name: Calculate Lead Time
+        id: lead_time
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SINCE_DAY: ${{ steps.period.outputs.since_day }}
+        run: |
+          set -euo pipefail
+
+          echo "⏱️ Calculating Lead Time since $SINCE_DAY..."
+
+          PRS_JSON=$(gh pr list --state merged --search "merged:>=$SINCE_DAY" --limit 500 --json number,createdAt,mergedAt)
+
+          echo "$PRS_JSON" | python3 - "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import math
+          import statistics
+          import sys
+          from datetime import datetime
+
+          out_path = sys.argv[1]
+          prs = json.load(sys.stdin)
+
+          def parse_iso(ts: str) -> datetime:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+          durations = []
+          for pr in prs:
+            created = pr.get("createdAt")
+            merged = pr.get("mergedAt")
+            if not created or not merged:
+              continue
+            durations.append((parse_iso(merged) - parse_iso(created)).total_seconds() / 3600.0)
+
+          durations.sort()
+          n = len(durations)
+
+          def pctl(p: float) -> float:
+            if n == 0:
+              return 0.0
+            idx = max(0, min(n - 1, math.ceil((p / 100.0) * n) - 1))
+            return durations[idx]
+
+          median = statistics.median(durations) if durations else 0.0
+          p95 = pctl(95)
+
+          with open(out_path, "a", encoding="utf-8") as f:
+            f.write(f"count={n}\n")
+            f.write(f"median_hours={median:.2f}\n")
+            f.write(f"p95_hours={p95:.2f}\n")
+          PY
+
+      # 3) CHANGE FAILURE RATE (heuristic)
+      - name: Calculate Change Failure Rate
+        id: cfr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SINCE_DAY: ${{ steps.period.outputs.since_day }}
+          TOTAL_DEPLOYS: ${{ steps.deploy_freq.outputs.count }}
+        run: |
+          set -euo pipefail
+
+          echo "🔥 Calculating Change Failure Rate since $SINCE_DAY..."
+
+          FAILURES=$(gh pr list --state merged --search "merged:>=$SINCE_DAY (hotfix OR revert OR rollback)" --limit 500 --json number --jq 'length' 2>/dev/null || echo 0)
+
+          if [ "${TOTAL_DEPLOYS:-0}" -gt 0 ]; then
+            CFR=$(echo "scale=1; $FAILURES * 100 / $TOTAL_DEPLOYS" | bc)
+          else
+            CFR="0"
+          fi
+
+          echo "failures=$FAILURES" >> "$GITHUB_OUTPUT"
+          echo "percent=$CFR" >> "$GITHUB_OUTPUT"
+
+      # 4) MEAN TIME TO RECOVERY (MTTR) (heuristic: incident issues open→close time)
+      - name: Calculate MTTR
+        id: mttr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SINCE_DAY: ${{ steps.period.outputs.since_day }}
+        run: |
+          set -euo pipefail
+
+          echo "🛠️ Calculating MTTR since $SINCE_DAY..."
+
+          ISSUES_JSON=$(gh issue list --state closed --label incident --search "closed:>=$SINCE_DAY" --limit 500 --json number,createdAt,closedAt)
+
+          echo "$ISSUES_JSON" | python3 - "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+          from datetime import datetime
+
+          out_path = sys.argv[1]
+          issues = json.load(sys.stdin)
+
+          def parse_iso(ts: str) -> datetime:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+          durations = []
+          for issue in issues:
+            created = issue.get("createdAt")
+            closed = issue.get("closedAt")
+            if not created or not closed:
+              continue
+            durations.append((parse_iso(closed) - parse_iso(created)).total_seconds() / 3600.0)
+
+          count = len(durations)
+          avg = (sum(durations) / count) if count else 0.0
+
+          with open(out_path, "a", encoding="utf-8") as f:
+            f.write(f"count={count}\n")
+            f.write(f"hours={avg:.2f}\n")
+          PY
+
+      - name: Generate DORA Report
+        run: |
+          set -euo pipefail
+
+          DEPLOY_PER_DAY="${{ steps.deploy_freq.outputs.per_day }}"
+          LEAD_P95="${{ steps.lead_time.outputs.p95_hours }}"
+          CFR_PCT="${{ steps.cfr.outputs.percent }}"
+          MTTR_HOURS="${{ steps.mttr.outputs.hours }}"
+
+          # Targets
+          TARGET_DEPLOY_PER_DAY="1"
+          TARGET_LEAD_P95_HOURS="24"
+          TARGET_CFR_PCT="10"
+          TARGET_MTTR_HOURS="4"
+
+          DF_STATUS="⚠️"
+          LT_STATUS="⚠️"
+          CFR_STATUS="⚠️"
+          MTTR_STATUS="⚠️"
+
+          if (( $(echo "$DEPLOY_PER_DAY >= $TARGET_DEPLOY_PER_DAY" | bc -l) )); then DF_STATUS="✅"; fi
+          if (( $(echo "$LEAD_P95 < $TARGET_LEAD_P95_HOURS" | bc -l) )); then LT_STATUS="✅"; fi
+          if (( $(echo "$CFR_PCT < $TARGET_CFR_PCT" | bc -l) )); then CFR_STATUS="✅"; fi
+          if (( $(echo "$MTTR_HOURS < $TARGET_MTTR_HOURS" | bc -l) )); then MTTR_STATUS="✅"; fi
+
+          {
+            echo "# DORA Metrics Report"
+            echo ""
+            echo "**Period:** Last $PERIOD_DAYS days"
+            echo "**Generated:** $(date -u +"%Y-%m-%d %H:%M UTC")"
+            echo ""
+            echo "## Metrics Summary"
+            echo ""
+            echo "| Metric | Value | Target | Status |"
+            echo "|--------|-------|--------|--------|"
+            echo "| Deployment Frequency | ${DEPLOY_PER_DAY}/day | >${TARGET_DEPLOY_PER_DAY}/day | $DF_STATUS |"
+            echo "| Lead Time (p95) | ${LEAD_P95}h | <${TARGET_LEAD_P95_HOURS}h | $LT_STATUS |"
+            echo "| Change Failure Rate | ${CFR_PCT}% | <${TARGET_CFR_PCT}% | $CFR_STATUS |"
+            echo "| MTTR | ${MTTR_HOURS}h | <${TARGET_MTTR_HOURS}h | $MTTR_STATUS |"
+            echo ""
+            echo "## Classification"
+            echo ""
+            echo "**Deployment Frequency:** ${{ steps.deploy_freq.outputs.classification }}"
+            echo ""
+            echo "## Raw Data"
+            echo ""
+            echo "- Deployments counted: ${{ steps.deploy_freq.outputs.count }}"
+            echo "- PRs analyzed (lead time): ${{ steps.lead_time.outputs.count }}"
+            echo "- Failure PRs matched: ${{ steps.cfr.outputs.failures }}"
+            echo "- Incidents analyzed (MTTR): ${{ steps.mttr.outputs.count }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save Metrics JSON
+        run: |
+          set -euo pipefail
+
+          mkdir -p metrics
+          cat > metrics/dora-metrics.json << EOF
+          {
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "period_days": $PERIOD_DAYS,
+            "metrics": {
+              "deployment_frequency": {
+                "count": ${{ steps.deploy_freq.outputs.count }},
+                "per_day": ${{ steps.deploy_freq.outputs.per_day }},
+                "classification": "${{ steps.deploy_freq.outputs.classification }}"
+              },
+              "lead_time_hours": {
+                "prs_analyzed": ${{ steps.lead_time.outputs.count }},
+                "median": ${{ steps.lead_time.outputs.median_hours }},
+                "p95": ${{ steps.lead_time.outputs.p95_hours }}
+              },
+              "change_failure_rate": {
+                "failure_prs": ${{ steps.cfr.outputs.failures }},
+                "percent": ${{ steps.cfr.outputs.percent }}
+              },
+              "mttr_hours": {
+                "incidents_analyzed": ${{ steps.mttr.outputs.count }},
+                "average": ${{ steps.mttr.outputs.hours }}
+              }
+            }
+          }
+          EOF
+
+      - name: Upload Metrics Artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: dora-metrics-${{ github.run_id }}
+          path: metrics/
+          retention-days: 365
