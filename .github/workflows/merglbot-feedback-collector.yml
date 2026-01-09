@@ -37,6 +37,11 @@ jobs:
           DAYS_BACK: ${{ github.event.inputs.days_back || '7' }}
         run: |
           set -euo pipefail
+
+          if ! [[ "$DAYS_BACK" =~ ^[0-9]+$ ]]; then
+            echo "Invalid DAYS_BACK: $DAYS_BACK (must be an integer)" >&2
+            exit 1
+          fi
           
           echo "========================================="
           echo "📊 MERGLBOT FEEDBACK COLLECTOR"
@@ -66,6 +71,7 @@ jobs:
           # Search for issue comments containing Merglbot review signature
           gh api "repos/${{ github.repository }}/issues/comments" \
             --paginate \
+            -f since="$SINCE_DATE" \
             -q '.[] | select(.body | contains("Merglbot PR Assistant")) | {id: .id, issue_url: .issue_url, created_at: .created_at, user: .user.login}' \
             > /tmp/merglbot_comments.json 2>/dev/null || echo "[]" > /tmp/merglbot_comments.json
           
@@ -106,7 +112,7 @@ jobs:
           # Calculate satisfaction score
           TOTAL_FEEDBACK=$((THUMBS_UP + THUMBS_DOWN))
           if [ "$TOTAL_FEEDBACK" -gt 0 ]; then
-            SATISFACTION_SCORE=$(echo "scale=1; $THUMBS_UP * 100 / $TOTAL_FEEDBACK" | bc)
+            SATISFACTION_SCORE=$(awk "BEGIN {printf \"%.1f\", $THUMBS_UP * 100 / $TOTAL_FEEDBACK}")
           else
             SATISFACTION_SCORE="N/A"
           fi
@@ -125,29 +131,179 @@ jobs:
           
           # Create summary JSON
           TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-          cat > feedback/summary.json << SUMMARY_EOF
-          {
-            "timestamp": "$TIMESTAMP",
-            "repository": "${{ github.repository }}",
-            "period_days": $DAYS_BACK,
-            "since": "$SINCE_DATE",
-            "metrics": {
-              "total_reviews": $TOTAL_REVIEWS,
-              "thumbs_up": $THUMBS_UP,
-              "thumbs_down": $THUMBS_DOWN,
-              "no_feedback": $NO_FEEDBACK,
-              "satisfaction_percent": "$SATISFACTION_SCORE"
-            }
-          }
-          SUMMARY_EOF
+          jq -n \
+            --arg timestamp "$TIMESTAMP" \
+            --arg repository "${{ github.repository }}" \
+            --argjson period_days "$DAYS_BACK" \
+            --arg since "$SINCE_DATE" \
+            --argjson total_reviews "$TOTAL_REVIEWS" \
+            --argjson thumbs_up "$THUMBS_UP" \
+            --argjson thumbs_down "$THUMBS_DOWN" \
+            --argjson no_feedback "$NO_FEEDBACK" \
+            --arg satisfaction_percent "$SATISFACTION_SCORE" \
+            '{
+              timestamp: $timestamp,
+              repository: $repository,
+              period_days: $period_days,
+              since: $since,
+              metrics: {
+                total_reviews: $total_reviews,
+                thumbs_up: $thumbs_up,
+                thumbs_down: $thumbs_down,
+                no_feedback: $no_feedback,
+                satisfaction_percent: $satisfaction_percent
+              }
+            }' > feedback/summary.json
           
           echo "Summary saved to feedback/summary.json"
           cat feedback/summary.json
+
+      - name: Collect Code Acceptance Rate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DAYS_BACK: ${{ github.event.inputs.days_back || '7' }}
+        run: |
+          set -euo pipefail
+
+          if ! [[ "$DAYS_BACK" =~ ^[0-9]+$ ]]; then
+            echo "Invalid DAYS_BACK: $DAYS_BACK (must be an integer)" >&2
+            exit 1
+          fi
+
+          REPO="${{ github.repository }}"
+          SIGNATURE="Merglbot PR Assistant"
+
+          mkdir -p feedback
+
+          SINCE_DATE=$(date -u -d "$DAYS_BACK days ago" '+%Y-%m-%dT00:00:00Z' 2>/dev/null || date -u -v-${DAYS_BACK}d '+%Y-%m-%dT00:00:00Z')
+          SINCE_DAY=$(date -u -d "$DAYS_BACK days ago" '+%Y-%m-%d' 2>/dev/null || date -u -v-${DAYS_BACK}d '+%Y-%m-%d')
+
+          echo "========================================="
+          echo "📈 CODE ACCEPTANCE RATE (HEURISTIC)"
+          echo "========================================="
+          echo ""
+          echo "Repository: $REPO"
+          echo "Since: $SINCE_DAY"
+          echo ""
+          echo "Method: merged PRs with '$SIGNATURE' comment in PR comments; classify by number of commits after first review comment:"
+          echo "- accepted_as_is: 0 commits"
+          echo "- minor_changes: 1-2 commits"
+          echo "- significant_changes: 3+ commits"
+          echo ""
+
+          # NOTE: --paginate is required; Search API returns max 100 items per page.
+          SEARCH_NUMBERS=""
+          if ! SEARCH_NUMBERS="$(gh api "search/issues" --paginate -f q="repo:$REPO is:pr is:merged merged:>=$SINCE_DAY \"$SIGNATURE\" in:comments" -F per_page=100 --jq '.items[].number // empty' 2>/dev/null)"; then
+            echo "⚠️  Search API failed; proceeding with 0 PRs." >&2
+            SEARCH_NUMBERS=""
+          fi
+          mapfile -t PR_NUMBERS < <(printf '%s\n' "$SEARCH_NUMBERS" | sed '/^$/d' | sort -n | uniq)
+          if [ ${#PR_NUMBERS[@]} -eq 0 ] || [ -z "${PR_NUMBERS[0]:-}" ]; then
+            echo "No PRs found matching criteria (this is OK; metrics will be zero)."
+            PR_NUMBERS=()
+          fi
+
+          TOTAL=0
+          ACCEPTED=0
+          MINOR=0
+          SIGNIFICANT=0
+          DETAILS='[]'
+
+          for PR_NUMBER in "${PR_NUMBERS[@]}"; do
+            [ -z "$PR_NUMBER" ] && continue
+            if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+              continue
+            fi
+
+            # Rate limit protection (avoid bursty loops on large PR sets)
+            if [ $((TOTAL % 50)) -eq 0 ] && [ "$TOTAL" -gt 0 ]; then
+              REMAINING="$(gh api rate_limit --jq '.rate.remaining' 2>/dev/null || echo '')"
+              if [ -n "$REMAINING" ] && [ "$REMAINING" -lt 100 ]; then
+                echo "⚠️  Rate limit low ($REMAINING remaining), sleeping 60s..." >&2
+                sleep 60
+              fi
+            fi
+            sleep 0.5
+
+            # Fetch PR comments and find the earliest Merglbot review comment timestamp
+            COMMENTS_JSON="$({ gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate 2>/dev/null || echo '[]'; } | jq -s 'add // []' 2>/dev/null || echo '[]')"
+            REVIEW_AT=$(echo "$COMMENTS_JSON" | jq -r --arg sig "$SIGNATURE" 'map(select(.body | contains($sig))) | min_by(.created_at) | .created_at // empty')
+            if [ -z "$REVIEW_AT" ]; then
+              continue
+            fi
+
+            TOTAL=$((TOTAL + 1))
+
+            COMMITS_JSON="$({ gh api "repos/$REPO/pulls/$PR_NUMBER/commits" --paginate 2>/dev/null || echo '[]'; } | jq -s 'add // []' 2>/dev/null || echo '[]')"
+            COMMITS_AFTER=$(echo "$COMMITS_JSON" | jq -r --arg review_at "$REVIEW_AT" '[.[] | select((.commit.committer.date // .commit.author.date) > $review_at)] | length')
+
+            CLASSIFICATION="accepted_as_is"
+            if [ "$COMMITS_AFTER" -eq 0 ]; then
+              ACCEPTED=$((ACCEPTED + 1))
+              CLASSIFICATION="accepted_as_is"
+            elif [ "$COMMITS_AFTER" -le 2 ]; then
+              MINOR=$((MINOR + 1))
+              CLASSIFICATION="minor_changes"
+            else
+              SIGNIFICANT=$((SIGNIFICANT + 1))
+              CLASSIFICATION="significant_changes"
+            fi
+
+            DETAILS=$(echo "$DETAILS" | jq \
+              --argjson pr_number "$PR_NUMBER" \
+              --arg review_at "$REVIEW_AT" \
+              --argjson commits_after_review "$COMMITS_AFTER" \
+              --arg classification "$CLASSIFICATION" \
+              '. + [{"pr_number": $pr_number, "review_at": $review_at, "commits_after_review": $commits_after_review, "classification": $classification}]')
+
+            echo "  PR #$PR_NUMBER: commits_after_review=$COMMITS_AFTER → $CLASSIFICATION"
+          done
+
+          TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          # NOTE: jq emits RFC8259-valid JSON numbers (e.g., 0.5, not .5).
+          jq -n \
+            --arg timestamp "$TIMESTAMP" \
+            --arg repository "$REPO" \
+            --argjson period_days "$DAYS_BACK" \
+            --arg since "$SINCE_DATE" \
+            --argjson total_reviews "$TOTAL" \
+            --argjson accepted_as_is "$ACCEPTED" \
+            --argjson minor_changes "$MINOR" \
+            --argjson significant_changes "$SIGNIFICANT" \
+            --argjson details "$DETAILS" \
+            'def pct(n):
+              if $total_reviews > 0 then (((n * 1000) / $total_reviews + 0.5) | floor) / 10 else 0 end;
+            {
+              timestamp: $timestamp,
+              repository: $repository,
+              period_days: $period_days,
+              since: $since,
+              total_reviews: $total_reviews,
+              acceptance_rate: {
+                accepted_as_is: $accepted_as_is,
+                accepted_as_is_percent: pct($accepted_as_is),
+                minor_changes: $minor_changes,
+                minor_changes_percent: pct($minor_changes),
+                significant_changes: $significant_changes,
+                significant_changes_percent: pct($significant_changes)
+              },
+              details: $details
+            }' > feedback/acceptance-metrics.json
+
+          echo ""
+          echo "Acceptance metrics saved to feedback/acceptance-metrics.json"
+          if ! jq empty feedback/acceptance-metrics.json 2>/dev/null; then
+            echo "ERROR: Generated invalid JSON in feedback/acceptance-metrics.json" >&2
+            cat feedback/acceptance-metrics.json || true
+            exit 1
+          fi
+          cat feedback/acceptance-metrics.json
       
       - name: Generate Feedback Report
         run: |
           # Create markdown report
-          cat > feedback/FEEDBACK_REPORT.md << 'REPORT_EOF'
+          # NOTE: This heredoc is intentionally unquoted to allow $(date ...) expansion.
+          cat > feedback/FEEDBACK_REPORT.md << REPORT_EOF
           # 📊 Merglbot PR Assistant - Feedback Report
           
           Generated: $(date -u '+%Y-%m-%d %H:%M UTC')
@@ -169,7 +325,32 @@ jobs:
             echo "| 👎 Not Helpful | $DOWN |" >> feedback/FEEDBACK_REPORT.md
             echo "| Satisfaction | ${SCORE}% |" >> feedback/FEEDBACK_REPORT.md
           fi
+
+          if [ -f feedback/acceptance-metrics.json ]; then
+            A_TOTAL=$(jq -r '.total_reviews' feedback/acceptance-metrics.json)
+            A_ACCEPTED=$(jq -r '.acceptance_rate.accepted_as_is' feedback/acceptance-metrics.json)
+            A_ACCEPTED_PCT=$(jq -r '.acceptance_rate.accepted_as_is_percent' feedback/acceptance-metrics.json)
+            A_MINOR=$(jq -r '.acceptance_rate.minor_changes' feedback/acceptance-metrics.json)
+            A_MINOR_PCT=$(jq -r '.acceptance_rate.minor_changes_percent' feedback/acceptance-metrics.json)
+            A_SIGNIFICANT=$(jq -r '.acceptance_rate.significant_changes' feedback/acceptance-metrics.json)
+            A_SIGNIFICANT_PCT=$(jq -r '.acceptance_rate.significant_changes_percent' feedback/acceptance-metrics.json)
+
+            cat >> feedback/FEEDBACK_REPORT.md << EOF
+
+          ## Code Acceptance Rate
+
+          **Total reviewed PRs (heuristic):** $A_TOTAL
+
+          | Classification | Count | Percent |
+          |----------------|-------|---------|
+          | Accepted as-is | $A_ACCEPTED | ${A_ACCEPTED_PCT}% |
+          | Minor changes | $A_MINOR | ${A_MINOR_PCT}% |
+          | Significant changes | $A_SIGNIFICANT | ${A_SIGNIFICANT_PCT}% |
+
+          EOF
+          fi
           
+          # NOTE: This heredoc is quoted to prevent variable expansion (literal text).
           cat >> feedback/FEEDBACK_REPORT.md << 'REPORT_EOF'
           
           ## Insights
@@ -218,8 +399,28 @@ jobs:
               echo "| 👎 Not Helpful | $DOWN |"
               echo "| Satisfaction | ${SCORE}% |"
               echo ""
+
+              if [ -f feedback/acceptance-metrics.json ]; then
+                A_TOTAL=$(jq -r '.total_reviews' feedback/acceptance-metrics.json)
+                A_ACCEPTED=$(jq -r '.acceptance_rate.accepted_as_is' feedback/acceptance-metrics.json)
+                A_ACCEPTED_PCT=$(jq -r '.acceptance_rate.accepted_as_is_percent' feedback/acceptance-metrics.json)
+                A_MINOR=$(jq -r '.acceptance_rate.minor_changes' feedback/acceptance-metrics.json)
+                A_MINOR_PCT=$(jq -r '.acceptance_rate.minor_changes_percent' feedback/acceptance-metrics.json)
+                A_SIGNIFICANT=$(jq -r '.acceptance_rate.significant_changes' feedback/acceptance-metrics.json)
+                A_SIGNIFICANT_PCT=$(jq -r '.acceptance_rate.significant_changes_percent' feedback/acceptance-metrics.json)
+
+                echo "## 📈 Code Acceptance Rate"
+                echo ""
+                echo "**Total reviewed PRs (heuristic):** $A_TOTAL"
+                echo ""
+                echo "| Classification | Count | Percent |"
+                echo "|----------------|-------|---------|"
+                echo "| Accepted as-is | $A_ACCEPTED | ${A_ACCEPTED_PCT}% |"
+                echo "| Minor changes | $A_MINOR | ${A_MINOR_PCT}% |"
+                echo "| Significant changes | $A_SIGNIFICANT | ${A_SIGNIFICANT_PCT}% |"
+                echo ""
+              fi
+
               echo "Full report available in artifacts."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
-
-
