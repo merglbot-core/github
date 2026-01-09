@@ -69,20 +69,22 @@ jobs:
           echo "🔍 Searching for Merglbot review comments..."
           
           # Search for issue comments containing Merglbot review signature
-          gh api "repos/${{ github.repository }}/issues/comments" \
+          if ! gh api "repos/${{ github.repository }}/issues/comments" \
             --paginate \
             -f since="$SINCE_DATE" \
             -q '.[] | select(.body | contains("Merglbot PR Assistant")) | {id: .id, issue_url: .issue_url, created_at: .created_at, user: .user.login}' \
-            > /tmp/merglbot_comments.json 2>/dev/null || echo "[]" > /tmp/merglbot_comments.json
+            2>/dev/null | jq -s '.' > /tmp/merglbot_comments.json; then
+            echo "[]" > /tmp/merglbot_comments.json
+          fi
           
-          COMMENT_COUNT=$(cat /tmp/merglbot_comments.json | jq -s 'length')
+          COMMENT_COUNT=$(jq 'length' /tmp/merglbot_comments.json)
           echo "Found $COMMENT_COUNT Merglbot review comments"
           echo ""
           
           # Process each comment
           echo "📈 Collecting reactions..."
           
-          cat /tmp/merglbot_comments.json | jq -c '.' | while read -r comment; do
+          jq -c '.[]' /tmp/merglbot_comments.json | while read -r comment; do
             COMMENT_ID=$(echo "$comment" | jq -r '.id')
             CREATED_AT=$(echo "$comment" | jq -r '.created_at')
             
