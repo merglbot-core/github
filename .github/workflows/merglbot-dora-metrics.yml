@@ -81,7 +81,7 @@ jobs:
           echo "count=$DEPLOY_COUNT" >> "$GITHUB_OUTPUT"
 
           export DEPLOY_COUNT
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          python3 <<'PY' >> "$GITHUB_OUTPUT"
           import os
 
           deploy_count = int(os.environ.get("DEPLOY_COUNT", "0") or 0)
@@ -120,15 +120,13 @@ jobs:
           fi
 
           export PRS_JSON
-          python3 - "$GITHUB_OUTPUT" <<'PY'
+          python3 <<'PY' >> "$GITHUB_OUTPUT"
           import json
           import math
           import statistics
           import os
-          import sys
           from datetime import datetime
 
-          out_path = sys.argv[1]
           prs = json.loads(os.environ.get("PRS_JSON", "[]"))
 
           def parse_iso(ts: str) -> datetime:
@@ -154,10 +152,9 @@ jobs:
           median = statistics.median(durations) if durations else 0.0
           p95 = pctl(95)
 
-          with open(out_path, "a", encoding="utf-8") as f:
-            f.write(f"count={n}\n")
-            f.write(f"median_hours={median:.2f}\n")
-            f.write(f"p95_hours={p95:.2f}\n")
+          print(f"count={n}")
+          print(f"median_hours={median:.2f}")
+          print(f"p95_hours={p95:.2f}")
           PY
 
       # 3) CHANGE FAILURE RATE (heuristic)
@@ -201,13 +198,11 @@ jobs:
           fi
 
           export ISSUES_JSON
-          python3 - "$GITHUB_OUTPUT" <<'PY'
+          python3 <<'PY' >> "$GITHUB_OUTPUT"
           import json
           import os
-          import sys
           from datetime import datetime
 
-          out_path = sys.argv[1]
           issues = json.loads(os.environ.get("ISSUES_JSON", "[]"))
 
           def parse_iso(ts: str) -> datetime:
@@ -224,9 +219,8 @@ jobs:
           count = len(durations)
           avg = (sum(durations) / count) if count else 0.0
 
-          with open(out_path, "a", encoding="utf-8") as f:
-            f.write(f"count={count}\n")
-            f.write(f"hours={avg:.2f}\n")
+          print(f"count={count}")
+          print(f"hours={avg:.2f}")
           PY
 
       - name: Generate DORA Report
@@ -252,7 +246,7 @@ jobs:
           export DEPLOY_PER_DAY LEAD_P95 CFR_PCT MTTR_HOURS
           export TARGET_DEPLOY_PER_DAY TARGET_LEAD_P95_HOURS TARGET_CFR_PCT TARGET_MTTR_HOURS
 
-          eval "$(python3 - <<'PY'
+          eval "$(python3 <<'PY'
           import os
 
           def to_float(name: str, default: float = 0.0) -> float:
@@ -325,7 +319,7 @@ jobs:
           set -euo pipefail
 
           mkdir -p metrics
-          python3 - <<'PY'
+          python3 <<'PY'
           import json
           import os
           from datetime import datetime, timezone
