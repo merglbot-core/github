@@ -40,8 +40,21 @@ jobs:
             exit 1
           fi
 
-          SINCE_DAY=$(date -u -d "-$PERIOD_DAYS days" '+%Y-%m-%d' 2>/dev/null || date -u -v-${PERIOD_DAYS}d '+%Y-%m-%d')
-          SINCE_ISO=$(date -u -d "-$PERIOD_DAYS days" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -v-${PERIOD_DAYS}d '+%Y-%m-%dT%H:%M:%SZ')
+          SINCE_DAY=$(
+            date -u -d "-$PERIOD_DAYS days" '+%Y-%m-%d' 2>/dev/null ||
+              date -u -v-${PERIOD_DAYS}d '+%Y-%m-%d' 2>/dev/null
+          ) || {
+            echo "::error::Failed to compute SINCE_DAY for PERIOD_DAYS=$PERIOD_DAYS" >&2
+            exit 1
+          }
+
+          SINCE_ISO=$(
+            date -u -d "-$PERIOD_DAYS days" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null ||
+              date -u -v-${PERIOD_DAYS}d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null
+          ) || {
+            echo "::error::Failed to compute SINCE_ISO for PERIOD_DAYS=$PERIOD_DAYS" >&2
+            exit 1
+          }
 
           echo "since_day=$SINCE_DAY" >> "$GITHUB_OUTPUT"
           echo "since_iso=$SINCE_ISO" >> "$GITHUB_OUTPUT"
@@ -58,15 +71,19 @@ jobs:
           echo "📦 Calculating Deployment Frequency since $SINCE_DAY..."
 
           # Heuristic: count successful runs of workflows whose name/path contains "deploy".
-          WORKFLOW_OUTPUT=$(gh workflow list --all --json name,path,state 2>&1) || {
-            echo "::error::Failed to list workflows: $WORKFLOW_OUTPUT"
+          if ! WORKFLOW_OUTPUT=$(gh workflow list --all --json name,path,state); then
+            echo "::error::Failed to list workflows" >&2
             exit 1
-          }
+          fi
 
-          mapfile -t DEPLOY_WORKFLOW_PATHS < <(
-            echo "$WORKFLOW_OUTPUT" | jq -r '.[] | select(.state == "active") | select((.name | test("deploy"; "i")) or (.path | test("deploy"; "i"))) | .path'
-          )
-          if [ ${#DEPLOY_WORKFLOW_PATHS[@]} -eq 0 ] || [ -z "${DEPLOY_WORKFLOW_PATHS[0]:-}" ]; then
+          DEPLOY_WORKFLOW_PATHS_RAW=""
+          if ! DEPLOY_WORKFLOW_PATHS_RAW=$(echo "$WORKFLOW_OUTPUT" | jq -r '.[] | select(.state == "active") | select((.name | test("deploy"; "i")) or (.path | test("deploy"; "i"))) | .path'); then
+            echo "::error::Failed to parse workflow list JSON" >&2
+            exit 1
+          fi
+
+          mapfile -t DEPLOY_WORKFLOW_PATHS < <(printf '%s\n' "$DEPLOY_WORKFLOW_PATHS_RAW" | sed '/^$/d')
+          if [ ${#DEPLOY_WORKFLOW_PATHS[@]} -eq 0 ]; then
             echo "No deploy workflows matched; using DEPLOY_COUNT=0."
             DEPLOY_WORKFLOW_PATHS=()
           fi
@@ -74,7 +91,15 @@ jobs:
           DEPLOY_COUNT=0
           for wf_path in "${DEPLOY_WORKFLOW_PATHS[@]}"; do
             [ -z "$wf_path" ] && continue
-            COUNT=$(gh run list --workflow="$wf_path" --status=success --created=">=$SINCE_DAY" --limit 200 --json databaseId --jq 'length' 2>/dev/null || echo 0)
+            COUNT=""
+            if ! COUNT=$(gh run list --workflow="$wf_path" --status=success --created=">=$SINCE_DAY" --limit 200 --json databaseId --jq 'length'); then
+              echo "::warning::Failed to list successful runs for workflow '$wf_path'; using 0" >&2
+              COUNT=0
+            fi
+            if ! [[ "$COUNT" =~ ^[0-9]+$ ]]; then
+              echo "::warning::Invalid run count '$COUNT' for workflow '$wf_path'; using 0" >&2
+              COUNT=0
+            fi
             DEPLOY_COUNT=$((DEPLOY_COUNT + COUNT))
           done
 
@@ -286,7 +311,7 @@ jobs:
             echo ""
             echo "| Metric | Value | Target | Status |"
             echo "|--------|-------|--------|--------|"
-            echo "| Deployment Frequency | ${DEPLOY_PER_DAY}/day | >${TARGET_DEPLOY_PER_DAY}/day | $DF_STATUS |"
+            echo "| Deployment Frequency | ${DEPLOY_PER_DAY}/day | >=${TARGET_DEPLOY_PER_DAY}/day | $DF_STATUS |"
             echo "| Lead Time (p95) | ${LEAD_P95}h | <${TARGET_LEAD_P95_HOURS}h | $LT_STATUS |"
             echo "| Change Failure Rate | ${CFR_PCT}% | <${TARGET_CFR_PCT}% | $CFR_STATUS |"
             echo "| MTTR | ${MTTR_HOURS}h | <${TARGET_MTTR_HOURS}h | $MTTR_STATUS |"
