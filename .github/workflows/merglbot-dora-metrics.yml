@@ -18,7 +18,7 @@ permissions:
   pull-requests: read
 
 env:
-  PERIOD_DAYS: ${{ inputs.period_days || 30 }}
+  PERIOD_DAYS: ${{ inputs.period_days }}
 
 jobs:
   collect-dora:
@@ -34,6 +34,9 @@ jobs:
         id: period
         run: |
           set -euo pipefail
+
+          PERIOD_DAYS="${PERIOD_DAYS:-30}"
+          echo "PERIOD_DAYS=$PERIOD_DAYS" >> "$GITHUB_ENV"
 
           if ! [[ "$PERIOD_DAYS" =~ ^[0-9]+$ ]] || [ "$PERIOD_DAYS" -lt 1 ]; then
             echo "Invalid PERIOD_DAYS: $PERIOD_DAYS (must be a positive integer >= 1)" >&2
@@ -82,7 +85,12 @@ jobs:
             exit 1
           fi
 
-          mapfile -t DEPLOY_WORKFLOW_PATHS < <(printf '%s\n' "$DEPLOY_WORKFLOW_PATHS_RAW" | sed '/^$/d')
+          DEPLOY_WORKFLOW_PATHS=()
+          while IFS= read -r wf_path; do
+            [ -z "$wf_path" ] && continue
+            DEPLOY_WORKFLOW_PATHS+=("$wf_path")
+          done <<< "$DEPLOY_WORKFLOW_PATHS_RAW"
+
           if [ ${#DEPLOY_WORKFLOW_PATHS[@]} -eq 0 ]; then
             echo "No deploy workflows matched; using DEPLOY_COUNT=0."
             DEPLOY_WORKFLOW_PATHS=()
@@ -144,6 +152,7 @@ jobs:
             PRS_JSON="[]"
           fi
 
+          # NOTE: JSON is passed via env var (no pipe+heredoc stdin), to avoid heredoc stdin precedence issues.
           export PRS_JSON
           python3 <<'PY' >> "$GITHUB_OUTPUT"
           import json
@@ -222,6 +231,7 @@ jobs:
             ISSUES_JSON="[]"
           fi
 
+          # NOTE: JSON is passed via env var (no pipe+heredoc stdin), to avoid heredoc stdin precedence issues.
           export ISSUES_JSON
           python3 <<'PY' >> "$GITHUB_OUTPUT"
           import json
