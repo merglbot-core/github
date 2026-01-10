@@ -69,7 +69,7 @@ jobs:
           echo "🔍 Searching for Merglbot review comments..."
           
           # Search for issue comments containing Merglbot review signature
-          if ! gh api "repos/${{ github.repository }}/issues/comments" \
+          if ! gh api -X GET "repos/${{ github.repository }}/issues/comments" \
             --paginate \
             -f since="$SINCE_DATE" \
             -q '.[] | select(.body | contains("Merglbot PR Assistant")) | {id: .id, issue_url: .issue_url, created_at: .created_at, user: .user.login}' \
