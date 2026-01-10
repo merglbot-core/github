@@ -195,7 +195,7 @@ jobs:
 
           # NOTE: --paginate is required; Search API returns max 100 items per page.
           SEARCH_NUMBERS=""
-          if ! SEARCH_NUMBERS="$(gh api "search/issues" --paginate -f q="repo:$REPO is:pr is:merged merged:>=$SINCE_DAY \"$SIGNATURE\" in:comments" -F per_page=100 --jq '.items[].number // empty' 2>/dev/null)"; then
+          if ! SEARCH_NUMBERS="$(gh api -X GET "search/issues" --paginate -f q="repo:$REPO is:pr is:merged merged:>=$SINCE_DAY \"$SIGNATURE\" in:comments" -F per_page=100 --jq '.items[].number // empty' 2>/dev/null)"; then
             echo "⚠️  Search API failed; proceeding with 0 PRs." >&2
             SEARCH_NUMBERS=""
           fi
