@@ -71,6 +71,7 @@ jobs:
       contents: write          # needed for release asset upload on tags
       id-token: write          # needed for WIF to GCP
       security-events: write   # needed for SARIF upload
+      actions: read            # needed for SARIF upload telemetry (avoids "Resource not accessible by integration")
 
     steps:
       - name: Checkout code
