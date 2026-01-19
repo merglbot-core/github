@@ -887,7 +887,8 @@ jobs:
           printf '%s\n' "2. Prioritize: Security > Bugs > Architecture > Style"
           printf '%s\n' "3. Filter false positives"
           printf '%s\n' "4. Preserve code examples and MERGLBOT citations"
-          printf '%s\n' "5. End with clear APPROVE or CHANGES NEEDED"
+          printf '%s\n' "5. Always include SSOT Sync (Docs) section (or 'None')"
+          printf '%s\n' "6. End with clear APPROVE or CHANGES NEEDED"
           printf '%s\n' ""
           printf '%s\n' "## Output Format"
           printf '%s\n' ""
@@ -902,6 +903,20 @@ jobs:
           printf '%s\n' ""
           printf '%s\n' "## Whats Good"
           printf '%s\n' ""
+          printf '%s\n' "## Bugbot Findings Analysis"
+          printf '%s\n' "[For EACH bugbot finding state: Agree/Disagree/Partially with reason]"
+          printf '%s\n' ""
+          printf '%s\n' "## SSOT Sync (Docs)"
+          printf '%s\n' "[List docs in merglbot-public/docs that must be updated due to this PR; if none: 'None']"
+          printf '%s\n' "- [ ] Doc: path - what changed + what to update"
+          printf '%s\n' ""
+          
+          if [ "${INCLUDE_RETRO:-false}" == "true" ]; then
+            printf '%s\n' "## Retro (Extractable Learnings)"
+            printf '%s\n' "[1-3 items max. Each item: Problem, Trigger Conditions, Root Cause, Fix/Workaround, Verification. If too tactical for SSOT, propose a LOCAL personal skill (not committed) with a SKILL.md skeleton.]"
+            printf '%s\n' ""
+          fi
+          
           printf '%s\n' "## Zaver"
           printf '%s\n' "Verdict: [APPROVE or CHANGES NEEDED]"
           printf '%s\n' ""
