@@ -18,6 +18,14 @@ on:
         options:
           - full
           - light
+      include_retro:
+        description: "Include SSOT-safe retro (extractable learnings + doc sync)"
+        required: false
+        type: choice
+        default: "false"
+        options:
+          - "false"
+          - "true"
       diff_scope:
         description: "Diff scope (auto = since last Merglbot review when possible)"
         required: false
@@ -72,6 +80,7 @@ jobs:
       should_run: ${{ steps.get_pr.outputs.should_run }}
       review_mode: ${{ steps.get_pr.outputs.review_mode }}
       diff_scope: ${{ steps.get_pr.outputs.diff_scope }}
+      include_retro: ${{ steps.get_pr.outputs.include_retro }}
     steps:
       - name: Get PR Number and Mode
         id: get_pr
@@ -79,9 +88,11 @@ jobs:
           # Security: Use env var to avoid command injection from comment body
           COMMENT_CONTAINS_LIGHT: ${{ contains(github.event.comment.body, '--light') }}
           COMMENT_CONTAINS_FULL_DIFF: ${{ contains(github.event.comment.body, '--full-diff') }}
+          COMMENT_CONTAINS_RETRO: ${{ contains(github.event.comment.body, '--retro') || contains(github.event.comment.body, '--learn') }}
           IS_WORKFLOW_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
           INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
           INPUT_REVIEW_MODE: ${{ github.event.inputs.review_mode }}
+          INPUT_INCLUDE_RETRO: ${{ github.event.inputs.include_retro }}
           INPUT_DIFF_SCOPE: ${{ github.event.inputs.diff_scope }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
@@ -94,6 +105,7 @@ jobs:
             PR_NUMBER_OUT="$INPUT_PR_NUMBER"
             REVIEW_MODE_OUT="${INPUT_REVIEW_MODE:-full}"
             DIFF_SCOPE_OUT="${INPUT_DIFF_SCOPE:-auto}"
+            INCLUDE_RETRO_OUT="${INPUT_INCLUDE_RETRO:-false}"
             echo "✅ Manual trigger for PR #$INPUT_PR_NUMBER (mode: ${INPUT_REVIEW_MODE:-full})"
           else
             PR_NUMBER_OUT="$ISSUE_NUMBER"
@@ -104,6 +116,13 @@ jobs:
             else
               REVIEW_MODE_OUT="full"
               echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: FULL)"
+            fi
+            
+            if [ "$COMMENT_CONTAINS_RETRO" == "true" ]; then
+              INCLUDE_RETRO_OUT="true"
+              echo "✅ Retro mode enabled (--retro/--learn)"
+            else
+              INCLUDE_RETRO_OUT="false"
             fi
             
             if [ "$COMMENT_CONTAINS_FULL_DIFF" == "true" ]; then
@@ -119,6 +138,7 @@ jobs:
             echo "should_run=true"
             echo "review_mode=$REVIEW_MODE_OUT"
             echo "diff_scope=$DIFF_SCOPE_OUT"
+            echo "include_retro=$INCLUDE_RETRO_OUT"
           } >> "$GITHUB_OUTPUT"
 
   multi-model-review:
@@ -133,6 +153,7 @@ jobs:
       PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
       REVIEW_MODE: ${{ needs.check-trigger.outputs.review_mode }}
       DIFF_SCOPE_MODE: ${{ needs.check-trigger.outputs.diff_scope }}
+      INCLUDE_RETRO: ${{ needs.check-trigger.outputs.include_retro }}
     
     steps:
       - name: Checkout
@@ -452,7 +473,7 @@ jobs:
           
           # Build prompt using printf to file (single redirect)
           {
-          printf '%s\n' "# Merglbot Multi-Model Code Review v3.2"
+          printf '%s\n' "# Merglbot Multi-Model Code Review v3.3"
           printf '%s\n' ""
           printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence."
           printf '%s\n' ""
@@ -551,6 +572,17 @@ jobs:
           printf '%s\n' "## Bugbot Findings Analysis"
           printf '%s\n' "[For EACH bugbot finding state: Agree/Disagree/Partially with reason]"
           printf '%s\n' ""
+          printf '%s\n' "## SSOT Sync (Docs)"
+          printf '%s\n' "[List docs in merglbot-public/docs that must be updated due to this PR; if none: 'None']"
+          printf '%s\n' "- [ ] Doc: path - what changed + what to update"
+          printf '%s\n' ""
+          
+          if [ "${INCLUDE_RETRO:-false}" == "true" ]; then
+            printf '%s\n' "## Retro (Extractable Learnings)"
+            printf '%s\n' "[1-3 items max. Each item: Problem, Trigger Conditions, Root Cause, Fix/Workaround, Verification. If too tactical for SSOT, propose a LOCAL personal skill (not committed) with a SKILL.md skeleton.]"
+            printf '%s\n' ""
+          fi
+          
           printf '%s\n' "## Zaver"
           printf '%s\n' "Verdict: [APPROVE or CHANGES NEEDED]"
           printf '%s\n' "[1-2 sentences]"

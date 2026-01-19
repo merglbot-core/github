@@ -70,5 +70,6 @@ GCP operation needed?
 ## Related Documentation
 
 - [MERGLBOT_CURSOR_SETUP.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_CURSOR_SETUP.md) - MCP configuration
-- [.cursorrules](../../bot-configs/.cursorrules) - Cursor AI rules with fallback strategy
+- [Cursor templates](https://github.com/merglbot-public/docs/blob/main/templates/cursor/README.md) - Project rules/commands/.cursorignore templates
+- [.cursorrules](../../bot-configs/.cursorrules) - Cursor legacy rules (deprecated; prefer .cursor/rules)
 - [MERGLBOT_AI_TOOLS.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_AI_TOOLS.md) - AI tools security policy
