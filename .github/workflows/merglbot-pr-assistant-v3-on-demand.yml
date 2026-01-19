@@ -19,7 +19,7 @@ on:
           - full
           - light
       include_retro:
-        description: "Include SSOT-safe retro (extractable learnings + doc sync)"
+        description: "Include SSOT-safe retro section (extractable learnings)"
         required: false
         type: choice
         default: "false"
@@ -96,6 +96,13 @@ jobs:
           INPUT_DIFF_SCOPE: ${{ github.event.inputs.diff_scope }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         run: |
+          validate_bool() {
+            case "$1" in
+              true|false) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
           if [ "$IS_WORKFLOW_DISPATCH" == "true" ]; then
             # Validate PR number is numeric (security)
             if ! [[ "$INPUT_PR_NUMBER" =~ ^[0-9]+$ ]]; then
@@ -131,6 +138,11 @@ jobs:
             else
               DIFF_SCOPE_OUT="auto"
             fi
+          fi
+
+          if ! validate_bool "${INCLUDE_RETRO_OUT:-false}"; then
+            echo "⚠️ Invalid include_retro value; defaulting to false"
+            INCLUDE_RETRO_OUT="false"
           fi
           
           {
