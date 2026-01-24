@@ -725,7 +725,7 @@ jobs:
           
             jq -n \
               --arg model "$MODEL_TO_TRY" \
-              --arg prompt "$FULL_PROMPT" \
+              --rawfile prompt /tmp/full_prompt.txt \
               --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
               '{
                 model: $model,
@@ -797,7 +797,7 @@ jobs:
                 fi
                 jq -n \
                   --arg model "$MODEL_TO_TRY" \
-                  --arg prompt "$FULL_PROMPT" \
+                  --rawfile prompt /tmp/full_prompt.txt \
                   --argjson max_tokens "$MAX_TOKENS_TURBO" \
                   '{
                     model: $model,
@@ -807,7 +807,7 @@ jobs:
               elif echo "$MODEL_TO_TRY" | grep -Eqi '^o[13]'; then
                 jq -n \
                   --arg model "$MODEL_TO_TRY" \
-                  --arg prompt "$FULL_PROMPT" \
+                  --rawfile prompt /tmp/full_prompt.txt \
                   --argjson max_tokens "$MAX_TOKENS_OPENAI" \
                   '{
                     model: $model,
@@ -817,7 +817,7 @@ jobs:
               else
                 jq -n \
                   --arg model "$MODEL_TO_TRY" \
-                  --arg prompt "$FULL_PROMPT" \
+                  --rawfile prompt /tmp/full_prompt.txt \
                   --argjson max_tokens "$MAX_TOKENS_OPENAI" \
                   '{
                     model: $model,
@@ -1038,7 +1038,7 @@ jobs:
               jq -n \
                 --arg model "$OPENAI_MODEL_FINAL" \
                 --arg sys_role "$OPENAI_SYSTEM_ROLE" \
-                --arg prompt "$SYNTHESIS_PROMPT" \
+                --rawfile prompt /tmp/synthesis_prompt.txt \
                 --argjson max_tokens "$MAX_TOKENS_TURBO" \
                 '{
                   model: $model,
@@ -1052,7 +1052,7 @@ jobs:
               jq -n \
                 --arg model "$OPENAI_MODEL_FINAL" \
                 --arg sys_role "$OPENAI_SYSTEM_ROLE" \
-                --arg prompt "$SYNTHESIS_PROMPT" \
+                --rawfile prompt /tmp/synthesis_prompt.txt \
                 --argjson max_tokens "$MAX_SYNTH_TOKENS" \
                 '{
                   model: $model,
@@ -1066,7 +1066,7 @@ jobs:
               jq -n \
                 --arg model "$OPENAI_MODEL_FINAL" \
                 --arg sys_role "$OPENAI_SYSTEM_ROLE" \
-                --arg prompt "$SYNTHESIS_PROMPT" \
+                --rawfile prompt /tmp/synthesis_prompt.txt \
                 --argjson max_tokens "$MAX_SYNTH_TOKENS" \
                 '{
                   model: $model,
