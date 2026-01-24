@@ -1023,7 +1023,6 @@ jobs:
           printf '%s\n' "Now synthesize into FINAL review."
           
           } > /tmp/synthesis_prompt.txt
-          SYNTHESIS_PROMPT=$(< /tmp/synthesis_prompt.txt)
           
           OPENAI_SYSTEM_ROLE="system"
           if echo "$OPENAI_MODEL_FINAL" | grep -Eqi '^o[13]'; then
