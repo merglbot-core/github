@@ -30,9 +30,13 @@ if [ ! -f "$TARGET_REPOS_FILE" ]; then
 fi
 
 # Platform scope (exclude Merglevsky-cz entirely).
-mapfile -t TARGET_REPOS < <(
-  sed -e 's/#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$TARGET_REPOS_FILE" | sed '/^$/d'
-)
+TARGET_REPOS=()
+while IFS= read -r line; do
+  line="${line%%#*}"
+  line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  [ -z "$line" ] && continue
+  TARGET_REPOS+=("$line")
+done < "$TARGET_REPOS_FILE"
 
 is_git_clean() {
   local repo_dir="$1"
