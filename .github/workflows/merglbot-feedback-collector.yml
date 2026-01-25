@@ -341,7 +341,7 @@ jobs:
             def top_rule_codes(n):
               ($details
                 | map(.rule_codes // [])
-                | add
+                | add // []
                 | map(select(type=="string"))
                 | sort
                 | group_by(.)

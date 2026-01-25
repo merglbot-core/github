@@ -896,6 +896,14 @@ jobs:
               }' > "$payload_c"
 
             for payload in "$payload_a" "$payload_b" "$payload_c"; do
+              local variant="A"
+              if [ "$payload" = "$payload_b" ]; then
+                variant="B"
+              elif [ "$payload" = "$payload_c" ]; then
+                variant="C"
+              fi
+              echo "  Trying Responses API payload variant ${variant}..."
+
               set +e
               local resp
               resp="$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.openai.com/v1/responses \
@@ -1287,10 +1295,12 @@ jobs:
 
               if [ "$exit_code" -ne 0 ] || ! echo "$resp" | jq -e . > /dev/null 2>&1; then
                 echo "  ERROR: Responses API returned non-JSON (exit=$exit_code)"
+                sleep 1
                 continue
               fi
               if echo "$resp" | jq -e ".error" > /dev/null 2>&1; then
                 echo "  ERROR: $(echo "$resp" | jq -r '.error.message')"
+                sleep 1
                 continue
               fi
 
@@ -1298,6 +1308,7 @@ jobs:
               out="$(extract_output_text "$resp")"
               if [ -z "$out" ] || [ "$out" = "null" ]; then
                 echo "  ERROR: Responses API contained no output_text"
+                sleep 1
                 continue
               fi
               printf '%s' "$out"

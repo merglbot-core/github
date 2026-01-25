@@ -18,6 +18,10 @@ permissions:
   pull-requests: write
   issues: read
 
+concurrency:
+  group: pr-assistant-improvement-digest
+  cancel-in-progress: false
+
 jobs:
   digest:
     name: Generate Improvement Digest

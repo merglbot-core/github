@@ -131,7 +131,7 @@ while IFS= read -r repo; do
   fi
 
   # Process each comment (reactions + lightweight parsing).
-  echo "$MERGLBOT_COMMENTS" | jq -c '.[]' | while read -r c; do
+  while IFS= read -r c; do
     CID="$(echo "$c" | jq -r '.id')"
     ISSUE_URL="$(echo "$c" | jq -r '.issue_url // empty')"
     PR_NUM="$(printf '%s' "$ISSUE_URL" | awk -F'/' '{print $NF}')"
@@ -160,16 +160,14 @@ while IFS= read -r repo; do
       '{repo:$repo, pr_number:$pr_number, url:$url, created_at:$created_at, verdict:$verdict, reactions:{up:$up, down:$down}, rule_codes:$rule_codes}' \
       >> "$COMMENT_METRICS_JSONL"
 
-    # Update totals (stdout parsing is OK; shell variables outside the while read loop won't update).
-  done
-
-  # Aggregate per-repo from COMMENT_METRICS_JSONL (repo-scoped)
-  REPO_SLICE="$(jq -s --arg repo "$repo" '[.[] | select(.repo == $repo)]' "$COMMENT_METRICS_JSONL" 2>/dev/null || echo '[]')"
-  UP="$(echo "$REPO_SLICE" | jq '[.[].reactions.up] | add // 0' 2>/dev/null || echo 0)"
-  DOWN="$(echo "$REPO_SLICE" | jq '[.[].reactions.down] | add // 0' 2>/dev/null || echo 0)"
-  APPROVE="$(echo "$REPO_SLICE" | jq '[.[] | select(.verdict=="APPROVE")] | length' 2>/dev/null || echo 0)"
-  CHANGES_NEEDED="$(echo "$REPO_SLICE" | jq '[.[] | select(.verdict=="CHANGES_NEEDED")] | length' 2>/dev/null || echo 0)"
-  UNKNOWN="$(echo "$REPO_SLICE" | jq '[.[] | select(.verdict=="UNKNOWN")] | length' 2>/dev/null || echo 0)"
+    UP=$((UP + PLUS_ONE))
+    DOWN=$((DOWN + MINUS_ONE))
+    case "$VERDICT" in
+      "APPROVE") APPROVE=$((APPROVE + 1)) ;;
+      "CHANGES_NEEDED") CHANGES_NEEDED=$((CHANGES_NEEDED + 1)) ;;
+      *) UNKNOWN=$((UNKNOWN + 1)) ;;
+    esac
+  done < <(printf '%s' "$MERGLBOT_COMMENTS" | jq -c '.[]')
 
   jq -n \
     --arg repo "$repo" \
