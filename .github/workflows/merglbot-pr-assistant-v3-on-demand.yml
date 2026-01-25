@@ -67,6 +67,7 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  checks: read
 
 concurrency:
   group: merglbot-review-${{ github.event.issue.number || github.event.inputs.pr_number }}
@@ -499,7 +500,7 @@ jobs:
           
           if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
             echo "Skipping Codex stage (light mode)."
-            echo "SKIPPED" > codex_review.txt
+            printf '%s' "SKIPPED" > codex_review.txt
             exit 0
           fi
 
@@ -664,12 +665,12 @@ jobs:
               printf '%s' "$resp" > "$resp_file"
 
               if [ "$exit_code" -ne 0 ] || ! echo "$resp" | jq -e . > /dev/null 2>&1; then
-                echo "  ERROR: Responses API returned non-JSON (exit=$exit_code)"
+                echo "  ERROR: Responses API returned non-JSON (exit=$exit_code)" >&2
                 sleep 1
                 continue
               fi
               if echo "$resp" | jq -e ".error" > /dev/null 2>&1; then
-                echo "  ERROR: $(echo "$resp" | jq -r '.error.message')"
+                echo "  ERROR: $(echo "$resp" | jq -r '.error.message')" >&2
                 sleep 1
                 continue
               fi
@@ -677,7 +678,7 @@ jobs:
               local out
               out="$(extract_output_text "$resp")"
               if [ -z "$out" ] || [ "$out" = "null" ]; then
-                echo "  ERROR: Responses API contained no output_text"
+                echo "  ERROR: Responses API contained no output_text" >&2
                 sleep 1
                 continue
               fi
@@ -694,7 +695,7 @@ jobs:
             printf '%s' "$CONTENT" > codex_review.txt
             echo "CODEX_MODEL_USED=$CODEX_MODEL" >> "$GITHUB_ENV"
           else
-            echo "API_ERROR" > codex_review.txt
+            printf '%s' "API_ERROR" > codex_review.txt
             echo "CODEX_MODEL_USED=$CODEX_MODEL" >> "$GITHUB_ENV"
           fi
           
@@ -857,14 +858,19 @@ jobs:
           OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
           
-          printf '%s\n' "## Anthropic Review ($ANTHROPIC_MODEL_FINAL)"
-          printf '%s\n' ""
-          printf '%s\n' "$ANTHROPIC_REVIEW"
-          printf '%s\n' ""
-          printf '%s\n' "## OpenAI Review ($OPENAI_MODEL_FINAL)"
-          printf '%s\n' ""
-          printf '%s\n' "$OPENAI_REVIEW"
-          printf '%s\n' ""
+          if [ "$ANTHROPIC_OK" == "true" ]; then
+            printf '%s\n' "## Anthropic Review ($ANTHROPIC_MODEL_FINAL)"
+            printf '%s\n' ""
+            printf '%s\n' "$ANTHROPIC_REVIEW"
+            printf '%s\n' ""
+          fi
+          
+          if [ "$OPENAI_OK" == "true" ]; then
+            printf '%s\n' "## OpenAI Review ($OPENAI_MODEL_FINAL)"
+            printf '%s\n' ""
+            printf '%s\n' "$OPENAI_REVIEW"
+            printf '%s\n' ""
+          fi
           
           if [ "$CODEX_OK" == "true" ]; then
             CODEX_MODEL_FINAL="${CODEX_MODEL_USED:-gpt-5.2-codex}"
@@ -943,18 +949,18 @@ jobs:
               set -e
 
               if [ "$exit_code" -ne 0 ] || ! echo "$resp" | jq -e . > /dev/null 2>&1; then
-                echo "ERROR: Responses API returned non-JSON (exit=$exit_code)"
+                echo "ERROR: Responses API returned non-JSON (exit=$exit_code)" >&2
                 continue
               fi
               if echo "$resp" | jq -e ".error" > /dev/null 2>&1; then
-                echo "ERROR: $(echo "$resp" | jq -r '.error.message')"
+                echo "ERROR: $(echo "$resp" | jq -r '.error.message')" >&2
                 continue
               fi
 
               local out
               out="$(extract_output_text_responses "$resp")"
               if [ -z "$out" ] || [ "$out" = "null" ]; then
-                echo "ERROR: Responses API contained no output_text"
+                echo "ERROR: Responses API contained no output_text" >&2
                 continue
               fi
 
