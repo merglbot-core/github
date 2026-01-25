@@ -55,6 +55,13 @@ on:
           - gpt-5.1
           - gpt-5
           - gpt-4-turbo
+      codex_model:
+        description: "OpenAI Codex model (specialist stage; full mode only)"
+        required: false
+        type: choice
+        default: "gpt-5.2-codex"
+        options:
+          - gpt-5.2-codex
 
 permissions:
   contents: read
@@ -221,7 +228,7 @@ jobs:
           echo "Review Mode: ${{ env.REVIEW_MODE }}"
           echo "Diff Scope Mode: ${{ env.DIFF_SCOPE_MODE }}"
           
-          gh pr view "$PR_NUM" --json title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles > pr_metadata.json
+          gh pr view "$PR_NUM" --json title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles,statusCheckRollup > pr_metadata.json
           
           PR_TITLE=$(jq -r '.title // "No title"' pr_metadata.json)
           PR_BODY=$(jq -r '.body // "No description"' pr_metadata.json)
@@ -247,6 +254,20 @@ jobs:
           printf '%s\n' "$PR_FILES" > pr_files_count.txt
           printf '%s\n' "$PR_BASE_SHA" > pr_base_sha.txt
           printf '%s\n' "$PR_HEAD_SHA" > pr_head_sha.txt
+
+          # CI / checks summary (best-effort)
+          jq -r '
+            .statusCheckRollup // []
+            | map(select(.name != null))
+            | map("- " + .name + ": " + ((.conclusion // .state // "UNKNOWN") | tostring | ascii_upcase))
+            | .[]
+          ' pr_metadata.json > pr_checks_summary.txt 2>/dev/null || true
+          if [ ! -s pr_checks_summary.txt ]; then
+            echo "No CI/checks data available." > pr_checks_summary.txt
+          fi
+
+          CHECKS_FAILED=$(jq -r '[.statusCheckRollup[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "failure" or . == "cancelled" or . == "timed_out")] | length' pr_metadata.json 2>/dev/null || echo "0")
+          printf '%s\n' "$CHECKS_FAILED" > pr_checks_failed_count.txt
           
           echo "PR_BASE_SHA=$PR_BASE_SHA" >> "$GITHUB_ENV"
           echo "PR_HEAD_SHA=$PR_HEAD_SHA" >> "$GITHUB_ENV"
@@ -283,10 +304,13 @@ jobs:
           echo "PREV_REVIEW_HEAD_SHA=$PREV_REVIEW_HEAD_SHA" >> "$GITHUB_ENV"
           
           SKIP_REVIEW="false"
+          SKIP_REASON="none"
           if [ "$DIFF_SCOPE_MODE" != "full" ] && [ -n "$PREV_REVIEW_HEAD_SHA" ] && [ "$PREV_REVIEW_HEAD_SHA" == "$PR_HEAD_SHA" ]; then
             SKIP_REVIEW="true"
+            SKIP_REASON="no_new_commits"
           fi
           echo "skip_review=$SKIP_REVIEW" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=$SKIP_REASON" >> "$GITHUB_OUTPUT"
           
           if [ "$SKIP_REVIEW" == "true" ]; then
             echo "⏭️ No new commits since last Merglbot review ($PREV_REVIEW_HEAD_SHA)"
@@ -335,6 +359,19 @@ jobs:
           
           DIFF_LINES=$(wc -l < pr_diff.txt 2>/dev/null || echo "0")
           echo "Diff: $DIFF_LINES lines"
+
+          # Security pre-scan: if diff contains secret-like patterns, skip AI review to avoid exfiltration to LLM APIs.
+          # IMPORTANT: never print the matching line(s) to logs.
+          if [ "$SKIP_REVIEW" != "true" ] && [ -s pr_diff.txt ]; then
+            SECRET_PATTERN='-----BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY-----|-----BEGIN PRIVATE KEY-----|xox[baprs]-|ghp_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}'
+            if grep -Eqi "$SECRET_PATTERN" pr_diff.txt; then
+              echo "⛔️ Potential secret-like material detected in diff; skipping AI review."
+              SKIP_REVIEW="true"
+              SKIP_REASON="potential_secret"
+              echo "skip_review=$SKIP_REVIEW" >> "$GITHUB_OUTPUT"
+              echo "skip_reason=$SKIP_REASON" >> "$GITHUB_OUTPUT"
+            fi
+          fi
           
           echo "REVIEW_CUTOFF=$LAST_REVIEW_CREATED_AT" >> "$GITHUB_ENV"
           
@@ -389,10 +426,11 @@ jobs:
           echo "CONTEXT GATHERING COMPLETE"
           echo "========================================="
 
-      - name: Skip Review (No New Commits)
+      - name: Skip Review (Guardrails)
         if: steps.context.outputs.skip_review == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SKIP_REASON: ${{ steps.context.outputs.skip_reason }}
         run: |
           set -euo pipefail
           
@@ -400,23 +438,41 @@ jobs:
           PREV_SHA="${{ env.PREV_REVIEW_HEAD_SHA }}"
           HEAD_SHA="${{ env.PR_HEAD_SHA }}"
           
-          if [ -z "$PREV_SHA" ] || [ -z "$HEAD_SHA" ]; then
-            echo "Skip requested but missing SHA context."
-            exit 0
+          if [ "${SKIP_REASON:-}" == "potential_secret" ]; then
+            {
+              printf '%s\n' "## 🤖 Merglbot PR Assistant v3"
+              printf '%s\n' ""
+              printf '%s\n' "⛔️ Skipped: potential secret-like material detected in the PR diff."
+              printf '%s\n' ""
+              printf '%s\n' "**Reason:** to avoid sending sensitive data to external LLM APIs."
+              printf '%s\n' ""
+              printf '%s\n' "**Next steps:**"
+              printf '%s\n' "- Run gitleaks/secret scanning locally and in CI"
+              printf '%s\n' "- Remove/rotate any exposed credentials"
+              printf '%s\n' "- Re-trigger: \`@merglbot review\` after fix"
+            } > comment.md
+          else
+            if [ -z "$PREV_SHA" ] || [ -z "$HEAD_SHA" ]; then
+              echo "Skip requested but missing SHA context."
+              exit 0
+            fi
+            {
+              printf '%s\n' "## 🤖 Merglbot PR Assistant v3"
+              printf '%s\n' ""
+              printf '%s\n' "⏭️ No new commits since last Merglbot review (\`${PREV_SHA:0:12}\`).  "
+              printf '%s\n' "Current head: \`${HEAD_SHA:0:12}\`."
+            } > comment.md
           fi
-          
-          {
-            printf '%s\n' "## 🤖 Merglbot PR Assistant v3"
-            printf '%s\n' ""
-            printf '%s\n' "⏭️ No new commits since last Merglbot review (\`${PREV_SHA:0:12}\`).  "
-            printf '%s\n' "Current head: \`${HEAD_SHA:0:12}\`."
-          } > comment.md
           
           gh pr comment "$PR_NUM" --body-file comment.md
           
           if [ "${{ github.event_name }}" == "issue_comment" ]; then
+            REACTION="hooray"
+            if [ "${SKIP_REASON:-}" == "potential_secret" ]; then
+              REACTION="confused"
+            fi
             gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
-              -f content='hooray' || true
+              -f content="$REACTION" || true
           fi
       
       - name: Step 1 - Parallel API Calls
@@ -460,6 +516,8 @@ jobs:
           PR_ADDITIONS=$(< pr_additions.txt)
           PR_DELETIONS=$(< pr_deletions.txt)
           PR_FILES_COUNT=$(< pr_files_count.txt)
+          PR_CHECKS_SUMMARY=$(python3 -c 'from pathlib import Path; import sys; p=Path("pr_checks_summary.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:8000])')
+          PR_CHECKS_FAILED=$(python3 -c 'from pathlib import Path; import sys; p=Path("pr_checks_failed_count.txt"); s=p.read_text(encoding="utf-8", errors="replace").strip() if p.exists() else "0"; sys.stdout.write(s if s else "0")')
           
           DIFF_SCOPE="full"
           if [ -f pr_diff_scope.txt ]; then
@@ -647,6 +705,7 @@ jobs:
           printf '%s\n' "### Rules"
           printf '%s\n' "- Czech for explanations, English for code"
           printf '%s\n' "- Include line numbers"
+          printf '%s\n' "- Evidence-first: every finding must cite file:line AND a diff excerpt; otherwise mark it as 'Needs verification'"
           printf '%s\n' "- Cite MERGLBOT rules"
           printf '%s\n' "- Code examples for fixes"
           printf '%s\n' "- Use checkboxes for actions"
@@ -660,6 +719,12 @@ jobs:
           printf '%s\n' "Author: @$PR_AUTHOR"
           printf '%s\n' "Changes: +$PR_ADDITIONS / -$PR_DELETIONS in $PR_FILES_COUNT files"
           printf '%s\n' "Changed Files: $CHANGED_FILES"
+          printf '%s\n' ""
+          printf '%s\n' "### CI / Checks Summary"
+          printf '%s\n' ""
+          printf '%s\n' "(Failed checks (best-effort): $PR_CHECKS_FAILED)"
+          printf '%s\n' ""
+          printf '%s\n' "$PR_CHECKS_SUMMARY"
           printf '%s\n' ""
           printf '%s\n' "### PR Description"
           printf '%s\n' ""
@@ -774,6 +839,107 @@ jobs:
             ANTHROPIC_MODEL_USED="$ANTHROPIC_MODEL"
           fi
           echo "ANTHROPIC_MODEL_USED=$ANTHROPIC_MODEL_USED" >> "$GITHUB_ENV"
+
+          extract_output_text_responses() {
+            local json="$1"
+            local out=""
+            out="$(echo "$json" | jq -r '.output_text // empty' 2>/dev/null || true)"
+            if [ -z "$out" ] || [ "$out" = "null" ]; then
+              out="$(echo "$json" | jq -r '[.output[]? | select(.type=="message") | .content[]? | select(.type=="output_text") | .text] | join("\n")' 2>/dev/null || true)"
+            fi
+            if [ -z "$out" ] || [ "$out" = "null" ]; then
+              out="$(echo "$json" | jq -r '.output[0].content[0].text // empty' 2>/dev/null || true)"
+            fi
+            printf '%s' "$out"
+          }
+
+          call_openai_responses() {
+            local model="$1"
+            local max_tokens="$2"
+            local prompt_file="$3"
+
+            local payload_a="/tmp/openai_responses_payload_a.json"
+            local payload_b="/tmp/openai_responses_payload_b.json"
+            local payload_c="/tmp/openai_responses_payload_c.json"
+
+            jq -n \
+              --arg model "$model" \
+              --rawfile prompt "$prompt_file" \
+              --argjson max_output_tokens "$max_tokens" \
+              '{
+                model: $model,
+                input: $prompt,
+                max_output_tokens: $max_output_tokens,
+                reasoning: { effort: "high" }
+              }' > "$payload_a"
+
+            jq -n \
+              --arg model "$model" \
+              --rawfile prompt "$prompt_file" \
+              --argjson max_output_tokens "$max_tokens" \
+              '{
+                model: $model,
+                input: [{ role: "user", content: $prompt }],
+                max_output_tokens: $max_output_tokens,
+                reasoning: { effort: "high" }
+              }' > "$payload_b"
+
+            jq -n \
+              --arg model "$model" \
+              --rawfile prompt "$prompt_file" \
+              --argjson max_output_tokens "$max_tokens" \
+              '{
+                model: $model,
+                input: [{ role: "user", content: [{ type: "input_text", text: $prompt }] }],
+                max_output_tokens: $max_output_tokens,
+                reasoning: { effort: "high" }
+              }' > "$payload_c"
+
+            for payload in "$payload_a" "$payload_b" "$payload_c"; do
+              set +e
+              local resp
+              resp="$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.openai.com/v1/responses \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $OPENAI_API_KEY" \
+                -d @"$payload")"
+              local exit_code=$?
+              set -e
+
+              if [ "$exit_code" -ne 0 ] || ! echo "$resp" | jq -e . > /dev/null 2>&1; then
+                echo "  ERROR: Responses API returned non-JSON (exit=$exit_code)"
+                continue
+              fi
+              if echo "$resp" | jq -e ".error" > /dev/null 2>&1; then
+                echo "  ERROR: $(echo "$resp" | jq -r '.error.message')"
+                continue
+              fi
+
+              local out
+              out="$(extract_output_text_responses "$resp")"
+              if [ -z "$out" ] || [ "$out" = "null" ]; then
+                echo "  ERROR: Responses API contained no output_text"
+                continue
+              fi
+
+              # Log token usage if present (do not fail if missing)
+              local total_tokens input_tokens output_tokens reasoning_tokens
+              total_tokens="$(echo "$resp" | jq -r '.usage.total_tokens // 0' 2>/dev/null || echo 0)"
+              input_tokens="$(echo "$resp" | jq -r '.usage.input_tokens // .usage.prompt_tokens // 0' 2>/dev/null || echo 0)"
+              output_tokens="$(echo "$resp" | jq -r '.usage.output_tokens // .usage.completion_tokens // 0' 2>/dev/null || echo 0)"
+              reasoning_tokens="$(echo "$resp" | jq -r '.usage.output_tokens_details.reasoning_tokens // .usage.completion_tokens_details.reasoning_tokens // 0' 2>/dev/null || echo 0)"
+              if [ "$total_tokens" != "0" ] || [ "$input_tokens" != "0" ] || [ "$output_tokens" != "0" ]; then
+                echo "  Token usage:"
+                echo "    Input: $input_tokens"
+                echo "    Output: $output_tokens (reasoning: $reasoning_tokens)"
+                echo "    Total: $total_tokens"
+              fi
+
+              printf '%s' "$out"
+              return 0
+            done
+
+            return 1
+          }
           
           # OPENAI CALL
           echo "Calling OpenAI (requested: $OPENAI_MODEL)..."
@@ -789,62 +955,53 @@ jobs:
             esac
             OPENAI_MODELS_TRIED="${OPENAI_MODELS_TRIED}${MODEL_TO_TRY}|"
             echo "  → Trying OpenAI model: $MODEL_TO_TRY"
-          
-              if [ "$MODEL_TO_TRY" = "gpt-4-turbo" ]; then
-                MAX_TOKENS_TURBO="$MAX_TOKENS_OPENAI"
-                if [ "$MAX_TOKENS_TURBO" -gt 4096 ]; then
-                  MAX_TOKENS_TURBO=4096
-                fi
-                jq -n \
-                  --arg model "$MODEL_TO_TRY" \
-                  --rawfile prompt /tmp/full_prompt.txt \
-                  --argjson max_tokens "$MAX_TOKENS_TURBO" \
-                  '{
-                    model: $model,
-                    messages: [{role: "user", content: $prompt}],
-                    max_tokens: $max_tokens
-                  }' > /tmp/openai_payload.json
-              elif echo "$MODEL_TO_TRY" | grep -Eqi '^o[13]'; then
-                jq -n \
-                  --arg model "$MODEL_TO_TRY" \
-                  --rawfile prompt /tmp/full_prompt.txt \
-                  --argjson max_tokens "$MAX_TOKENS_OPENAI" \
-                  '{
-                    model: $model,
-                    messages: [{role: "user", content: $prompt}],
-                    max_completion_tokens: $max_tokens
-                  }' > /tmp/openai_payload.json
-              else
-                jq -n \
-                  --arg model "$MODEL_TO_TRY" \
-                  --rawfile prompt /tmp/full_prompt.txt \
-                  --argjson max_tokens "$MAX_TOKENS_OPENAI" \
-                  '{
-                    model: $model,
-                    messages: [{role: "user", content: $prompt}],
-                    max_completion_tokens: $max_tokens,
-                    reasoning_effort: "high"
-                  }' > /tmp/openai_payload.json
+
+            # Prefer Responses API for GPT-5.*. Fall back to Chat Completions for legacy models.
+            USE_CHAT="false"
+            if [ "$MODEL_TO_TRY" = "gpt-4-turbo" ] || echo "$MODEL_TO_TRY" | grep -Eqi '^o[13]'; then
+              USE_CHAT="true"
+            fi
+
+            if [ "$USE_CHAT" == "false" ]; then
+              echo "  → Using Responses API"
+              if CONTENT="$(call_openai_responses "$MODEL_TO_TRY" "$MAX_TOKENS_OPENAI" "/tmp/full_prompt.txt")"; then
+                OPENAI_MODEL_USED="$MODEL_TO_TRY"
+                echo "Success (model: $OPENAI_MODEL_USED)"
+                echo "Words: $(printf '%s' "$CONTENT" | wc -w)"
+                printf '%s' "$CONTENT" > openai_review.txt
+                break
               fi
-            
-            set +e
-            OPENAI_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.openai.com/v1/chat/completions \
-              -H "Content-Type: application/json" \
-              -H "Authorization: Bearer $OPENAI_API_KEY" \
-              -d @/tmp/openai_payload.json)
-            CURL_EXIT=$?
-            set -e
-            
-            if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
-              echo "  ERROR: OpenAI request failed or returned non-JSON (curl exit=$CURL_EXIT)"
-              continue
-            fi
-            
-            if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
-              echo "  ERROR: $(echo "$OPENAI_RESP" | jq -r '.error.message')"
-              continue
-            fi
-            
+              echo "  WARN: Responses API failed; falling back to Chat Completions"
+
+              jq -n \
+                --arg model "$MODEL_TO_TRY" \
+                --rawfile prompt /tmp/full_prompt.txt \
+                --argjson max_tokens "$MAX_TOKENS_OPENAI" \
+                '{
+                  model: $model,
+                  messages: [{role: "user", content: $prompt}],
+                  max_completion_tokens: $max_tokens,
+                  reasoning_effort: "high"
+                }' > /tmp/openai_payload.json
+
+              set +e
+              OPENAI_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.openai.com/v1/chat/completions \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $OPENAI_API_KEY" \
+                -d @/tmp/openai_payload.json)
+              CURL_EXIT=$?
+              set -e
+
+              if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+                echo "  ERROR: OpenAI request failed or returned non-JSON (curl exit=$CURL_EXIT)"
+                continue
+              fi
+
+              if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
+                echo "  ERROR: $(echo "$OPENAI_RESP" | jq -r '.error.message')"
+                continue
+              fi
+
               CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
               REFUSAL=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.refusal // empty')
               if [ -n "$REFUSAL" ] && [ "$REFUSAL" != "null" ]; then
@@ -855,10 +1012,73 @@ jobs:
                 echo "  ERROR: OpenAI response contained no content"
                 continue
               fi
-            
+
+              OPENAI_MODEL_USED="$MODEL_TO_TRY"
+              echo "Success (model: $OPENAI_MODEL_USED)"
+              echo "Words: $(echo "$CONTENT" | wc -w)"
+              echo "$CONTENT" > openai_review.txt
+              break
+            fi
+
+            echo "  → Using Chat Completions API"
+            if [ "$MODEL_TO_TRY" = "gpt-4-turbo" ]; then
+              MAX_TOKENS_TURBO="$MAX_TOKENS_OPENAI"
+              if [ "$MAX_TOKENS_TURBO" -gt 4096 ]; then
+                MAX_TOKENS_TURBO=4096
+              fi
+              jq -n \
+                --arg model "$MODEL_TO_TRY" \
+                --rawfile prompt /tmp/full_prompt.txt \
+                --argjson max_tokens "$MAX_TOKENS_TURBO" \
+                '{
+                  model: $model,
+                  messages: [{role: "user", content: $prompt}],
+                  max_tokens: $max_tokens
+                }' > /tmp/openai_payload.json
+            else
+              jq -n \
+                --arg model "$MODEL_TO_TRY" \
+                --rawfile prompt /tmp/full_prompt.txt \
+                --argjson max_tokens "$MAX_TOKENS_OPENAI" \
+                '{
+                  model: $model,
+                  messages: [{role: "user", content: $prompt}],
+                  max_completion_tokens: $max_tokens
+                }' > /tmp/openai_payload.json
+            fi
+
+            set +e
+            OPENAI_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.openai.com/v1/chat/completions \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $OPENAI_API_KEY" \
+              -d @/tmp/openai_payload.json)
+            CURL_EXIT=$?
+            set -e
+
+            if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+              echo "  ERROR: OpenAI request failed or returned non-JSON (curl exit=$CURL_EXIT)"
+              continue
+            fi
+
+            if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
+              echo "  ERROR: $(echo "$OPENAI_RESP" | jq -r '.error.message')"
+              continue
+            fi
+
+            CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
+            REFUSAL=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.refusal // empty')
+            if [ -n "$REFUSAL" ] && [ "$REFUSAL" != "null" ]; then
+              echo "  ERROR: OpenAI response refusal"
+              continue
+            fi
+            if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
+              echo "  ERROR: OpenAI response contained no content"
+              continue
+            fi
+
             OPENAI_MODEL_USED="$MODEL_TO_TRY"
             echo "Success (model: $OPENAI_MODEL_USED)"
-            
+
             TOTAL_TOKENS=$(echo "$OPENAI_RESP" | jq -r '.usage.total_tokens // 0')
             PROMPT_TOKENS=$(echo "$OPENAI_RESP" | jq -r '.usage.prompt_tokens // 0')
             COMPLETION_TOKENS=$(echo "$OPENAI_RESP" | jq -r '.usage.completion_tokens // 0')
@@ -868,7 +1088,7 @@ jobs:
             echo "    Prompt: $PROMPT_TOKENS"
             echo "    Completion: $COMPLETION_TOKENS (reasoning: $REASONING_TOKENS, output: $OUTPUT_TOKENS)"
             echo "    Total: $TOTAL_TOKENS"
-            
+
             echo "Words: $(echo "$CONTENT" | wc -w)"
             echo "$CONTENT" > openai_review.txt
             break
@@ -887,7 +1107,221 @@ jobs:
           echo "STEP 1 COMPLETE"
           echo "========================================="
       
-      - name: Step 2 - Intelligent Synthesis
+      - name: Step 2 - Codex Specialist Review
+        if: success() && steps.context.outputs.skip_review != 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_MODEL: ${{ github.event.inputs.codex_model || vars.MERGLBOT_CODEX_MODEL || 'gpt-5.2-codex' }}
+        run: |
+          set -euo pipefail
+          
+          echo "========================================="
+          echo "STEP 2: CODEX SPECIALIST REVIEW"
+          echo "========================================="
+          
+          if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
+            echo "Skipping Codex stage (light mode)."
+            echo "SKIPPED" > codex_review.txt
+            exit 0
+          fi
+
+          sanitize_model() {
+            local raw="${1:-}"
+            raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            case "$raw" in
+              *[[:space:]]*) raw="" ;;
+            esac
+            if [ -n "$raw" ] && ! [[ "$raw" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              raw=""
+            fi
+            printf '%s' "$raw"
+          }
+
+          CODEX_MODEL="$(sanitize_model "${CODEX_MODEL:-}")"
+          if [ -z "$CODEX_MODEL" ]; then
+            CODEX_MODEL="gpt-5.2-codex"
+          fi
+          echo "Codex model: $CODEX_MODEL"
+
+          MAX_OUTPUT_TOKENS=20000
+          
+          PR_TITLE=$(< pr_title.txt)
+
+          DIFF_SCOPE="full"
+          if [ -f pr_diff_scope.txt ]; then
+            DIFF_SCOPE=$(< pr_diff_scope.txt)
+          fi
+          DIFF_RANGE=""
+          if [ -f pr_diff_range.txt ]; then
+            DIFF_RANGE=$(< pr_diff_range.txt)
+          fi
+
+          BUGBOT_FINDINGS=$(python3 -c 'from pathlib import Path; import sys; p=Path("bugbot_findings.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:20000])')
+          PR_DIFF=$(python3 -c 'from pathlib import Path; import sys; p=Path("pr_diff.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:100000])')
+
+          ANTHROPIC_SNIP=$(python3 -c 'from pathlib import Path; import sys; p=Path("anthropic_review.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:12000])')
+          OPENAI_SNIP=$(python3 -c 'from pathlib import Path; import sys; p=Path("openai_review.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:12000])')
+
+          # Build Codex prompt (single redirect)
+          {
+            printf '%s\n' "# Codex Specialist Review (Debugger/Patcher)"
+            printf '%s\n' ""
+            printf '%s\n' "You are the 3rd specialist reviewer in Merglbot PR Assistant."
+            printf '%s\n' "Your role: identify likely real bugs, propose minimal safe patches, and produce an actionable test plan."
+            printf '%s\n' ""
+            printf '%s\n' "## Constraints"
+            printf '%s\n' "- Be conservative: do NOT propose large refactors unless required for correctness/security."
+            printf '%s\n' "- Evidence-first: every finding must include file path + line numbers and cite the exact diff hunk."
+            printf '%s\n' "- Czech for explanations, English for code."
+            printf '%s\n' "- Prefer minimal patches that can be applied as-is."
+            printf '%s\n' ""
+            printf '%s\n' "## Output Format (STRICT)"
+            printf '%s\n' ""
+            printf '%s\n' "## Likely real bugs (with evidence)"
+            printf '%s\n' "- [ ] file:line - finding (why it's real) + evidence (diff excerpt)"
+            printf '%s\n' ""
+            printf '%s\n' "## Minimal patch suggestions"
+            printf '%s\n' "- Patch 1: file path"
+            printf '%s\n' '```diff'
+            printf '%s\n' "[minimal diff]"
+            printf '%s\n' '```'
+            printf '%s\n' ""
+            printf '%s\n' "## Test plan"
+            printf '%s\n' "- Commands to run locally/CI"
+            printf '%s\n' ""
+            printf '%s\n' "## Risk hotspots"
+            printf '%s\n' "- Auth, secrets, infra, migrations, CI, data pipelines"
+            printf '%s\n' ""
+            printf '%s\n' "---"
+            printf '%s\n' ""
+            printf '%s\n' "## PR Context"
+            printf '%s\n' "Title: $PR_TITLE"
+            printf '%s\n' "Diff scope: $DIFF_SCOPE"
+            printf '%s\n' "Diff range: $DIFF_RANGE"
+            printf '%s\n' ""
+            printf '%s\n' "### Bugbot Findings"
+            printf '%s\n' "$BUGBOT_FINDINGS"
+            printf '%s\n' ""
+            printf '%s\n' "### Anthropic Review (truncated)"
+            printf '%s\n' "$ANTHROPIC_SNIP"
+            printf '%s\n' ""
+            printf '%s\n' "### OpenAI Review (truncated)"
+            printf '%s\n' "$OPENAI_SNIP"
+            printf '%s\n' ""
+            printf '%s\n' "### PR Diff"
+            printf '%s\n' '```diff'
+            printf '%s\n' "$PR_DIFF"
+            printf '%s\n' '```'
+          } > /tmp/codex_prompt.txt
+
+          PROMPT_SIZE=$(wc -c < /tmp/codex_prompt.txt 2>/dev/null || echo 0)
+          echo "Codex prompt size: ${PROMPT_SIZE} chars"
+
+          extract_output_text() {
+            local json="$1"
+            local out=""
+            out="$(echo "$json" | jq -r '.output_text // empty' 2>/dev/null || true)"
+            if [ -z "$out" ] || [ "$out" = "null" ]; then
+              out="$(echo "$json" | jq -r '[.output[]? | select(.type=="message") | .content[]? | select(.type=="output_text") | .text] | join("\n")' 2>/dev/null || true)"
+            fi
+            if [ -z "$out" ] || [ "$out" = "null" ]; then
+              out="$(echo "$json" | jq -r '.output[0].content[0].text // empty' 2>/dev/null || true)"
+            fi
+            printf '%s' "$out"
+          }
+
+          call_responses() {
+            local model="$1"
+            local max_tokens="$2"
+            local prompt_file="$3"
+            local resp_file="$4"
+
+            local payload_a="/tmp/openai_responses_payload_a.json"
+            local payload_b="/tmp/openai_responses_payload_b.json"
+            local payload_c="/tmp/openai_responses_payload_c.json"
+
+            jq -n \
+              --arg model "$model" \
+              --rawfile prompt "$prompt_file" \
+              --argjson max_output_tokens "$max_tokens" \
+              '{
+                model: $model,
+                input: $prompt,
+                max_output_tokens: $max_output_tokens,
+                reasoning: { effort: "high" }
+              }' > "$payload_a"
+
+            jq -n \
+              --arg model "$model" \
+              --rawfile prompt "$prompt_file" \
+              --argjson max_output_tokens "$max_tokens" \
+              '{
+                model: $model,
+                input: [{ role: "user", content: $prompt }],
+                max_output_tokens: $max_output_tokens,
+                reasoning: { effort: "high" }
+              }' > "$payload_b"
+
+            jq -n \
+              --arg model "$model" \
+              --rawfile prompt "$prompt_file" \
+              --argjson max_output_tokens "$max_tokens" \
+              '{
+                model: $model,
+                input: [{ role: "user", content: [{ type: "input_text", text: $prompt }] }],
+                max_output_tokens: $max_output_tokens,
+                reasoning: { effort: "high" }
+              }' > "$payload_c"
+
+            for payload in "$payload_a" "$payload_b" "$payload_c"; do
+              set +e
+              local resp
+              resp="$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.openai.com/v1/responses \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $OPENAI_API_KEY" \
+                -d @"$payload")"
+              local exit_code=$?
+              set -e
+
+              printf '%s' "$resp" > "$resp_file"
+
+              if [ "$exit_code" -ne 0 ] || ! echo "$resp" | jq -e . > /dev/null 2>&1; then
+                echo "  ERROR: Responses API returned non-JSON (exit=$exit_code)"
+                continue
+              fi
+              if echo "$resp" | jq -e ".error" > /dev/null 2>&1; then
+                echo "  ERROR: $(echo "$resp" | jq -r '.error.message')"
+                continue
+              fi
+
+              local out
+              out="$(extract_output_text "$resp")"
+              if [ -z "$out" ] || [ "$out" = "null" ]; then
+                echo "  ERROR: Responses API contained no output_text"
+                continue
+              fi
+              printf '%s' "$out"
+              return 0
+            done
+
+            return 1
+          }
+
+          echo "Calling OpenAI Responses API for Codex specialist..."
+          if CONTENT="$(call_responses "$CODEX_MODEL" "$MAX_OUTPUT_TOKENS" "/tmp/codex_prompt.txt" "/tmp/codex_response.json")"; then
+            echo "Success (Codex). Words: $(printf '%s' "$CONTENT" | wc -w)"
+            printf '%s' "$CONTENT" > codex_review.txt
+            echo "CODEX_MODEL_USED=$CODEX_MODEL" >> "$GITHUB_ENV"
+          else
+            echo "API_ERROR" > codex_review.txt
+            echo "CODEX_MODEL_USED=$CODEX_MODEL" >> "$GITHUB_ENV"
+          fi
+          
+          echo "========================================="
+          echo "STEP 2 COMPLETE"
+          echo "========================================="
+      
+      - name: Step 3 - Intelligent Synthesis
         if: success() && steps.context.outputs.skip_review != 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -897,7 +1331,7 @@ jobs:
           set -euo pipefail
           
           echo "========================================="
-          echo "STEP 2: INTELLIGENT SYNTHESIS"
+          echo "STEP 3: INTELLIGENT SYNTHESIS"
           echo "========================================="
 
           sanitize_model() {
@@ -923,30 +1357,58 @@ jobs:
           
           ANTHROPIC_REVIEW=$(< anthropic_review.txt)
           OPENAI_REVIEW=$(< openai_review.txt)
+          CODEX_REVIEW=""
+          if [ -f codex_review.txt ]; then
+            CODEX_REVIEW=$(< codex_review.txt)
+          fi
           PR_TITLE=$(< pr_title.txt)
           PR_BODY=$(python3 -c 'from pathlib import Path; import sys; s=Path("pr_body.txt").read_text(encoding="utf-8", errors="replace"); sys.stdout.write(s[:3000])')
           
+          ANTHROPIC_OK="false"
+          if [ -s anthropic_review.txt ] && ! grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null; then
+            ANTHROPIC_OK="true"
+          fi
+          OPENAI_OK="false"
+          if [ -s openai_review.txt ] && ! grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
+            OPENAI_OK="true"
+          fi
+          CODEX_OK="false"
+          if [ -s codex_review.txt ] && ! grep -qx "API_ERROR" codex_review.txt 2>/dev/null && ! grep -qx "SKIPPED" codex_review.txt 2>/dev/null; then
+            CODEX_OK="true"
+          fi
+
           echo "Input Reviews:"
           echo "  Anthropic: $(echo "$ANTHROPIC_REVIEW" | wc -w) words"
           echo "  OpenAI: $(echo "$OPENAI_REVIEW" | wc -w) words"
+          if [ "$CODEX_OK" == "true" ]; then
+            echo "  Codex: $(echo "$CODEX_REVIEW" | wc -w) words"
+          else
+            echo "  Codex: 0 words (skipped or failed)"
+          fi
           
-            if grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null && grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
-              echo "ERROR: Both primary reviews failed; skipping synthesis"
-              echo "API_ERROR" > final_review.txt
-              exit 0
-            fi
-            
-            if grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null && ! grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
-              echo "WARN: Anthropic review failed; using OpenAI review directly (skipping synthesis)"
-              cp openai_review.txt final_review.txt
-              exit 0
-            fi
-            
-            if grep -qx "API_ERROR" openai_review.txt 2>/dev/null && ! grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null; then
-              echo "WARN: OpenAI review failed; using Anthropic review directly (skipping synthesis)"
-              cp anthropic_review.txt final_review.txt
-              exit 0
-            fi
+          AVAILABLE_REVIEW_FILES=()
+          if [ "$ANTHROPIC_OK" == "true" ]; then
+            AVAILABLE_REVIEW_FILES+=("anthropic_review.txt")
+          fi
+          if [ "$OPENAI_OK" == "true" ]; then
+            AVAILABLE_REVIEW_FILES+=("openai_review.txt")
+          fi
+          if [ "$CODEX_OK" == "true" ]; then
+            AVAILABLE_REVIEW_FILES+=("codex_review.txt")
+          fi
+          SYNTH_INPUT_COUNT="${#AVAILABLE_REVIEW_FILES[@]}"
+
+          if [ "$SYNTH_INPUT_COUNT" -eq 0 ]; then
+            echo "ERROR: All reviews failed; cannot synthesize"
+            echo "API_ERROR" > final_review.txt
+            exit 0
+          fi
+
+          if [ "$SYNTH_INPUT_COUNT" -eq 1 ]; then
+            echo "Only one review available; skipping synthesis."
+            cp "${AVAILABLE_REVIEW_FILES[0]}" final_review.txt
+            exit 0
+          fi
           
           if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
             MAX_SYNTH_TOKENS=25000
@@ -958,7 +1420,7 @@ jobs:
           {
           printf '%s\n' "# Final Review Synthesis"
           printf '%s\n' ""
-          printf '%s\n' "Synthesize two AI reviews into ONE final review."
+          printf '%s\n' "Synthesize ${SYNTH_INPUT_COUNT} AI reviews into ONE final review."
           printf '%s\n' ""
           printf '%s\n' "## Rules"
           printf '%s\n' "1. Eliminate duplicates - keep better explanation"
@@ -967,6 +1429,8 @@ jobs:
           printf '%s\n' "4. Preserve code examples and MERGLBOT citations"
           printf '%s\n' "5. Always include SSOT Sync (Docs) section (or 'None')"
           printf '%s\n' "6. End with clear APPROVE or CHANGES NEEDED"
+          printf '%s\n' "7. If Codex Specialist Review is present, treat it as patch-focused guidance (minimal diffs + test plan)."
+          printf '%s\n' "8. Evidence-first: every kept finding must include file:line + a quoted diff excerpt; drop unverified speculation."
           printf '%s\n' ""
           printf '%s\n' "## Output Format"
           printf '%s\n' ""
@@ -1020,15 +1484,130 @@ jobs:
           printf '%s\n' ""
           printf '%s\n' "$OPENAI_REVIEW"
           printf '%s\n' ""
+          
+          if [ "$CODEX_OK" == "true" ]; then
+            CODEX_MODEL_FINAL="${CODEX_MODEL_USED:-gpt-5.2-codex}"
+            printf '%s\n' "## Codex Specialist Review ($CODEX_MODEL_FINAL)"
+            printf '%s\n' ""
+            printf '%s\n' "$CODEX_REVIEW"
+            printf '%s\n' ""
+          fi
           printf '%s\n' "Now synthesize into FINAL review."
           
           } > /tmp/synthesis_prompt.txt
-          
-          OPENAI_SYSTEM_ROLE="system"
-          if echo "$OPENAI_MODEL_FINAL" | grep -Eqi '^o[13]'; then
-            OPENAI_SYSTEM_ROLE="developer"
+
+          extract_output_text_responses() {
+            local json="$1"
+            local out=""
+            out="$(echo "$json" | jq -r '.output_text // empty' 2>/dev/null || true)"
+            if [ -z "$out" ] || [ "$out" = "null" ]; then
+              out="$(echo "$json" | jq -r '[.output[]? | select(.type=="message") | .content[]? | select(.type=="output_text") | .text] | join("\n")' 2>/dev/null || true)"
+            fi
+            if [ -z "$out" ] || [ "$out" = "null" ]; then
+              out="$(echo "$json" | jq -r '.output[0].content[0].text // empty' 2>/dev/null || true)"
+            fi
+            printf '%s' "$out"
+          }
+
+          call_openai_responses_synthesis() {
+            local model="$1"
+            local max_tokens="$2"
+            local prompt_file="$3"
+
+            local payload_a="/tmp/openai_responses_synth_payload_a.json"
+            local payload_b="/tmp/openai_responses_synth_payload_b.json"
+            local payload_c="/tmp/openai_responses_synth_payload_c.json"
+
+            jq -n \
+              --arg model "$model" \
+              --rawfile prompt "$prompt_file" \
+              --argjson max_output_tokens "$max_tokens" \
+              '{
+                model: $model,
+                input: $prompt,
+                max_output_tokens: $max_output_tokens,
+                reasoning: { effort: "high" }
+              }' > "$payload_a"
+
+            jq -n \
+              --arg model "$model" \
+              --rawfile prompt "$prompt_file" \
+              --argjson max_output_tokens "$max_tokens" \
+              '{
+                model: $model,
+                input: [{ role: "user", content: $prompt }],
+                max_output_tokens: $max_output_tokens,
+                reasoning: { effort: "high" }
+              }' > "$payload_b"
+
+            jq -n \
+              --arg model "$model" \
+              --rawfile prompt "$prompt_file" \
+              --argjson max_output_tokens "$max_tokens" \
+              '{
+                model: $model,
+                input: [{ role: "user", content: [{ type: "input_text", text: $prompt }] }],
+                max_output_tokens: $max_output_tokens,
+                reasoning: { effort: "high" }
+              }' > "$payload_c"
+
+            for payload in "$payload_a" "$payload_b" "$payload_c"; do
+              set +e
+              local resp
+              resp="$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.openai.com/v1/responses \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $OPENAI_API_KEY" \
+                -d @"$payload")"
+              local exit_code=$?
+              set -e
+
+              if [ "$exit_code" -ne 0 ] || ! echo "$resp" | jq -e . > /dev/null 2>&1; then
+                echo "ERROR: Responses API returned non-JSON (exit=$exit_code)"
+                continue
+              fi
+              if echo "$resp" | jq -e ".error" > /dev/null 2>&1; then
+                echo "ERROR: $(echo "$resp" | jq -r '.error.message')"
+                continue
+              fi
+
+              local out
+              out="$(extract_output_text_responses "$resp")"
+              if [ -z "$out" ] || [ "$out" = "null" ]; then
+                echo "ERROR: Responses API contained no output_text"
+                continue
+              fi
+
+              printf '%s' "$out"
+              return 0
+            done
+
+            return 1
+          }
+
+          # Pick fallback review (prefer OpenAI > Anthropic > Codex)
+          FALLBACK_REVIEW_FILE="openai_review.txt"
+          if [ ! -s openai_review.txt ] || grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
+            FALLBACK_REVIEW_FILE="anthropic_review.txt"
+            if [ ! -s anthropic_review.txt ] || grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null; then
+              if [ -s codex_review.txt ] && ! grep -qx "API_ERROR" codex_review.txt 2>/dev/null && ! grep -qx "SKIPPED" codex_review.txt 2>/dev/null; then
+                FALLBACK_REVIEW_FILE="codex_review.txt"
+              fi
+            fi
           fi
-          
+
+          USE_CHAT="false"
+          if [ "$OPENAI_MODEL_FINAL" = "gpt-4-turbo" ] || echo "$OPENAI_MODEL_FINAL" | grep -Eqi '^o[13]'; then
+            USE_CHAT="true"
+          fi
+
+          if [ "$USE_CHAT" == "true" ]; then
+            echo "Calling OpenAI Chat Completions for synthesis (model: $OPENAI_MODEL_FINAL)..."
+
+            OPENAI_SYSTEM_ROLE="system"
+            if echo "$OPENAI_MODEL_FINAL" | grep -Eqi '^o[13]'; then
+              OPENAI_SYSTEM_ROLE="developer"
+            fi
+
             if [ "$OPENAI_MODEL_FINAL" = "gpt-4-turbo" ]; then
               MAX_TOKENS_TURBO="$MAX_SYNTH_TOKENS"
               if [ "$MAX_TOKENS_TURBO" -gt 4096 ]; then
@@ -1047,7 +1626,7 @@ jobs:
                   ],
                   max_tokens: $max_tokens
                 }' > /tmp/synthesis_payload.json
-            elif echo "$OPENAI_MODEL_FINAL" | grep -Eqi '^o[13]'; then
+            else
               jq -n \
                 --arg model "$OPENAI_MODEL_FINAL" \
                 --arg sys_role "$OPENAI_SYSTEM_ROLE" \
@@ -1061,50 +1640,23 @@ jobs:
                   ],
                   max_completion_tokens: $max_tokens
                 }' > /tmp/synthesis_payload.json
-            else
-              jq -n \
-                --arg model "$OPENAI_MODEL_FINAL" \
-                --arg sys_role "$OPENAI_SYSTEM_ROLE" \
-                --rawfile prompt /tmp/synthesis_prompt.txt \
-                --argjson max_tokens "$MAX_SYNTH_TOKENS" \
-                '{
-                  model: $model,
-                  messages: [
-                    {role: $sys_role, content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
-                    {role: "user", content: $prompt}
-                  ],
-                  max_completion_tokens: $max_tokens,
-                  reasoning_effort: "high"
-                }' > /tmp/synthesis_payload.json
             fi
-          
-          echo "Calling OpenAI for synthesis..."
-          
-          set +e
-          SYNTHESIS_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.openai.com/v1/chat/completions \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $OPENAI_API_KEY" \
-            -d @/tmp/synthesis_payload.json)
-          CURL_EXIT=$?
-          set -e
-          
-          echo "Synthesis Response: ${#SYNTHESIS_RESP} chars"
-          
-          FALLBACK_REVIEW_FILE="anthropic_review.txt"
-          if [ ! -s anthropic_review.txt ] || grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null; then
-            if [ -s openai_review.txt ] && ! grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
-              FALLBACK_REVIEW_FILE="openai_review.txt"
-            fi
-          fi
-          
-          if [ "$CURL_EXIT" -ne 0 ] || ! echo "$SYNTHESIS_RESP" | jq -e . > /dev/null 2>&1; then
-            echo "ERROR: Synthesis request failed or returned non-JSON (curl exit=$CURL_EXIT)"
-            cp "$FALLBACK_REVIEW_FILE" final_review.txt
-          elif echo "$SYNTHESIS_RESP" | jq -e ".error" > /dev/null 2>&1; then
-            echo "ERROR: $(echo "$SYNTHESIS_RESP" | jq -r '.error.message')"
-            cp "$FALLBACK_REVIEW_FILE" final_review.txt
+
+            set +e
+            SYNTHESIS_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.openai.com/v1/chat/completions \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $OPENAI_API_KEY" \
+              -d @/tmp/synthesis_payload.json)
+            CURL_EXIT=$?
+            set -e
+
+            if [ "$CURL_EXIT" -ne 0 ] || ! echo "$SYNTHESIS_RESP" | jq -e . > /dev/null 2>&1; then
+              echo "ERROR: Synthesis request failed or returned non-JSON (curl exit=$CURL_EXIT)"
+              cp "$FALLBACK_REVIEW_FILE" final_review.txt
+            elif echo "$SYNTHESIS_RESP" | jq -e ".error" > /dev/null 2>&1; then
+              echo "ERROR: $(echo "$SYNTHESIS_RESP" | jq -r '.error.message')"
+              cp "$FALLBACK_REVIEW_FILE" final_review.txt
             else
-              echo "Success"
               CONTENT=$(echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.content // empty')
               REFUSAL=$(echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.refusal // empty')
               if [ -n "$REFUSAL" ] && [ "$REFUSAL" != "null" ]; then
@@ -1118,11 +1670,63 @@ jobs:
                 echo "$CONTENT" > final_review.txt
               fi
             fi
+          else
+            echo "Calling OpenAI Responses API for synthesis (model: $OPENAI_MODEL_FINAL)..."
+            if CONTENT="$(call_openai_responses_synthesis "$OPENAI_MODEL_FINAL" "$MAX_SYNTH_TOKENS" "/tmp/synthesis_prompt.txt")"; then
+              echo "Words: $(printf '%s' "$CONTENT" | wc -w)"
+              printf '%s' "$CONTENT" > final_review.txt
+            else
+              echo "WARN: Responses API failed; trying Chat Completions fallback"
+
+              jq -n \
+                --arg model "$OPENAI_MODEL_FINAL" \
+                --rawfile prompt /tmp/synthesis_prompt.txt \
+                --argjson max_tokens "$MAX_SYNTH_TOKENS" \
+                '{
+                  model: $model,
+                  messages: [
+                    {role: "system", content: "You are an expert code reviewer that synthesizes multiple AI reviews into one authoritative final review."},
+                    {role: "user", content: $prompt}
+                  ],
+                  max_completion_tokens: $max_tokens,
+                  reasoning_effort: "high"
+                }' > /tmp/synthesis_payload.json
+
+              set +e
+              SYNTHESIS_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.openai.com/v1/chat/completions \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $OPENAI_API_KEY" \
+                -d @/tmp/synthesis_payload.json)
+              CURL_EXIT=$?
+              set -e
+
+              if [ "$CURL_EXIT" -ne 0 ] || ! echo "$SYNTHESIS_RESP" | jq -e . > /dev/null 2>&1; then
+                echo "ERROR: Synthesis fallback failed or returned non-JSON (curl exit=$CURL_EXIT)"
+                cp "$FALLBACK_REVIEW_FILE" final_review.txt
+              elif echo "$SYNTHESIS_RESP" | jq -e ".error" > /dev/null 2>&1; then
+                echo "ERROR: $(echo "$SYNTHESIS_RESP" | jq -r '.error.message')"
+                cp "$FALLBACK_REVIEW_FILE" final_review.txt
+              else
+                CONTENT=$(echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.content // empty')
+                REFUSAL=$(echo "$SYNTHESIS_RESP" | jq -r '.choices[0].message.refusal // empty')
+                if [ -n "$REFUSAL" ] && [ "$REFUSAL" != "null" ]; then
+                  echo "ERROR: Synthesis refusal received"
+                  cp "$FALLBACK_REVIEW_FILE" final_review.txt
+                elif [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
+                  echo "ERROR: Synthesis response contained no content"
+                  cp "$FALLBACK_REVIEW_FILE" final_review.txt
+                else
+                  echo "Words: $(echo "$CONTENT" | wc -w)"
+                  echo "$CONTENT" > final_review.txt
+                fi
+              fi
+            fi
+          fi
           
           FINAL_WORDS=$(wc -w < final_review.txt 2>/dev/null || echo 0)
           echo "Final review: $FINAL_WORDS words"
           echo "========================================="
-          echo "STEP 2 COMPLETE"
+          echo "STEP 3 COMPLETE"
           echo "========================================="
       
       - name: Post Review Comment
@@ -1131,6 +1735,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
           OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
+          CODEX_MODEL: ${{ github.event.inputs.codex_model || vars.MERGLBOT_CODEX_MODEL || 'gpt-5.2-codex' }}
         run: |
           set -euo pipefail
           
@@ -1148,11 +1753,15 @@ jobs:
 
           ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
+          CODEX_MODEL="$(sanitize_model "${CODEX_MODEL:-}")"
           if [ -z "$ANTHROPIC_MODEL" ]; then
             ANTHROPIC_MODEL="claude-opus-4-5-20250929"
           fi
           if [ -z "$OPENAI_MODEL" ]; then
             OPENAI_MODEL="gpt-5.2"
+          fi
+          if [ -z "$CODEX_MODEL" ]; then
+            CODEX_MODEL="gpt-5.2-codex"
           fi
 
           PR_NUM="${{ env.PR_NUMBER }}"
@@ -1191,16 +1800,23 @@ jobs:
           
           OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
+          CODEX_MODEL_FINAL="${CODEX_MODEL_USED:-$CODEX_MODEL}"
           
-          OPENAI_CONFIG_DESC="reasoning_effort=high 🧠"
+          OPENAI_CONFIG_DESC="reasoning=high (Responses API; fallback Chat) 🧠"
           if [ "$OPENAI_MODEL_FINAL" = "gpt-4-turbo" ]; then
-            OPENAI_CONFIG_DESC="max_tokens (no reasoning_effort)"
+            OPENAI_CONFIG_DESC="Chat Completions (max_tokens)"
           elif echo "$OPENAI_MODEL_FINAL" | grep -Eqi '^o[13]'; then
-            OPENAI_CONFIG_DESC="max_completion_tokens (no reasoning_effort)"
+            OPENAI_CONFIG_DESC="Chat Completions (max_completion_tokens)"
           fi
+
+          CODEX_CONFIG_DESC="reasoning=high (Responses API)"
           
           ANTHROPIC_WORDS=$(wc -w < anthropic_review.txt 2>/dev/null || echo "0")
           OPENAI_WORDS=$(wc -w < openai_review.txt 2>/dev/null || echo "0")
+          CODEX_WORDS="0"
+          if [ -f codex_review.txt ] && ! grep -qx "SKIPPED" codex_review.txt 2>/dev/null && ! grep -qx "API_ERROR" codex_review.txt 2>/dev/null; then
+            CODEX_WORDS=$(wc -w < codex_review.txt 2>/dev/null || echo "0")
+          fi
           FINAL_WORDS=$(wc -w < final_review.txt 2>/dev/null || echo "0")
           
           echo "Building PR comment..."
@@ -1227,8 +1843,9 @@ jobs:
               echo "| Phase | Model | Config |"
               echo "|-------|-------|--------|"
               echo "| Primary Analysis | Anthropic \`$ANTHROPIC_MODEL_FINAL\` | temp=0.2 |"
-                echo "| Secondary Analysis | OpenAI \`$OPENAI_MODEL_FINAL\` | $OPENAI_CONFIG_DESC |"
-                echo "| Final Synthesis | OpenAI \`$OPENAI_MODEL_FINAL\` | $OPENAI_CONFIG_DESC |"
+              echo "| Secondary Analysis | OpenAI \`$OPENAI_MODEL_FINAL\` | $OPENAI_CONFIG_DESC |"
+              echo "| Codex Specialist | OpenAI \`$CODEX_MODEL_FINAL\` | $CODEX_CONFIG_DESC |"
+              echo "| Final Synthesis | OpenAI \`$OPENAI_MODEL_FINAL\` | $OPENAI_CONFIG_DESC |"
               echo ""
               echo "### Review Statistics"
               echo ""
@@ -1240,6 +1857,7 @@ jobs:
               echo "| Head SHA | \`${PR_HEAD_SHA:0:12}\` |"
               echo "| Anthropic Output | $ANTHROPIC_WORDS words |"
               echo "| OpenAI Output | $OPENAI_WORDS words |"
+              echo "| Codex Output | $CODEX_WORDS words |"
               echo "| Final Review | $FINAL_WORDS words |"
               echo ""
               echo "### Bugbot Sources Analyzed"
@@ -1253,6 +1871,7 @@ jobs:
               echo "### Context Used"
               echo ""
               echo "- Full PR description"
+              echo "- CI / checks summary"
               echo "- Diff scope: \`$DIFF_SCOPE\` (\`$DIFF_RANGE\`)"
               echo "- Changed files list"
               echo "- Bugbot findings ($BUGBOT_COUNT sources)"
@@ -1298,12 +1917,17 @@ jobs:
       - name: Workflow Summary
         run: |
           SKIPPED="${{ steps.context.outputs.skip_review }}"
+          SKIP_REASON="${{ steps.context.outputs.skip_reason }}"
           if [ "$SKIPPED" == "true" ]; then
             {
               echo "## 🤖 Merglbot PR Assistant v3 - Summary"
               echo ""
               echo "- **PR**: #${{ env.PR_NUMBER }}"
-              echo "- **Status**: Skipped (no new commits since last review)"
+              if [ "$SKIP_REASON" == "potential_secret" ]; then
+                echo "- **Status**: Skipped (potential secret-like material detected in diff)"
+              else
+                echo "- **Status**: Skipped (no new commits since last review)"
+              fi
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
@@ -1340,6 +1964,7 @@ jobs:
             echo "|--------|-------|"
             echo "| Anthropic | $(wc -w < anthropic_review.txt 2>/dev/null || echo 0) words |"
             echo "| OpenAI | $(wc -w < openai_review.txt 2>/dev/null || echo 0) words |"
+            echo "| Codex | $(wc -w < codex_review.txt 2>/dev/null || echo 0) words |"
             echo "| Final | $(wc -w < final_review.txt 2>/dev/null || echo 0) words |"
             echo ""
             echo "### Bugbot Sources"
@@ -1353,6 +1978,7 @@ jobs:
         env:
           ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
           OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
+          CODEX_MODEL: ${{ github.event.inputs.codex_model || vars.MERGLBOT_CODEX_MODEL || 'gpt-5.2-codex' }}
         run: |
           # Create metrics JSON for feedback loop analysis
           sanitize_model() {
@@ -1369,11 +1995,15 @@ jobs:
 
           ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
+          CODEX_MODEL="$(sanitize_model "${CODEX_MODEL:-}")"
           if [ -z "$ANTHROPIC_MODEL" ]; then
             ANTHROPIC_MODEL="claude-opus-4-5-20250929"
           fi
           if [ -z "$OPENAI_MODEL" ]; then
             OPENAI_MODEL="gpt-5.2"
+          fi
+          if [ -z "$CODEX_MODEL" ]; then
+            CODEX_MODEL="gpt-5.2-codex"
           fi
 
           TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -1382,9 +2012,14 @@ jobs:
           
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
           OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
+          CODEX_MODEL_FINAL="${CODEX_MODEL_USED:-$CODEX_MODEL}"
           
           ANTHROPIC_WORDS=$(wc -w < anthropic_review.txt 2>/dev/null || echo 0)
           OPENAI_WORDS=$(wc -w < openai_review.txt 2>/dev/null || echo 0)
+          CODEX_WORDS=0
+          if [ -f codex_review.txt ] && ! grep -qx "SKIPPED" codex_review.txt 2>/dev/null && ! grep -qx "API_ERROR" codex_review.txt 2>/dev/null; then
+            CODEX_WORDS=$(wc -w < codex_review.txt 2>/dev/null || echo 0)
+          fi
           FINAL_WORDS=$(wc -w < final_review.txt 2>/dev/null || echo 0)
           
           BUGBOT_COUNT="0"
@@ -1442,11 +2077,13 @@ jobs:
             "run_id": "${{ github.run_id }}",
             "models": {
               "anthropic": "$ANTHROPIC_MODEL_FINAL",
-              "openai": "$OPENAI_MODEL_FINAL"
+              "openai": "$OPENAI_MODEL_FINAL",
+              "codex": "$CODEX_MODEL_FINAL"
             },
             "output": {
               "anthropic_words": $ANTHROPIC_WORDS,
               "openai_words": $OPENAI_WORDS,
+              "codex_words": $CODEX_WORDS,
               "final_words": $FINAL_WORDS
             },
             "findings": {

@@ -52,7 +52,7 @@ jobs:
           echo ""
           
           # Calculate date range
-          SINCE_DATE=$(date -u -d "$DAYS_BACK days ago" '+%Y-%m-%dT00:00:00Z' 2>/dev/null || date -u -v-${DAYS_BACK}d '+%Y-%m-%dT00:00:00Z')
+          SINCE_DATE=$(date -u -d "$DAYS_BACK days ago" '+%Y-%m-%dT00:00:00Z')
           echo "Collecting feedback since: $SINCE_DATE"
           echo ""
           
@@ -177,8 +177,8 @@ jobs:
 
           mkdir -p feedback
 
-          SINCE_DATE=$(date -u -d "$DAYS_BACK days ago" '+%Y-%m-%dT00:00:00Z' 2>/dev/null || date -u -v-${DAYS_BACK}d '+%Y-%m-%dT00:00:00Z')
-          SINCE_DAY=$(date -u -d "$DAYS_BACK days ago" '+%Y-%m-%d' 2>/dev/null || date -u -v-${DAYS_BACK}d '+%Y-%m-%d')
+          SINCE_DATE=$(date -u -d "$DAYS_BACK days ago" '+%Y-%m-%dT00:00:00Z')
+          SINCE_DAY=$(date -u -d "$DAYS_BACK days ago" '+%Y-%m-%d')
 
           echo "========================================="
           echo "📈 CODE ACCEPTANCE RATE (HEURISTIC)"
@@ -233,6 +233,7 @@ jobs:
             if [ -z "$REVIEW_AT" ]; then
               continue
             fi
+            REVIEW_BODY=$(echo "$COMMENTS_JSON" | jq -r --arg sig "$SIGNATURE" 'map(select(.body | contains($sig))) | min_by(.created_at) | .body // ""')
 
             TOTAL=$((TOTAL + 1))
 
@@ -251,12 +252,61 @@ jobs:
               CLASSIFICATION="significant_changes"
             fi
 
+            PR_JSON="$(gh api "repos/$REPO/pulls/$PR_NUMBER" 2>/dev/null || echo '{}')"
+            PR_URL="$(echo "$PR_JSON" | jq -r '.html_url // empty' 2>/dev/null || echo '')"
+            MERGED_AT="$(echo "$PR_JSON" | jq -r '.merged_at // empty' 2>/dev/null || echo '')"
+
+            # Merge latency (hours)
+            MERGE_LATENCY_HOURS_JSON="null"
+            if [ -n "$MERGED_AT" ] && [ -n "$REVIEW_AT" ]; then
+              MERGE_LATENCY_HOURS="$(python3 -c 'from datetime import datetime; import sys; parse=lambda s: datetime.fromisoformat(s.replace("Z","+00:00")); delta=parse(sys.argv[2]) - parse(sys.argv[1]); print(f"{(delta.total_seconds()/3600.0):.2f}")' "$REVIEW_AT" "$MERGED_AT")"
+              if [[ "$MERGE_LATENCY_HOURS" =~ ^-?[0-9]+(\.[0-9]+)?$ ]]; then
+                MERGE_LATENCY_HOURS_JSON="$MERGE_LATENCY_HOURS"
+              fi
+            fi
+
+            # Parse verdict from the FIRST Merglbot review comment
+            VERDICT="UNKNOWN"
+            VERDICT_LINE="$(printf '%s\n' "$REVIEW_BODY" | grep -im1 '^Verdict:' 2>/dev/null || true)"
+            if [ -n "$VERDICT_LINE" ]; then
+              VERDICT_VALUE="$(printf '%s' "$VERDICT_LINE" | sed -E 's/^Verdict:[[:space:]]*//I')"
+              if echo "$VERDICT_VALUE" | grep -Eqi '^changes[[:space:]]+needed'; then
+                VERDICT="CHANGES_NEEDED"
+              elif echo "$VERDICT_VALUE" | grep -Eqi '^approve'; then
+                VERDICT="APPROVE"
+              fi
+            fi
+
+            MERGED_DESPITE_CHANGES_NEEDED="false"
+            if [ "$VERDICT" = "CHANGES_NEEDED" ]; then
+              MERGED_DESPITE_CHANGES_NEEDED="true"
+            fi
+
+            RULE_CODES_JSON="$(printf '%s' "$REVIEW_BODY" | python3 -c 'import sys, json, re; body=sys.stdin.read(); codes=sorted(set(re.findall(r"MERGLBOT-[A-Z]+-[0-9]{3}", body))); print(json.dumps(codes))')"
+
             DETAILS=$(echo "$DETAILS" | jq \
               --argjson pr_number "$PR_NUMBER" \
               --arg review_at "$REVIEW_AT" \
+              --arg merged_at "$MERGED_AT" \
+              --arg pr_url "$PR_URL" \
               --argjson commits_after_review "$COMMITS_AFTER" \
               --arg classification "$CLASSIFICATION" \
-              '. + [{"pr_number": $pr_number, "review_at": $review_at, "commits_after_review": $commits_after_review, "classification": $classification}]')
+              --arg verdict "$VERDICT" \
+              --argjson merge_latency_hours "$MERGE_LATENCY_HOURS_JSON" \
+              --argjson merged_despite_changes_needed "$MERGED_DESPITE_CHANGES_NEEDED" \
+              --argjson rule_codes "$RULE_CODES_JSON" \
+              '. + [{
+                "pr_number": $pr_number,
+                "pr_url": $pr_url,
+                "review_at": $review_at,
+                "merged_at": $merged_at,
+                "merge_latency_hours": $merge_latency_hours,
+                "commits_after_review": $commits_after_review,
+                "classification": $classification,
+                "verdict": $verdict,
+                "merged_despite_changes_needed": $merged_despite_changes_needed,
+                "rule_codes": $rule_codes
+              }]')
 
             echo "  PR #$PR_NUMBER: commits_after_review=$COMMITS_AFTER → $CLASSIFICATION"
           done
@@ -275,6 +325,36 @@ jobs:
             --argjson details "$DETAILS" \
             'def pct(n):
               if $total_reviews > 0 then (((n * 1000) / $total_reviews + 0.5) | floor) / 10 else 0 end;
+            def latencies:
+              [$details[] | .merge_latency_hours] | map(select(type=="number")) | sort;
+            def avg(arr):
+              if (arr|length) > 0 then (arr|add) / (arr|length) else 0 end;
+            def median(arr):
+              if (arr|length) == 0 then 0
+              elif (arr|length) % 2 == 1 then arr[(arr|length)/2]
+              else (arr[(arr|length)/2 - 1] + arr[(arr|length)/2]) / 2
+              end;
+            def percentile(arr; p):
+              if (arr|length) == 0 then 0
+              else arr[((arr|length) - 1) * p / 100 | round]
+              end;
+            def top_rule_codes(n):
+              ($details
+                | map(.rule_codes // [])
+                | add
+                | map(select(type=="string"))
+                | sort
+                | group_by(.)
+                | map({code: .[0], count: length})
+                | sort_by(-.count)
+                | .[:n]
+              );
+            def approve_count:
+              [$details[] | select(.verdict == "APPROVE")] | length;
+            def changes_needed_count:
+              [$details[] | select(.verdict == "CHANGES_NEEDED")] | length;
+            def merged_despite_changes_needed_count:
+              [$details[] | select(.merged_despite_changes_needed == true)] | length;
             {
               timestamp: $timestamp,
               repository: $repository,
@@ -289,6 +369,26 @@ jobs:
                 significant_changes: $significant_changes,
                 significant_changes_percent: pct($significant_changes)
               },
+              merge_latency_hours: (
+                (latencies) as $l
+                | {
+                  avg: (avg($l) | ((. * 100) | round) / 100),
+                  median: (median($l) | ((. * 100) | round) / 100),
+                  p90: (percentile($l; 90) | ((. * 100) | round) / 100),
+                  min: (if ($l|length)>0 then $l[0] else 0 end),
+                  max: (if ($l|length)>0 then $l[-1] else 0 end)
+                }
+              ),
+              verdicts: {
+                approve: approve_count,
+                changes_needed: changes_needed_count,
+                changes_needed_percent: pct(changes_needed_count)
+              },
+              merged_despite_changes_needed: {
+                count: merged_despite_changes_needed_count,
+                percent: pct(merged_despite_changes_needed_count)
+              },
+              top_rule_codes: top_rule_codes(15),
               details: $details
             }' > feedback/acceptance-metrics.json
 
@@ -322,10 +422,12 @@ jobs:
             DOWN=$(jq -r '.metrics.thumbs_down' feedback/summary.json)
             SCORE=$(jq -r '.metrics.satisfaction_percent' feedback/summary.json)
             
-            echo "| Total Reviews | $TOTAL |" >> feedback/FEEDBACK_REPORT.md
-            echo "| 👍 Helpful | $UP |" >> feedback/FEEDBACK_REPORT.md
-            echo "| 👎 Not Helpful | $DOWN |" >> feedback/FEEDBACK_REPORT.md
-            echo "| Satisfaction | ${SCORE}% |" >> feedback/FEEDBACK_REPORT.md
+            {
+              echo "| Total Reviews | $TOTAL |"
+              echo "| 👍 Helpful | $UP |"
+              echo "| 👎 Not Helpful | $DOWN |"
+              echo "| Satisfaction | ${SCORE}% |"
+            } >> feedback/FEEDBACK_REPORT.md
           fi
 
           if [ -f feedback/acceptance-metrics.json ]; then
@@ -336,6 +438,16 @@ jobs:
             A_MINOR_PCT=$(jq -r '.acceptance_rate.minor_changes_percent' feedback/acceptance-metrics.json)
             A_SIGNIFICANT=$(jq -r '.acceptance_rate.significant_changes' feedback/acceptance-metrics.json)
             A_SIGNIFICANT_PCT=$(jq -r '.acceptance_rate.significant_changes_percent' feedback/acceptance-metrics.json)
+            L_AVG=$(jq -r '.merge_latency_hours.avg' feedback/acceptance-metrics.json)
+            L_MED=$(jq -r '.merge_latency_hours.median' feedback/acceptance-metrics.json)
+            L_P90=$(jq -r '.merge_latency_hours.p90' feedback/acceptance-metrics.json)
+            L_MIN=$(jq -r '.merge_latency_hours.min' feedback/acceptance-metrics.json)
+            L_MAX=$(jq -r '.merge_latency_hours.max' feedback/acceptance-metrics.json)
+            V_APPROVE=$(jq -r '.verdicts.approve' feedback/acceptance-metrics.json)
+            V_CHANGES=$(jq -r '.verdicts.changes_needed' feedback/acceptance-metrics.json)
+            V_CHANGES_PCT=$(jq -r '.verdicts.changes_needed_percent' feedback/acceptance-metrics.json)
+            M_DESPITE=$(jq -r '.merged_despite_changes_needed.count' feedback/acceptance-metrics.json)
+            M_DESPITE_PCT=$(jq -r '.merged_despite_changes_needed.percent' feedback/acceptance-metrics.json)
 
             cat >> feedback/FEEDBACK_REPORT.md << EOF
 
@@ -348,6 +460,30 @@ jobs:
           | Accepted as-is | $A_ACCEPTED | ${A_ACCEPTED_PCT}% |
           | Minor changes | $A_MINOR | ${A_MINOR_PCT}% |
           | Significant changes | $A_SIGNIFICANT | ${A_SIGNIFICANT_PCT}% |
+
+          ## Merge Latency (hours)
+
+          | Metric | Value |
+          |--------|-------|
+          | Avg | $L_AVG |
+          | Median | $L_MED |
+          | P90 | $L_P90 |
+          | Min | $L_MIN |
+          | Max | $L_MAX |
+
+          ## Verdicts (from first Merglbot review)
+
+          | Verdict | Count | Percent |
+          |--------|-------|---------|
+          | APPROVE | $V_APPROVE | - |
+          | CHANGES NEEDED | $V_CHANGES | ${V_CHANGES_PCT}% |
+          | Merged despite CHANGES NEEDED | $M_DESPITE | ${M_DESPITE_PCT}% |
+
+          ## Top MERGLBOT Rule Codes (frequency)
+
+          \`\`\`
+          $(jq -r '.top_rule_codes[]? | "\(.count)\t\(.code)"' feedback/acceptance-metrics.json | head -n 15)
+          \`\`\`
 
           EOF
           fi
@@ -410,6 +546,13 @@ jobs:
                 A_MINOR_PCT=$(jq -r '.acceptance_rate.minor_changes_percent' feedback/acceptance-metrics.json)
                 A_SIGNIFICANT=$(jq -r '.acceptance_rate.significant_changes' feedback/acceptance-metrics.json)
                 A_SIGNIFICANT_PCT=$(jq -r '.acceptance_rate.significant_changes_percent' feedback/acceptance-metrics.json)
+                L_AVG=$(jq -r '.merge_latency_hours.avg' feedback/acceptance-metrics.json)
+                L_MED=$(jq -r '.merge_latency_hours.median' feedback/acceptance-metrics.json)
+                L_P90=$(jq -r '.merge_latency_hours.p90' feedback/acceptance-metrics.json)
+                V_CHANGES=$(jq -r '.verdicts.changes_needed' feedback/acceptance-metrics.json)
+                V_CHANGES_PCT=$(jq -r '.verdicts.changes_needed_percent' feedback/acceptance-metrics.json)
+                M_DESPITE=$(jq -r '.merged_despite_changes_needed.count' feedback/acceptance-metrics.json)
+                M_DESPITE_PCT=$(jq -r '.merged_despite_changes_needed.percent' feedback/acceptance-metrics.json)
 
                 echo "## 📈 Code Acceptance Rate"
                 echo ""
@@ -420,6 +563,23 @@ jobs:
                 echo "| Accepted as-is | $A_ACCEPTED | ${A_ACCEPTED_PCT}% |"
                 echo "| Minor changes | $A_MINOR | ${A_MINOR_PCT}% |"
                 echo "| Significant changes | $A_SIGNIFICANT | ${A_SIGNIFICANT_PCT}% |"
+                echo ""
+
+                echo "## ⏱️ Merge Latency (hours)"
+                echo ""
+                echo "| Metric | Value |"
+                echo "|--------|-------|"
+                echo "| Avg | $L_AVG |"
+                echo "| Median | $L_MED |"
+                echo "| P90 | $L_P90 |"
+                echo ""
+
+                echo "## ✅ Verdict Signals"
+                echo ""
+                echo "| Signal | Count | Percent |"
+                echo "|--------|-------|---------|"
+                echo "| CHANGES NEEDED | $V_CHANGES | ${V_CHANGES_PCT}% |"
+                echo "| Merged despite CHANGES NEEDED | $M_DESPITE | ${M_DESPITE_PCT}% |"
                 echo ""
               fi
 

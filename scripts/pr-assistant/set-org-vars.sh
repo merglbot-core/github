@@ -17,6 +17,7 @@ done
 
 OPENAI_MODEL_DEFAULT="${MERGLBOT_OPENAI_MODEL_DEFAULT:-gpt-5.2}"
 ANTHROPIC_MODEL_DEFAULT="${MERGLBOT_ANTHROPIC_MODEL_DEFAULT:-claude-opus-4-5-20250929}"
+CODEX_MODEL_DEFAULT="${MERGLBOT_CODEX_MODEL_DEFAULT:-gpt-5.2-codex}"
 
 ORGS=(
   "merglbot-core"
@@ -58,10 +59,11 @@ set_var() {
 echo "Mode:      $([ "$DRY_RUN" == "true" ] && echo "DRY RUN" || echo "APPLY")"
 echo "OpenAI:    $OPENAI_MODEL_DEFAULT"
 echo "Anthropic: $ANTHROPIC_MODEL_DEFAULT"
+echo "Codex:     $CODEX_MODEL_DEFAULT"
 echo ""
 
 for org in "${ORGS[@]}"; do
   set_var "$org" "MERGLBOT_OPENAI_MODEL" "$OPENAI_MODEL_DEFAULT"
   set_var "$org" "MERGLBOT_ANTHROPIC_MODEL" "$ANTHROPIC_MODEL_DEFAULT"
+  set_var "$org" "MERGLBOT_CODEX_MODEL" "$CODEX_MODEL_DEFAULT"
 done
-

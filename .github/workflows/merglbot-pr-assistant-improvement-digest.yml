@@ -1,0 +1,107 @@
+name: Merglbot PR Assistant Improvement Digest
+
+on:
+  schedule:
+    # Daily at 06:30 UTC
+    - cron: '30 6 * * *'
+
+  workflow_dispatch:
+    inputs:
+      days_back:
+        description: "Days to look back for digest"
+        required: false
+        default: "7"
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+
+jobs:
+  digest:
+    name: Generate Improvement Digest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1 (tag: v6.0.1)
+
+      - name: Generate Digest
+        env:
+          # Prefer enterprise-wide token if available; falls back to repo token (limited to current org/repo access).
+          GH_TOKEN: ${{ secrets.ENTERPRISE_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+          DAYS_BACK: ${{ github.event.inputs.days_back || '7' }}
+        run: |
+          set -euo pipefail
+
+          if ! [[ "$DAYS_BACK" =~ ^[0-9]+$ ]]; then
+            echo "Invalid DAYS_BACK: $DAYS_BACK (must be an integer)" >&2
+            exit 1
+          fi
+
+          DATE="$(date -u '+%Y-%m-%d')"
+          OUT="docs/pr-assistant/improvement-digest/${DATE}.md"
+          LATEST="docs/pr-assistant/improvement-digest/LATEST.md"
+
+          chmod +x scripts/pr-assistant/generate-improvement-digest.sh
+          scripts/pr-assistant/generate-improvement-digest.sh --days-back "$DAYS_BACK" --output "$OUT"
+
+          mkdir -p "$(dirname "$LATEST")"
+          cat > "$LATEST" <<EOF
+          # Latest improvement digest
+
+          - ${DATE}.md
+          EOF
+
+          {
+            echo "DATE=$DATE"
+            echo "OUT=$OUT"
+            echo "LATEST=$LATEST"
+            echo "DAYS_BACK=$DAYS_BACK"
+          } >> "$GITHUB_ENV"
+
+      - name: Create / Update PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          DATE="${DATE:?}"
+          OUT="${OUT:?}"
+          LATEST="${LATEST:?}"
+          DAYS_BACK="${DAYS_BACK:?}"
+
+          git config user.name "merglbot-bot"
+          git config user.email "bot@merglbot.ai"
+
+          BRANCH="chore/pr-assistant-improvement-digest-${DATE}"
+
+          if git ls-remote --exit-code origin "refs/heads/${BRANCH}" > /dev/null 2>&1; then
+            git fetch origin "${BRANCH}:${BRANCH}"
+            git checkout "${BRANCH}"
+          else
+            git checkout -b "${BRANCH}"
+          fi
+
+          git add "$OUT" "$LATEST"
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore(pr-assistant): improvement digest ${DATE}"
+          git push --set-upstream origin "${BRANCH}"
+
+          PR_NUMBER="$(gh pr list --head "${BRANCH}" --json number --jq '.[0].number // empty' 2>/dev/null || true)"
+          if [ -n "$PR_NUMBER" ]; then
+            echo "PR already exists: #$PR_NUMBER"
+            exit 0
+          fi
+
+          gh pr create \
+            --title "chore(pr-assistant): improvement digest ${DATE}" \
+            --body "Auto-generated daily digest for PR Assistant feedback and recurring patterns (lookback window: ${DATE} minus ${DAYS_BACK} days)." \
+            --base main \
+            --head "${BRANCH}"
