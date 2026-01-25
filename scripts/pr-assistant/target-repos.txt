@@ -1,0 +1,25 @@
+# Platform scope (exclude Merglevsky-cz entirely).
+# One repo per line. Used by:
+# - deploy-v3.sh (copy PR Assistant workflow)
+# - improvement digest (cross-repo metrics)
+merglbot-core/ai_prompts
+merglbot-core/dataform
+merglbot-core/infra
+merglbot-core/merglbot-admin
+merglbot-core/platform
+merglbot-core/tf-modules-
+merglbot-public/docs
+merglbot-public/website
+merglbot-proteinaco/abc_product_material_analysis
+merglbot-proteinaco/btf-viz
+merglbot-proteinaco/proteinaco-web
+merglbot-proteinaco/viz-api
+merglbot-denatura/denatura-btf-data
+merglbot-denatura/denatura-fb-viz
+merglbot-denatura/marketing_actions_detector
+merglbot-ruzovyslon/business_forecasting
+merglbot-ruzovyslon/kbc_data_quality_metodology
+merglbot-ruzovyslon/ruzovyslon-web
+merglbot-ruzovyslon/viz-api
+merglbot-extractors/facebook-extractor
+merglbot-milan-private/fakturoid
