@@ -59,6 +59,7 @@ mkdir -p "$(dirname "$OUTPUT")"
 
 # Collect per-repo metrics as JSON lines for later aggregation.
 TMP_DIR="$(mktemp -d)"
+trap '[[ -d "$TMP_DIR" ]] && rm -rf -- "$TMP_DIR"' EXIT
 REPO_METRICS_JSONL="${TMP_DIR}/repo-metrics.jsonl"
 COMMENT_METRICS_JSONL="${TMP_DIR}/comment-metrics.jsonl"
 touch "$REPO_METRICS_JSONL" "$COMMENT_METRICS_JSONL"
