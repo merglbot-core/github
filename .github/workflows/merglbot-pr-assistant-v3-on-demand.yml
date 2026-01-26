@@ -298,8 +298,8 @@ jobs:
           LAST_REVIEW_CREATED_AT=$(jq -r '[.[] | select(.user.login == "github-actions" or .user.login == "github-actions[bot]") | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .created_at // empty' issue_comments.json 2>/dev/null || echo "")
           
           if [ -z "$LAST_REVIEW_BODY" ]; then
-            LAST_REVIEW_BODY=$(jq -r '[.[] | select(.body | contains("## 🤖 Merglbot PR Assistant v3"))] | sort_by(.created_at) | last | .body // empty' issue_comments.json 2>/dev/null || echo "")
-            LAST_REVIEW_CREATED_AT=$(jq -r '[.[] | select(.body | contains("## 🤖 Merglbot PR Assistant v3"))] | sort_by(.created_at) | last | .created_at // empty' issue_comments.json 2>/dev/null || echo "")
+            LAST_REVIEW_BODY=$(jq -r '[.[] | select(.user.login == "github-actions" or .user.login == "github-actions[bot]") | select(.body | contains("## 🤖 Merglbot PR Assistant v3"))] | sort_by(.created_at) | last | .body // empty' issue_comments.json 2>/dev/null || echo "")
+            LAST_REVIEW_CREATED_AT=$(jq -r '[.[] | select(.user.login == "github-actions" or .user.login == "github-actions[bot]") | select(.body | contains("## 🤖 Merglbot PR Assistant v3"))] | sort_by(.created_at) | last | .created_at // empty' issue_comments.json 2>/dev/null || echo "")
           fi
           
           printf '%s' "$LAST_REVIEW_BODY" > prev_merglbot_review.txt
@@ -606,12 +606,16 @@ jobs:
             printf '%s\n' "### Bugbot Findings"
             printf '%s\n' "$BUGBOT_FINDINGS"
             printf '%s\n' ""
-            printf '%s\n' "### Anthropic Review (truncated)"
-            printf '%s\n' "$ANTHROPIC_SNIP"
-            printf '%s\n' ""
-            printf '%s\n' "### OpenAI Review (truncated)"
-            printf '%s\n' "$OPENAI_SNIP"
-            printf '%s\n' ""
+            if [ -n "$ANTHROPIC_SNIP" ]; then
+              printf '%s\n' "### Anthropic Review (truncated)"
+              printf '%s\n' "$ANTHROPIC_SNIP"
+              printf '%s\n' ""
+            fi
+            if [ -n "$OPENAI_SNIP" ]; then
+              printf '%s\n' "### OpenAI Review (truncated)"
+              printf '%s\n' "$OPENAI_SNIP"
+              printf '%s\n' ""
+            fi
             printf '%s\n' "### PR Diff"
             printf '%s\n' '```diff'
             printf '%s\n' "$PR_DIFF"
