@@ -4,22 +4,27 @@
 # - improvement digest (cross-repo metrics)
 merglbot-core/ai_prompts
 merglbot-core/dataform
+merglbot-core/fb-viz-api
 merglbot-core/infra
 merglbot-core/merglbot-admin
 merglbot-core/platform
 merglbot-core/tf-modules-
 merglbot-public/docs
 merglbot-public/website
+merglbot-cerano/product-forecasting
+merglbot-denatura/denatura-fb-viz
+merglbot-denatura/marketing_actions_detector
+merglbot-denatura/marketing-planning
 merglbot-proteinaco/abc_product_material_analysis
 merglbot-proteinaco/btf-viz
 merglbot-proteinaco/proteinaco-web
 merglbot-proteinaco/viz-api
-merglbot-denatura/denatura-btf-data
-merglbot-denatura/denatura-fb-viz
-merglbot-denatura/marketing_actions_detector
 merglbot-ruzovyslon/business_forecasting
 merglbot-ruzovyslon/kbc_data_quality_metodology
 merglbot-ruzovyslon/ruzovyslon-web
 merglbot-ruzovyslon/viz-api
 merglbot-extractors/facebook-extractor
 merglbot-milan-private/fakturoid
+
+# Archived/read-only (excluded from rollouts):
+# - merglbot-denatura/denatura-btf-data

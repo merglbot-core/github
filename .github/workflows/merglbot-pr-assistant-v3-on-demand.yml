@@ -36,11 +36,13 @@ on:
           - delta
           - full
       anthropic_model:
-        description: "Anthropic model"
+        description: "Anthropic model (org_default = use org var MERGLBOT_ANTHROPIC_MODEL)"
         required: false
         type: choice
-        default: "claude-opus-4-5-20250929"
+        default: "org_default"
         options:
+          - org_default
+          - claude-opus-4-5-20251101
           - claude-opus-4-5-20250929
           - claude-sonnet-4-5-20250929
           - claude-opus-4-1-20250805
@@ -228,7 +230,15 @@ jobs:
           echo "Review Mode: ${{ env.REVIEW_MODE }}"
           echo "Diff Scope Mode: ${{ env.DIFF_SCOPE_MODE }}"
           
-          gh pr view "$PR_NUM" --json title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles,statusCheckRollup > pr_metadata.json
+          PR_VIEW_FIELDS_WITH_CHECKS="title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles,statusCheckRollup"
+          PR_VIEW_FIELDS_NO_CHECKS="title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles"
+          if gh pr view "$PR_NUM" --json "$PR_VIEW_FIELDS_WITH_CHECKS" > pr_metadata.json 2>pr_view_err.txt; then
+            rm -f pr_view_err.txt
+          else
+            echo "WARN: gh pr view with statusCheckRollup failed; retrying without checks (best-effort)." >&2
+            cat pr_view_err.txt >&2 || true
+            gh pr view "$PR_NUM" --json "$PR_VIEW_FIELDS_NO_CHECKS" > pr_metadata.json
+          fi
           
           PR_TITLE=$(jq -r '.title // "No title"' pr_metadata.json)
           PR_BODY=$(jq -r '.body // "No description"' pr_metadata.json)
@@ -474,13 +484,13 @@ jobs:
             gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
               -f content="$REACTION" || true
           fi
-      
+
       - name: Step 1 - Parallel API Calls
         if: success() && steps.context.outputs.skip_review != 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
+          ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20251101' }}
           OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
         run: |
           set -euo pipefail
@@ -707,7 +717,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
-          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
+          ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20251101' }}
         run: |
           set -euo pipefail
           
@@ -730,7 +740,7 @@ jobs:
           ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
           if [ -z "$ANTHROPIC_MODEL" ]; then
-            ANTHROPIC_MODEL="claude-opus-4-5-20250929"
+            ANTHROPIC_MODEL="claude-opus-4-5-20251101"
           fi
           if [ -z "$OPENAI_MODEL" ]; then
             OPENAI_MODEL="gpt-5.2"
@@ -1114,7 +1124,7 @@ jobs:
         if: success() && steps.context.outputs.skip_review != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
+          ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20251101' }}
           OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
           CODEX_MODEL: ${{ github.event.inputs.codex_model || vars.MERGLBOT_CODEX_MODEL || 'gpt-5.2-codex' }}
         run: |
@@ -1136,7 +1146,7 @@ jobs:
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
           CODEX_MODEL="$(sanitize_model "${CODEX_MODEL:-}")"
           if [ -z "$ANTHROPIC_MODEL" ]; then
-            ANTHROPIC_MODEL="claude-opus-4-5-20250929"
+            ANTHROPIC_MODEL="claude-opus-4-5-20251101"
           fi
           if [ -z "$OPENAI_MODEL" ]; then
             OPENAI_MODEL="gpt-5.2"
@@ -1357,7 +1367,7 @@ jobs:
       - name: Save Review Metrics (Feedback Loop)
         if: always() && steps.context.outputs.skip_review != 'true'
         env:
-          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20250929' }}
+          ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20251101' }}
           OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
           CODEX_MODEL: ${{ github.event.inputs.codex_model || vars.MERGLBOT_CODEX_MODEL || 'gpt-5.2-codex' }}
         run: |
@@ -1378,7 +1388,7 @@ jobs:
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
           CODEX_MODEL="$(sanitize_model "${CODEX_MODEL:-}")"
           if [ -z "$ANTHROPIC_MODEL" ]; then
-            ANTHROPIC_MODEL="claude-opus-4-5-20250929"
+            ANTHROPIC_MODEL="claude-opus-4-5-20251101"
           fi
           if [ -z "$OPENAI_MODEL" ]; then
             OPENAI_MODEL="gpt-5.2"
