@@ -24,8 +24,11 @@ sanitize_model() {
 
 ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
 OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
+if [ "$ANTHROPIC_MODEL" = "org_default" ]; then
+  ANTHROPIC_MODEL=""
+fi
 if [ -z "$ANTHROPIC_MODEL" ]; then
-  ANTHROPIC_MODEL="claude-opus-4-5-20250929"
+  ANTHROPIC_MODEL="claude-opus-4-5-20251101"
 fi
 if [ -z "$OPENAI_MODEL" ]; then
   OPENAI_MODEL="gpt-5.2"
@@ -299,7 +302,7 @@ echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
 
 ANTHROPIC_MODEL_USED=""
 ANTHROPIC_MODELS_TRIED="|"
-for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
+for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
   if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
     continue
   fi

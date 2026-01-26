@@ -16,12 +16,13 @@ for arg in "$@"; do
 done
 
 OPENAI_MODEL_DEFAULT="${MERGLBOT_OPENAI_MODEL_DEFAULT:-gpt-5.2}"
-ANTHROPIC_MODEL_DEFAULT="${MERGLBOT_ANTHROPIC_MODEL_DEFAULT:-claude-opus-4-5-20250929}"
+ANTHROPIC_MODEL_DEFAULT="${MERGLBOT_ANTHROPIC_MODEL_DEFAULT:-claude-opus-4-5-20251101}"
 CODEX_MODEL_DEFAULT="${MERGLBOT_CODEX_MODEL_DEFAULT:-gpt-5.2-codex}"
 
 ORGS=(
   "merglbot-core"
   "merglbot-public"
+  "merglbot-cerano"
   "merglbot-denatura"
   "merglbot-proteinaco"
   "merglbot-ruzovyslon"
