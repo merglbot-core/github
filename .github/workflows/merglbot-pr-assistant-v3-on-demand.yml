@@ -294,8 +294,8 @@ jobs:
           gh api "repos/${{ github.repository }}/issues/$PR_NUM/comments" --paginate > issue_comments.json 2>/dev/null || echo "[]" > issue_comments.json
           
           echo "Detecting previous Merglbot review..."
-          LAST_REVIEW_BODY=$(jq -r '[.[] | select(.user.login == "github-actions") | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .body // empty' issue_comments.json 2>/dev/null || echo "")
-          LAST_REVIEW_CREATED_AT=$(jq -r '[.[] | select(.user.login == "github-actions") | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .created_at // empty' issue_comments.json 2>/dev/null || echo "")
+          LAST_REVIEW_BODY=$(jq -r '[.[] | select(.user.login == "github-actions" or .user.login == "github-actions[bot]") | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .body // empty' issue_comments.json 2>/dev/null || echo "")
+          LAST_REVIEW_CREATED_AT=$(jq -r '[.[] | select(.user.login == "github-actions" or .user.login == "github-actions[bot]") | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .created_at // empty' issue_comments.json 2>/dev/null || echo "")
           
           if [ -z "$LAST_REVIEW_BODY" ]; then
             LAST_REVIEW_BODY=$(jq -r '[.[] | select(.body | contains("## 🤖 Merglbot PR Assistant v3"))] | sort_by(.created_at) | last | .body // empty' issue_comments.json 2>/dev/null || echo "")
