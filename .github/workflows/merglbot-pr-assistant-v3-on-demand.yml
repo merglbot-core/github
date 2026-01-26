@@ -69,6 +69,7 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  checks: read
 
 concurrency:
   group: merglbot-review-${{ github.event.issue.number || github.event.inputs.pr_number }}
@@ -236,8 +237,14 @@ jobs:
             rm -f pr_view_err.txt
           else
             echo "WARN: gh pr view with statusCheckRollup failed; retrying without checks (best-effort)." >&2
-            cat pr_view_err.txt >&2 || true
-            gh pr view "$PR_NUM" --json "$PR_VIEW_FIELDS_NO_CHECKS" > pr_metadata.json
+            if grep -Eqi 'statusCheckRollup|Cannot query field|Resource not accessible|forbidden' pr_view_err.txt 2>/dev/null; then
+              head -n 30 pr_view_err.txt >&2 || true
+              gh pr view "$PR_NUM" --json "$PR_VIEW_FIELDS_NO_CHECKS" > pr_metadata.json
+            else
+              echo "ERROR: gh pr view failed (unexpected). Aborting." >&2
+              head -n 30 pr_view_err.txt >&2 || true
+              exit 1
+            fi
           fi
           
           PR_TITLE=$(jq -r '.title // "No title"' pr_metadata.json)
@@ -267,7 +274,7 @@ jobs:
 
           # CI / checks summary (best-effort)
           jq -r '
-            .statusCheckRollup // []
+            (.statusCheckRollup.contexts // .statusCheckRollup // [])
             | map(select(.name != null))
             | map("- " + .name + ": " + ((.conclusion // .state // "UNKNOWN") | tostring | ascii_upcase))
             | .[]
@@ -276,7 +283,7 @@ jobs:
             echo "No CI/checks data available." > pr_checks_summary.txt
           fi
 
-          CHECKS_FAILED=$(jq -r '[.statusCheckRollup[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "failure" or . == "cancelled" or . == "timed_out")] | length' pr_metadata.json 2>/dev/null || echo "0")
+          CHECKS_FAILED=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "failure" or . == "cancelled" or . == "timed_out" or . == "error") ] | length' pr_metadata.json 2>/dev/null || echo "0")
           printf '%s\n' "$CHECKS_FAILED" > pr_checks_failed_count.txt
           
           echo "PR_BASE_SHA=$PR_BASE_SHA" >> "$GITHUB_ENV"
@@ -287,8 +294,8 @@ jobs:
           gh api "repos/${{ github.repository }}/issues/$PR_NUM/comments" --paginate > issue_comments.json 2>/dev/null || echo "[]" > issue_comments.json
           
           echo "Detecting previous Merglbot review..."
-          LAST_REVIEW_BODY=$(jq -r '[.[] | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .body // empty' issue_comments.json 2>/dev/null || echo "")
-          LAST_REVIEW_CREATED_AT=$(jq -r '[.[] | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .created_at // empty' issue_comments.json 2>/dev/null || echo "")
+          LAST_REVIEW_BODY=$(jq -r '[.[] | select(.user.login == "github-actions") | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .body // empty' issue_comments.json 2>/dev/null || echo "")
+          LAST_REVIEW_CREATED_AT=$(jq -r '[.[] | select(.user.login == "github-actions") | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .created_at // empty' issue_comments.json 2>/dev/null || echo "")
           
           if [ -z "$LAST_REVIEW_BODY" ]; then
             LAST_REVIEW_BODY=$(jq -r '[.[] | select(.body | contains("## 🤖 Merglbot PR Assistant v3"))] | sort_by(.created_at) | last | .body // empty' issue_comments.json 2>/dev/null || echo "")
@@ -370,17 +377,20 @@ jobs:
           DIFF_LINES=$(wc -l < pr_diff.txt 2>/dev/null || echo "0")
           echo "Diff: $DIFF_LINES lines"
 
-          # Security pre-scan: if diff contains secret-like patterns, skip AI review to avoid exfiltration to LLM APIs.
+          # Security pre-scan: if PR context contains secret-like patterns, skip AI review to avoid exfiltration to LLM APIs.
           # IMPORTANT: never print the matching line(s) to logs.
-          if [ "$SKIP_REVIEW" != "true" ] && [ -s pr_diff.txt ]; then
-            SECRET_PATTERN='-----BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY-----|-----BEGIN PRIVATE KEY-----|xox[baprs]-|ghp_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}'
-            if grep -Eqi "$SECRET_PATTERN" pr_diff.txt; then
-              echo "⛔️ Potential secret-like material detected in diff; skipping AI review."
-              SKIP_REVIEW="true"
-              SKIP_REASON="potential_secret"
-              echo "skip_review=$SKIP_REVIEW" >> "$GITHUB_OUTPUT"
-              echo "skip_reason=$SKIP_REASON" >> "$GITHUB_OUTPUT"
-            fi
+          if [ "$SKIP_REVIEW" != "true" ]; then
+            SECRET_PATTERN='-----BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY-----|-----BEGIN PRIVATE KEY-----|xox[baprs]-|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|gh[opsu]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}'
+            for SECRET_SCAN_FILE in pr_diff.txt pr_title.txt pr_body.txt; do
+              if [ -s "$SECRET_SCAN_FILE" ] && grep -Eqi "$SECRET_PATTERN" "$SECRET_SCAN_FILE"; then
+                echo "⛔️ Potential secret-like material detected in PR context; skipping AI review."
+                SKIP_REVIEW="true"
+                SKIP_REASON="potential_secret"
+                echo "skip_review=$SKIP_REVIEW" >> "$GITHUB_OUTPUT"
+                echo "skip_reason=$SKIP_REASON" >> "$GITHUB_OUTPUT"
+                break
+              fi
+            done
           fi
           
           echo "REVIEW_CUTOFF=$LAST_REVIEW_CREATED_AT" >> "$GITHUB_ENV"
@@ -509,7 +519,7 @@ jobs:
           
           if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
             echo "Skipping Codex stage (light mode)."
-            echo "SKIPPED" > codex_review.txt
+            printf '%s' "SKIPPED" > codex_review.txt
             exit 0
           fi
 
@@ -547,8 +557,14 @@ jobs:
           BUGBOT_FINDINGS=$(python3 -c 'from pathlib import Path; import sys; p=Path("bugbot_findings.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:20000])')
           PR_DIFF=$(python3 -c 'from pathlib import Path; import sys; p=Path("pr_diff.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:100000])')
 
-          ANTHROPIC_SNIP=$(python3 -c 'from pathlib import Path; import sys; p=Path("anthropic_review.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:12000])')
-          OPENAI_SNIP=$(python3 -c 'from pathlib import Path; import sys; p=Path("openai_review.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:12000])')
+          ANTHROPIC_SNIP=""
+          if [ -s anthropic_review.txt ] && ! grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null; then
+            ANTHROPIC_SNIP=$(python3 -c 'from pathlib import Path; import sys; p=Path("anthropic_review.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:12000])')
+          fi
+          OPENAI_SNIP=""
+          if [ -s openai_review.txt ] && ! grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
+            OPENAI_SNIP=$(python3 -c 'from pathlib import Path; import sys; p=Path("openai_review.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:12000])')
+          fi
 
           # Build Codex prompt (single redirect)
           {
@@ -704,7 +720,7 @@ jobs:
             printf '%s' "$CONTENT" > codex_review.txt
             echo "CODEX_MODEL_USED=$CODEX_MODEL" >> "$GITHUB_ENV"
           else
-            echo "API_ERROR" > codex_review.txt
+            printf '%s' "API_ERROR" > codex_review.txt
             echo "CODEX_MODEL_USED=$CODEX_MODEL" >> "$GITHUB_ENV"
           fi
           
@@ -746,33 +762,43 @@ jobs:
             OPENAI_MODEL="gpt-5.2"
           fi
           
-          ANTHROPIC_REVIEW=$(< anthropic_review.txt)
-          OPENAI_REVIEW=$(< openai_review.txt)
-          CODEX_REVIEW=""
-          if [ -f codex_review.txt ]; then
-            CODEX_REVIEW=$(< codex_review.txt)
-          fi
           PR_TITLE=$(< pr_title.txt)
           PR_BODY=$(python3 -c 'from pathlib import Path; import sys; s=Path("pr_body.txt").read_text(encoding="utf-8", errors="replace"); sys.stdout.write(s[:3000])')
-          
+
+          ANTHROPIC_REVIEW=""
           ANTHROPIC_OK="false"
           if [ -s anthropic_review.txt ] && ! grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null; then
             ANTHROPIC_OK="true"
+            ANTHROPIC_REVIEW=$(< anthropic_review.txt)
           fi
+
+          OPENAI_REVIEW=""
           OPENAI_OK="false"
           if [ -s openai_review.txt ] && ! grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
             OPENAI_OK="true"
+            OPENAI_REVIEW=$(< openai_review.txt)
           fi
+
+          CODEX_REVIEW=""
           CODEX_OK="false"
           if [ -s codex_review.txt ] && ! grep -qx "API_ERROR" codex_review.txt 2>/dev/null && ! grep -qx "SKIPPED" codex_review.txt 2>/dev/null; then
             CODEX_OK="true"
+            CODEX_REVIEW=$(< codex_review.txt)
           fi
 
           echo "Input Reviews:"
-          echo "  Anthropic: $(echo "$ANTHROPIC_REVIEW" | wc -w) words"
-          echo "  OpenAI: $(echo "$OPENAI_REVIEW" | wc -w) words"
+          if [ "$ANTHROPIC_OK" == "true" ]; then
+            echo "  Anthropic: $(printf '%s' "$ANTHROPIC_REVIEW" | wc -w) words"
+          else
+            echo "  Anthropic: 0 words (failed)"
+          fi
+          if [ "$OPENAI_OK" == "true" ]; then
+            echo "  OpenAI: $(printf '%s' "$OPENAI_REVIEW" | wc -w) words"
+          else
+            echo "  OpenAI: 0 words (failed)"
+          fi
           if [ "$CODEX_OK" == "true" ]; then
-            echo "  Codex: $(echo "$CODEX_REVIEW" | wc -w) words"
+            echo "  Codex: $(printf '%s' "$CODEX_REVIEW" | wc -w) words"
           else
             echo "  Codex: 0 words (skipped or failed)"
           fi
@@ -791,7 +817,7 @@ jobs:
 
           if [ "$SYNTH_INPUT_COUNT" -eq 0 ]; then
             echo "ERROR: All reviews failed; cannot synthesize"
-            echo "API_ERROR" > final_review.txt
+            printf '%s' "API_ERROR" > final_review.txt
             exit 0
           fi
 
@@ -867,14 +893,18 @@ jobs:
           OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
           
-          printf '%s\n' "## Anthropic Review ($ANTHROPIC_MODEL_FINAL)"
-          printf '%s\n' ""
-          printf '%s\n' "$ANTHROPIC_REVIEW"
-          printf '%s\n' ""
-          printf '%s\n' "## OpenAI Review ($OPENAI_MODEL_FINAL)"
-          printf '%s\n' ""
-          printf '%s\n' "$OPENAI_REVIEW"
-          printf '%s\n' ""
+          if [ "$ANTHROPIC_OK" == "true" ]; then
+            printf '%s\n' "## Anthropic Review ($ANTHROPIC_MODEL_FINAL)"
+            printf '%s\n' ""
+            printf '%s\n' "$ANTHROPIC_REVIEW"
+            printf '%s\n' ""
+          fi
+          if [ "$OPENAI_OK" == "true" ]; then
+            printf '%s\n' "## OpenAI Review ($OPENAI_MODEL_FINAL)"
+            printf '%s\n' ""
+            printf '%s\n' "$OPENAI_REVIEW"
+            printf '%s\n' ""
+          fi
           
           if [ "$CODEX_OK" == "true" ]; then
             CODEX_MODEL_FINAL="${CODEX_MODEL_USED:-gpt-5.2-codex}"
@@ -1057,8 +1087,8 @@ jobs:
                 echo "ERROR: Synthesis response contained no content"
                 cp "$FALLBACK_REVIEW_FILE" final_review.txt
               else
-                echo "Words: $(echo "$CONTENT" | wc -w)"
-                echo "$CONTENT" > final_review.txt
+                echo "Words: $(printf '%s' "$CONTENT" | wc -w)"
+                printf '%s' "$CONTENT" > final_review.txt
               fi
             fi
           else
@@ -1107,8 +1137,8 @@ jobs:
                   echo "ERROR: Synthesis response contained no content"
                   cp "$FALLBACK_REVIEW_FILE" final_review.txt
                 else
-                  echo "Words: $(echo "$CONTENT" | wc -w)"
-                  echo "$CONTENT" > final_review.txt
+                  echo "Words: $(printf '%s' "$CONTENT" | wc -w)"
+                  printf '%s' "$CONTENT" > final_review.txt
                 fi
               fi
             fi
