@@ -427,7 +427,7 @@ jobs:
           # Security pre-scan: if PR context contains secret-like patterns, skip AI review to avoid exfiltration to LLM APIs.
           # IMPORTANT: never print the matching line(s) to logs.
           if [ "$SKIP_REVIEW" != "true" ]; then
-              SECRET_PATTERN='-----BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY-----|-----BEGIN PRIVATE KEY-----|xox[baprs]-|github_pat_[A-Za-z0-9_]{20,}|gh[opsur]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}'
+            SECRET_PATTERN='-----BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY-----|-----BEGIN PRIVATE KEY-----|xox[baprs]-|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|gh[orsu]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}'
             for SECRET_SCAN_FILE in pr_diff.txt pr_title.txt pr_body.txt bugbot_findings.txt changed_files.txt pr_checks_summary.txt; do
               if [ -s "$SECRET_SCAN_FILE" ] && grep -Eqi "$SECRET_PATTERN" "$SECRET_SCAN_FILE"; then
                 echo "⛔️ Potential secret-like material detected in PR context; skipping AI review."
