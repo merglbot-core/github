@@ -427,7 +427,7 @@ jobs:
           # Security pre-scan: if PR context contains secret-like patterns, skip AI review to avoid exfiltration to LLM APIs.
           # IMPORTANT: never print the matching line(s) to logs.
           if [ "$SKIP_REVIEW" != "true" ]; then
-            SECRET_PATTERN='-----BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY-----|-----BEGIN PRIVATE KEY-----|xox[baprs]-|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|gh[opsur]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}'
+              SECRET_PATTERN='-----BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY-----|-----BEGIN PRIVATE KEY-----|xox[baprs]-|github_pat_[A-Za-z0-9_]{20,}|gh[opsur]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}'
             for SECRET_SCAN_FILE in pr_diff.txt pr_title.txt pr_body.txt bugbot_findings.txt changed_files.txt pr_checks_summary.txt; do
               if [ -s "$SECRET_SCAN_FILE" ] && grep -Eqi "$SECRET_PATTERN" "$SECRET_SCAN_FILE"; then
                 echo "⛔️ Potential secret-like material detected in PR context; skipping AI review."
@@ -560,17 +560,8 @@ jobs:
           BUGBOT_FINDINGS=$(python3 -c 'from pathlib import Path; import sys; p=Path("bugbot_findings.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:20000])')
           PR_DIFF=$(python3 -c 'from pathlib import Path; import sys; p=Path("pr_diff.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:100000])')
 
-          ANTHROPIC_SNIP=""
-          if [ -s anthropic_review.txt ] && ! grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null; then
-            ANTHROPIC_SNIP=$(python3 -c 'from pathlib import Path; import sys; p=Path("anthropic_review.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:12000])')
-          fi
-          OPENAI_SNIP=""
-          if [ -s openai_review.txt ] && ! grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
-            OPENAI_SNIP=$(python3 -c 'from pathlib import Path; import sys; p=Path("openai_review.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:12000])')
-          fi
-
-          # Build Codex prompt (single redirect)
-          {
+            # Build Codex prompt (single redirect)
+            {
             printf '%s\n' "# Codex Specialist Review (Debugger/Patcher)"
             printf '%s\n' ""
             printf '%s\n' "You are the 3rd specialist reviewer in Merglbot PR Assistant."
@@ -620,16 +611,16 @@ jobs:
             printf '%s\n' "$BUGBOT_FINDINGS" | escape_untrusted
             printf '%s\n' "<<<MERGLBOT_END_UNTRUSTED_BUGBOT_FINDINGS>>>"
             printf '%s\n' ""
-            if [ -n "$ANTHROPIC_SNIP" ]; then
-              printf '%s\n' "### Anthropic Review (truncated)"
-              printf '%s\n' "$ANTHROPIC_SNIP"
-              printf '%s\n' ""
-            fi
-            if [ -n "$OPENAI_SNIP" ]; then
-              printf '%s\n' "### OpenAI Review (truncated)"
-              printf '%s\n' "$OPENAI_SNIP"
-              printf '%s\n' ""
-            fi
+              if [ -s anthropic_review.txt ] && ! grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null; then
+                printf '%s\n' "### Anthropic Review (truncated)"
+                python3 -c 'from pathlib import Path; import sys; p=Path("anthropic_review.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:12000])'
+                printf '%s\n' ""
+              fi
+              if [ -s openai_review.txt ] && ! grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
+                printf '%s\n' "### OpenAI Review (truncated)"
+                python3 -c 'from pathlib import Path; import sys; p=Path("openai_review.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:12000])'
+                printf '%s\n' ""
+              fi
             printf '%s\n' "### PR Diff (untrusted)"
             printf '%s\n' "<<<MERGLBOT_BEGIN_UNTRUSTED_PR_DIFF>>>"
             printf '%s\n' '```diff'
