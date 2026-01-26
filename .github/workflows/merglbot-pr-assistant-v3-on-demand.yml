@@ -422,12 +422,12 @@ jobs:
           done
           
           gh api "repos/${{ github.repository }}/pulls/$PR_NUM/comments" --paginate > review_comments.json 2>/dev/null || echo "[]" > review_comments.json
-          REVIEW_COMMENT_COUNT=$(jq -r --arg cutoff "$LAST_REVIEW_CREATED_AT" '[.[] | select(($cutoff == "") or (.created_at > $cutoff))] | length' review_comments.json 2>/dev/null || echo "0")
+          REVIEW_COMMENT_COUNT=$(jq -r --arg cutoff "$LAST_REVIEW_CREATED_AT" --arg head "$PR_HEAD_SHA" '[.[] | select(.commit_id == $head) | select(($cutoff == "") or (.created_at > $cutoff))] | length' review_comments.json 2>/dev/null || echo "0")
           if [ "$REVIEW_COMMENT_COUNT" -gt 0 ]; then
             {
               echo "### Existing Review Comments"
               echo ""
-              jq -r --arg cutoff "$LAST_REVIEW_CREATED_AT" '.[] | select(($cutoff == "") or (.created_at > $cutoff)) | "**\(.user.login)** on \(.path): \(.body)"' review_comments.json 2>/dev/null || echo "None"
+              jq -r --arg cutoff "$LAST_REVIEW_CREATED_AT" --arg head "$PR_HEAD_SHA" '.[] | select(.commit_id == $head) | select(($cutoff == "") or (.created_at > $cutoff)) | "**\(.user.login)** on \(.path): \(.body)"' review_comments.json 2>/dev/null || echo "None"
               echo ""
             } >> bugbot_findings.txt
           fi
