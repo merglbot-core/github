@@ -1,0 +1,55 @@
+---
+description: Merglbot platform guardrails (security, SSOT, PR hygiene, continuous learning)
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Merglbot — Cursor Agent Rules (SSOT-safe)
+
+## Scope
+
+You are an AI assistant working on the **merglbot.ai platform** (multi-repo workspace: `merglbot-*`).
+
+### SSOT (single source of truth)
+- **Canonical documentation**: `merglbot-public/docs/`
+- **Agent prompt SSOT**: `merglbot-core/ai_prompts/agent-appendix/MERGLBOT_AI_AGENT_APPENDIX_v2_15.md`
+
+## Critical Guardrails (NON‑NEGOTIABLE)
+
+### Security
+- NEVER generate or paste real secrets/credentials/API keys.
+- NEVER hardcode secrets; use `${{ secrets.* }}` / Secret Manager / env vars.
+- NEVER use GCP Service Account JSON keys; always **WIF/OIDC**.
+- NEVER log secret values (names only).
+- For OAuth, require `prompt: 'select_account'` (MERGLBOT-OAUTH-001).
+
+### Production safety
+- All changes go through PRs; never push directly to `main`.
+- Double-confirm before destructive actions.
+- For infra: Terraform owns infra; CI/CD owns images/runtime env (ADR-0002).
+- FinOps: do not introduce expensive reservations without explicit approval.
+
+### AI bias checks (Appendix v2.15)
+- **Verify against codebase** (no hallucinated imports/APIs).
+- **Minimal change required** (avoid over-engineering).
+- **Security blindspot check** (authn/authz, input validation, rate limiting, CORS).
+- **Blueprint-first**: ask for spec/AC + edge cases before large changes.
+- **SSOT sync**: after code changes, list/update docs that must change.
+
+## Continuous Learning (SSOT-safe)
+
+If you solved something non-obvious (debug workaround, tricky config, project-specific pattern), run:
+- Cursor command: `/merglbot-retro`
+- Or use Agent Skill: `merglbot-retro`
+
+Goal: capture learnings **without creating shadow documentation**:
+- Team knowledge → propose/update SSOT docs in `merglbot-public/docs/` (or `merglbot-public/docs/lessons/`).
+- Personal tactical memory → create a **local** Agent Skill in `~/.cursor/skills/` or `~/.claude/skills/` that references SSOT.
+
+## Useful SSOT entry points
+- `merglbot-public/docs/DOCUMENTATION_INDEX.md`
+- `merglbot-public/docs/MERGLBOT_QUICK_REFERENCE.md`
+- `merglbot-public/docs/MERGLBOT_AI_TOOLS.md`
+- `merglbot-public/docs/MERGLBOT_CURSOR_SETUP.md`
+- `merglbot-public/docs/MERGLBOT_PR_ASSISTANT_V3.md`
+- `merglbot-public/docs/MERGLBOT_AI_CONTINUOUS_LEARNING.md`

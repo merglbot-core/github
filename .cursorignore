@@ -1,0 +1,43 @@
+# Merglbot — Cursor ignore list (security + performance)
+#
+# Cursor blocks access to these files from Agent/Tab/Semantic search.
+# This is best-effort protection; still follow MERGLBOT_AI_TOOLS.md and never paste secrets into prompts.
+#
+# Syntax: same as .gitignore
+
+# Secrets / env
+**/.env
+**/.env.*
+**/*.env
+**/*.env.*
+
+# Common credentials / keys
+**/credentials.json
+**/secrets.json
+**/*secret*
+**/*.pem
+**/*.key
+**/id_rsa
+**/id_dsa
+**/id_ecdsa
+**/id_ed25519
+**/*service-account*.json
+**/*sa-key*.json
+
+# Terraform sensitive inputs/state
+**/*.tfvars
+**/*.tfvars.json
+**/.terraform/**
+**/.terraform.lock.hcl
+**/terraform.tfstate
+**/terraform.tfstate.*
+
+# Local caches / build outputs (reduce noise)
+**/node_modules/**
+**/.next/**
+**/dist/**
+**/build/**
+**/.cache/**
+**/__pycache__/**
+**/.venv/**
+**/.pytest_cache/**
