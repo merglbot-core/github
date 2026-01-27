@@ -272,8 +272,15 @@ def download_review_metrics(repo: str, pr_number: int, run_id: int, tmp_dir: Pat
 
     extract_dir = tmp_dir / f"review-metrics-{repo.replace('/', '_')}-{run_id}"
     extract_dir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path, "r") as z:
-        z.extractall(extract_dir)
+    try:
+        with zipfile.ZipFile(zip_path, "r") as z:
+            z.extractall(extract_dir)
+    except zipfile.BadZipFile:
+        print(f"WARN: invalid metrics ZIP for {repo} run {run_id}", file=sys.stderr)
+        return None
+    except OSError as e:
+        print(f"WARN: failed to extract metrics ZIP for {repo} run {run_id}: {e}", file=sys.stderr)
+        return None
 
     metrics_files = list(extract_dir.rglob("review-metrics.json"))
     if not metrics_files:
