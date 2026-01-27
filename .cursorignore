@@ -16,8 +16,6 @@
 **/secrets.json
 **/secrets/**
 **/*secret*
-!**/*secret*.md
-!**/*secret*.mdx
 **/*.pem
 **/*.key
 **/id_rsa
