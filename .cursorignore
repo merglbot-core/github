@@ -14,7 +14,7 @@
 # Common credentials / keys
 **/credentials.json
 **/secrets.json
-**/*secret*
+**/secrets/**
 **/*.pem
 **/*.key
 **/id_rsa
