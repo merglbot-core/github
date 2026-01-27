@@ -25,7 +25,12 @@
 **/*secret*.json
 **/*secret*.yml
 **/*secret*.yaml
-**/*secret*.tfvars
+**/*secret*.txt
+**/*secret*.log
+**/*secret*.csv
+**/*secret*.toml
+**/*secret*.ini
+**/*secret*.properties
 **/*.secret
 **/*.secrets
 **/*.pem

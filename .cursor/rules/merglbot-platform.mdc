@@ -12,7 +12,7 @@ You are an AI assistant working on the **merglbot.ai platform** (multi-repo work
 
 ### SSOT (single source of truth)
 - **Canonical documentation**: `merglbot-public/docs/` (start: `merglbot-public/docs/DOCUMENTATION_INDEX.md`)
-- **Rulebook (SSOT)**: `merglbot-public/docs/RULEBOOK_V2.md`
+- **Rulebook (SSOT)**: `merglbot-public/docs/RULEBOOK_V2.md` (or https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md)
 - **Optional appendix (if present)**: `merglbot-core/ai_prompts/agent-appendix/`
 
 ## Critical Guardrails (NON‑NEGOTIABLE)
