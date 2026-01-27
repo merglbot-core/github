@@ -88,8 +88,8 @@ if not m:
   print("UNKNOWN")
   raise SystemExit(0)
 v = m.group(1).strip()
-v = re.sub(r'[`*]+', '', v)
 v = re.sub(r'_+', ' ', v)
+v = re.sub(r'[`*]+', '', v)
 v = re.sub(r'\s+', ' ', v).strip()
 if re.match(r'(?i)^changes\s+needed', v):
   print("CHANGES_NEEDED")

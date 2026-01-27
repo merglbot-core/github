@@ -473,6 +473,16 @@ call_openai_responses() {
     OPENAI_USAGE_REASONING_TOKENS="$reasoning_tokens"
     OPENAI_USAGE_TOTAL_TOKENS="$total_tokens"
 
+    cat > openai_usage.json << EOF
+{
+  "api": "responses",
+  "input_tokens": ${input_tokens},
+  "output_tokens": ${output_tokens},
+  "reasoning_tokens": ${reasoning_tokens},
+  "total_tokens": ${total_tokens}
+}
+EOF
+
     printf '%s' "$out"
     return 0
   done
@@ -664,7 +674,8 @@ if [ -z "$OPENAI_MODEL_USED" ]; then
 fi
 echo "OPENAI_MODEL_USED=$OPENAI_MODEL_USED" >> "$GITHUB_ENV"
 
-cat > openai_usage.json << EOF
+if [ ! -f openai_usage.json ] || ! jq -e . openai_usage.json > /dev/null 2>&1; then
+  cat > openai_usage.json << EOF
 {
   "api": "${OPENAI_USAGE_API}",
   "input_tokens": ${OPENAI_USAGE_INPUT_TOKENS},
@@ -673,6 +684,7 @@ cat > openai_usage.json << EOF
   "total_tokens": ${OPENAI_USAGE_TOTAL_TOKENS}
 }
 EOF
+fi
 
 echo "========================================="
 echo "STEP 1 COMPLETE"

@@ -72,6 +72,7 @@ permissions:
   checks: read
 
 concurrency:
+  # Avoid unrelated issue_comment events cancelling active review runs (e.g. gemini quota warnings).
   group: merglbot-review-${{ github.event.issue.number || github.event.inputs.pr_number }}-${{ (github.event_name == 'workflow_dispatch') && 'review' || ((github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '@merglbot review')) && 'review' || 'other') }}
   cancel-in-progress: true
 
@@ -1529,7 +1530,7 @@ jobs:
           VERDICT_LINE=$(grep -im1 '^Verdict:' final_review.txt 2>/dev/null || true)
           if [ -n "$VERDICT_LINE" ]; then
             VERDICT_VALUE_RAW=$(printf '%s' "$VERDICT_LINE" | sed -E 's/^Verdict:[[:space:]]*//I')
-            VERDICT_VALUE_CLEAN="$(printf '%s' "$VERDICT_VALUE_RAW" | tr -d '\r' | sed -E 's/[`*]+//g' | tr '_' ' ' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+            VERDICT_VALUE_CLEAN="$(printf '%s' "$VERDICT_VALUE_RAW" | tr -d '\r' | tr '_' ' ' | sed -E 's/[`*]+//g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
             if echo "$VERDICT_VALUE_CLEAN" | grep -Eqi '^changes[[:space:]]+needed'; then
               VERDICT="CHANGES_NEEDED"
             elif echo "$VERDICT_VALUE_CLEAN" | grep -Eqi '^approve'; then
