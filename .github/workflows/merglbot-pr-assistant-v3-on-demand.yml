@@ -409,7 +409,7 @@ jobs:
             {
               echo "### Existing Review Comments"
               echo ""
-              jq -r '.[] | select(.outdated != true) | "**\(.user.login)** on \(.path): \(.body)"' review_comments.json 2>/dev/null || echo "None"
+              jq -r '[.[] | select(.outdated != true)] | sort_by(.created_at) | .[-50:] | .[] | "**\(.user.login)** on \(.path): \(.body)"' review_comments.json 2>/dev/null || echo "None"
               echo ""
             } >> bugbot_findings.txt
           fi
