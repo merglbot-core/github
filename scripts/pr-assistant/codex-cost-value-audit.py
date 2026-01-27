@@ -139,8 +139,9 @@ def extract_table_words(body: str, label: str) -> int | None:
 
 def normalize_verdict(raw: str) -> str:
     v = raw.strip()
-    v = re.sub(r"[`*_]+", "", v).strip()
-    v = v.replace("CHANGES_NEEDED", "CHANGES NEEDED")
+    v = re.sub(r"[`*]+", "", v)
+    v = re.sub(r"_+", " ", v)
+    v = re.sub(r"\s+", " ", v).strip()
     if re.match(r"(?i)^changes\s+needed\b", v):
         return "CHANGES_NEEDED"
     if re.match(r"(?i)^approve\b", v):
