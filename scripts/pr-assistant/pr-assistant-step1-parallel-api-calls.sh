@@ -466,12 +466,26 @@ call_openai_responses() {
       echo "    Total: $total_tokens"
     fi
 
+    # Persist numeric usage for later metrics artifact (no secrets).
+    OPENAI_USAGE_API="responses"
+    OPENAI_USAGE_INPUT_TOKENS="$input_tokens"
+    OPENAI_USAGE_OUTPUT_TOKENS="$output_tokens"
+    OPENAI_USAGE_REASONING_TOKENS="$reasoning_tokens"
+    OPENAI_USAGE_TOTAL_TOKENS="$total_tokens"
+
     printf '%s' "$out"
     return 0
   done
 
   return 1
 }
+
+# Default usage fields (filled on success; safe to write even if zeros).
+OPENAI_USAGE_API="unknown"
+OPENAI_USAGE_INPUT_TOKENS=0
+OPENAI_USAGE_OUTPUT_TOKENS=0
+OPENAI_USAGE_REASONING_TOKENS=0
+OPENAI_USAGE_TOTAL_TOKENS=0
 
 # OPENAI CALL
 echo "Calling OpenAI (requested: $OPENAI_MODEL)..."
@@ -549,6 +563,13 @@ for MODEL_TO_TRY in "$OPENAI_MODEL" "gpt-5.2" "gpt-5.1" "gpt-5" "gpt-4-turbo"; d
     echo "Success (model: $OPENAI_MODEL_USED)"
     echo "Words: $(echo "$CONTENT" | wc -w)"
     echo "$CONTENT" > openai_review.txt
+
+    # Persist token usage for fallback Chat Completions.
+    OPENAI_USAGE_API="chat_completions"
+    OPENAI_USAGE_TOTAL_TOKENS="$(echo "$OPENAI_RESP" | jq -r '.usage.total_tokens // 0' 2>/dev/null || echo 0)"
+    OPENAI_USAGE_INPUT_TOKENS="$(echo "$OPENAI_RESP" | jq -r '.usage.prompt_tokens // 0' 2>/dev/null || echo 0)"
+    OPENAI_USAGE_OUTPUT_TOKENS="$(echo "$OPENAI_RESP" | jq -r '.usage.completion_tokens // 0' 2>/dev/null || echo 0)"
+    OPENAI_USAGE_REASONING_TOKENS="$(echo "$OPENAI_RESP" | jq -r '.usage.completion_tokens_details.reasoning_tokens // 0' 2>/dev/null || echo 0)"
     break
   fi
 
@@ -621,6 +642,12 @@ for MODEL_TO_TRY in "$OPENAI_MODEL" "gpt-5.2" "gpt-5.1" "gpt-5" "gpt-4-turbo"; d
   echo "    Completion: $COMPLETION_TOKENS (reasoning: $REASONING_TOKENS, output: $OUTPUT_TOKENS)"
   echo "    Total: $TOTAL_TOKENS"
 
+  OPENAI_USAGE_API="chat_completions"
+  OPENAI_USAGE_TOTAL_TOKENS="$TOTAL_TOKENS"
+  OPENAI_USAGE_INPUT_TOKENS="$PROMPT_TOKENS"
+  OPENAI_USAGE_OUTPUT_TOKENS="$COMPLETION_TOKENS"
+  OPENAI_USAGE_REASONING_TOKENS="$REASONING_TOKENS"
+
   echo "Words: $(echo "$CONTENT" | wc -w)"
   echo "$CONTENT" > openai_review.txt
   break
@@ -634,6 +661,16 @@ if [ -z "$OPENAI_MODEL_USED" ]; then
   OPENAI_MODEL_USED="$OPENAI_MODEL"
 fi
 echo "OPENAI_MODEL_USED=$OPENAI_MODEL_USED" >> "$GITHUB_ENV"
+
+cat > openai_usage.json << EOF
+{
+  "api": "${OPENAI_USAGE_API}",
+  "input_tokens": ${OPENAI_USAGE_INPUT_TOKENS},
+  "output_tokens": ${OPENAI_USAGE_OUTPUT_TOKENS},
+  "reasoning_tokens": ${OPENAI_USAGE_REASONING_TOKENS},
+  "total_tokens": ${OPENAI_USAGE_TOTAL_TOKENS}
+}
+EOF
 
 echo "========================================="
 echo "STEP 1 COMPLETE"
