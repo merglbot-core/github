@@ -11,8 +11,8 @@ alwaysApply: true
 You are an AI assistant working on the **merglbot.ai platform** (multi-repo workspace: `merglbot-*`).
 
 ### SSOT (single source of truth)
-- **Canonical documentation**: `merglbot-public/docs/`
-- **Agent prompt SSOT**: `merglbot-core/ai_prompts/agent-appendix/MERGLBOT_AI_AGENT_APPENDIX_v2_15.md`
+- **Canonical documentation**: `merglbot-public/docs/` (start: `merglbot-public/docs/DOCUMENTATION_INDEX.md`)
+- **Agent rules (Appendix v2.15)**: `merglbot-core/ai_prompts/agent-appendix/MERGLBOT_AI_AGENT_APPENDIX_v2_15.md` (if available in workspace)
 
 ## Critical Guardrails (NON‑NEGOTIABLE)
 
@@ -21,13 +21,13 @@ You are an AI assistant working on the **merglbot.ai platform** (multi-repo work
 - NEVER hardcode secrets; use `${{ secrets.* }}` / Secret Manager / env vars.
 - NEVER use GCP Service Account JSON keys; always **WIF/OIDC**.
 - NEVER log secret values (names only).
-- For OAuth, require `prompt: 'select_account'` (MERGLBOT-OAUTH-001).
+- For OAuth, require `prompt: 'select_account'` (SSOT: `merglbot-public/docs/AUTHENTICATION_AUTHORIZATION.md`, `merglbot-public/docs/lessons/MERGLBOT_LESSONS_AUTH.md`).
 
 ### Production safety
 - All changes go through PRs; never push directly to `main`.
 - Double-confirm before destructive actions.
-- For infra: Terraform owns infra; CI/CD owns images/runtime env (ADR-0002).
-- FinOps: do not introduce expensive reservations without explicit approval.
+- For infra: Terraform owns infra; CI/CD owns images/runtime env (SSOT: `merglbot-public/docs/adr/0002-terraform-cicd-coexistence.md`).
+- FinOps: do not introduce expensive reservations without explicit approval (SSOT: `merglbot-public/docs/IAC_STANDARDS.md`).
 
 ### AI bias checks (Appendix v2.15)
 - **Verify against codebase** (no hallucinated imports/APIs).

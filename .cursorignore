@@ -15,6 +15,9 @@
 **/credentials.json
 **/secrets.json
 **/secrets/**
+**/*secret*
+!**/*secret*.md
+!**/*secret*.mdx
 **/*.pem
 **/*.key
 **/id_rsa
@@ -24,11 +27,22 @@
 **/*service-account*.json
 **/*sa-key*.json
 
+# Package manager / CLI auth files
+**/.npmrc
+**/.pypirc
+**/.netrc
+**/.docker/config.json
+
+# Cloud CLI creds (if copied into repo/workspace)
+**/application_default_credentials.json
+**/.aws/credentials
+**/.aws/config
+**/.config/gcloud/**
+
 # Terraform sensitive inputs/state
 **/*.tfvars
 **/*.tfvars.json
 **/.terraform/**
-**/.terraform.lock.hcl
 **/terraform.tfstate
 **/terraform.tfstate.*
 

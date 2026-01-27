@@ -34,8 +34,7 @@ Use this when you are about to open or update a PR in any `merglbot-*` repo.
      - Summary (why)
      - Risk/impact
      - Test plan (checklist)
-   - Trigger review tool installed in the repo (default: comment `@merglbot review`)
-   - If using multiple comment-based bots: `/gemini review` + `@cursor review` first (wait), then `@merglbot review` last (avoids cancellations)
+   - Trigger review tooling installed in the repo (e.g. comment-based bots). If unsure, follow SSOT PR review docs.
 
 7. **Merge**
    - Squash merge
@@ -44,6 +43,6 @@ Use this when you are about to open or update a PR in any `merglbot-*` repo.
 
 ## SSOT references
 
-- Agent rules: `merglbot-core/ai_prompts/agent-appendix/MERGLBOT_AI_AGENT_APPENDIX_v2_15.md`
-- PR review methodology: `merglbot-core/ai_prompts/pr-review/MERGLBOT_PR_REVIEW_AUTONOMOUS_V5.md`
+- PR review quick start: `merglbot-public/docs/MERGLBOT_PR_REVIEW_QUICK_START.md`
 - PR size hygiene: `merglbot-public/docs/MERGLBOT_PR_SIZE_AND_REVIEW_HYGIENE.md`
+- Agent rules (Appendix): `merglbot-core/ai_prompts/agent-appendix/MERGLBOT_AI_AGENT_APPENDIX_v2_15.md` (if available in workspace)
