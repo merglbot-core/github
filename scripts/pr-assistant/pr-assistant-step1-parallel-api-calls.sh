@@ -381,6 +381,7 @@ call_openai_responses() {
   local model="$1"
   local max_tokens="$2"
   local prompt_file="$3"
+  local usage_file="${4:-}"
 
   local payload_a="/tmp/openai_responses_payload_a.json"
   local payload_b="/tmp/openai_responses_payload_b.json"
@@ -426,7 +427,7 @@ call_openai_responses() {
     elif [ "$payload" = "$payload_c" ]; then
       variant="C"
     fi
-    echo "  Trying Responses API payload variant ${variant}..."
+    echo "  Trying Responses API payload variant ${variant}..." >&2
 
     set +e
     local resp
@@ -438,18 +439,18 @@ call_openai_responses() {
     set -e
 
     if [ "$exit_code" -ne 0 ] || ! echo "$resp" | jq -e . > /dev/null 2>&1; then
-      echo "  ERROR: Responses API returned non-JSON (exit=$exit_code)"
+      echo "  ERROR: Responses API returned non-JSON (exit=$exit_code)" >&2
       continue
     fi
     if echo "$resp" | jq -e ".error" > /dev/null 2>&1; then
-      echo "  ERROR: $(echo "$resp" | jq -r '.error.message')"
+      echo "  ERROR: $(echo "$resp" | jq -r '.error.message')" >&2
       continue
     fi
 
     local out
     out="$(extract_output_text_responses "$resp")"
     if [ -z "$out" ] || [ "$out" = "null" ]; then
-      echo "  ERROR: Responses API contained no output_text"
+      echo "  ERROR: Responses API contained no output_text" >&2
       continue
     fi
 
@@ -460,10 +461,22 @@ call_openai_responses() {
     output_tokens="$(echo "$resp" | jq -r '.usage.output_tokens // .usage.completion_tokens // 0' 2>/dev/null || echo 0)"
     reasoning_tokens="$(echo "$resp" | jq -r '.usage.output_tokens_details.reasoning_tokens // .usage.completion_tokens_details.reasoning_tokens // 0' 2>/dev/null || echo 0)"
     if [ "$total_tokens" != "0" ] || [ "$input_tokens" != "0" ] || [ "$output_tokens" != "0" ]; then
-      echo "  Token usage:"
-      echo "    Input: $input_tokens"
-      echo "    Output: $output_tokens (reasoning: $reasoning_tokens)"
-      echo "    Total: $total_tokens"
+      echo "  Token usage:" >&2
+      echo "    Input: $input_tokens" >&2
+      echo "    Output: $output_tokens (reasoning: $reasoning_tokens)" >&2
+      echo "    Total: $total_tokens" >&2
+    fi
+
+    if [ -n "$usage_file" ]; then
+      cat > "$usage_file" << EOF
+{
+  "api": "responses",
+  "input_tokens": ${input_tokens},
+  "output_tokens": ${output_tokens},
+  "reasoning_tokens": ${reasoning_tokens},
+  "total_tokens": ${total_tokens}
+}
+EOF
     fi
 
     printf '%s' "$out"
@@ -472,6 +485,13 @@ call_openai_responses() {
 
   return 1
 }
+
+# Default usage fields (filled on success; safe to write even if zeros).
+OPENAI_USAGE_API="unknown"
+OPENAI_USAGE_INPUT_TOKENS=0
+OPENAI_USAGE_OUTPUT_TOKENS=0
+OPENAI_USAGE_REASONING_TOKENS=0
+OPENAI_USAGE_TOTAL_TOKENS=0
 
 # OPENAI CALL
 echo "Calling OpenAI (requested: $OPENAI_MODEL)..."
@@ -496,13 +516,21 @@ for MODEL_TO_TRY in "$OPENAI_MODEL" "gpt-5.2" "gpt-5.1" "gpt-5" "gpt-4-turbo"; d
 
   if [ "$USE_CHAT" == "false" ]; then
     echo "  → Using Responses API"
-    if CONTENT="$(call_openai_responses "$MODEL_TO_TRY" "$MAX_TOKENS_OPENAI" "/tmp/full_prompt.txt")"; then
+    OPENAI_RESPONSES_OUT="$(mktemp)"
+    OPENAI_USAGE_FILE="$(mktemp)"
+    if call_openai_responses "$MODEL_TO_TRY" "$MAX_TOKENS_OPENAI" "/tmp/full_prompt.txt" "$OPENAI_USAGE_FILE" > "$OPENAI_RESPONSES_OUT"; then
       OPENAI_MODEL_USED="$MODEL_TO_TRY"
       echo "Success (model: $OPENAI_MODEL_USED)"
-      echo "Words: $(printf '%s' "$CONTENT" | wc -w)"
-      printf '%s' "$CONTENT" > openai_review.txt
+      echo "Words: $(wc -w < "$OPENAI_RESPONSES_OUT")"
+      mv -f "$OPENAI_RESPONSES_OUT" openai_review.txt
+      if [ -f "$OPENAI_USAGE_FILE" ] && jq -e . "$OPENAI_USAGE_FILE" > /dev/null 2>&1; then
+        mv -f "$OPENAI_USAGE_FILE" openai_usage.json
+      else
+        rm -f "$OPENAI_USAGE_FILE"
+      fi
       break
     fi
+    rm -f "$OPENAI_RESPONSES_OUT" "$OPENAI_USAGE_FILE"
     echo "  WARN: Responses API failed; falling back to Chat Completions"
 
     jq -n \
@@ -549,6 +577,13 @@ for MODEL_TO_TRY in "$OPENAI_MODEL" "gpt-5.2" "gpt-5.1" "gpt-5" "gpt-4-turbo"; d
     echo "Success (model: $OPENAI_MODEL_USED)"
     echo "Words: $(echo "$CONTENT" | wc -w)"
     echo "$CONTENT" > openai_review.txt
+
+    # Persist token usage for fallback Chat Completions.
+    OPENAI_USAGE_API="chat_completions"
+    OPENAI_USAGE_TOTAL_TOKENS="$(echo "$OPENAI_RESP" | jq -r '.usage.total_tokens // 0' 2>/dev/null || echo 0)"
+    OPENAI_USAGE_INPUT_TOKENS="$(echo "$OPENAI_RESP" | jq -r '.usage.prompt_tokens // 0' 2>/dev/null || echo 0)"
+    OPENAI_USAGE_OUTPUT_TOKENS="$(echo "$OPENAI_RESP" | jq -r '.usage.completion_tokens // 0' 2>/dev/null || echo 0)"
+    OPENAI_USAGE_REASONING_TOKENS="$(echo "$OPENAI_RESP" | jq -r '.usage.completion_tokens_details.reasoning_tokens // 0' 2>/dev/null || echo 0)"
     break
   fi
 
@@ -621,6 +656,12 @@ for MODEL_TO_TRY in "$OPENAI_MODEL" "gpt-5.2" "gpt-5.1" "gpt-5" "gpt-4-turbo"; d
   echo "    Completion: $COMPLETION_TOKENS (reasoning: $REASONING_TOKENS, output: $OUTPUT_TOKENS)"
   echo "    Total: $TOTAL_TOKENS"
 
+  OPENAI_USAGE_API="chat_completions"
+  OPENAI_USAGE_TOTAL_TOKENS="$TOTAL_TOKENS"
+  OPENAI_USAGE_INPUT_TOKENS="$PROMPT_TOKENS"
+  OPENAI_USAGE_OUTPUT_TOKENS="$COMPLETION_TOKENS"
+  OPENAI_USAGE_REASONING_TOKENS="$REASONING_TOKENS"
+
   echo "Words: $(echo "$CONTENT" | wc -w)"
   echo "$CONTENT" > openai_review.txt
   break
@@ -634,6 +675,18 @@ if [ -z "$OPENAI_MODEL_USED" ]; then
   OPENAI_MODEL_USED="$OPENAI_MODEL"
 fi
 echo "OPENAI_MODEL_USED=$OPENAI_MODEL_USED" >> "$GITHUB_ENV"
+
+if [ ! -f openai_usage.json ] || ! jq -e . openai_usage.json > /dev/null 2>&1; then
+  cat > openai_usage.json << EOF
+{
+  "api": "${OPENAI_USAGE_API}",
+  "input_tokens": ${OPENAI_USAGE_INPUT_TOKENS},
+  "output_tokens": ${OPENAI_USAGE_OUTPUT_TOKENS},
+  "reasoning_tokens": ${OPENAI_USAGE_REASONING_TOKENS},
+  "total_tokens": ${OPENAI_USAGE_TOTAL_TOKENS}
+}
+EOF
+fi
 
 echo "========================================="
 echo "STEP 1 COMPLETE"
