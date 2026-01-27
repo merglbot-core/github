@@ -15,7 +15,14 @@
 **/credentials.json
 **/secrets.json
 **/secrets/**
-**/*secret*
+# Ignore common secret dump files, but do not hide source/docs with "secret" in the filename.
+**/*secret*.env
+**/*secret*.env.*
+**/*secret*.json
+**/*secret*.yml
+**/*secret*.yaml
+**/*.secret
+**/*.secrets
 **/*.pem
 **/*.key
 **/id_rsa

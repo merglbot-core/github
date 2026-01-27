@@ -12,7 +12,8 @@ You are an AI assistant working on the **merglbot.ai platform** (multi-repo work
 
 ### SSOT (single source of truth)
 - **Canonical documentation**: `merglbot-public/docs/` (start: `merglbot-public/docs/DOCUMENTATION_INDEX.md`)
-- **Agent rules (Appendix v2.15)**: `merglbot-core/ai_prompts/agent-appendix/MERGLBOT_AI_AGENT_APPENDIX_v2_15.md` (if available in workspace)
+- **Rulebook (SSOT)**: `merglbot-public/docs/RULEBOOK_V2.md`
+- **Optional appendix (if present)**: `merglbot-core/ai_prompts/agent-appendix/`
 
 ## Critical Guardrails (NON‑NEGOTIABLE)
 
@@ -29,7 +30,7 @@ You are an AI assistant working on the **merglbot.ai platform** (multi-repo work
 - For infra: Terraform owns infra; CI/CD owns images/runtime env (SSOT: `merglbot-public/docs/adr/0002-terraform-cicd-coexistence.md`).
 - FinOps: do not introduce expensive reservations without explicit approval (SSOT: `merglbot-public/docs/IAC_STANDARDS.md`).
 
-### AI bias checks (Appendix v2.15)
+### AI bias checks (SSOT-safe)
 - **Verify against codebase** (no hallucinated imports/APIs).
 - **Minimal change required** (avoid over-engineering).
 - **Security blindspot check** (authn/authz, input validation, rate limiting, CORS).
@@ -40,7 +41,7 @@ You are an AI assistant working on the **merglbot.ai platform** (multi-repo work
 
 If you solved something non-obvious (debug workaround, tricky config, project-specific pattern), run:
 - Cursor command: `/merglbot-retro`
-- Or use Agent Skill: `merglbot-retro`
+- Optionally capture personal tactical memory as a **local** Agent Skill in `~/.cursor/skills/` or `~/.claude/skills/` (do not commit)
 
 Goal: capture learnings **without creating shadow documentation**:
 - Team knowledge → propose/update SSOT docs in `merglbot-public/docs/` (or `merglbot-public/docs/lessons/`).

@@ -45,4 +45,5 @@ Use this when you are about to open or update a PR in any `merglbot-*` repo.
 
 - PR review quick start: `merglbot-public/docs/MERGLBOT_PR_REVIEW_QUICK_START.md`
 - PR size hygiene: `merglbot-public/docs/MERGLBOT_PR_SIZE_AND_REVIEW_HYGIENE.md`
-- Agent rules (Appendix): `merglbot-core/ai_prompts/agent-appendix/MERGLBOT_AI_AGENT_APPENDIX_v2_15.md` (if available); otherwise see `merglbot-public/docs/RULEBOOK_V2.md`
+- Agent rules (SSOT): `merglbot-public/docs/RULEBOOK_V2.md` (or https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md)
+- Optional appendix (if present in workspace): `merglbot-core/ai_prompts/agent-appendix/`
