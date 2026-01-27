@@ -11,6 +11,10 @@
 **/*.env
 **/*.env.*
 
+# Agent local skills (if mistakenly created inside a repo/workspace)
+**/.cursor/skills/**
+**/.claude/skills/**
+
 # Common credentials / keys
 **/credentials.json
 **/secrets.json
@@ -21,6 +25,7 @@
 **/*secret*.json
 **/*secret*.yml
 **/*secret*.yaml
+**/*secret*.tfvars
 **/*.secret
 **/*.secrets
 **/*.pem

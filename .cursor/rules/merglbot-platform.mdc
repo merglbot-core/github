@@ -41,7 +41,7 @@ You are an AI assistant working on the **merglbot.ai platform** (multi-repo work
 
 If you solved something non-obvious (debug workaround, tricky config, project-specific pattern), run:
 - Cursor command: `/merglbot-retro`
-- Optionally capture personal tactical memory as a **local** Agent Skill in `~/.cursor/skills/` or `~/.claude/skills/` (do not commit)
+- Optionally capture personal tactical memory as a **local** Agent Skill in `~/.cursor/skills/` or `~/.claude/skills/` (do not commit; never store secrets or customer data there)
 
 Goal: capture learnings **without creating shadow documentation**:
 - Team knowledge → propose/update SSOT docs in `merglbot-public/docs/` (or `merglbot-public/docs/lessons/`).
