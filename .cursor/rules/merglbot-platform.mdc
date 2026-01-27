@@ -1,5 +1,6 @@
 ---
 description: Merglbot platform guardrails (security, SSOT, PR hygiene, continuous learning)
+source: merglbot-public/docs/templates/cursor/.cursor/rules/merglbot-platform.mdc
 globs: ["**/*"]
 alwaysApply: true
 ---

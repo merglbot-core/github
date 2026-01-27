@@ -4,6 +4,9 @@
 # This is best-effort protection; still follow MERGLBOT_AI_TOOLS.md and never paste secrets into prompts.
 #
 # Syntax: same as .gitignore
+#
+# Source: `merglbot-public/docs/templates/cursor/.cursorignore`
+# GitHub: https://github.com/merglbot-public/docs/blob/main/templates/cursor/.cursorignore
 
 # Secrets / env
 **/.env
@@ -25,6 +28,11 @@
 **/*secret*.json
 **/*secret*.yml
 **/*secret*.yaml
+# Terraform vars often contain secrets
+**/*.tfvars
+**/*.tfvars.json
+**/*.tfvars.*
+**/*secret*.tfvars
 **/*secret*.txt
 **/*secret*.log
 **/*secret*.csv
@@ -57,9 +65,12 @@
 # Terraform sensitive inputs/state
 **/*.tfvars
 **/*.tfvars.json
+**/*.tfvars.*
 **/.terraform/**
 **/terraform.tfstate
 **/terraform.tfstate.*
+**/*.tfstate
+**/*.tfstate.backup
 
 # Local caches / build outputs (reduce noise)
 **/node_modules/**

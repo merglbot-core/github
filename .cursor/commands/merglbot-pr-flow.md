@@ -1,5 +1,7 @@
 # Merglbot PR Flow (Branch + PR + Review)
 
+<!-- Source: merglbot-public/docs/templates/cursor/.cursor/commands/merglbot-pr-flow.md -->
+
 Use this when you are about to open or update a PR in any `merglbot-*` repo.
 
 ## Checklist
