@@ -1027,7 +1027,7 @@ jobs:
                 continue
               fi
 
-              # Capture token usage (best-effort; do not fail on missing fields).
+              # Capture token usage after output_text validation (best-effort; do not fail on missing fields).
               local total_tokens input_tokens output_tokens reasoning_tokens
               total_tokens="$(echo "$resp" | jq -r '.usage.total_tokens // 0' 2>/dev/null || echo 0)"
               input_tokens="$(echo "$resp" | jq -r '.usage.input_tokens // .usage.prompt_tokens // 0' 2>/dev/null || echo 0)"

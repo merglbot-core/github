@@ -381,6 +381,7 @@ call_openai_responses() {
   local model="$1"
   local max_tokens="$2"
   local prompt_file="$3"
+  local usage_file="${4:-}"
 
   local payload_a="/tmp/openai_responses_payload_a.json"
   local payload_b="/tmp/openai_responses_payload_b.json"
@@ -466,14 +467,8 @@ call_openai_responses() {
       echo "    Total: $total_tokens" >&2
     fi
 
-    # Persist numeric usage for later metrics artifact (no secrets).
-    OPENAI_USAGE_API="responses"
-    OPENAI_USAGE_INPUT_TOKENS="$input_tokens"
-    OPENAI_USAGE_OUTPUT_TOKENS="$output_tokens"
-    OPENAI_USAGE_REASONING_TOKENS="$reasoning_tokens"
-    OPENAI_USAGE_TOTAL_TOKENS="$total_tokens"
-
-    cat > openai_usage.json << EOF
+    if [ -n "$usage_file" ]; then
+      cat > "$usage_file" << EOF
 {
   "api": "responses",
   "input_tokens": ${input_tokens},
@@ -482,6 +477,7 @@ call_openai_responses() {
   "total_tokens": ${total_tokens}
 }
 EOF
+    fi
 
     printf '%s' "$out"
     return 0
@@ -521,14 +517,20 @@ for MODEL_TO_TRY in "$OPENAI_MODEL" "gpt-5.2" "gpt-5.1" "gpt-5" "gpt-4-turbo"; d
   if [ "$USE_CHAT" == "false" ]; then
     echo "  → Using Responses API"
     OPENAI_RESPONSES_OUT="$(mktemp)"
-    if call_openai_responses "$MODEL_TO_TRY" "$MAX_TOKENS_OPENAI" "/tmp/full_prompt.txt" > "$OPENAI_RESPONSES_OUT"; then
+    OPENAI_USAGE_FILE="$(mktemp)"
+    if call_openai_responses "$MODEL_TO_TRY" "$MAX_TOKENS_OPENAI" "/tmp/full_prompt.txt" "$OPENAI_USAGE_FILE" > "$OPENAI_RESPONSES_OUT"; then
       OPENAI_MODEL_USED="$MODEL_TO_TRY"
       echo "Success (model: $OPENAI_MODEL_USED)"
       echo "Words: $(wc -w < "$OPENAI_RESPONSES_OUT")"
       mv -f "$OPENAI_RESPONSES_OUT" openai_review.txt
+      if [ -f "$OPENAI_USAGE_FILE" ] && jq -e . "$OPENAI_USAGE_FILE" > /dev/null 2>&1; then
+        mv -f "$OPENAI_USAGE_FILE" openai_usage.json
+      else
+        rm -f "$OPENAI_USAGE_FILE"
+      fi
       break
     fi
-    rm -f "$OPENAI_RESPONSES_OUT"
+    rm -f "$OPENAI_RESPONSES_OUT" "$OPENAI_USAGE_FILE"
     echo "  WARN: Responses API failed; falling back to Chat Completions"
 
     jq -n \
