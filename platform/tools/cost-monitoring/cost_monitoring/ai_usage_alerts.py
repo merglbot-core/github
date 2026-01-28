@@ -10,7 +10,6 @@ This is designed to run in GitHub Actions using WIF/OIDC (no JSON keys).
 from __future__ import annotations
 
 import os
-import sys
 import datetime as dt
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -19,6 +18,7 @@ from google.cloud import bigquery
 from google.cloud import firestore
 
 from cost_monitoring.alerting.notifiers import send_slack
+from cost_monitoring.utils.anomaly_config import parse_daily_spike_factor
 
 
 def _utc_now() -> dt.datetime:
@@ -282,28 +282,7 @@ def main() -> int:
 
     config = load_budget_config(admin_project_id)
     anomaly_cfg = config.get("anomaly") if isinstance(config.get("anomaly"), dict) else {}
-    spike_factor = 2.0
-    if anomaly_cfg:
-        try:
-            if "daily_spike_factor" in anomaly_cfg:
-                spike_factor = float(anomaly_cfg.get("daily_spike_factor") or spike_factor)
-            elif "daily_spike_pct" in anomaly_cfg:
-                pct = float(anomaly_cfg.get("daily_spike_pct") or 0.0)
-                # Guardrail: keep parsing unambiguous to avoid alert spam.
-                # - (0, 1] is treated as a fraction (e.g. 0.5 => +50% => factor 1.5)
-                # - >1 must be an integer percent (e.g. 50 => +50% => factor 1.5; 150 => +150% => factor 2.5)
-                if pct <= 0.0:
-                    raise ValueError("daily_spike_pct must be > 0")
-                if pct <= 1.0:
-                    spike_factor = 1.0 + pct
-                elif pct.is_integer():
-                    spike_factor = 1.0 + (pct / 100.0)
-                else:
-                    raise ValueError("daily_spike_pct > 1 must be an integer percent (e.g. 50, 150); use daily_spike_factor for fractional factors")
-        except (TypeError, ValueError):
-            spike_factor = 2.0
-    if spike_factor < 1.0:
-        spike_factor = 1.0
+    spike_factor = parse_daily_spike_factor(anomaly_cfg)
 
     raw_budgets = config.get("budgets") or []
     budgets: List[BudgetItem] = []
