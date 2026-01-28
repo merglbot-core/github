@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from google.cloud import bigquery
 from google.cloud import firestore
+from google.api_core.exceptions import NotFound, PermissionDenied
 
 from cost_monitoring.alerting.notifiers import send_slack
 from cost_monitoring.utils.anomaly_config import parse_daily_spike_factor
@@ -76,11 +77,20 @@ def _parse_budget_item(raw: Dict[str, Any]) -> Optional[BudgetItem]:
 def load_budget_config(admin_project_id: str) -> Dict[str, Any]:
     # Restrict to a dedicated Firestore DB to avoid broad access to admin Firestore data.
     # Must match infra: `google_firestore_database.ai_usage_settings` (name: ai-usage-settings).
-    db = firestore.Client(
-        project=admin_project_id,
-        database=_env("AI_USAGE_SETTINGS_FIRESTORE_DATABASE_ID", "ai-usage-settings"),
-    )
-    doc = db.collection("settings").document("ai_usage_telemetry").get()
+    db_id = _env("AI_USAGE_SETTINGS_FIRESTORE_DATABASE_ID", "ai-usage-settings")
+    try:
+        db = firestore.Client(project=admin_project_id, database=db_id)
+        doc = db.collection("settings").document("ai_usage_telemetry").get()
+    except TypeError as e:
+        raise RuntimeError(
+            "Firestore client does not support the 'database' parameter; "
+            "upgrade google-cloud-firestore (or adjust the runtime) to use dedicated databases."
+        ) from e
+    except (PermissionDenied, NotFound) as e:
+        raise RuntimeError(
+            f"Cannot read Firestore settings from database '{db_id}'. "
+            "Ensure infra (ai-usage-settings DB) + IAM Conditions are applied."
+        ) from e
     if not doc.exists:
         return {}
     data = doc.to_dict() or {}
