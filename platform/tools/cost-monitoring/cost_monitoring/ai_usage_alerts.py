@@ -57,7 +57,7 @@ def _parse_budget_item(raw: Dict[str, Any]) -> Optional[BudgetItem]:
         for t in thresholds_raw:
             try:
                 thresholds.append(float(t))
-            except Exception:
+            except (TypeError, ValueError):
                 continue
     thresholds = sorted({t for t in thresholds if t > 0})
     if not thresholds:
@@ -200,7 +200,7 @@ def evaluate_anomaly_alerts(
         by_provider.setdefault(provider, {})[date_key] = float(r.get("cost_usd") or 0.0)
 
     # Evaluate yesterday vs avg of previous 7 days (excluding yesterday)
-    today = dt.datetime.now().date()
+    today = _utc_now().date()
     yesterday = today - dt.timedelta(days=1)
     prev_start = today - dt.timedelta(days=8)
     prev_end = today - dt.timedelta(days=2)
@@ -291,7 +291,7 @@ def main() -> int:
                 pct = float(anomaly_cfg.get("daily_spike_pct") or 0.0)
                 # Accept either 0.5 (50%) or 50 (percent)
                 spike_factor = 1.0 + (pct / 100.0 if pct > 1.0 else pct)
-        except Exception:
+        except (TypeError, ValueError):
             spike_factor = 2.0
     if spike_factor < 1.0:
         spike_factor = 1.0
@@ -316,7 +316,7 @@ def main() -> int:
     daily_rows = get_recent_daily_spend(platform_project_id, dataset, days=14)
     alerts += evaluate_anomaly_alerts(daily_rows, spike_factor=spike_factor)
 
-    month = dt.datetime.now().strftime("%Y-%m")
+    month = _utc_now().strftime("%Y-%m")
     if alerts:
         webhook_url = os.environ.get("SLACK_WEBHOOK_URL", "")
         formatted = format_slack_message(month, platform_project_id, alerts)
