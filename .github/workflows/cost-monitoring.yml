@@ -107,6 +107,7 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           # Defaults are safe; keep explicit for clarity.
           AI_USAGE_ADMIN_PROJECT_ID: "merglbot-admin-prd"
+          AI_USAGE_SETTINGS_FIRESTORE_DATABASE_ID: "ai-usage-settings"
           AI_USAGE_PLATFORM_PROJECT_ID: "merglbot-platform-prd"
           AI_USAGE_DATASET: "ai_usage"
         run: |

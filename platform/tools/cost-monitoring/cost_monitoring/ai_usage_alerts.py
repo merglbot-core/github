@@ -74,7 +74,12 @@ def _parse_budget_item(raw: Dict[str, Any]) -> Optional[BudgetItem]:
 
 
 def load_budget_config(admin_project_id: str) -> Dict[str, Any]:
-    db = firestore.Client(project=admin_project_id)
+    # Restrict to a dedicated Firestore DB to avoid broad access to admin Firestore data.
+    # Must match infra: `google_firestore_database.ai_usage_settings` (name: ai-usage-settings).
+    db = firestore.Client(
+        project=admin_project_id,
+        database=_env("AI_USAGE_SETTINGS_FIRESTORE_DATABASE_ID", "ai-usage-settings"),
+    )
     doc = db.collection("settings").document("ai_usage_telemetry").get()
     if not doc.exists:
         return {}
