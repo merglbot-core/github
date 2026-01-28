@@ -1558,6 +1558,10 @@ jobs:
           if [ -f synthesis_usage.json ] && jq -e . synthesis_usage.json > /dev/null 2>&1; then
             SYNTHESIS_USAGE_JSON="$(jq -c . synthesis_usage.json)"
           fi
+          ANTHROPIC_USAGE_JSON="{}"
+          if [ -f anthropic_usage.json ] && jq -e . anthropic_usage.json > /dev/null 2>&1; then
+            ANTHROPIC_USAGE_JSON="$(jq -c . anthropic_usage.json)"
+          fi
           
           cat > metrics/review-metrics.json << METRICS_EOF
           {
@@ -1567,12 +1571,18 @@ jobs:
             "review_mode": "$REVIEW_MODE",
             "trigger": "${{ github.event_name }}",
             "run_id": "${{ github.run_id }}",
+            "workflow": "${{ github.workflow }}",
+            "workflow_ref": "${{ github.workflow_ref }}",
+            "actor": "${{ github.actor }}",
+            "comment_author": "${{ github.event.comment.user.login || '' }}",
+            "pr_author": "$(cat pr_author.txt 2>/dev/null || echo '')",
             "models": {
               "anthropic": "$ANTHROPIC_MODEL_FINAL",
               "openai": "$OPENAI_MODEL_FINAL",
               "codex": "$CODEX_MODEL_FINAL"
             },
             "usage": {
+              "anthropic": $ANTHROPIC_USAGE_JSON,
               "openai": $OPENAI_USAGE_JSON,
               "codex": $CODEX_USAGE_JSON,
               "synthesis": $SYNTHESIS_USAGE_JSON
