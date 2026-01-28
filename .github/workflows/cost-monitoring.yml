@@ -100,6 +100,20 @@ jobs:
           echo "reports_dir=$(pwd)/reports" >> "$GITHUB_OUTPUT"
           echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
 
+      - name: AI Usage Telemetry Alerts (Budgets)
+        id: ai_usage_alerts
+        working-directory: platform/tools/cost-monitoring
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          # Defaults are safe; keep explicit for clarity.
+          AI_USAGE_ADMIN_PROJECT_ID: "merglbot-admin-prd"
+          AI_USAGE_PLATFORM_PROJECT_ID: "merglbot-platform-prd"
+          AI_USAGE_DATASET: "ai_usage"
+        run: |
+          set -euo pipefail
+          python -m cost_monitoring.ai_usage_alerts
+
       - name: Generate Step Summary
         if: always()
         working-directory: platform/tools/cost-monitoring

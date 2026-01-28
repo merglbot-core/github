@@ -351,12 +351,30 @@ for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-5-20251101" "claude-opus-4
   ANTHROPIC_MODEL_USED="$MODEL_TO_TRY"
   echo "Success (model: $ANTHROPIC_MODEL_USED)"
   echo "Words: $(echo "$ANTHROPIC_CONTENT" | wc -w)"
+  
+  # Save numeric-only token usage for downstream telemetry (no prompts, no secrets).
+  # This file is consumed by review-metrics.json generation.
+  if echo "$ANTHROPIC_RESP" | jq -e '.usage' > /dev/null 2>&1; then
+    echo "$ANTHROPIC_RESP" | jq -c '.usage | with_entries(select(.value | type == "number"))' > anthropic_usage.json 2>/dev/null || true
+  fi
+
   echo "$ANTHROPIC_CONTENT" > anthropic_review.txt
   break
 done
 
 if [ ! -s anthropic_review.txt ]; then
   echo "API_ERROR" > anthropic_review.txt
+fi
+
+if [ ! -f anthropic_usage.json ] || ! jq -e . anthropic_usage.json > /dev/null 2>&1; then
+  cat > anthropic_usage.json << EOF
+{
+  "input_tokens": 0,
+  "output_tokens": 0,
+  "cache_creation_input_tokens": 0,
+  "cache_read_input_tokens": 0
+}
+EOF
 fi
 
 if [ -z "$ANTHROPIC_MODEL_USED" ]; then
