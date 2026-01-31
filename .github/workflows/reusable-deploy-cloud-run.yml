@@ -155,17 +155,27 @@ jobs:
       # Container Security: Trivy Scanning
       # CRITICAL vulnerabilities block deploy, HIGH are reported to Code Scanning
       # Per MERGLBOT_AI_AGENT_APPENDIX Rule 12: Security gating must not be weakened
-      - name: Run Trivy vulnerability scanner
+      - name: Run Trivy (gate CRITICAL)
         uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8  # v0.33.1
-        continue-on-error: true  # Temporarily allow deploy while investigating SARIF exit-code issue
+        with:
+          image-ref: ${{ steps.build.outputs.full_image }}
+          format: 'table'
+          severity: 'CRITICAL'  # Block on CRITICAL immediately
+          exit-code: '1'
+          ignore-unfixed: true  # Don't fail on unfixable vulns
+
+      - name: Run Trivy (SARIF)
+        if: always()
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8  # v0.33.1
+        continue-on-error: true
         with:
           image-ref: ${{ steps.build.outputs.full_image }}
           format: 'sarif'
           output: 'trivy-results.sarif'
-          severity: 'CRITICAL'  # Block on CRITICAL only
-          exit-code: '0'        # Temporarily set to 0 - SARIF has false positive exit codes
-          ignore-unfixed: true  # Don't fail on unfixable vulns
-      
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+          ignore-unfixed: true
+
       - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@cdefb33c0f6224e58673d9004f47f7cb3e328b89  # v4
         if: always()
