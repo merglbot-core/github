@@ -84,6 +84,7 @@ on:
         value: ${{ jobs.build.outputs.scan_passed }}
 
 permissions:
+  actions: read
   contents: read
   packages: write
   id-token: write
@@ -171,7 +172,10 @@ jobs:
           image-ref: '${{ inputs.registry }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}'
           format: 'sarif'
           output: 'trivy-results.sarif'
+          limit-severities-for-sarif: 'true'
+          scanners: 'vuln'
           severity: 'CRITICAL,HIGH'
+          trivyignores: ${{ hashFiles('.trivyignore') != '' && '.trivyignore' || '' }}
           exit-code: '1'
 
       - name: Upload Trivy SARIF
