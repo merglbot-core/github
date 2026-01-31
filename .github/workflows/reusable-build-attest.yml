@@ -249,8 +249,15 @@ jobs:
           EOF
           )
           
-          echo "provenance=$PROVENANCE" >> $GITHUB_OUTPUT
           echo "$PROVENANCE" > provenance.json
+
+          # GitHub Actions output syntax requires multiline values to use the heredoc form.
+          # Writing raw JSON to `provenance=<json>` breaks the file command parser.
+          {
+            echo "provenance<<EOF"
+            cat provenance.json
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload SLSA Provenance
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
