@@ -311,7 +311,7 @@ jobs:
           echo "Creating attestation for: $IMAGE_DIGEST"
           
           # Create attestation using gcloud
-          gcloud container binauthz attestations sign-and-create \
+          gcloud beta container binauthz attestations sign-and-create \
             --project=merglbot-artifacts \
             --artifact-url="$IMAGE_DIGEST" \
             --attestor="$ATTESTOR" \
