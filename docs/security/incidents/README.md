@@ -9,3 +9,7 @@
 
 - Incidenty se dokumentují v SSOT docs.
 - Tento adresář existuje jen jako stabilní cíl pro interní linky v training materiálech.
+
+## Local runbooks (must be kept in sync with SSOT)
+
+- `GITHUB_TOKEN_EXPOSURE_RESPONSE.md` (SEC-P0-005)
