@@ -179,7 +179,7 @@ create_branch_protection() {
     "strict": true,
     "contexts": ${contexts_json}
   },
-  "enforce_admins": false,
+  "enforce_admins": true,
   "required_pull_request_reviews": {
     "required_approving_review_count": 0,
     "dismiss_stale_reviews": false,
@@ -236,12 +236,16 @@ ensure_linear_history_enabled() {
     end
   ')"
 
-  # Preserve existing allow_force_pushes and allow_deletions
+  # Preserve existing allow_force_pushes, allow_deletions, block_creations, lock_branch
   # GET returns {"enabled": bool}; PUT expects bool
   local allow_force_pushes
   allow_force_pushes="$(printf '%s' "$existing" | jq '.allow_force_pushes.enabled // false')"
   local allow_deletions
   allow_deletions="$(printf '%s' "$existing" | jq '.allow_deletions.enabled // false')"
+  local block_creations
+  block_creations="$(printf '%s' "$existing" | jq '.block_creations.enabled // false')"
+  local lock_branch
+  lock_branch="$(printf '%s' "$existing" | jq '.lock_branch.enabled // false')"
 
   local payload
   payload="$(cat <<EOF
@@ -258,6 +262,8 @@ ensure_linear_history_enabled() {
   "restrictions": ${restrictions},
   "allow_force_pushes": ${allow_force_pushes},
   "allow_deletions": ${allow_deletions},
+  "block_creations": ${block_creations},
+  "lock_branch": ${lock_branch},
   "required_conversation_resolution": false
 }
 EOF
