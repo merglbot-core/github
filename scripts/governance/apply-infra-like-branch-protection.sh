@@ -147,7 +147,7 @@ create_branch_protection() {
   if required_check="$(discover_min_required_check "$full_name" "$branch")"; then
     log "  Discovered required check: ${required_check}"
   else
-    warn "  No stable required check discovered (creating protection with empty required checks)"
+    warn "  ${full_name}:${branch}: no stable required check discovered (creating protection with empty required checks)"
   fi
 
   local contexts_json="[]"
@@ -169,9 +169,57 @@ create_branch_protection() {
     "require_code_owner_reviews": false,
     "require_last_push_approval": false
   },
+  "required_linear_history": true,
   "restrictions": null,
   "allow_force_pushes": false,
   "allow_deletions": false
+}
+EOF
+)"
+
+  gh_api PUT "repos/${full_name}/branches/${branch}/protection" --input - <<<"$payload" >/dev/null
+}
+
+ensure_linear_history_enabled() {
+  local full_name=$1
+  local branch=$2
+
+  # There is no dedicated REST sub-endpoint for this setting; it must be applied via the protection PUT payload.
+  local enabled
+  enabled="$(gh api "repos/${full_name}/branches/${branch}/protection" --jq '.required_linear_history.enabled // false' 2>/dev/null || echo false)"
+  if [ "$enabled" = "true" ]; then
+    return 0
+  fi
+
+  if [ "$DRY_RUN" = true ]; then
+    log "  DRY RUN: enable linear history"
+    return 0
+  fi
+
+  local strict
+  strict="$(gh api "repos/${full_name}/branches/${branch}/protection" --jq '.required_status_checks.strict // true')"
+  local contexts
+  contexts="$(gh api "repos/${full_name}/branches/${branch}/protection" --jq '.required_status_checks.contexts // []')"
+
+  local payload
+  payload="$(cat <<EOF
+{
+  "required_status_checks": {
+    "strict": ${strict},
+    "contexts": ${contexts}
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 0,
+    "dismiss_stale_reviews": false,
+    "require_code_owner_reviews": false,
+    "require_last_push_approval": false
+  },
+  "required_linear_history": true,
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
+  "required_conversation_resolution": false
 }
 EOF
 )"
@@ -202,7 +250,7 @@ apply_to_branch() {
   if [ "$DRY_RUN" = true ]; then
     log "  DRY RUN: set required reviews -> 0"
     log "  DRY RUN: disable conversation resolution"
-    log "  DRY RUN: enable linear history"
+    log "  DRY RUN: enable linear history (if disabled)"
     log "  DRY RUN: enable enforce-admins"
     return 0
   fi
@@ -218,11 +266,11 @@ apply_to_branch() {
   #    DELETE is safe when already disabled (may 404).
   gh_api DELETE "repos/${full_name}/branches/${branch}/protection/required_conversation_resolution" >/dev/null 2>&1 || true
 
-  # 3) Linear history ON
-  gh_api POST "repos/${full_name}/branches/${branch}/protection/required_linear_history" >/dev/null 2>&1 || true
-
-  # 4) Enforce admins ON (no bypass)
+  # 3) Enforce admins ON (no bypass)
   gh_api POST "repos/${full_name}/branches/${branch}/protection/enforce_admins" >/dev/null 2>&1 || true
+
+  # 4) Linear history ON (best-effort; only updates if currently disabled)
+  ensure_linear_history_enabled "$full_name" "$branch" || true
 }
 
 list_repos_for_org() {
