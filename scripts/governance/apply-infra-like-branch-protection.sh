@@ -450,6 +450,13 @@ process_repo() {
     default_branch="$(get_default_branch "$full_name")"
   fi
 
+  # Skip repos without a default branch (e.g., empty repos with no commits)
+  if [ -z "$default_branch" ]; then
+    warn "Skip ${full_name} (no default branch - possibly empty repo)"
+    skipped=$((skipped + 1))
+    return 0
+  fi
+
   local rc=0
   apply_to_branch "$full_name" "$default_branch" || rc=$?
   case "$rc" in
