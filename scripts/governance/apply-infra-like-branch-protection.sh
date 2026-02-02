@@ -204,8 +204,12 @@ ensure_linear_history_enabled() {
   encoded_branch="$(urlencode "$branch")"
 
   # There is no dedicated REST sub-endpoint for this setting; it must be applied via the protection PUT payload.
+  # We must preserve ALL existing settings to avoid unintended side effects.
+  local existing
+  existing="$(gh api "repos/${full_name}/branches/${encoded_branch}/protection" 2>/dev/null)" || return 0
+
   local enabled
-  enabled="$(gh api "repos/${full_name}/branches/${encoded_branch}/protection" --jq '.required_linear_history.enabled // false' 2>/dev/null || echo false)"
+  enabled="$(printf '%s' "$existing" | jq -r '.required_linear_history.enabled // false')"
   if [ "$enabled" = "true" ]; then
     return 0
   fi
@@ -215,18 +219,24 @@ ensure_linear_history_enabled() {
     return 0
   fi
 
-  local strict
-  strict="$(gh api "repos/${full_name}/branches/${encoded_branch}/protection" --jq '.required_status_checks.strict // true')"
-  local contexts
-  contexts="$(gh api "repos/${full_name}/branches/${encoded_branch}/protection" --jq '.required_status_checks.contexts // []')"
+  # Preserve existing required_status_checks (may be null or object)
+  local required_status_checks
+  required_status_checks="$(printf '%s' "$existing" | jq '.required_status_checks')"
+
+  # Preserve existing restrictions (may be null or object)
+  local restrictions
+  restrictions="$(printf '%s' "$existing" | jq '.restrictions')"
+
+  # Preserve existing allow_force_pushes and allow_deletions
+  local allow_force_pushes
+  allow_force_pushes="$(printf '%s' "$existing" | jq '.allow_force_pushes // false')"
+  local allow_deletions
+  allow_deletions="$(printf '%s' "$existing" | jq '.allow_deletions // false')"
 
   local payload
   payload="$(cat <<EOF
 {
-  "required_status_checks": {
-    "strict": ${strict},
-    "contexts": ${contexts}
-  },
+  "required_status_checks": ${required_status_checks},
   "enforce_admins": true,
   "required_pull_request_reviews": {
     "required_approving_review_count": 0,
@@ -235,9 +245,9 @@ ensure_linear_history_enabled() {
     "require_last_push_approval": false
   },
   "required_linear_history": true,
-  "restrictions": null,
-  "allow_force_pushes": false,
-  "allow_deletions": false,
+  "restrictions": ${restrictions},
+  "allow_force_pushes": ${allow_force_pushes},
+  "allow_deletions": ${allow_deletions},
   "required_conversation_resolution": false
 }
 EOF
@@ -365,6 +375,7 @@ done
 
 need_cmd gh
 need_cmd python3
+need_cmd jq
 gh auth status >/dev/null 2>&1 || { err "Not logged in to GitHub via gh. Run: gh auth login"; exit 1; }
 
 if [ "${#TARGET_ORGS[@]}" -eq 0 ] && [ "${#TARGET_REPOS[@]}" -eq 0 ]; then
