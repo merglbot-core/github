@@ -13,6 +13,9 @@
 
 set -euo pipefail
 
+# Exit codes
+readonly RC_SKIPPED=20
+
 DRY_RUN=false
 INCLUDE_ARCHIVED=false
 INCLUDE_FORKS=false
@@ -68,6 +71,12 @@ log() { printf '%s %s\n' "[$(date +'%Y-%m-%d %H:%M:%S')]" "$*"; }
 warn() { printf '%s %s\n' "[WARN]" "$*" >&2; }
 err() { printf '%s %s\n' "[ERROR]" "$*" >&2; }
 
+# URL-encode a string (needed for branch names containing / like release/v1.0)
+urlencode() {
+  local string="$1"
+  python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$string"
+}
+
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || { err "Missing dependency: $1"; exit 1; }
 }
@@ -87,13 +96,17 @@ get_default_branch() {
 branch_exists() {
   local full_name=$1
   local branch=$2
-  gh api "repos/${full_name}/branches/${branch}" >/dev/null 2>&1
+  local encoded_branch
+  encoded_branch="$(urlencode "$branch")"
+  gh api "repos/${full_name}/branches/${encoded_branch}" >/dev/null 2>&1
 }
 
 protection_exists() {
   local full_name=$1
   local branch=$2
-  gh api "repos/${full_name}/branches/${branch}/protection" >/dev/null 2>&1
+  local encoded_branch
+  encoded_branch="$(urlencode "$branch")"
+  gh api "repos/${full_name}/branches/${encoded_branch}/protection" >/dev/null 2>&1
 }
 
 list_release_branches() {
@@ -104,6 +117,8 @@ list_release_branches() {
 discover_min_required_check() {
   local full_name=$1
   local branch=$2
+  local encoded_branch
+  encoded_branch="$(urlencode "$branch")"
 
   # Prefer a single, always-present CI gate over a long list of checks (per-repo differs).
   local preferred=(
@@ -119,7 +134,7 @@ discover_min_required_check() {
   )
 
   local names
-  names="$(gh api --paginate "repos/${full_name}/commits/${branch}/check-runs?per_page=100" --jq '.check_runs[].name' 2>/dev/null || true)"
+  names="$(gh api --paginate "repos/${full_name}/commits/${encoded_branch}/check-runs?per_page=100" --jq '.check_runs[].name' 2>/dev/null || true)"
 
   local candidate
   for candidate in "${preferred[@]}"; do
@@ -135,6 +150,8 @@ discover_min_required_check() {
 create_branch_protection() {
   local full_name=$1
   local branch=$2
+  local encoded_branch
+  encoded_branch="$(urlencode "$branch")"
 
   log "Create branch protection baseline: ${full_name}:${branch}"
 
@@ -177,16 +194,18 @@ create_branch_protection() {
 EOF
 )"
 
-  gh_api PUT "repos/${full_name}/branches/${branch}/protection" --input - <<<"$payload" >/dev/null
+  gh_api PUT "repos/${full_name}/branches/${encoded_branch}/protection" --input - <<<"$payload" >/dev/null
 }
 
 ensure_linear_history_enabled() {
   local full_name=$1
   local branch=$2
+  local encoded_branch
+  encoded_branch="$(urlencode "$branch")"
 
   # There is no dedicated REST sub-endpoint for this setting; it must be applied via the protection PUT payload.
   local enabled
-  enabled="$(gh api "repos/${full_name}/branches/${branch}/protection" --jq '.required_linear_history.enabled // false' 2>/dev/null || echo false)"
+  enabled="$(gh api "repos/${full_name}/branches/${encoded_branch}/protection" --jq '.required_linear_history.enabled // false' 2>/dev/null || echo false)"
   if [ "$enabled" = "true" ]; then
     return 0
   fi
@@ -197,9 +216,9 @@ ensure_linear_history_enabled() {
   fi
 
   local strict
-  strict="$(gh api "repos/${full_name}/branches/${branch}/protection" --jq '.required_status_checks.strict // true')"
+  strict="$(gh api "repos/${full_name}/branches/${encoded_branch}/protection" --jq '.required_status_checks.strict // true')"
   local contexts
-  contexts="$(gh api "repos/${full_name}/branches/${branch}/protection" --jq '.required_status_checks.contexts // []')"
+  contexts="$(gh api "repos/${full_name}/branches/${encoded_branch}/protection" --jq '.required_status_checks.contexts // []')"
 
   local payload
   payload="$(cat <<EOF
@@ -224,16 +243,18 @@ ensure_linear_history_enabled() {
 EOF
 )"
 
-  gh_api PUT "repos/${full_name}/branches/${branch}/protection" --input - <<<"$payload" >/dev/null
+  gh_api PUT "repos/${full_name}/branches/${encoded_branch}/protection" --input - <<<"$payload" >/dev/null
 }
 
 apply_to_branch() {
   local full_name=$1
   local branch=$2
+  local encoded_branch
+  encoded_branch="$(urlencode "$branch")"
 
   if ! branch_exists "$full_name" "$branch"; then
     warn "Skip ${full_name}:${branch} (branch does not exist)"
-    return 20
+    return "$RC_SKIPPED"
   fi
 
   if ! protection_exists "$full_name" "$branch"; then
@@ -241,7 +262,7 @@ apply_to_branch() {
       create_branch_protection "$full_name" "$branch" || return 1
     else
       warn "Skip ${full_name}:${branch} (no branch protection found)"
-      return 20
+      return "$RC_SKIPPED"
     fi
   fi
 
@@ -256,7 +277,7 @@ apply_to_branch() {
   fi
 
   # 1) Approvals = 0 (still requires PRs)
-  gh_api PATCH "repos/${full_name}/branches/${branch}/protection/required_pull_request_reviews" \
+  gh_api PATCH "repos/${full_name}/branches/${encoded_branch}/protection/required_pull_request_reviews" \
     -F required_approving_review_count=0 \
     -F dismiss_stale_reviews=false \
     -F require_code_owner_reviews=false \
@@ -264,10 +285,10 @@ apply_to_branch() {
 
   # 2) Conversation resolution OFF (vibecoder-friendly)
   #    DELETE is safe when already disabled (may 404).
-  gh_api DELETE "repos/${full_name}/branches/${branch}/protection/required_conversation_resolution" >/dev/null 2>&1 || true
+  gh_api DELETE "repos/${full_name}/branches/${encoded_branch}/protection/required_conversation_resolution" >/dev/null 2>&1 || true
 
   # 3) Enforce admins ON (no bypass)
-  gh_api POST "repos/${full_name}/branches/${branch}/protection/enforce_admins" >/dev/null 2>&1 || true
+  gh_api POST "repos/${full_name}/branches/${encoded_branch}/protection/enforce_admins" >/dev/null 2>&1 || true
 
   # 4) Linear history ON (best-effort; only updates if currently disabled)
   ensure_linear_history_enabled "$full_name" "$branch" || true
@@ -316,15 +337,18 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --org)
-      TARGET_ORGS+=("${2:-}")
+      [ -z "${2:-}" ] && { err "Missing argument for $1"; usage; exit 2; }
+      TARGET_ORGS+=("$2")
       shift 2
       ;;
     --repo)
-      TARGET_REPOS+=("${2:-}")
+      [ -z "${2:-}" ] && { err "Missing argument for $1"; usage; exit 2; }
+      TARGET_REPOS+=("$2")
       shift 2
       ;;
     --branch)
-      SPECIFIC_BRANCH="${2:-}"
+      [ -z "${2:-}" ] && { err "Missing argument for $1"; usage; exit 2; }
+      SPECIFIC_BRANCH="$2"
       shift 2
       ;;
     -h|--help)
@@ -340,10 +364,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 need_cmd gh
+need_cmd python3
 gh auth status >/dev/null 2>&1 || { err "Not logged in to GitHub via gh. Run: gh auth login"; exit 1; }
-if [ "$CREATE_IF_MISSING" = true ] && [ "$DRY_RUN" = false ]; then
-  need_cmd python3
-fi
 
 if [ "${#TARGET_ORGS[@]}" -eq 0 ] && [ "${#TARGET_REPOS[@]}" -eq 0 ]; then
   TARGET_ORGS=("${DEFAULT_ORGS[@]}")
@@ -373,7 +395,7 @@ process_repo() {
   apply_to_branch "$full_name" "$default_branch" || rc=$?
   case "$rc" in
     0) updated=$((updated + 1)) ;;
-    20) skipped=$((skipped + 1)) ;;
+    "$RC_SKIPPED") skipped=$((skipped + 1)) ;;
     *) failed=$((failed + 1)) ;;
   esac
 
@@ -384,7 +406,7 @@ process_repo() {
       apply_to_branch "$full_name" "$rel" || rc=$?
       case "$rc" in
         0) updated=$((updated + 1)) ;;
-        20) skipped=$((skipped + 1)) ;;
+        "$RC_SKIPPED") skipped=$((skipped + 1)) ;;
         *) failed=$((failed + 1)) ;;
       esac
     done < <(list_release_branches "$full_name" || true)
