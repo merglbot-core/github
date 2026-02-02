@@ -223,15 +223,25 @@ ensure_linear_history_enabled() {
   local required_status_checks
   required_status_checks="$(printf '%s' "$existing" | jq '.required_status_checks')"
 
-  # Preserve existing restrictions (may be null or object)
+  # Preserve existing restrictions (transform from GET format to PUT format)
+  # GET returns full objects with URLs; PUT expects simple arrays of logins/slugs
   local restrictions
-  restrictions="$(printf '%s' "$existing" | jq '.restrictions')"
+  restrictions="$(printf '%s' "$existing" | jq '
+    if .restrictions == null then null
+    else {
+      users: [.restrictions.users[]?.login // empty],
+      teams: [.restrictions.teams[]?.slug // empty],
+      apps: [.restrictions.apps[]?.slug // empty]
+    }
+    end
+  ')"
 
   # Preserve existing allow_force_pushes and allow_deletions
+  # GET returns {"enabled": bool}; PUT expects bool
   local allow_force_pushes
-  allow_force_pushes="$(printf '%s' "$existing" | jq '.allow_force_pushes // false')"
+  allow_force_pushes="$(printf '%s' "$existing" | jq '.allow_force_pushes.enabled // false')"
   local allow_deletions
-  allow_deletions="$(printf '%s' "$existing" | jq '.allow_deletions // false')"
+  allow_deletions="$(printf '%s' "$existing" | jq '.allow_deletions.enabled // false')"
 
   local payload
   payload="$(cat <<EOF
