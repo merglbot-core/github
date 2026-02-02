@@ -7,7 +7,7 @@
 #
 # Notes:
 # - This script does NOT change required status checks (per-repo CI differs).
-# - It skips repos/branches without existing branch protection (to avoid weakening security by creating a minimal protection).
+# - By default it skips repos/branches without existing branch protection. Use `--create-if-missing` to bootstrap a baseline.
 #
 # Requires: gh CLI authenticated with admin access.
 
@@ -17,6 +17,7 @@ DRY_RUN=false
 INCLUDE_ARCHIVED=false
 INCLUDE_FORKS=false
 INCLUDE_RELEASE_BRANCHES=false
+CREATE_IF_MISSING=false
 
 TARGET_ORGS=()
 TARGET_REPOS=()
@@ -55,6 +56,7 @@ Options:
   --repo ORG/REPO             Target a specific repo (repeatable).
   --branch BRANCH             Apply to this branch name only (overrides repo default branch).
   --include-release-branches  Also apply to existing branches matching release/*.
+  --create-if-missing         Create branch protection if missing (uses best-effort required status check discovery).
   --include-archived          Include archived repositories.
   --include-forks             Include forked repositories.
   --dry-run                   Print what would change, do not write.
@@ -99,6 +101,84 @@ list_release_branches() {
   gh api --paginate "repos/${full_name}/branches?per_page=100" --jq '.[] | select(.name | test("^release/")) | .name'
 }
 
+discover_min_required_check() {
+  local full_name=$1
+  local branch=$2
+
+  # Prefer a single, always-present CI gate over a long list of checks (per-repo differs).
+  local preferred=(
+    "ci-gate"
+    "ci"
+    "lint"
+    "build"
+    "test"
+    "pytest"
+    "ruff"
+    "actionlint"
+    "markdown-lint"
+  )
+
+  local names
+  names="$(gh api --paginate "repos/${full_name}/commits/${branch}/check-runs?per_page=100" --jq '.check_runs[].name' 2>/dev/null || true)"
+
+  local candidate
+  for candidate in "${preferred[@]}"; do
+    if printf '%s\n' "$names" | grep -Fxq "$candidate"; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+create_branch_protection() {
+  local full_name=$1
+  local branch=$2
+
+  log "Create branch protection baseline: ${full_name}:${branch}"
+
+  if [ "$DRY_RUN" = true ]; then
+    log "  DRY RUN: would create branch protection (approvals=0, strict status checks)"
+    return 0
+  fi
+
+  local required_check=""
+  if required_check="$(discover_min_required_check "$full_name" "$branch")"; then
+    log "  Discovered required check: ${required_check}"
+  else
+    warn "  No stable required check discovered (creating protection with empty required checks)"
+  fi
+
+  local contexts_json="[]"
+  if [ -n "$required_check" ]; then
+    contexts_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$required_check")"
+  fi
+
+  local payload
+  payload="$(cat <<EOF
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": ${contexts_json}
+  },
+  "enforce_admins": false,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 0,
+    "dismiss_stale_reviews": false,
+    "require_code_owner_reviews": false,
+    "require_last_push_approval": false
+  },
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false
+}
+EOF
+)"
+
+  gh_api PUT "repos/${full_name}/branches/${branch}/protection" --input - <<<"$payload" >/dev/null
+}
+
 apply_to_branch() {
   local full_name=$1
   local branch=$2
@@ -109,8 +189,12 @@ apply_to_branch() {
   fi
 
   if ! protection_exists "$full_name" "$branch"; then
-    warn "Skip ${full_name}:${branch} (no branch protection found)"
-    return 20
+    if [ "$CREATE_IF_MISSING" = true ]; then
+      create_branch_protection "$full_name" "$branch" || return 1
+    else
+      warn "Skip ${full_name}:${branch} (no branch protection found)"
+      return 20
+    fi
   fi
 
   log "Apply infra-like protection: ${full_name}:${branch}"
@@ -179,6 +263,10 @@ while [[ $# -gt 0 ]]; do
       INCLUDE_RELEASE_BRANCHES=true
       shift
       ;;
+    --create-if-missing)
+      CREATE_IF_MISSING=true
+      shift
+      ;;
     --org)
       TARGET_ORGS+=("${2:-}")
       shift 2
@@ -205,6 +293,9 @@ done
 
 need_cmd gh
 gh auth status >/dev/null 2>&1 || { err "Not logged in to GitHub via gh. Run: gh auth login"; exit 1; }
+if [ "$CREATE_IF_MISSING" = true ] && [ "$DRY_RUN" = false ]; then
+  need_cmd python3
+fi
 
 if [ "${#TARGET_ORGS[@]}" -eq 0 ] && [ "${#TARGET_REPOS[@]}" -eq 0 ]; then
   TARGET_ORGS=("${DEFAULT_ORGS[@]}")
