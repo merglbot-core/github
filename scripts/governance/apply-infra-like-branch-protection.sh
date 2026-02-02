@@ -247,17 +247,49 @@ ensure_linear_history_enabled() {
   local lock_branch
   lock_branch="$(printf '%s' "$existing" | jq '.lock_branch.enabled // false')"
 
+  # Preserve existing PR review sub-settings (dismissal_restrictions, bypass_pull_request_allowances)
+  # GET returns full objects with URLs; PUT expects simple arrays of logins/slugs
+  local dismissal_restrictions
+  dismissal_restrictions="$(printf '%s' "$existing" | jq '
+    if .required_pull_request_reviews.dismissal_restrictions == null then null
+    else {
+      users: [.required_pull_request_reviews.dismissal_restrictions.users[]?.login // empty],
+      teams: [.required_pull_request_reviews.dismissal_restrictions.teams[]?.slug // empty],
+      apps: [.required_pull_request_reviews.dismissal_restrictions.apps[]?.slug // empty]
+    }
+    end
+  ')"
+  local bypass_pull_request_allowances
+  bypass_pull_request_allowances="$(printf '%s' "$existing" | jq '
+    if .required_pull_request_reviews.bypass_pull_request_allowances == null then null
+    else {
+      users: [.required_pull_request_reviews.bypass_pull_request_allowances.users[]?.login // empty],
+      teams: [.required_pull_request_reviews.bypass_pull_request_allowances.teams[]?.slug // empty],
+      apps: [.required_pull_request_reviews.bypass_pull_request_allowances.apps[]?.slug // empty]
+    }
+    end
+  ')"
+
+  # Build required_pull_request_reviews object with preserved sub-settings
+  local pr_reviews
+  pr_reviews="$(jq -n \
+    --argjson dismissal "$dismissal_restrictions" \
+    --argjson bypass "$bypass_pull_request_allowances" \
+    '{
+      required_approving_review_count: 0,
+      dismiss_stale_reviews: false,
+      require_code_owner_reviews: false,
+      require_last_push_approval: false
+    } + (if $dismissal != null then {dismissal_restrictions: $dismissal} else {} end)
+      + (if $bypass != null then {bypass_pull_request_allowances: $bypass} else {} end)'
+  )"
+
   local payload
   payload="$(cat <<EOF
 {
   "required_status_checks": ${required_status_checks},
   "enforce_admins": true,
-  "required_pull_request_reviews": {
-    "required_approving_review_count": 0,
-    "dismiss_stale_reviews": false,
-    "require_code_owner_reviews": false,
-    "require_last_push_approval": false
-  },
+  "required_pull_request_reviews": ${pr_reviews},
   "required_linear_history": true,
   "restrictions": ${restrictions},
   "allow_force_pushes": ${allow_force_pushes},
