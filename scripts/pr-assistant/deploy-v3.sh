@@ -17,36 +17,26 @@ done
 
 WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 SOURCE_WORKFLOW="${WORKSPACE_ROOT}/merglbot-core/github/.github/workflows/merglbot-pr-assistant-v3-on-demand.yml"
+TARGET_REPOS_FILE="${WORKSPACE_ROOT}/merglbot-core/github/scripts/pr-assistant/target-repos.txt"
 
 if [ ! -f "$SOURCE_WORKFLOW" ]; then
   echo "ERROR: Source workflow not found: $SOURCE_WORKFLOW" >&2
   exit 1
 fi
 
+if [ ! -f "$TARGET_REPOS_FILE" ]; then
+  echo "ERROR: Target repos file not found: $TARGET_REPOS_FILE" >&2
+  exit 1
+fi
+
 # Platform scope (exclude Merglevsky-cz entirely).
-TARGET_REPOS=(
-  "merglbot-core/ai_prompts"
-  "merglbot-core/dataform"
-  "merglbot-core/infra"
-  "merglbot-core/merglbot-admin"
-  "merglbot-core/platform"
-  "merglbot-core/tf-modules-"
-  "merglbot-public/docs"
-  "merglbot-public/website"
-  "merglbot-proteinaco/abc_product_material_analysis"
-  "merglbot-proteinaco/btf-viz"
-  "merglbot-proteinaco/proteinaco-web"
-  "merglbot-proteinaco/viz-api"
-  "merglbot-denatura/denatura-btf-data"
-  "merglbot-denatura/denatura-fb-viz"
-  "merglbot-denatura/marketing_actions_detector"
-  "merglbot-ruzovyslon/business_forecasting"
-  "merglbot-ruzovyslon/kbc_data_quality_metodology"
-  "merglbot-ruzovyslon/ruzovyslon-web"
-  "merglbot-ruzovyslon/viz-api"
-  "merglbot-extractors/facebook-extractor"
-  "merglbot-milan-private/fakturoid"
-)
+TARGET_REPOS=()
+while IFS= read -r line; do
+  line="${line%%#*}"
+  line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  [ -z "$line" ] && continue
+  TARGET_REPOS+=("$line")
+done < "$TARGET_REPOS_FILE"
 
 is_git_clean() {
   local repo_dir="$1"

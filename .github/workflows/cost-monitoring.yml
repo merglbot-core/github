@@ -100,6 +100,28 @@ jobs:
           echo "reports_dir=$(pwd)/reports" >> "$GITHUB_OUTPUT"
           echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
 
+      - name: AI Usage Telemetry Alerts (Budgets)
+        id: ai_usage_alerts
+        working-directory: platform/tools/cost-monitoring
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          # Defaults are safe; keep explicit for clarity.
+          AI_USAGE_ADMIN_PROJECT_ID: "merglbot-admin-prd"
+          AI_USAGE_SETTINGS_FIRESTORE_DATABASE_ID: "ai-usage-settings"
+          AI_USAGE_PLATFORM_PROJECT_ID: "merglbot-platform-prd"
+          AI_USAGE_DATASET: "ai_usage"
+        run: |
+          set -euo pipefail
+          EXIT=0
+          python -m cost_monitoring.ai_usage_alerts || EXIT=$?
+
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+
+          # `2` means "alerts found" (expected behavior); fail only on unexpected error codes.
+          if [ "$EXIT" -ne 0 ] && [ "$EXIT" -ne 2 ]; then
+            exit "$EXIT"
+          fi
+
       - name: Generate Step Summary
         if: always()
         working-directory: platform/tools/cost-monitoring
@@ -124,6 +146,7 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "---" >> "$GITHUB_STEP_SUMMARY"
           echo "- Exit code: ${{ steps.generate.outputs.exit_code }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- AI usage alerts exit code: ${{ steps.ai_usage_alerts.outputs.exit_code }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Reports directory: ${{ steps.generate.outputs.reports_dir }}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload cost reports

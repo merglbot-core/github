@@ -1,0 +1,83 @@
+# Merglbot — Cursor ignore list (security + performance)
+#
+# Cursor blocks access to these files from Agent/Tab/Semantic search.
+# This is best-effort protection; still follow MERGLBOT_AI_TOOLS.md and never paste secrets into prompts.
+#
+# Syntax: same as .gitignore
+#
+# Source: `merglbot-public/docs/templates/cursor/.cursorignore`
+# GitHub: https://github.com/merglbot-public/docs/blob/main/templates/cursor/.cursorignore
+
+# Secrets / env
+**/.env
+**/.env.*
+**/*.env
+**/*.env.*
+
+# Agent local skills (if mistakenly created inside a repo/workspace)
+**/.cursor/skills/**
+**/.claude/skills/**
+
+# Common credentials / keys
+**/credentials.json
+**/secrets.json
+**/secrets/**
+# Ignore common secret dump files, but do not hide source/docs with "secret" in the filename.
+**/*secret*.env
+**/*secret*.env.*
+**/*secret*.json
+**/*secret*.yml
+**/*secret*.yaml
+# Terraform vars often contain secrets
+**/*.tfvars
+**/*.tfvars.json
+**/*.tfvars.*
+**/*secret*.tfvars
+**/*secret*.txt
+**/*secret*.log
+**/*secret*.csv
+**/*secret*.toml
+**/*secret*.ini
+**/*secret*.properties
+**/*.secret
+**/*.secrets
+**/*.pem
+**/*.key
+**/id_rsa
+**/id_dsa
+**/id_ecdsa
+**/id_ed25519
+**/*service-account*.json
+**/*sa-key*.json
+
+# Package manager / CLI auth files
+**/.npmrc
+**/.pypirc
+**/.netrc
+**/.docker/config.json
+
+# Cloud CLI creds (if copied into repo/workspace)
+**/application_default_credentials.json
+**/.aws/credentials
+**/.aws/config
+**/.config/gcloud/**
+
+# Terraform sensitive inputs/state
+**/*.tfvars
+**/*.tfvars.json
+**/*.tfvars.*
+**/.terraform/**
+**/terraform.tfstate
+**/terraform.tfstate.*
+**/*.tfstate
+**/*.tfstate.backup
+
+# Local caches / build outputs (reduce noise)
+**/node_modules/**
+**/.next/**
+**/dist/**
+**/build/**
+**/.cache/**
+**/__pycache__/**
+**/.venv/**
+**/.pytest_cache/**
