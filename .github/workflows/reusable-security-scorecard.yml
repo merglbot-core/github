@@ -200,7 +200,7 @@ jobs:
             echo "uses: actions/checkout@v4" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "# ✅ Good: SHA pinned" >> $GITHUB_STEP_SUMMARY
-            echo "uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.1" >> $GITHUB_STEP_SUMMARY
+            echo "uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2" >> $GITHUB_STEP_SUMMARY
             echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           else
             echo "✅ **All actions are SHA-pinned**" >> $GITHUB_STEP_SUMMARY
