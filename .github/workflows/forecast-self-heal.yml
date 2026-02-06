@@ -1,0 +1,245 @@
+name: Forecast Self-Heal Guardrail (06:05/14:05 Europe/Prague)
+
+on:
+  schedule:
+    # GitHub cron is UTC. To keep 06:05/14:05 Europe/Prague stable across DST, we schedule both
+    # CET and CEST equivalents and let the script auto-noop outside the local window.
+    #
+    # 06:05 Europe/Prague:
+    # - CET  (UTC+1): 05:05 UTC
+    # - CEST (UTC+2): 04:05 UTC
+    - cron: "5 5 * * *"
+    - cron: "5 4 * * *"
+    #
+    # 14:05 Europe/Prague:
+    # - CET  (UTC+1): 13:05 UTC
+    # - CEST (UTC+2): 12:05 UTC
+    - cron: "5 13 * * *"
+    - cron: "5 12 * * *"
+
+  workflow_dispatch:
+    inputs:
+      patch_date_local:
+        description: "Date to check/patch (YYYY-MM-DD, Europe/Prague). Default: yesterday."
+        required: false
+        type: string
+      run_mode:
+        description: "auto (default), cz_morning, noncz_afternoon, all"
+        required: false
+        type: string
+        default: "auto"
+      dry_run:
+        description: "Skip patching, DTS triggers and Slack notifications"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write  # For WIF/OIDC
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Forecast Self-Heal
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Authenticate to GCP via WIF (and install gcloud/bq/gsutil)
+        uses: ./.github/actions/setup-gcp-auth
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - name: Run forecast self-heal
+        id: guardrail
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL: ${{ inputs.patch_date_local }}
+          RUN_MODE: ${{ inputs.run_mode }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-self-heal-out"
+
+          CMD="python scripts/guardrails/forecast_self_heal.py --outdir $OUTDIR --timezone Europe/Prague"
+
+          if [ -n "${PATCH_DATE_LOCAL}" ]; then
+            CMD="$CMD --patch-date-local ${PATCH_DATE_LOCAL}"
+          fi
+          if [ -n "${RUN_MODE}" ]; then
+            CMD="$CMD --run-mode ${RUN_MODE}"
+          fi
+          if [ "${DRY_RUN}" = "true" ]; then
+            CMD="$CMD --dry-run"
+          fi
+
+          echo "Running: $CMD"
+          EXIT=0
+          $CMD || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_self_heal_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          p = Path("forecast-self-heal-out/forecast_self_heal_summary.json")
+          s = json.loads(p.read_text(encoding="utf-8"))
+          print(f"pipelines_fixed={s.get('pipelines_fixed', 0)}")
+          print(f"pipelines_failed={s.get('pipelines_failed', 0)}")
+          print(f"run_mode={s.get('run_mode', '')}")
+          print(f"patch_date_local={s.get('patch_date_local', '')}")
+          PY
+          else
+            echo "pipelines_fixed=0" >> "$GITHUB_OUTPUT"
+            echo "pipelines_failed=0" >> "$GITHUB_OUTPUT"
+            echo "run_mode=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Add report to step summary
+        if: always()
+        run: |
+          MD_FILE="${{ steps.guardrail.outputs.outdir }}/forecast_self_heal_report.md"
+          echo "## 🔧 Forecast Self-Heal Guardrail" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -f "$MD_FILE" ]; then
+            head -n 200 "$MD_FILE" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$(wc -l < "$MD_FILE")" -gt 200 ]; then
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "*... Report truncated. See artifacts for full report.*" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "❌ No report generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "---" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Exit code: ${{ steps.guardrail.outputs.exit_code }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Run mode: ${{ steps.guardrail.outputs.run_mode }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Patch date (local): ${{ steps.guardrail.outputs.patch_date_local }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Fixed: ${{ steps.guardrail.outputs.pipelines_fixed }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Failed: ${{ steps.guardrail.outputs.pipelines_failed }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload guardrail artifacts
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: forecast-self-heal-${{ github.run_id }}
+          path: ${{ steps.guardrail.outputs.outdir }}/
+          retention-days: 90
+
+      - name: Slack alert (FAIL/FIX-only)
+        if: (steps.guardrail.outputs.exit_code != '0' || steps.guardrail.outputs.pipelines_fixed != '0') && inputs.dry_run != true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SLACK_WEBHOOK_URL}" ]; then
+            echo "ℹ️ SLACK_WEBHOOK_URL not configured; skipping Slack notification."
+            exit 0
+          fi
+
+          OUTDIR="${{ steps.guardrail.outputs.outdir }}"
+          SUMMARY_JSON="${OUTDIR}/forecast_self_heal_summary.json"
+          REPORT_CSV="${OUTDIR}/forecast_self_heal_report.csv"
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PAYLOAD="$(
+            SUMMARY_JSON="$SUMMARY_JSON" \
+            REPORT_CSV="$REPORT_CSV" \
+            RUN_URL="$RUN_URL" \
+            GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+              python - <<'PY'
+          import csv
+          import json
+          import os
+
+          summary_path = os.environ.get("SUMMARY_JSON", "")
+          report_csv = os.environ.get("REPORT_CSV", "")
+          run_url = os.environ.get("RUN_URL", "")
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+
+          status = "?"
+          run_mode = ""
+          patch_date = ""
+          fixed = "?"
+          failed = "?"
+          try:
+              with open(summary_path, "r", encoding="utf-8") as f:
+                  s = json.load(f)
+              status = str(s.get("status", "?"))
+              run_mode = str(s.get("run_mode", "") or "")
+              patch_date = str(s.get("patch_date_local", "") or "")
+              fixed = str(s.get("pipelines_fixed", "?"))
+              failed = str(s.get("pipelines_failed", "?"))
+          except Exception:
+              pass
+
+          lines = []
+          try:
+              with open(report_csv, "r", encoding="utf-8", newline="") as f:
+                  r = csv.DictReader(f)
+                  for row in r:
+                      st = (row.get("status") or "").strip()
+                      if st not in ("FAIL", "FIXED"):
+                          continue
+                      project = row.get("project_id") or ""
+                      tenant = row.get("tenant") or ""
+                      country = row.get("country") or ""
+                      reason = row.get("reason") or ""
+                      lines.append(f"• {st}: {tenant}/{country} ({project}) — {reason}")
+                      if len(lines) >= 10:
+                          break
+          except Exception:
+              pass
+
+          title = f"Forecast self-heal {status}: fixed={fixed}, failed={failed}"
+          if run_mode:
+              title += f" ({run_mode})"
+          if patch_date:
+              title += f" for {patch_date}"
+
+          attachment = {
+              "color": "danger" if status != "PASS" else "warning",
+              "fields": [
+                  {"title": "Repo", "value": repo, "short": True},
+                  {"title": "Workflow Run", "value": run_url, "short": False},
+              ],
+          }
+          if lines:
+              attachment["text"] = "\\n".join(lines)
+
+          payload = {"text": title, "attachments": [attachment]}
+          print(json.dumps(payload))
+          PY
+          )"
+
+          curl -sS -X POST "$SLACK_WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            --data "$PAYLOAD"
+
+      - name: Fail workflow if guardrail failed
+        if: steps.guardrail.outputs.exit_code != '0'
+        run: exit 1
+
