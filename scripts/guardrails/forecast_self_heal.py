@@ -210,10 +210,6 @@ def _as_float(v: Any) -> float:
         return 0.0
 
 
-def _sum_field(rows: list[dict[str, str]], field: str) -> float:
-    return sum(_as_float(r.get(field)) for r in rows)
-
-
 def _final_prep_by_channel(
     *,
     project_id: str,
@@ -708,9 +704,9 @@ def run(
         for project_id, cfg14 in sorted(trigger_14_configs):
             try:
                 _trigger_transfer_run(project_id=project_id, config_resource_name=cfg14, run_time_utc=run_time_utc)
-                # Mark rows as triggered for visibility
+                # Mark rows as triggered for visibility (only if they have bq_table_14)
                 for i, r in enumerate(results):
-                    if r.project_id == project_id and r.status in {"PASS", "FIXED"}:
+                    if r.project_id == project_id and r.status in {"PASS", "FIXED"} and r.bq_table_14:
                         results[i] = replace(r, triggered_14_run="yes")
             except Exception as exc:  # noqa: BLE001
                 fails += 1
