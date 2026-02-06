@@ -629,6 +629,10 @@ def run(
                             status = "FAIL"
                             reason = "No rows patched"
                             fails += 1
+                        elif not patched_cols:
+                            status = "FAIL"
+                            reason = "Rows found but no columns modified"
+                            fails += 1
                         else:
                             # Upload + trigger DTS run for 13
                             _gsutil_cp(str(local_patched), spec.gcs_uri)
