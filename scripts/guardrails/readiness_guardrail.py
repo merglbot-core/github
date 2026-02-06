@@ -388,10 +388,13 @@ def main() -> int:
     parser.add_argument(
         "--ignore-table-regex",
         action="append",
-        default=[".*_test$"],
+        default=None,
         help="Regex for table names to ignore (repeatable). Default ignores: .*_test$",
     )
     args = parser.parse_args()
+
+    # Apply default ignore patterns if none provided (avoids argparse append gotcha)
+    ignore_table_regexes = args.ignore_table_regex if args.ignore_table_regex else [".*_test$"]
 
     try:
         return run(
@@ -399,10 +402,12 @@ def main() -> int:
             outdir=Path(args.outdir),
             tz_name=args.timezone,
             date_local_str=args.date_local,
-            ignore_table_regexes=args.ignore_table_regex,
+            ignore_table_regexes=ignore_table_regexes,
         )
     except Exception as exc:  # noqa: BLE001
+        import traceback
         print(f"ERROR: {exc}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return 1
 
 
