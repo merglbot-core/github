@@ -1,0 +1,20 @@
+project_id,dataset_id,table_pattern,sla_local_time
+# NOTE: `table_pattern` uses SQL LIKE semantics (% wildcard). Example: visualisation_final%
+# NOTE: `sla_local_time` is evaluated in Europe/Prague for the `date_local` being checked.
+proteinaco-main,final_prep_cz,%,06:00
+proteinaco-main,final_prep_hu,%,06:00
+proteinaco-main,final_prep_pl,%,06:00
+proteinaco-main,final_prep_ro,%,06:00
+proteinaco-main,final_prep_sk,%,06:00
+proteinaco-main,visualisation_final_all_countries,14_tran_db_ga4_join_all_channel_cost_plan_final_with_forecasts%,06:00
+proteinaco-main,visualisation_final_all_countries,15_tran_db_ga4_join_all_channel_cost_plan_final_with_forecasts%,06:00
+proteinaco-main,visualisation_final_cz,13_tran_db_ga4_join_all_channel_cost_plan_final_with_forecasts%,06:00
+proteinaco-main,visualisation_final_hu,13_tran_db_ga4_join_all_channel_cost_plan_final_with_forecasts%,06:00
+proteinaco-main,visualisation_final_pl,13_tran_db_ga4_join_all_channel_cost_plan_final_with_forecasts%,06:00
+proteinaco-main,visualisation_final_ro,13_tran_db_ga4_join_all_channel_cost_plan_final_with_forecasts%,06:00
+proteinaco-main,visualisation_final_sk,13_tran_db_ga4_join_all_channel_cost_plan_final_with_forecasts%,06:00
+denatura-main,final_prep_denatura_cz,%,06:00
+denatura-main,final_prep_denatura_sk,%,06:00
+denatura-main,visualisation_final_denatura_all_domains,14_tran_db_ga4_join_all_channel_cost_plan_final_with_forecasts%,06:00
+denatura-main,visualisation_final_denatura_cz,13_tran_db_ga4_join_all_channel_cost_plan_final_with_forecasts%,06:00
+denatura-main,visualisation_final_denatura_sk,13_tran_db_ga4_join_all_channel_cost_plan_final_with_forecasts%,06:00
