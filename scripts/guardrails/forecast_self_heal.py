@@ -506,6 +506,7 @@ def run(
             outdir.mkdir(parents=True, exist_ok=True)
             summary = {
                 "status": "NOOP",
+                "run_mode": "noop",
                 "reason": "Outside execution window for auto mode",
                 "now_local": now_local.isoformat(),
                 "timezone": tz_name,
