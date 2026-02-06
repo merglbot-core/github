@@ -97,11 +97,12 @@ jobs:
 
           SUMMARY_JSON="${OUTDIR}/forecast_self_heal_summary.json"
           if [ -f "$SUMMARY_JSON" ]; then
-            python - <<'PY' >> "$GITHUB_OUTPUT"
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
+          import os
           from pathlib import Path
 
-          p = Path("forecast-self-heal-out/forecast_self_heal_summary.json")
+          p = Path(os.environ["SUMMARY_JSON"])
           s = json.loads(p.read_text(encoding="utf-8"))
           print(f"pipelines_fixed={s.get('pipelines_fixed', 0)}")
           print(f"pipelines_failed={s.get('pipelines_failed', 0)}")
