@@ -130,61 +130,61 @@ jobs:
             RUN_URL="$RUN_URL" \
             GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
               python - <<'PY'
-import csv
-import json
-import os
+          import csv
+          import json
+          import os
 
-summary_path = os.environ.get("SUMMARY_JSON", "")
-report_csv = os.environ.get("REPORT_CSV", "")
-run_url = os.environ.get("RUN_URL", "")
-repo = os.environ.get("GITHUB_REPOSITORY", "")
+          summary_path = os.environ.get("SUMMARY_JSON", "")
+          report_csv = os.environ.get("REPORT_CSV", "")
+          run_url = os.environ.get("RUN_URL", "")
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
 
-fails = "?"
-date_local = ""
-try:
-    with open(summary_path, "r", encoding="utf-8") as f:
-        summary = json.load(f)
-    fails = str(summary.get("tables_fail", "?"))
-    date_local = str(summary.get("date_local", "") or "")
-except Exception:
-    pass
+          fails = "?"
+          date_local = ""
+          try:
+              with open(summary_path, "r", encoding="utf-8") as f:
+                  summary = json.load(f)
+              fails = str(summary.get("tables_fail", "?"))
+              date_local = str(summary.get("date_local", "") or "")
+          except Exception:
+              pass
 
-fail_lines: list[str] = []
-try:
-    with open(report_csv, "r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if row.get("status") != "FAIL":
-                continue
-            table = row.get("table_id") or ""
-            project = row.get("project_id") or ""
-            dataset = row.get("dataset_id") or ""
-            reason = row.get("reason") or ""
-            last_local = row.get("last_modified_local") or ""
-            if table:
-                fail_lines.append(f"• {project}:{dataset}.{table} — {reason} ({last_local})")
-            else:
-                fail_lines.append(f"• {project}:{dataset} ({row.get('table_pattern','')}) — {reason}")
-            if len(fail_lines) >= 10:
-                break
-except Exception:
-    pass
+          fail_lines: list[str] = []
+          try:
+              with open(report_csv, "r", encoding="utf-8", newline="") as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      if row.get("status") != "FAIL":
+                          continue
+                      table = row.get("table_id") or ""
+                      project = row.get("project_id") or ""
+                      dataset = row.get("dataset_id") or ""
+                      reason = row.get("reason") or ""
+                      last_local = row.get("last_modified_local") or ""
+                      if table:
+                          fail_lines.append(f"• {project}:{dataset}.{table} — {reason} ({last_local})")
+                      else:
+                          fail_lines.append(f"• {project}:{dataset} ({row.get('table_pattern','')}) — {reason}")
+                      if len(fail_lines) >= 10:
+                          break
+          except Exception:
+              pass
 
-text = f"🚨 Readiness guardrail FAIL ({fails} failure(s))" + (f" for {date_local}" if date_local else "")
+          text = f"🚨 Readiness guardrail FAIL ({fails} failure(s))" + (f" for {date_local}" if date_local else "")
 
-attachment = {
-    "color": "danger",
-    "fields": [
-        {"title": "Repo", "value": repo, "short": True},
-        {"title": "Workflow Run", "value": run_url, "short": False},
-    ],
-}
-if fail_lines:
-    attachment["text"] = "\n".join(fail_lines)
+          attachment = {
+              "color": "danger",
+              "fields": [
+                  {"title": "Repo", "value": repo, "short": True},
+                  {"title": "Workflow Run", "value": run_url, "short": False},
+              ],
+          }
+          if fail_lines:
+              attachment["text"] = "\n".join(fail_lines)
 
-payload = {"text": text, "attachments": [attachment]}
-print(json.dumps(payload))
-PY
+          payload = {"text": text, "attachments": [attachment]}
+          print(json.dumps(payload))
+          PY
           )"
 
           curl -sS -X POST "$SLACK_WEBHOOK_URL" \
