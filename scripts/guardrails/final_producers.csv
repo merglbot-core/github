@@ -1,5 +1,5 @@
 project_id,dataset_id,table_pattern,sla_local_time
-# NOTE: `table_pattern` uses SQL LIKE semantics (% wildcard). Example: visualisation_final%
+# NOTE: `table_pattern` uses `%` as a wildcard (SQL LIKE-style). `_` is treated as a literal underscore.
 # NOTE: `sla_local_time` is evaluated in Europe/Prague for the `date_local` being checked.
 proteinaco-main,final_prep_cz,%,06:00
 proteinaco-main,final_prep_hu,%,06:00

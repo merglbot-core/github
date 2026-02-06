@@ -64,8 +64,6 @@ def _like_pattern_to_regex(pattern: str) -> re.Pattern[str]:
     for ch in pattern:
         if ch == "%":
             regex.append(".*")
-        elif ch == "_":
-            regex.append(".")
         else:
             regex.append(re.escape(ch))
     return re.compile("^" + "".join(regex) + "$")

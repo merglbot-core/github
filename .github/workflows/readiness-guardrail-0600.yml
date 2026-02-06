@@ -123,9 +123,73 @@ jobs:
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
+          PAYLOAD="$(
+            OUTDIR="$OUTDIR" \
+            SUMMARY_JSON="$SUMMARY_JSON" \
+            REPORT_CSV="$REPORT_CSV" \
+            RUN_URL="$RUN_URL" \
+            GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+              python - <<'PY'
+import csv
+import json
+import os
+
+summary_path = os.environ.get("SUMMARY_JSON", "")
+report_csv = os.environ.get("REPORT_CSV", "")
+run_url = os.environ.get("RUN_URL", "")
+repo = os.environ.get("GITHUB_REPOSITORY", "")
+
+fails = "?"
+date_local = ""
+try:
+    with open(summary_path, "r", encoding="utf-8") as f:
+        summary = json.load(f)
+    fails = str(summary.get("tables_fail", "?"))
+    date_local = str(summary.get("date_local", "") or "")
+except Exception:
+    pass
+
+fail_lines: list[str] = []
+try:
+    with open(report_csv, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row.get("status") != "FAIL":
+                continue
+            table = row.get("table_id") or ""
+            project = row.get("project_id") or ""
+            dataset = row.get("dataset_id") or ""
+            reason = row.get("reason") or ""
+            last_local = row.get("last_modified_local") or ""
+            if table:
+                fail_lines.append(f"• {project}:{dataset}.{table} — {reason} ({last_local})")
+            else:
+                fail_lines.append(f"• {project}:{dataset} ({row.get('table_pattern','')}) — {reason}")
+            if len(fail_lines) >= 10:
+                break
+except Exception:
+    pass
+
+text = f"🚨 Readiness guardrail FAIL ({fails} failure(s))" + (f" for {date_local}" if date_local else "")
+
+attachment = {
+    "color": "danger",
+    "fields": [
+        {"title": "Repo", "value": repo, "short": True},
+        {"title": "Workflow Run", "value": run_url, "short": False},
+    ],
+}
+if fail_lines:
+    attachment["text"] = "\n".join(fail_lines)
+
+payload = {"text": text, "attachments": [attachment]}
+print(json.dumps(payload))
+PY
+          )"
+
           curl -sS -X POST "$SLACK_WEBHOOK_URL" \
             -H 'Content-Type: application/json' \
-            -d "$(OUTDIR=\"$OUTDIR\" SUMMARY_JSON=\"$SUMMARY_JSON\" REPORT_CSV=\"$REPORT_CSV\" RUN_URL=\"$RUN_URL\" GITHUB_REPOSITORY=\"$GITHUB_REPOSITORY\" python - <<'PY'\nimport csv\nimport json\nimport os\n\nsummary_path=os.environ.get('SUMMARY_JSON','')\nreport_csv=os.environ.get('REPORT_CSV','')\nrun_url=os.environ.get('RUN_URL','')\nrepo=os.environ.get('GITHUB_REPOSITORY','')\n\nfails='?'\ndate_local=''\ntry:\n  with open(summary_path,'r',encoding='utf-8') as f:\n    s=json.load(f)\n  fails=str(s.get('tables_fail','?'))\n  date_local=str(s.get('date_local','') or '')\nexcept Exception:\n  pass\n\nfail_lines=[]\ntry:\n  with open(report_csv,'r',encoding='utf-8',newline='') as f:\n    reader=csv.DictReader(f)\n    for row in reader:\n      if row.get('status')!='FAIL':\n        continue\n      table=row.get('table_id') or ''\n      project=row.get('project_id') or ''\n      dataset=row.get('dataset_id') or ''\n      reason=row.get('reason') or ''\n      last_local=row.get('last_modified_local') or ''\n      if table:\n        fail_lines.append(f\"• {project}:{dataset}.{table} — {reason} ({last_local})\")\n      else:\n        fail_lines.append(f\"• {project}:{dataset} ({row.get('table_pattern','')}) — {reason}\")\n      if len(fail_lines) >= 10:\n        break\nexcept Exception:\n  pass\n\ntext=f\"🚨 Readiness guardrail FAIL ({fails} failure(s))\" + (f\" for {date_local}\" if date_local else \"\")\n\npayload={\n  \"text\": text,\n  \"attachments\": [\n    {\n      \"color\": \"danger\",\n      \"fields\": [\n        {\"title\": \"Repo\", \"value\": repo, \"short\": True},\n        {\"title\": \"Workflow Run\", \"value\": run_url, \"short\": False},\n      ],\n      \"text\": \"\\n\".join(fail_lines) if fail_lines else None,\n    }\n  ]\n}\n# Remove nulls (Slack can be picky)\npayload['attachments'][0]={k:v for k,v in payload['attachments'][0].items() if v is not None}\nprint(json.dumps(payload))\nPY")"
+            --data "$PAYLOAD"
 
       - name: Fail workflow if guardrail failed
         if: steps.guardrail.outputs.exit_code != '0'
