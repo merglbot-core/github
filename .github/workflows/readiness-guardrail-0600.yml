@@ -1,0 +1,196 @@
+name: Readiness Guardrail 06:00 (Europe/Prague)
+
+on:
+  schedule:
+    # 05:05 UTC == 06:05 Europe/Prague in winter time (CET). Note: DST will shift this to 07:05 local.
+    - cron: "5 5 * * *"
+  workflow_dispatch:
+    inputs:
+      date_local:
+        description: "Date to check (YYYY-MM-DD, Europe/Prague). Default: today in Europe/Prague."
+        required: false
+        type: string
+      dry_run:
+        description: "Skip Slack notifications"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write  # For WIF/OIDC
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Readiness Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # pinned
+
+      - name: Setup Python
+        uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548  # pinned
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: scripts/guardrails/requirements.txt
+
+      - name: Authenticate to GCP via WIF
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # pinned
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
+          export_environment_variables: true
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r scripts/guardrails/requirements.txt
+
+      - name: Run readiness guardrail
+        id: guardrail
+        continue-on-error: true
+        env:
+          DATE_LOCAL: ${{ inputs.date_local }}
+        run: |
+          set -euo pipefail
+          OUTDIR="guardrail-out"
+
+          CMD="python scripts/guardrails/readiness_guardrail.py --outdir $OUTDIR --timezone Europe/Prague"
+          if [ -n "${DATE_LOCAL}" ]; then
+            CMD="$CMD --date-local ${DATE_LOCAL}"
+          fi
+
+          echo "Running: $CMD"
+          EXIT=0
+          $CMD || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+
+      - name: Add report to step summary
+        if: always()
+        run: |
+          MD_FILE="${{ steps.guardrail.outputs.outdir }}/readiness_guardrail_report.md"
+          echo "## ⏱️ Readiness Guardrail (06:00 Europe/Prague)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -f "$MD_FILE" ]; then
+            head -n 200 "$MD_FILE" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$(wc -l < "$MD_FILE")" -gt 200 ]; then
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "*... Report truncated. See artifacts for full report.*" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "❌ No report generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "---" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Exit code: ${{ steps.guardrail.outputs.exit_code }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload guardrail artifacts
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # pinned
+        with:
+          name: readiness-guardrail-${{ github.run_id }}
+          path: ${{ steps.guardrail.outputs.outdir }}/
+          retention-days: 90
+
+      - name: Slack alert (FAIL-only)
+        if: steps.guardrail.outputs.exit_code != '0' && inputs.dry_run != true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SLACK_WEBHOOK_URL}" ]; then
+            echo "ℹ️ SLACK_WEBHOOK_URL not configured; skipping Slack notification."
+            exit 0
+          fi
+
+          OUTDIR="${{ steps.guardrail.outputs.outdir }}"
+          SUMMARY_JSON="${OUTDIR}/readiness_guardrail_summary.json"
+          REPORT_CSV="${OUTDIR}/readiness_guardrail_report.csv"
+
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          PAYLOAD="$(
+            OUTDIR="$OUTDIR" \
+            SUMMARY_JSON="$SUMMARY_JSON" \
+            REPORT_CSV="$REPORT_CSV" \
+            RUN_URL="$RUN_URL" \
+            GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+              python - <<'PY'
+          import csv
+          import json
+          import os
+
+          summary_path = os.environ.get("SUMMARY_JSON", "")
+          report_csv = os.environ.get("REPORT_CSV", "")
+          run_url = os.environ.get("RUN_URL", "")
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+
+          fails = "?"
+          date_local = ""
+          try:
+              with open(summary_path, "r", encoding="utf-8") as f:
+                  summary = json.load(f)
+              fails = str(summary.get("tables_fail", "?"))
+              date_local = str(summary.get("date_local", "") or "")
+          except Exception:
+              pass
+
+          fail_lines: list[str] = []
+          try:
+              with open(report_csv, "r", encoding="utf-8", newline="") as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      if row.get("status") != "FAIL":
+                          continue
+                      table = row.get("table_id") or ""
+                      project = row.get("project_id") or ""
+                      dataset = row.get("dataset_id") or ""
+                      reason = row.get("reason") or ""
+                      last_local = row.get("last_modified_local") or ""
+                      if table:
+                          fail_lines.append(f"• {project}:{dataset}.{table} — {reason} ({last_local})")
+                      else:
+                          fail_lines.append(f"• {project}:{dataset} ({row.get('table_pattern','')}) — {reason}")
+                      if len(fail_lines) >= 10:
+                          break
+          except Exception:
+              pass
+
+          text = f"🚨 Readiness guardrail FAIL ({fails} failure(s))" + (f" for {date_local}" if date_local else "")
+
+          attachment = {
+              "color": "danger",
+              "fields": [
+                  {"title": "Repo", "value": repo, "short": True},
+                  {"title": "Workflow Run", "value": run_url, "short": False},
+              ],
+          }
+          if fail_lines:
+              attachment["text"] = "\n".join(fail_lines)
+
+          payload = {"text": text, "attachments": [attachment]}
+          print(json.dumps(payload))
+          PY
+          )"
+
+          curl -sS -X POST "$SLACK_WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            --data "$PAYLOAD"
+
+      - name: Fail workflow if guardrail failed
+        if: steps.guardrail.outputs.exit_code != '0'
+        run: exit 1
