@@ -228,7 +228,7 @@ jobs:
               ],
           }
           if lines:
-              attachment["text"] = "\\n".join(lines)
+              attachment["text"] = "\n".join(lines)
 
           payload = {"text": title, "attachments": [attachment]}
           print(json.dumps(payload))

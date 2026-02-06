@@ -22,7 +22,7 @@ import json
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -157,11 +157,13 @@ def _load_specs(csv_path: Path) -> list[PipelineSpec]:
                     country=row["country"].strip(),
                     location=row["location"].strip(),
                     gcs_uri=row["gcs_uri"].strip(),
-                    final_prep_txns_table=row["final_prep_txns_table"].strip(),
-                    final_prep_cost_table=row["final_prep_cost_table"].strip(),
-                    bq_table_13=row["bq_table_13"].strip(),
+                    # Preserve spaces in BQ table names - some legacy tables have leading spaces
+                    # (e.g. "final_prep_si. 8_join_*"). Stripping would break BQ queries.
+                    final_prep_txns_table=row["final_prep_txns_table"],
+                    final_prep_cost_table=row["final_prep_cost_table"],
+                    bq_table_13=row["bq_table_13"],
                     dts_config_13=row["dts_config_13"].strip(),
-                    bq_table_14=row["bq_table_14"].strip(),
+                    bq_table_14=row["bq_table_14"],
                     dts_config_14=row["dts_config_14"].strip(),
                 )
             )
@@ -705,9 +707,33 @@ def run(
                 # Mark rows as triggered for visibility
                 for i, r in enumerate(results):
                     if r.project_id == project_id and r.status in {"PASS", "FIXED"}:
-                        results[i] = ResultRow(**{**r.__dict__, "triggered_14_run": "yes"})  # type: ignore[arg-type]
+                        results[i] = replace(r, triggered_14_run="yes")
             except Exception as exc:  # noqa: BLE001
                 fails += 1
+                results.append(
+                    ResultRow(
+                        project_id=project_id,
+                        tenant="",
+                        country="",
+                        run_mode=run_mode,
+                        patch_date_local=patch_date,
+                        status="FAIL",
+                        reason=f"DTS 14 trigger failed: {exc}",
+                        gcs_uri="",
+                        bq_table_13="",
+                        bq_table_14=cfg14,
+                        final_prep_sessions_sum=0.0,
+                        final_prep_revenue_db_sum=0.0,
+                        final_prep_transactions_db_sum=0.0,
+                        bq13_sessions_sum=0.0,
+                        bq13_revenue_db_sum=0.0,
+                        bq13_transactions_db_sum=0.0,
+                        bq13_cost_sum=0.0,
+                        patched_metrics="",
+                        triggered_13_run="no",
+                        triggered_14_run="no",
+                    )
+                )
 
     report_csv = outdir / "forecast_self_heal_report.csv"
     report_md = outdir / "forecast_self_heal_report.md"
