@@ -194,7 +194,19 @@ def _parse_csv_rows(text: str) -> list[dict[str, str]]:
     text = (text or "").strip()
     if not text:
         return []
-    reader = csv.DictReader(text.splitlines())
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+
+    # `bq` can emit auth-related warnings to stdout in some environments (notably external_account),
+    # which would break CSV parsing (header not on the first line).
+    noise_prefixes = ("WARNING:", "INFO:", "NOTE:")
+    lines = [ln for ln in lines if not ln.lstrip().startswith(noise_prefixes)]
+    if not lines:
+        return []
+
+    # Drop UTF-8 BOM if present.
+    lines[0] = lines[0].lstrip("\ufeff")
+
+    reader = csv.DictReader(lines)
     return [dict(r) for r in reader]
 
 
