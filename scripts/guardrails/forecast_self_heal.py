@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import subprocess
 import sys
 import time
@@ -120,11 +121,48 @@ def _parse_date_local(value: str, tz: ZoneInfo) -> date:
     return date.fromisoformat(value)
 
 
-def _infer_run_mode_auto(now_local: datetime) -> str:
-    # Allow a small window to avoid clock jitter.
-    if now_local.hour == 6 and 0 <= now_local.minute <= 15:
+def _infer_run_mode_auto(now_local: datetime, *, gh_schedule: str = "") -> str:
+    """
+    Infer run mode for scheduled runs.
+
+    IMPORTANT:
+    - GitHub scheduled workflows can start late (minutes to >1 hour).
+    - We also schedule both CET/CEST cron equivalents; only one should execute.
+
+    When `gh_schedule` is provided (from `github.event.schedule`), prefer it over
+    wall-clock gating to stay robust to scheduling delays and DST.
+    """
+
+    gh_schedule = (gh_schedule or "").strip()
+    if gh_schedule:
+        offset = now_local.utcoffset() or timedelta(0)
+        is_cet = offset == timedelta(hours=1)
+        is_cest = offset == timedelta(hours=2)
+
+        # Workflow crons (UTC) in `.github/workflows/forecast-self-heal.yml`
+        morning_cet = "5 5 * * *"   # 06:05 Europe/Prague (UTC+1)
+        morning_cest = "5 4 * * *"  # 06:05 Europe/Prague (UTC+2)
+        afternoon_cet = "5 13 * * *"   # 14:05 Europe/Prague (UTC+1)
+        afternoon_cest = "5 12 * * *"  # 14:05 Europe/Prague (UTC+2)
+
+        if is_cet:
+            if gh_schedule == morning_cet:
+                return "cz_morning"
+            if gh_schedule == afternoon_cet:
+                return "noncz_afternoon"
+            return "noop"
+
+        if is_cest:
+            if gh_schedule == morning_cest:
+                return "cz_morning"
+            if gh_schedule == afternoon_cest:
+                return "noncz_afternoon"
+            return "noop"
+
+    # Fallback: allow any time within the local hour (handles common delays).
+    if now_local.hour == 6:
         return "cz_morning"
-    if now_local.hour == 14 and 0 <= now_local.minute <= 15:
+    if now_local.hour == 14:
         return "noncz_afternoon"
     return "noop"
 
@@ -512,7 +550,8 @@ def run(
     now_local = datetime.now(tz=tz)
 
     if run_mode == "auto":
-        run_mode = _infer_run_mode_auto(now_local)
+        gh_schedule = os.environ.get("GITHUB_EVENT_SCHEDULE", "")
+        run_mode = _infer_run_mode_auto(now_local, gh_schedule=gh_schedule)
         if run_mode == "noop":
             # No-op run (for DST-safe dual cron schedule).
             outdir.mkdir(parents=True, exist_ok=True)
@@ -520,6 +559,7 @@ def run(
                 "status": "NOOP",
                 "run_mode": "noop",
                 "reason": "Outside execution window for auto mode",
+                "github_event_schedule": gh_schedule,
                 "now_local": now_local.isoformat(),
                 "timezone": tz_name,
             }
@@ -651,8 +691,8 @@ def run(
                             )
                             triggered_13 = "yes"
 
-                            # Some unions (notably cerano-main) have 4h cadence; trigger 14 manually there.
-                            if spec.project_id == "cerano-main" and spec.dts_config_14:
+                            # Trigger 14 union refresh when a fix is applied (deduplicated per run).
+                            if spec.dts_config_14:
                                 trigger_14_configs.add((spec.project_id, spec.dts_config_14))
 
                             status = "FIXED"

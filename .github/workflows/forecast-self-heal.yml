@@ -104,6 +104,7 @@ jobs:
           PATCH_DATE_LOCAL: ${{ inputs.patch_date_local }}
           RUN_MODE: ${{ inputs.run_mode }}
           DRY_RUN: ${{ inputs.dry_run }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: |
           set -euo pipefail
           OUTDIR="forecast-self-heal-out"
