@@ -67,6 +67,7 @@ jobs:
 
       - name: Sanity check BigQuery access (denatura CZ)
         if: github.event_name == 'workflow_dispatch'
+        continue-on-error: true
         env:
           PATCH_DATE_LOCAL: ${{ inputs.patch_date_local }}
         run: |
@@ -83,7 +84,7 @@ jobs:
             --use_legacy_sql=false \
             --format=csv \
             --parameter=d:STRING:${DATE} \
-            "SELECT COUNT(1) AS rows, SUM(sessions) AS sessions, SUM(revenue_db) AS revenue_db, SUM(transactions_db) AS transactions_db FROM \`denatura-main.final_prep_denatura_cz.8_join_tran_db_ga4_transactions_denatura_cz\` WHERE CAST(date AS STRING)=@d" \
+            "SELECT COUNT(1) AS row_count, SUM(sessions) AS sessions, SUM(revenue_db) AS revenue_db, SUM(transactions_db) AS transactions_db FROM \`denatura-main.final_prep_denatura_cz.8_join_tran_db_ga4_transactions_denatura_cz\` WHERE CAST(date AS STRING)=@d" \
             | sed -n '1,5p'
 
           echo ""
@@ -93,7 +94,7 @@ jobs:
             --use_legacy_sql=false \
             --format=csv \
             --parameter=d:STRING:${DATE} \
-            "SELECT COUNT(1) AS rows, SUM(sessions) AS sessions, SUM(revenue_db) AS revenue_db, SUM(transactions_db) AS transactions_db, SUM(cost) AS cost FROM \`denatura-main.visualisation_final_denatura_cz.13_tran_db_ga4_join_all_channel_cost_plan_final_with_forecasts_denatura_cz\` WHERE CAST(date AS STRING)=@d" \
+            "SELECT COUNT(1) AS row_count, SUM(sessions) AS sessions, SUM(revenue_db) AS revenue_db, SUM(transactions_db) AS transactions_db, SUM(cost) AS cost FROM \`denatura-main.visualisation_final_denatura_cz.13_tran_db_ga4_join_all_channel_cost_plan_final_with_forecasts_denatura_cz\` WHERE CAST(date AS STRING)=@d" \
             | sed -n '1,5p'
 
       - name: Run forecast self-heal
@@ -148,7 +149,7 @@ jobs:
           fi
 
       - name: Add report to step summary
-        if: always()
+        if: always() && steps.guardrail.outputs.outdir != ''
         run: |
           MD_FILE="${{ steps.guardrail.outputs.outdir }}/forecast_self_heal_report.md"
           echo "## 🔧 Forecast Self-Heal Guardrail" >> "$GITHUB_STEP_SUMMARY"
@@ -173,7 +174,7 @@ jobs:
           echo "- Failed: ${{ steps.guardrail.outputs.pipelines_failed }}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload guardrail artifacts
-        if: always()
+        if: always() && steps.guardrail.outputs.outdir != ''
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: forecast-self-heal-${{ github.run_id }}
