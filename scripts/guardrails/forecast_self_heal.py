@@ -32,6 +32,10 @@ from zoneinfo import ZoneInfo
 
 EPS = 1e-9
 
+# Delay between GCS object overwrite and DTS trigger to allow eventual consistency to settle.
+# Observed in practice: immediate trigger after overwrite may read the previous object generation.
+GCS_SETTLE_DELAY_S = 5.0
+
 
 @dataclass(frozen=True)
 class PipelineSpec:
@@ -249,6 +253,11 @@ def _bq_table_columns(*, project_id: str, table_fq: str) -> set[str]:
 
     We use INFORMATION_SCHEMA to support tenant-specific schema variants
     (e.g. some sources do not have revenue_with_vat_db/buyprice_db/margin_db).
+
+    Note: There is a theoretical race condition between schema introspection and
+    the subsequent query using these columns. In practice, schema changes on these
+    production tables are extremely rare and always coordinated. The retry wrapper
+    around BQ queries handles transient failures if they occur.
     """
 
     proj, dataset, table = _split_table_fq(table_fq)
@@ -732,7 +741,7 @@ def run(
                             # GCS object overwrites can be eventually consistent for downstream readers.
                             # A short settle delay reduces the risk of triggering a DTS run that reads the
                             # previous object generation (observed in practice with immediate trigger).
-                            time.sleep(5.0)
+                            time.sleep(GCS_SETTLE_DELAY_S)
                             run_time_utc = datetime.now(tz=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
                             _trigger_transfer_run(
                                 project_id=spec.project_id, config_resource_name=spec.dts_config_13, run_time_utc=run_time_utc

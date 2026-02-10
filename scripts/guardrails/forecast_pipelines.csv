@@ -1,6 +1,6 @@
 project_id,tenant,country,location,gcs_uri,final_prep_txns_table,final_prep_cost_table,bq_table_13,dts_config_13,bq_table_14,dts_config_14
 # Notes:
-# - `country=cz` is checked/fixed in the morning run; non-CZ countries are checked/fixed in the afternoon run.
+# - All pipelines are checked in the morning run (run_mode=all); non-CZ countries are re-checked in the afternoon as a backstop.
 # - `dts_config_14` is optional (some tenants do not have a 14_* union table).
 # - Some legacy BigQuery table IDs may include a leading space (e.g. `final_prep_si. 8_join_*`). Keep them as-is.
 autodoplnky-ss-gtm-pmbwqjp,autodoplnky,cz,europe,gs://6_shoptet_ga4_join_all_channel_cost_plan_autodoplnky/6_cz_shoptet_ga4_join_all_channel_cost_plan_final_extrap_cz.csv,autodoplnky-ss-gtm-pmbwqjp.visualisation_final.6_cz_shoptet_ga4_transactions,autodoplnky-ss-gtm-pmbwqjp.visualisation_final.5_all_channels_cost_by_date_cz,autodoplnky-ss-gtm-pmbwqjp.visualisation_final.6_shoptet_ga4_join_all_channel_cost_plan_final_extrap_cz,projects/876534247318/locations/europe/transferConfigs/649f4c8b-0000-2bca-9c2a-f4f5e80db9e8,,
