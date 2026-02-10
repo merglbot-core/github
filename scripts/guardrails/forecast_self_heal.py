@@ -8,7 +8,7 @@ Purpose:
 
 Key business rules (Europe/Prague):
 - CZ (country=cz): D-1 must be ready in the morning window.
-- non-CZ: morning D-2 is acceptable; D-1 must be ready only from the afternoon window.
+- non-CZ: checked in the morning as well (denatura-like readiness) and re-checked in the afternoon as a backstop.
 
 This script is designed to run from GitHub Actions with WIF/OIDC and Cloud SDK (bq/gsutil) available.
 Never logs secret values.
@@ -147,21 +147,21 @@ def _infer_run_mode_auto(now_local: datetime, *, gh_schedule: str = "") -> str:
 
         if is_cet:
             if gh_schedule == morning_cet:
-                return "cz_morning"
+                return "all"
             if gh_schedule == afternoon_cet:
                 return "noncz_afternoon"
             return "noop"
 
         if is_cest:
             if gh_schedule == morning_cest:
-                return "cz_morning"
+                return "all"
             if gh_schedule == afternoon_cest:
                 return "noncz_afternoon"
             return "noop"
 
     # Fallback: allow any time within the local hour (handles common delays).
     if now_local.hour == 6:
-        return "cz_morning"
+        return "all"
     if now_local.hour == 14:
         return "noncz_afternoon"
     return "noop"
@@ -228,6 +228,36 @@ def _bq_query_csv(*, project_id: str, sql: str, parameters: Iterable[str]) -> st
     return cp.stdout
 
 
+def _split_table_fq(table_fq: str) -> tuple[str, str, str]:
+    """
+    Split fully-qualified table name "project.dataset.table" into its parts.
+
+    IMPORTANT:
+    - Preserve spaces in table names (some legacy tables have leading spaces).
+    """
+
+    s = table_fq or ""
+    parts = s.split(".", 2)
+    if len(parts) != 3:
+        raise ValueError(f"Invalid table FQ name (expected project.dataset.table): {table_fq!r}")
+    return parts[0], parts[1], parts[2]
+
+
+def _bq_table_columns(*, project_id: str, table_fq: str) -> set[str]:
+    """
+    Return a set of column names for a given table.
+
+    We use INFORMATION_SCHEMA to support tenant-specific schema variants
+    (e.g. some sources do not have revenue_with_vat_db/buyprice_db/margin_db).
+    """
+
+    proj, dataset, table = _split_table_fq(table_fq)
+    sql = f"SELECT column_name FROM `{proj}.{dataset}.INFORMATION_SCHEMA.COLUMNS` WHERE table_name=@t"
+    rows = _parse_csv_rows(_bq_query_csv(project_id=project_id, sql=sql, parameters=[f"t:STRING:{table}"]))
+    cols = {str(r.get("column_name") or "").strip() for r in rows}
+    return {c for c in cols if c}
+
+
 def _parse_csv_rows(text: str) -> list[dict[str, str]]:
     text = (text or "").strip()
     if not text:
@@ -268,27 +298,41 @@ def _final_prep_by_channel(
     cost_table: str,
 ) -> tuple[dict[str, dict[str, float]], dict[str, dict[str, float]]]:
     # Use CAST(date AS STRING) filter so the query works for both DATE and STRING typed date columns.
+    txns_cols = _bq_table_columns(project_id=project_id, table_fq=txns_table)
+    cost_cols = _bq_table_columns(project_id=project_id, table_fq=cost_table)
+
+    if "channel" not in txns_cols:
+        raise RuntimeError(f"Transactions table missing required column: channel ({txns_table})")
+    if "channel" not in cost_cols:
+        raise RuntimeError(f"Cost table missing required column: channel ({cost_table})")
+
+    def _sum_or_zero(cols: set[str], col: str) -> str:
+        return f"SUM({col}) AS {col}" if col in cols else f"0 AS {col}"
+
+    txns_metrics = [
+        "sessions",
+        "quantity_db",
+        "revenue_db",
+        "revenue_with_vat_db",
+        "buyprice_db",
+        "margin_db",
+        "transactions_db",
+    ]
+    cost_metrics = ["clicks", "cost", "impressions"]
+
     sql_txns = (
-        "SELECT channel,"
-        " SUM(sessions) AS sessions,"
-        " SUM(quantity_db) AS quantity_db,"
-        " SUM(revenue_db) AS revenue_db,"
-        " SUM(revenue_with_vat_db) AS revenue_with_vat_db,"
-        " SUM(buyprice_db) AS buyprice_db,"
-        " SUM(margin_db) AS margin_db,"
-        " SUM(transactions_db) AS transactions_db"
-        f" FROM `{txns_table}`"
-        " WHERE CAST(date AS STRING)=@d"
-        " GROUP BY channel"
+        "SELECT "
+        + ", ".join(["channel"] + [_sum_or_zero(txns_cols, c) for c in txns_metrics])
+        + f" FROM `{txns_table}`"
+        + " WHERE CAST(date AS STRING)=@d"
+        + " GROUP BY channel"
     )
     sql_cost = (
-        "SELECT channel,"
-        " SUM(clicks) AS clicks,"
-        " SUM(cost) AS cost,"
-        " SUM(impressions) AS impressions"
-        f" FROM `{cost_table}`"
-        " WHERE CAST(date AS STRING)=@d"
-        " GROUP BY channel"
+        "SELECT "
+        + ", ".join(["channel"] + [_sum_or_zero(cost_cols, c) for c in cost_metrics])
+        + f" FROM `{cost_table}`"
+        + " WHERE CAST(date AS STRING)=@d"
+        + " GROUP BY channel"
     )
     txns_rows = _parse_csv_rows(
         _bq_query_csv(project_id=project_id, sql=sql_txns, parameters=[f"d:STRING:{patch_date}"])
@@ -685,6 +729,10 @@ def run(
                         else:
                             # Upload + trigger DTS run for 13
                             _gsutil_cp(str(local_patched), spec.gcs_uri)
+                            # GCS object overwrites can be eventually consistent for downstream readers.
+                            # A short settle delay reduces the risk of triggering a DTS run that reads the
+                            # previous object generation (observed in practice with immediate trigger).
+                            time.sleep(5.0)
                             run_time_utc = datetime.now(tz=UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
                             _trigger_transfer_run(
                                 project_id=spec.project_id, config_resource_name=spec.dts_config_13, run_time_utc=run_time_utc
