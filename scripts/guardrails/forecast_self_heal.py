@@ -8,7 +8,7 @@ Purpose:
 
 Key business rules (Europe/Prague):
 - CZ (country=cz): D-1 must be ready in the morning window.
-- non-CZ: checked in the morning as well (denatura-like readiness) and re-checked in the afternoon as a backstop.
+- non-CZ: morning D-2 is acceptable; D-1 must be ready only from the afternoon window.
 
 This script is designed to run from GitHub Actions with WIF/OIDC and Cloud SDK (bq/gsutil) available.
 Never logs secret values.
@@ -151,21 +151,21 @@ def _infer_run_mode_auto(now_local: datetime, *, gh_schedule: str = "") -> str:
 
         if is_cet:
             if gh_schedule == morning_cet:
-                return "all"
+                return "cz_morning"
             if gh_schedule == afternoon_cet:
                 return "noncz_afternoon"
             return "noop"
 
         if is_cest:
             if gh_schedule == morning_cest:
-                return "all"
+                return "cz_morning"
             if gh_schedule == afternoon_cest:
                 return "noncz_afternoon"
             return "noop"
 
     # Fallback: allow any time within the local hour (handles common delays).
     if now_local.hour == 6:
-        return "all"
+        return "cz_morning"
     if now_local.hour == 14:
         return "noncz_afternoon"
     return "noop"
