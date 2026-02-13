@@ -209,6 +209,11 @@ jobs:
               except Exception:
                   return 0.0
 
+          # Slack Block Kit limits / readability caps
+          MAX_TENANTS_DISPLAY = 15
+          MAX_REQ_FAILURES_DISPLAY = 10
+          MAX_OPT_FAILURES_DISPLAY = 5
+
           status = "?"
           slot = ""
           policy = ""
@@ -253,12 +258,18 @@ jobs:
           except Exception:
               pass
 
-          if req_failed > 0:
-              header_text = f"🔴 Forecast D-1 Readiness: FAIL ({req_failed} required failures)"
+          status_norm = (status or "").strip().upper()
+          if status_norm == "FAIL" or req_failed > 0:
+              if req_failed > 0:
+                  header_text = f"🔴 Forecast D-1 Readiness: FAIL ({req_failed} required failures)"
+              else:
+                  header_text = "🔴 Forecast D-1 Readiness: FAIL (see details)"
           elif opt_failed > 0:
               header_text = f"⚠️ Forecast D-1 Readiness: PASS ({opt_failed} optional warnings)"
-          else:
+          elif status_norm == "PASS":
               header_text = "✅ Forecast D-1 Readiness: ALL PASS"
+          else:
+              header_text = f"❓ Forecast D-1 Readiness: UNKNOWN (status={status_norm or '?'})"
 
           blocks: list[dict] = []
           blocks.append(
@@ -301,7 +312,7 @@ jobs:
               tenant_items.append((0 if has_req_fail else 1, 0 if has_opt_fail else 1, tenant.lower(), tenant))
           tenant_items.sort()
 
-          tenant_limit = 15
+          tenant_limit = MAX_TENANTS_DISPLAY
           for _, _, _, tenant in tenant_items[:tenant_limit]:
               entries = tenant_map.get(tenant, [])
               decorated: list[tuple[int, int, str, str, str, str, bool, int, float]] = []
@@ -366,9 +377,9 @@ jobs:
 
           if req_failed > 0:
               req_fail_list.sort()
-              lines = [f"• `{t}/{c}` — {r}" for _, t, _, c, r in req_fail_list[:10]]
-              if len(req_fail_list) > 10:
-                  lines.append(f"… (+{len(req_fail_list) - 10} more)")
+              lines = [f"• `{t}/{c}` — {r}" for _, t, _, c, r in req_fail_list[:MAX_REQ_FAILURES_DISPLAY]]
+              if len(req_fail_list) > MAX_REQ_FAILURES_DISPLAY:
+                  lines.append(f"… (+{len(req_fail_list) - MAX_REQ_FAILURES_DISPLAY} more)")
               blocks.append(
                   {
                       "type": "section",
@@ -381,9 +392,9 @@ jobs:
 
           if opt_failed > 0:
               opt_fail_list.sort()
-              lines = [f"• `{t}/{c}` — {r}" for _, t, _, c, r in opt_fail_list[:5]]
-              if len(opt_fail_list) > 5:
-                  lines.append(f"… (+{len(opt_fail_list) - 5} more)")
+              lines = [f"• `{t}/{c}` — {r}" for _, t, _, c, r in opt_fail_list[:MAX_OPT_FAILURES_DISPLAY]]
+              if len(opt_fail_list) > MAX_OPT_FAILURES_DISPLAY:
+                  lines.append(f"… (+{len(opt_fail_list) - MAX_OPT_FAILURES_DISPLAY} more)")
               blocks.append(
                   {
                       "type": "section",
@@ -394,18 +405,19 @@ jobs:
                   }
               )
 
-          blocks.append(
-              {
-                  "type": "actions",
-                  "elements": [
-                      {
-                          "type": "button",
-                          "text": {"type": "plain_text", "text": "View Run Details"},
-                          "url": run_url,
-                      }
-                  ],
-              }
-          )
+          if run_url:
+              blocks.append(
+                  {
+                      "type": "actions",
+                      "elements": [
+                          {
+                              "type": "button",
+                              "text": {"type": "plain_text", "text": "View Run Details"},
+                              "url": run_url,
+                          }
+                      ],
+                  }
+              )
 
           payload = {"text": header_text, "blocks": blocks}
           print(json.dumps(payload))
