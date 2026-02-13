@@ -234,7 +234,13 @@ jobs:
               with open(report_csv, "r", encoding="utf-8", newline="") as f:
                   reader = csv.DictReader(f)
                   fails = [row for row in reader if (row.get("status") or "").strip() == "FAIL"]
-              fails.sort(key=lambda r: (0 if (r.get("is_required") or "").strip() == "yes" else 1, r.get("tenant") or "", r.get("country") or ""))
+              decorated = []
+              for r in fails:
+                  scope_rank = 0 if (r.get("is_required") or "").strip() == "yes" else 1
+                  decorated.append(((scope_rank, r.get("tenant") or "", r.get("country") or ""), r))
+              decorated.sort()
+              fails = [r for _, r in decorated]
+
               for row in fails[:10]:
                   scope = "REQ" if (row.get("is_required") or "").strip() == "yes" else "OPT"
                   tenant = (row.get("tenant") or "").strip()
@@ -271,4 +277,3 @@ jobs:
       - name: Fail workflow if guardrail failed
         if: steps.guardrail.outputs.exit_code != '0'
         run: exit 1
-
