@@ -183,6 +183,7 @@ jobs:
             GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
               python - <<'PY'
           import csv
+          from collections import defaultdict
           import json
           import os
 
@@ -229,11 +230,36 @@ jobs:
           if patch_date:
               title += f" for {patch_date}"
 
-          lines: list[str] = []
+          tenant_lines: list[str] = []
+          fail_lines: list[str] = []
           try:
               with open(report_csv, "r", encoding="utf-8", newline="") as f:
                   reader = csv.DictReader(f)
-                  fails = [row for row in reader if (row.get("status") or "").strip() == "FAIL"]
+                  rows = [row for row in reader]
+
+              by_tenant: dict[str, list[tuple[str, str, str, str, str]]] = defaultdict(list)
+              for row in rows:
+                  tenant = (row.get("tenant") or "").strip() or "?"
+                  country = (row.get("country") or "").strip() or "?"
+                  st = (row.get("status") or "").strip() or "?"
+                  reason = (row.get("reason") or "").strip()
+                  is_req = "yes" if (row.get("is_required") or "").strip() == "yes" else "no"
+                  by_tenant[tenant].append((country.lower(), country, st, reason, is_req))
+
+              for tenant in sorted(by_tenant.keys()):
+                  entries = sorted(by_tenant[tenant])
+                  parts = []
+                  for _, country, st, reason, is_req in entries:
+                      opt = " (opt)" if is_req != "yes" else ""
+                      if st == "PASS":
+                          parts.append(f"{country}=PASS{opt}")
+                      elif reason:
+                          parts.append(f"{country}=FAIL({reason}){opt}")
+                      else:
+                          parts.append(f"{country}=FAIL{opt}")
+                  tenant_lines.append(f"• {tenant}: " + ", ".join(parts))
+
+              fails = [row for row in rows if (row.get("status") or "").strip() == "FAIL"]
               decorated = []
               for r in fails:
                   scope_rank = 0 if (r.get("is_required") or "").strip() == "yes" else 1
@@ -249,21 +275,39 @@ jobs:
                   table = (row.get("table_fq") or "").strip()
                   reason = (row.get("reason") or "").strip()
                   if table:
-                      lines.append(f"• {scope}: {tenant}/{country} ({project}) — {reason} — {table}")
+                      fail_lines.append(f"• {scope}: {tenant}/{country} ({project}) — {reason} — {table}")
                   else:
-                      lines.append(f"• {scope}: {tenant}/{country} ({project}) — {reason}")
+                      fail_lines.append(f"• {scope}: {tenant}/{country} ({project}) — {reason}")
           except Exception:
               pass
 
+          attachment_lines = [
+              f"*Repo*: {repo}",
+              f"*Workflow Run*: {run_url}",
+          ]
+          if slot or policy or patch_date:
+              attachment_lines.append(f"*Slot*: {slot}  *Policy*: {policy}  *Date*: {patch_date}")
+          attachment_lines.append("")
+          attachment_lines.append(f"*Required*: {req_failed}/{req_total} FAIL")
+          attachment_lines.append(f"*Optional*: {opt_failed}/{opt_total} FAIL")
+
+          if tenant_lines:
+              attachment_lines.append("")
+              attachment_lines.append("*Results by tenant/country*")
+              attachment_lines.extend(tenant_lines[:20])
+              if len(tenant_lines) > 20:
+                  attachment_lines.append(f"… (+{len(tenant_lines) - 20} more)")
+
+          if fail_lines:
+              attachment_lines.append("")
+              attachment_lines.append("*Top failures (max 10)*")
+              attachment_lines.extend(fail_lines)
+
           attachment = {
               "color": color,
-              "fields": [
-                  {"title": "Repo", "value": repo, "short": True},
-                  {"title": "Workflow Run", "value": run_url, "short": False},
-              ],
+              "mrkdwn_in": ["text"],
+              "text": "\n".join(attachment_lines).strip(),
           }
-          if lines:
-              attachment["text"] = "\n".join(lines)
 
           payload = {"text": title, "attachments": [attachment]}
           print(json.dumps(payload))
