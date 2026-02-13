@@ -161,12 +161,12 @@ jobs:
       - name: Slack alert (PASS/FAIL)
         if: always() && steps.guardrail.outputs.status != 'NOOP' && inputs.dry_run != true
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL_FINAL_DATA_ALERTS || secrets.SLACK_WEBHOOK_URL }}
         run: |
           set -euo pipefail
 
           if [ -z "${SLACK_WEBHOOK_URL}" ]; then
-            echo "ℹ️ SLACK_WEBHOOK_URL not configured; skipping Slack notification."
+            echo "ℹ️ No Slack webhook secret configured (SLACK_WEBHOOK_URL_FINAL_DATA_ALERTS or SLACK_WEBHOOK_URL); skipping Slack notification."
             exit 0
           fi
 
