@@ -145,10 +145,22 @@ def _bq_show_table_json(*, job_project_id: str, table_fq: str) -> dict:
     if cp.returncode != 0:
         kind = _classify_bq_error(cp.stderr)
         raise RuntimeError(f"{kind}: bq show failed for {table_ref}. stderr(first 800)={cp.stderr[:800]!r}")
+    raw = (cp.stdout or "").strip()
+    if not raw:
+        raise RuntimeError(f"bq show returned empty stdout for {table_ref}")
+
+    # Best-effort parsing: sometimes bq may emit non-JSON warnings before the JSON object.
     try:
-        return json.loads(cp.stdout)
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"bq show returned invalid JSON for {table_ref}") from exc
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(raw[start : end + 1])
+            except json.JSONDecodeError:
+                pass
+        raise RuntimeError(f"bq show returned invalid JSON for {table_ref}. stdout(first 400)={raw[:400]!r}")
 
 
 def _bq_query_csv(*, job_project_id: str, sql: str, parameters: list[str]) -> str:
