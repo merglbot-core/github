@@ -52,7 +52,6 @@ runs:
         workload_identity_provider: ${{ inputs.workload_identity_provider }}
         service_account: ${{ inputs.service_account }}
         create_credentials_file: true
-        credentials_file_path: "${{ runner.temp }}/gcp-credentials.json"
         export_environment_variables: ${{ inputs.export_environment_variables }}
         cleanup_credentials: true
         token_format: 'access_token'
