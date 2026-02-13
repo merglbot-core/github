@@ -184,6 +184,7 @@ jobs:
               python - <<'PY'
           import csv
           from collections import defaultdict
+          from datetime import datetime, timedelta
           import json
           import os
 
@@ -192,14 +193,31 @@ jobs:
           run_url = os.environ.get("RUN_URL", "")
           repo = os.environ.get("GITHUB_REPOSITORY", "")
 
+          def _to_int(v: object) -> int:
+              try:
+                  if v is None:
+                      return 0
+                  return int(float(str(v).strip() or "0"))
+              except Exception:
+                  return 0
+
+          def _to_float(v: object) -> float:
+              try:
+                  if v is None:
+                      return 0.0
+                  return float(str(v).strip() or "0")
+              except Exception:
+                  return 0.0
+
           status = "?"
           slot = ""
           policy = ""
           patch_date = ""
-          req_failed = "?"
-          opt_failed = "?"
-          req_total = "?"
-          opt_total = "?"
+          now_local = ""
+          req_failed = 0
+          opt_failed = 0
+          req_total = 0
+          opt_total = 0
           try:
               with open(summary_path, "r", encoding="utf-8") as f:
                   s = json.load(f)
@@ -207,109 +225,189 @@ jobs:
               slot = str(s.get("slot", "") or "")
               policy = str(s.get("required_policy", "") or "")
               patch_date = str(s.get("patch_date_local", "") or "")
-              req_failed = str(s.get("required_failed", "?"))
-              opt_failed = str(s.get("optional_failed", "?"))
-              req_total = str(s.get("required_total", "?"))
-              opt_total = str(s.get("optional_total", "?"))
+              now_local = str(s.get("now_local", "") or "")
+              req_failed = _to_int(s.get("required_failed"))
+              opt_failed = _to_int(s.get("optional_failed"))
+              req_total = _to_int(s.get("required_total"))
+              opt_total = _to_int(s.get("optional_total"))
           except Exception:
               pass
 
-          color = "danger"
+          req_ok = max(0, req_total - req_failed)
+
+          tz_abbrev = "Europe/Prague"
           try:
-              if status == "PASS":
-                  color = "warning" if int(opt_failed or "0") > 0 else "good"
+              dt = datetime.fromisoformat(now_local)
+              off = dt.utcoffset()
+              if off == timedelta(hours=1):
+                  tz_abbrev = "CET"
+              elif off == timedelta(hours=2):
+                  tz_abbrev = "CEST"
           except Exception:
-              if status == "PASS":
-                  color = "good"
+              pass
 
-          title = f"Forecast D-1 readiness {status}: required_fail={req_failed}/{req_total}, optional_fail={opt_failed}/{opt_total}"
-          if slot:
-              title += f" (slot {slot})"
-          if policy:
-              title += f" [{policy}]"
-          if patch_date:
-              title += f" for {patch_date}"
+          slot_disp = ""
+          try:
+              if slot and slot.isdigit():
+                  slot_disp = f"{int(slot):02d}:00"
+          except Exception:
+              pass
 
-          tenant_lines: list[str] = []
-          fail_lines: list[str] = []
+          if req_failed > 0:
+              header_text = f"🔴 Forecast D-1 Readiness: FAIL ({req_failed} required failures)"
+          elif opt_failed > 0:
+              header_text = f"⚠️ Forecast D-1 Readiness: PASS ({opt_failed} optional warnings)"
+          else:
+              header_text = "✅ Forecast D-1 Readiness: ALL PASS"
+
+          blocks: list[dict] = []
+          blocks.append(
+              {
+                  "type": "header",
+                  "text": {"type": "plain_text", "text": header_text, "emoji": True},
+              }
+          )
+
+          tenant_map: dict[str, list[tuple[str, str, str, bool, int, float]]] = defaultdict(list)
+          req_fail_list: list[tuple[str, str, str, str, str]] = []
+          opt_fail_list: list[tuple[str, str, str, str, str]] = []
+
           try:
               with open(report_csv, "r", encoding="utf-8", newline="") as f:
                   reader = csv.DictReader(f)
-                  rows = [row for row in reader]
+                  for row in reader:
+                      tenant = (row.get("tenant") or "").strip() or "?"
+                      country = (row.get("country") or "").strip() or "?"
+                      st = (row.get("status") or "").strip() or "?"
+                      reason = (row.get("reason") or "").strip()
+                      is_req = (row.get("is_required") or "").strip() == "yes"
+                      row_count = _to_int(row.get("row_count"))
+                      actuals_sum = _to_float(row.get("actuals_sum"))
 
-              by_tenant: dict[str, list[tuple[str, str, str, str, str]]] = defaultdict(list)
-              for row in rows:
-                  tenant = (row.get("tenant") or "").strip() or "?"
-                  country = (row.get("country") or "").strip() or "?"
-                  st = (row.get("status") or "").strip() or "?"
-                  reason = (row.get("reason") or "").strip()
-                  is_req = "yes" if (row.get("is_required") or "").strip() == "yes" else "no"
-                  by_tenant[tenant].append((country.lower(), country, st, reason, is_req))
+                      tenant_map[tenant].append((country, st, reason, is_req, row_count, actuals_sum))
 
-              for tenant in sorted(by_tenant.keys()):
-                  entries = sorted(by_tenant[tenant])
-                  parts = []
-                  for _, country, st, reason, is_req in entries:
-                      opt = " (opt)" if is_req != "yes" else ""
-                      if st == "PASS":
-                          parts.append(f"{country}=PASS{opt}")
-                      elif reason:
-                          parts.append(f"{country}=FAIL({reason}){opt}")
-                      else:
-                          parts.append(f"{country}=FAIL{opt}")
-                  tenant_lines.append(f"• {tenant}: " + ", ".join(parts))
-
-              fails = [row for row in rows if (row.get("status") or "").strip() == "FAIL"]
-              decorated = []
-              for r in fails:
-                  scope_rank = 0 if (r.get("is_required") or "").strip() == "yes" else 1
-                  decorated.append(((scope_rank, r.get("tenant") or "", r.get("country") or ""), r))
-              decorated.sort()
-              fails = [r for _, r in decorated]
-
-              for row in fails[:10]:
-                  scope = "REQ" if (row.get("is_required") or "").strip() == "yes" else "OPT"
-                  tenant = (row.get("tenant") or "").strip()
-                  country = (row.get("country") or "").strip()
-                  project = (row.get("project_id") or "").strip()
-                  table = (row.get("table_fq") or "").strip()
-                  reason = (row.get("reason") or "").strip()
-                  if table:
-                      fail_lines.append(f"• {scope}: {tenant}/{country} ({project}) — {reason} — {table}")
-                  else:
-                      fail_lines.append(f"• {scope}: {tenant}/{country} ({project}) — {reason}")
+                      if st == "FAIL":
+                          if is_req:
+                              req_fail_list.append((tenant.lower(), tenant, country.lower(), country, reason))
+                          else:
+                              opt_fail_list.append((tenant.lower(), tenant, country.lower(), country, reason))
           except Exception:
               pass
 
-          attachment_lines = [
-              f"*Repo*: {repo}",
-              f"*Workflow Run*: {run_url}",
-          ]
-          if slot or policy or patch_date:
-              attachment_lines.append(f"*Slot*: {slot}  *Policy*: {policy}  *Date*: {patch_date}")
-          attachment_lines.append("")
-          attachment_lines.append(f"*Required*: {req_failed}/{req_total} FAIL")
-          attachment_lines.append(f"*Optional*: {opt_failed}/{opt_total} FAIL")
+          tenant_items: list[tuple[int, int, str, str]] = []
+          for tenant, entries in tenant_map.items():
+              has_req_fail = any(st == "FAIL" and is_req for _, st, _, is_req, _, _ in entries)
+              has_opt_fail = any(st == "FAIL" and (not is_req) for _, st, _, is_req, _, _ in entries)
+              tenant_items.append((0 if has_req_fail else 1, 0 if has_opt_fail else 1, tenant.lower(), tenant))
+          tenant_items.sort()
 
-          if tenant_lines:
-              attachment_lines.append("")
-              attachment_lines.append("*Results by tenant/country*")
-              attachment_lines.extend(tenant_lines[:20])
-              if len(tenant_lines) > 20:
-                  attachment_lines.append(f"… (+{len(tenant_lines) - 20} more)")
+          tenant_limit = 15
+          for _, _, _, tenant in tenant_items[:tenant_limit]:
+              entries = tenant_map.get(tenant, [])
+              decorated: list[tuple[int, int, str, str, str, str, bool, int, float]] = []
+              for country, st, reason, is_req, row_count, actuals_sum in entries:
+                  fail_rank = 0 if st == "FAIL" else 1
+                  sev_rank = 0 if (st == "FAIL" and is_req) else 1 if st == "FAIL" else 2
+                  decorated.append(
+                      (
+                          fail_rank,
+                          sev_rank,
+                          country.lower(),
+                          country,
+                          st,
+                          reason,
+                          is_req,
+                          row_count,
+                          actuals_sum,
+                      )
+                  )
+              decorated.sort()
 
-          if fail_lines:
-              attachment_lines.append("")
-              attachment_lines.append("*Top failures (max 10)*")
-              attachment_lines.extend(fail_lines)
+              badges: list[str] = []
+              detail_lines: list[str] = []
+              for _, _, _, country, st, reason, is_req, row_count, actuals_sum in decorated:
+                  if st == "PASS":
+                      badges.append(f"✅ `{country}`")
+                  else:
+                      icon = "❌" if is_req else "⚠️"
+                      badges.append(f"{icon} `{country}`")
 
-          attachment = {
-              "color": color,
-              "mrkdwn_in": ["text"],
-              "text": "\n".join(attachment_lines).strip(),
-          }
+                      det = reason or "FAIL"
+                      if det in ("no_rows_for_date", "actuals_zero"):
+                          det = f"{det} ({row_count} rows, sum={actuals_sum:.6f})"
+                      detail_lines.append(f"• {icon} `{country}` — _{det}_")
 
-          payload = {"text": title, "attachments": [attachment]}
+              section_text = f"*📊 {tenant}*\n" + "  ".join(badges)
+              if detail_lines:
+                  section_text += "\n" + "\n".join(detail_lines)
+
+              blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": section_text}})
+
+          if len(tenant_items) > tenant_limit:
+              blocks.append(
+                  {
+                      "type": "section",
+                      "text": {
+                          "type": "mrkdwn",
+                          "text": f"_(+{len(tenant_items) - tenant_limit} more tenants in artifact)_",
+                      },
+                  }
+              )
+
+          blocks.append({"type": "divider"})
+
+          req_mark = "✓" if req_failed == 0 else "❌"
+          ctx = f"📅 {patch_date} │ 🕐 {slot_disp} {tz_abbrev} │ Policy: {policy} │ Required: {req_ok}/{req_total} {req_mark}"
+          if opt_total > 0:
+              opt_mark = "⚠️" if opt_failed > 0 else "✓"
+              ctx += f" │ Optional: {opt_failed}/{opt_total} {opt_mark}"
+
+          blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": ctx}]})
+
+          if req_failed > 0:
+              req_fail_list.sort()
+              lines = [f"• `{t}/{c}` — {r}" for _, t, _, c, r in req_fail_list[:10]]
+              if len(req_fail_list) > 10:
+                  lines.append(f"… (+{len(req_fail_list) - 10} more)")
+              blocks.append(
+                  {
+                      "type": "section",
+                      "text": {
+                          "type": "mrkdwn",
+                          "text": f"*🔴 Required failures ({req_failed}):*\n" + "\n".join(lines),
+                      },
+                  }
+              )
+
+          if opt_failed > 0:
+              opt_fail_list.sort()
+              lines = [f"• `{t}/{c}` — {r}" for _, t, _, c, r in opt_fail_list[:5]]
+              if len(opt_fail_list) > 5:
+                  lines.append(f"… (+{len(opt_fail_list) - 5} more)")
+              blocks.append(
+                  {
+                      "type": "section",
+                      "text": {
+                          "type": "mrkdwn",
+                          "text": f"*⚠️ Optional warnings ({opt_failed}):*\n" + "\n".join(lines),
+                      },
+                  }
+              )
+
+          blocks.append(
+              {
+                  "type": "actions",
+                  "elements": [
+                      {
+                          "type": "button",
+                          "text": {"type": "plain_text", "text": "View Run Details"},
+                          "url": run_url,
+                      }
+                  ],
+              }
+          )
+
+          payload = {"text": header_text, "blocks": blocks}
           print(json.dumps(payload))
           PY
           )"
