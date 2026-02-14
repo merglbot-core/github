@@ -29,6 +29,15 @@ on:
         description: "Date to check (YYYY-MM-DD, Europe/Prague). Default: yesterday."
         required: false
         type: string
+      slot:
+        description: "Slot policy to simulate (08/10=cz_only, 15=all)."
+        required: false
+        type: choice
+        options:
+          - "08"
+          - "10"
+          - "15"
+        default: "15"
       dry_run:
         description: "Skip Slack notifications"
         required: false
@@ -71,13 +80,14 @@ jobs:
         continue-on-error: true
         env:
           PATCH_DATE_LOCAL: ${{ inputs.patch_date_local }}
+          SLOT: ${{ inputs.slot || '15' }}
           MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
           GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: |
           set -euo pipefail
           OUTDIR="forecast-d1-readiness-out"
 
-          CMD="python scripts/guardrails/forecast_d1_readiness.py --outdir $OUTDIR --timezone Europe/Prague --mode ${MODE}"
+          CMD="python scripts/guardrails/forecast_d1_readiness.py --outdir $OUTDIR --timezone Europe/Prague --mode ${MODE} --slot ${SLOT}"
           if [ -n "${PATCH_DATE_LOCAL}" ]; then
             CMD="$CMD --patch-date-local ${PATCH_DATE_LOCAL}"
           fi
@@ -279,9 +289,19 @@ jobs:
               }
           )
 
-          tenant_map: dict[str, list[tuple[str, str, str, bool, int, float]]] = defaultdict(list)
+          # Report rows are table-level; Slack summary must be pipeline-level (tenant/country) without duplicates.
+          tenant_map: dict[str, list[dict]] = defaultdict(list)
+          pipeline_map: dict[tuple[str, str], dict] = {}
           req_fail_list: list[tuple[str, str, str, str, str]] = []
           opt_fail_list: list[tuple[str, str, str, str, str]] = []
+
+          def _fmt_fail_detail(kind: str, reason: str, row_count: int, actuals_sum: float, domain: str) -> str:
+              det = (reason or "FAIL").strip() or "FAIL"
+              if det in ("no_rows_for_date", "actuals_zero"):
+                  det = f"{det} ({row_count} rows, sum={actuals_sum:.6f})"
+              if kind == "14" and domain:
+                  det = f"{det}, domain={domain}"
+              return f"{kind}:{det}"
 
           try:
               with open(report_csv, "r", encoding="utf-8", newline="") as f:
@@ -289,63 +309,112 @@ jobs:
                   for row in reader:
                       tenant = (row.get("tenant") or "").strip() or "?"
                       country = (row.get("country") or "").strip() or "?"
+                      kind = (row.get("table_kind") or "").strip() or "13"
+                      domain = (row.get("domain") or "").strip()
                       st = (row.get("status") or "").strip() or "?"
                       reason = (row.get("reason") or "").strip()
                       is_req = (row.get("is_required") or "").strip() == "yes"
                       row_count = _to_int(row.get("row_count"))
                       actuals_sum = _to_float(row.get("actuals_sum"))
 
-                      tenant_map[tenant].append((country, st, reason, is_req, row_count, actuals_sum))
+                      pipeline_tc = (tenant, country)
+                      p = pipeline_map.get(pipeline_tc)
+                      if not p:
+                          p = {"tenant": tenant, "country": country, "is_req": is_req, "checks": {}}
+                          pipeline_map[pipeline_tc] = p
+                      p["is_req"] = bool(p.get("is_req")) or is_req
 
-                      if st == "FAIL":
-                          if is_req:
-                              req_fail_list.append((tenant.lower(), tenant, country.lower(), country, reason))
-                          else:
-                              opt_fail_list.append((tenant.lower(), tenant, country.lower(), country, reason))
+                      checks = p.get("checks") or {}
+                      p["checks"] = checks
+
+                      cur = {
+                          "status": st,
+                          "reason": reason,
+                          "row_count": row_count,
+                          "actuals_sum": actuals_sum,
+                          "domain": domain,
+                      }
+                      prev = checks.get(kind)
+                      if not prev:
+                          checks[kind] = cur
+                      else:
+                          # Keep the worst status (FAIL wins) for each check kind.
+                          if str(prev.get("status", "")).strip() != "FAIL" and st == "FAIL":
+                              checks[kind] = cur
           except Exception:
               pass
 
+          for (tenant, country), p in pipeline_map.items():
+              checks = p.get("checks") or {}
+              kinds = sorted(str(k) for k in checks.keys())
+              pipeline_pass = bool(kinds) and all(str(checks[k].get("status", "")).strip() == "PASS" for k in kinds)
+
+              fail_details: list[str] = []
+              for k in sorted(kinds):
+                  info = checks.get(k) or {}
+                  if str(info.get("status", "")).strip() == "FAIL":
+                      fail_details.append(
+                          _fmt_fail_detail(
+                              k,
+                              str(info.get("reason", "") or ""),
+                              _to_int(info.get("row_count")),
+                              _to_float(info.get("actuals_sum")),
+                              str(info.get("domain", "") or ""),
+                          )
+                      )
+
+              p["pipeline_pass"] = pipeline_pass
+              p["fail_summary"] = "; ".join(fail_details) if fail_details else ""
+              tenant_map[tenant].append(p)
+
+              if not pipeline_pass:
+                  summary = p.get("fail_summary") or "FAIL"
+                  if bool(p.get("is_req")):
+                      req_fail_list.append((tenant.lower(), tenant, country.lower(), country, summary))
+                  else:
+                      opt_fail_list.append((tenant.lower(), tenant, country.lower(), country, summary))
+
           tenant_items: list[tuple[int, int, str, str]] = []
           for tenant, entries in tenant_map.items():
-              has_req_fail = any(st == "FAIL" and is_req for _, st, _, is_req, _, _ in entries)
-              has_opt_fail = any(st == "FAIL" and (not is_req) for _, st, _, is_req, _, _ in entries)
+              has_req_fail = any((not bool(p.get("pipeline_pass"))) and bool(p.get("is_req")) for p in entries)
+              has_opt_fail = any((not bool(p.get("pipeline_pass"))) and (not bool(p.get("is_req"))) for p in entries)
               tenant_items.append((0 if has_req_fail else 1, 0 if has_opt_fail else 1, tenant.lower(), tenant))
           tenant_items.sort()
 
           tenant_limit = MAX_TENANTS_DISPLAY
           for _, _, _, tenant in tenant_items[:tenant_limit]:
               entries = tenant_map.get(tenant, [])
-              decorated: list[tuple[int, int, str, str, str, str, bool, int, float]] = []
-              for country, st, reason, is_req, row_count, actuals_sum in entries:
-                  fail_rank = 0 if st == "FAIL" else 1
-                  sev_rank = 0 if (st == "FAIL" and is_req) else 1 if st == "FAIL" else 2
+              decorated: list[tuple[int, int, str, str, bool, bool, str]] = []
+              for p in entries:
+                  country = str(p.get("country") or "?")
+                  is_req = bool(p.get("is_req"))
+                  pipeline_pass = bool(p.get("pipeline_pass"))
+                  fail_summary = str(p.get("fail_summary") or "")
+                  fail_rank = 0 if (not pipeline_pass) else 1
+                  sev_rank = 0 if ((not pipeline_pass) and is_req) else 1 if (not pipeline_pass) else 2
                   decorated.append(
                       (
                           fail_rank,
                           sev_rank,
                           country.lower(),
                           country,
-                          st,
-                          reason,
+                          pipeline_pass,
                           is_req,
-                          row_count,
-                          actuals_sum,
+                          fail_summary,
                       )
                   )
               decorated.sort()
 
               badges: list[str] = []
               detail_lines: list[str] = []
-              for _, _, _, country, st, reason, is_req, row_count, actuals_sum in decorated:
-                  if st == "PASS":
+              for _, _, _, country, pipeline_pass, is_req, fail_summary in decorated:
+                  if pipeline_pass:
                       badges.append(f"✅ `{country}`")
                   else:
                       icon = "❌" if is_req else "⚠️"
                       badges.append(f"{icon} `{country}`")
 
-                      det = reason or "FAIL"
-                      if det in ("no_rows_for_date", "actuals_zero"):
-                          det = f"{det} ({row_count} rows, sum={actuals_sum:.6f})"
+                      det = fail_summary or "FAIL"
                       detail_lines.append(f"• {icon} `{country}` — _{det}_")
 
               section_text = f"*📊 {tenant}*\n" + "  ".join(badges)

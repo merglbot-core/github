@@ -39,6 +39,12 @@ EPS = 1e-9
 REQUIRED_COLUMNS = ("date", "sessions", "revenue_db", "transactions_db")
 OPTIONAL_COLUMN_COST = "cost"
 
+# Local, minimal override for domain mismatches in 14_* checks.
+# Default domain format is `{tenant}.{country}` (e.g. `cerano.cz`).
+DOMAIN_OVERRIDE: dict[tuple[str, str], str] = {
+    # ("tenant", "country"): "custom.domain",
+}
+
 
 @dataclass(frozen=True)
 class PipelineSpec:
@@ -46,6 +52,7 @@ class PipelineSpec:
     tenant: str
     country: str
     bq_table_13: str
+    bq_table_14: str
 
 
 @dataclass(frozen=True)
@@ -57,7 +64,9 @@ class ResultRow:
     required_policy: str
     patch_date_local: str
     is_required: str
+    table_kind: str
     table_fq: str
+    domain: str
     status: str
     reason: str
     row_count: int
@@ -298,11 +307,26 @@ def _load_specs(csv_path: Path) -> list[PipelineSpec]:
                     country=row["country"].strip(),
                     # Preserve spaces in table names (legacy can have leading spaces in other columns).
                     bq_table_13=row["bq_table_13"],
+                    bq_table_14=row["bq_table_14"],
                 )
             )
     if not specs:
         raise ValueError(f"No specs found in {csv_path}")
     return specs
+
+
+def _infer_domain(*, tenant: str, country: str) -> str:
+    """Infer a `domain` string for a tenant/country pair.
+
+    Prefers a manual override in `DOMAIN_OVERRIDE`; otherwise returns
+    `{tenant}.{country}` (lowercased) when both parts are present.
+    """
+    key = ((tenant or "").strip().lower(), (country or "").strip().lower())
+    if key in DOMAIN_OVERRIDE:
+        return DOMAIN_OVERRIDE[key]
+    if key[0] and key[1]:
+        return f"{key[0]}.{key[1]}"
+    return ""
 
 
 def _write_csv(path: Path, rows: list[ResultRow]) -> None:
@@ -318,7 +342,9 @@ def _write_csv(path: Path, rows: list[ResultRow]) -> None:
                 "required_policy",
                 "patch_date_local",
                 "is_required",
+                "table_kind",
                 "table_fq",
+                "domain",
                 "status",
                 "reason",
                 "row_count",
@@ -341,7 +367,9 @@ def _write_csv(path: Path, rows: list[ResultRow]) -> None:
                     r.required_policy,
                     r.patch_date_local,
                     r.is_required,
+                    r.table_kind,
                     r.table_fq,
+                    r.domain,
                     r.status,
                     r.reason,
                     str(r.row_count),
@@ -384,6 +412,7 @@ def _write_md(
     lines.append(f"- Status: **{status}**")
     lines.append(f"- Required: {required_total - required_failed} PASS / {required_failed} FAIL (total: {required_total})")
     lines.append(f"- Optional: {optional_total - optional_failed} PASS / {optional_failed} FAIL (total: {optional_total})")
+    lines.append("- Note: Required/optional counts are per pipeline; table-level checks below may show multiple rows per pipeline.")
     lines.append("")
 
     required_fail = [r for r in rows if r.status == "FAIL" and r.is_required == "yes"]
@@ -392,22 +421,22 @@ def _write_md(
     if required_fail:
         lines.append("## Required failures (first 20)")
         lines.append("")
-        lines.append("| Project | Tenant | Country | Table | Reason | row_count | actuals_sum | cost_sum |")
-        lines.append("|---|---|---|---|---|---:|---:|---:|")
+        lines.append("| Project | Tenant | Country | Check | Table | Domain | Reason | row_count | actuals_sum | cost_sum |")
+        lines.append("|---|---|---|---:|---|---|---|---:|---:|---:|")
         for r in required_fail[:20]:
             lines.append(
-                f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{r.table_fq}` | `{r.reason}` | {r.row_count} | {r.actuals_sum:.6f} | {r.cost_sum:.6f} |"
+                f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{r.table_kind}` | `{r.table_fq}` | `{r.domain or ''}` | `{r.reason}` | {r.row_count} | {r.actuals_sum:.6f} | {r.cost_sum:.6f} |"
             )
         lines.append("")
 
     if optional_fail:
         lines.append("## Optional failures (first 20)")
         lines.append("")
-        lines.append("| Project | Tenant | Country | Table | Reason | row_count | actuals_sum | cost_sum |")
-        lines.append("|---|---|---|---|---|---:|---:|---:|")
+        lines.append("| Project | Tenant | Country | Check | Table | Domain | Reason | row_count | actuals_sum | cost_sum |")
+        lines.append("|---|---|---|---:|---|---|---|---:|---:|---:|")
         for r in optional_fail[:20]:
             lines.append(
-                f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{r.table_fq}` | `{r.reason}` | {r.row_count} | {r.actuals_sum:.6f} | {r.cost_sum:.6f} |"
+                f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{r.table_kind}` | `{r.table_fq}` | `{r.domain or ''}` | `{r.reason}` | {r.row_count} | {r.actuals_sum:.6f} | {r.cost_sum:.6f} |"
             )
         lines.append("")
 
@@ -419,14 +448,16 @@ def _write_json_summary(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: str, mode: str) -> int:
+def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: str, mode: str, slot_override: str) -> int:
     tz = ZoneInfo(tz_name)
     now_local = datetime.now(tz=tz)
 
     gh_schedule = (os.environ.get("GITHUB_EVENT_SCHEDULE", "") or "").strip()
     if mode == "manual":
-        slot = "15"
-        required_policy = "all"
+        slot = (slot_override or "15").strip()
+        if slot not in ("08", "10", "15"):
+            raise ValueError(f"Invalid --slot for manual mode: {slot!r} (expected 08|10|15)")
+        required_policy = "cz_only" if slot in ("08", "10") else "all"
     elif mode == "auto":
         slot = _infer_slot_auto(now_local, gh_schedule=gh_schedule)
         if slot == "noop":
@@ -482,90 +513,108 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
 
         print(f"[check] {spec.project_id} {spec.tenant}/{spec.country} (required={'yes' if req else 'no'})", file=sys.stderr)
 
-        status = "FAIL"
-        reason = "bq_error"
-        row_count = 0
-        sessions_sum = 0.0
-        revenue_sum = 0.0
-        transactions_sum = 0.0
-        actuals_sum = 0.0
-        cost_sum = 0.0
-        cost_present = "no"
-        error_snippet = ""
+        def check_table(*, table_kind: str, table_fq: str, domain: str) -> ResultRow:
+            status = "FAIL"
+            reason = "bq_error"
+            row_count = 0
+            sessions_sum = 0.0
+            revenue_sum = 0.0
+            transactions_sum = 0.0
+            actuals_sum = 0.0
+            cost_sum = 0.0
+            cost_present = "no"
+            error_snippet = ""
 
-        try:
-            meta = _bq_show_table_json(job_project_id=spec.project_id, table_fq=spec.bq_table_13)
-            fields = meta.get("schema", {}).get("fields", []) or []
-            cols = {str(f.get("name", "") or "").strip().lower() for f in fields if isinstance(f, dict)}
-            missing = [c for c in REQUIRED_COLUMNS if c not in cols]
-            cost_present = "yes" if OPTIONAL_COLUMN_COST in cols else "no"
+            try:
+                meta = _bq_show_table_json(job_project_id=spec.project_id, table_fq=table_fq)
+                fields = meta.get("schema", {}).get("fields", []) or []
+                cols = {str(f.get("name", "") or "").strip().lower() for f in fields if isinstance(f, dict)}
+                filter_col = ""
+                if table_kind == "14":
+                    # Some 14_* union tables are domain-level (`domain` column), others are country-level (`country` column).
+                    if "domain" in cols:
+                        filter_col = "domain"
+                    elif "country" in cols:
+                        filter_col = "country"
+                required_cols = REQUIRED_COLUMNS
+                if table_kind == "14":
+                    if filter_col:
+                        required_cols = REQUIRED_COLUMNS + (filter_col,)
+                    else:
+                        required_cols = REQUIRED_COLUMNS + ("domain", "country")
+                missing = [c for c in required_cols if c not in cols]
+                cost_present = "yes" if OPTIONAL_COLUMN_COST in cols else "no"
 
-            if missing:
-                status = "FAIL"
-                reason = "missing_columns:" + ",".join(missing)
-            else:
-                select_parts = [
-                    "COUNT(1) AS row_count",
-                    "IFNULL(SUM(sessions), 0) AS sessions_sum",
-                    "IFNULL(SUM(revenue_db), 0) AS revenue_db_sum",
-                    "IFNULL(SUM(transactions_db), 0) AS transactions_db_sum",
-                ]
-                if cost_present == "yes":
-                    select_parts.append("IFNULL(SUM(cost), 0) AS cost_sum")
-
-                sql = (
-                    "SELECT "
-                    + ", ".join(select_parts)
-                    + f" FROM `{spec.bq_table_13}`"
-                    + " WHERE CAST(date AS STRING)=@d"
-                )
-
-                out = _bq_query_csv(job_project_id=spec.project_id, sql=sql, parameters=[f"d:STRING:{patch_date}"])
-                qrows = _parse_csv_rows(out)
-                if qrows:
-                    r = qrows[0]
-                    row_count = _as_int(r.get("row_count"))
-                    sessions_sum = _as_float(r.get("sessions_sum"))
-                    revenue_sum = _as_float(r.get("revenue_db_sum"))
-                    transactions_sum = _as_float(r.get("transactions_db_sum"))
-                    actuals_sum = sessions_sum + revenue_sum + transactions_sum
-                    if cost_present == "yes":
-                        cost_sum = _as_float(r.get("cost_sum"))
-
-                if row_count <= 0:
+                if missing:
                     status = "FAIL"
-                    reason = "no_rows_for_date"
-                elif actuals_sum <= EPS:
-                    status = "FAIL"
-                    reason = "actuals_zero"
+                    reason = "missing_columns:" + ",".join(missing)
                 else:
-                    status = "PASS"
-                    reason = ""
-        except Exception as exc:  # noqa: BLE001
-            msg = str(exc)
-            kind = "bq_error"
-            if msg.startswith("not_found:"):
-                kind = "not_found"
-            elif msg.startswith("forbidden:"):
-                kind = "forbidden"
-            elif msg.startswith("bq_error:"):
+                    select_parts = [
+                        "COUNT(1) AS row_count",
+                        "IFNULL(SUM(sessions), 0) AS sessions_sum",
+                        "IFNULL(SUM(revenue_db), 0) AS revenue_db_sum",
+                        "IFNULL(SUM(transactions_db), 0) AS transactions_db_sum",
+                    ]
+                    if cost_present == "yes":
+                        select_parts.append("IFNULL(SUM(cost), 0) AS cost_sum")
+
+                    where_parts = ["CAST(date AS STRING)=@d"]
+                    parameters = [f"d:STRING:{patch_date}"]
+                    if table_kind == "14":
+                        if filter_col == "domain":
+                            where_parts.append("domain=@dom")
+                            parameters.append(f"dom:STRING:{domain}")
+                        elif filter_col == "country":
+                            where_parts.append("country=@country")
+                            parameters.append(f"country:STRING:{spec.country}")
+
+                    sql = (
+                        "SELECT "
+                        + ", ".join(select_parts)
+                        + f" FROM `{table_fq}`"
+                        + " WHERE "
+                        + " AND ".join(where_parts)
+                    )
+
+                    out = _bq_query_csv(job_project_id=spec.project_id, sql=sql, parameters=parameters)
+                    qrows = _parse_csv_rows(out)
+                    if qrows:
+                        r = qrows[0]
+                        row_count = _as_int(r.get("row_count"))
+                        sessions_sum = _as_float(r.get("sessions_sum"))
+                        revenue_sum = _as_float(r.get("revenue_db_sum"))
+                        transactions_sum = _as_float(r.get("transactions_db_sum"))
+                        actuals_sum = abs(sessions_sum) + abs(revenue_sum) + abs(transactions_sum)
+                        if cost_present == "yes":
+                            cost_sum = _as_float(r.get("cost_sum"))
+
+                    if row_count <= 0:
+                        status = "FAIL"
+                        reason = "no_rows_for_date"
+                    elif actuals_sum <= EPS:
+                        status = "FAIL"
+                        reason = "actuals_zero"
+                    else:
+                        status = "PASS"
+                        reason = ""
+            except Exception as exc:  # noqa: BLE001
+                msg = str(exc)
                 kind = "bq_error"
+                if msg.startswith("not_found:"):
+                    kind = "not_found"
+                elif msg.startswith("forbidden:"):
+                    kind = "forbidden"
+                elif msg.startswith("bq_error:"):
+                    kind = "bq_error"
 
-            reason = kind
-            if "stderr(first" in msg:
-                error_snippet = msg.split("stderr(first", 1)[-1]
-                error_snippet = error_snippet[-800:]
-            else:
-                error_snippet = msg[:800]
+                reason = kind
+                if "stderr(first" in msg:
+                    error_snippet = msg.split("stderr(first", 1)[-1]
+                    error_snippet = error_snippet[-800:]
+                else:
+                    error_snippet = msg[:800]
 
-        if status != "PASS":
-            if req:
-                required_failed += 1
-            else:
-                optional_failed += 1
-
-        rows.append(
-            ResultRow(
+            return ResultRow(
                 project_id=spec.project_id,
                 tenant=spec.tenant,
                 country=spec.country,
@@ -573,7 +622,9 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                 required_policy=required_policy,
                 patch_date_local=patch_date,
                 is_required="yes" if req else "no",
-                table_fq=spec.bq_table_13,
+                table_kind=table_kind,
+                table_fq=table_fq,
+                domain=domain,
                 status=status,
                 reason=reason,
                 row_count=row_count,
@@ -585,7 +636,22 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                 cost_present=cost_present,
                 error_snippet=error_snippet,
             )
-        )
+
+        check_rows: list[ResultRow] = []
+        check_rows.append(check_table(table_kind="13", table_fq=spec.bq_table_13, domain=""))
+
+        if (spec.bq_table_14 or "").strip():
+            dom = _infer_domain(tenant=spec.tenant, country=spec.country)
+            check_rows.append(check_table(table_kind="14", table_fq=spec.bq_table_14, domain=dom))
+
+        pipeline_failed = any(r.status != "PASS" for r in check_rows)
+        if pipeline_failed:
+            if req:
+                required_failed += 1
+            else:
+                optional_failed += 1
+
+        rows.extend(check_rows)
 
     status = "FAIL" if required_failed > 0 else "PASS"
 
@@ -645,6 +711,12 @@ def main() -> int:
         help="Date to check (YYYY-MM-DD, evaluated in --timezone). Default: yesterday in --timezone.",
     )
     ap.add_argument("--mode", default="auto", choices=["auto", "manual"])
+    ap.add_argument(
+        "--slot",
+        default="15",
+        choices=["08", "10", "15"],
+        help="Manual slot override (only used when --mode=manual). Controls required policy: 08/10=cz_only, 15=all.",
+    )
     ap.add_argument("--outdir", default="forecast-d1-readiness-out")
     args = ap.parse_args()
 
@@ -655,6 +727,7 @@ def main() -> int:
             tz_name=args.timezone,
             patch_date_local_str=args.patch_date_local.strip(),
             mode=args.mode.strip(),
+            slot_override=args.slot.strip(),
         )
     except Exception as exc:  # noqa: BLE001
         # Best-effort summary so CI can Slack even on unexpected errors.
