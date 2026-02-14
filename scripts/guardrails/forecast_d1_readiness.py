@@ -316,6 +316,11 @@ def _load_specs(csv_path: Path) -> list[PipelineSpec]:
 
 
 def _infer_domain(*, tenant: str, country: str) -> str:
+    """Infer a `domain` string for a tenant/country pair.
+
+    Prefers a manual override in `DOMAIN_OVERRIDE`; otherwise returns
+    `{tenant}.{country}` (lowercased) when both parts are present.
+    """
     key = ((tenant or "").strip().lower(), (country or "").strip().lower())
     if key in DOMAIN_OVERRIDE:
         return DOMAIN_OVERRIDE[key]
@@ -531,7 +536,12 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                         filter_col = "domain"
                     elif "country" in cols:
                         filter_col = "country"
-                required_cols = REQUIRED_COLUMNS + ((filter_col,) if filter_col else (("domain", "country") if table_kind == "14" else ()))
+                required_cols = REQUIRED_COLUMNS
+                if table_kind == "14":
+                    if filter_col:
+                        required_cols = REQUIRED_COLUMNS + (filter_col,)
+                    else:
+                        required_cols = REQUIRED_COLUMNS + ("domain", "country")
                 missing = [c for c in required_cols if c not in cols]
                 cost_present = "yes" if OPTIONAL_COLUMN_COST in cols else "no"
 
