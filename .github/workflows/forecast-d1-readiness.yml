@@ -317,11 +317,11 @@ jobs:
                       row_count = _to_int(row.get("row_count"))
                       actuals_sum = _to_float(row.get("actuals_sum"))
 
-                      key = (tenant, country)
-                      p = pipeline_map.get(key)
+                      pipeline_tc = (tenant, country)
+                      p = pipeline_map.get(pipeline_tc)
                       if not p:
                           p = {"tenant": tenant, "country": country, "is_req": is_req, "checks": {}}
-                          pipeline_map[key] = p
+                          pipeline_map[pipeline_tc] = p
                       p["is_req"] = bool(p.get("is_req")) or is_req
 
                       checks = p.get("checks") or {}
