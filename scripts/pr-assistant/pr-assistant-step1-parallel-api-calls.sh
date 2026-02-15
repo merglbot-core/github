@@ -363,41 +363,41 @@ for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-6" "claude-opus-4-5-202511
   ANTHROPIC_MODELS_TRIED="${ANTHROPIC_MODELS_TRIED}${MODEL_TO_TRY}|"
   echo "  → Trying Anthropic model: $MODEL_TO_TRY"
 
-	  jq -n \
-	    --arg model "$MODEL_TO_TRY" \
-	    --rawfile prompt "$FULL_PROMPT_FILE" \
-	    --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
-	    '{
-	      model: $model,
-	      max_tokens: $max_tokens,
-	      temperature: 0.2,
-	      messages: [{role: "user", content: $prompt}]
-	    }' > "$ANTHROPIC_PAYLOAD_FILE"
-	  
-	  set +e
-	  ANTHROPIC_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 "$ANTHROPIC_MESSAGES_URL" \
-	    -H "content-type: application/json" \
-	    -H "x-api-key: $ANTHROPIC_API_KEY" \
-	    -H "anthropic-version: $ANTHROPIC_API_VERSION" \
-	    -d @"$ANTHROPIC_PAYLOAD_FILE")
-	  CURL_EXIT=$?
-	  set -e
-	  
-	  if [ "$CURL_EXIT" -ne 0 ] || ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
-	    echo "  ERROR: Anthropic request failed or returned non-JSON (curl exit=$CURL_EXIT)" >&2
-	    continue
-	  fi
-	  
-	  if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
-	    echo "  ERROR: $(echo "$ANTHROPIC_RESP" | jq -r '.error.message')" >&2
-	    continue
-	  fi
-	  
-	  ANTHROPIC_CONTENT=$(echo "$ANTHROPIC_RESP" | jq -r '.content[0].text // empty')
-	  if [ -z "$ANTHROPIC_CONTENT" ] || [ "$ANTHROPIC_CONTENT" = "null" ]; then
-	    echo "  ERROR: Anthropic response contained no content" >&2
-	    continue
-	  fi
+  jq -n \
+    --arg model "$MODEL_TO_TRY" \
+    --rawfile prompt "$FULL_PROMPT_FILE" \
+    --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
+    '{
+      model: $model,
+      max_tokens: $max_tokens,
+      temperature: 0.2,
+      messages: [{role: "user", content: $prompt}]
+    }' > "$ANTHROPIC_PAYLOAD_FILE"
+
+  set +e
+  ANTHROPIC_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 "$ANTHROPIC_MESSAGES_URL" \
+    -H "content-type: application/json" \
+    -H "x-api-key: $ANTHROPIC_API_KEY" \
+    -H "anthropic-version: $ANTHROPIC_API_VERSION" \
+    -d @"$ANTHROPIC_PAYLOAD_FILE")
+  CURL_EXIT=$?
+  set -e
+
+  if [ "$CURL_EXIT" -ne 0 ] || ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
+    echo "  ERROR: Anthropic request failed or returned non-JSON (curl exit=$CURL_EXIT)" >&2
+    continue
+  fi
+
+  if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
+    echo "  ERROR: $(echo "$ANTHROPIC_RESP" | jq -r '.error.message')" >&2
+    continue
+  fi
+
+  ANTHROPIC_CONTENT=$(echo "$ANTHROPIC_RESP" | jq -r '.content[0].text // empty')
+  if [ -z "$ANTHROPIC_CONTENT" ] || [ "$ANTHROPIC_CONTENT" = "null" ]; then
+    echo "  ERROR: Anthropic response contained no content" >&2
+    continue
+  fi
   
   ANTHROPIC_MODEL_USED="$MODEL_TO_TRY"
   echo "Success (model: $ANTHROPIC_MODEL_USED)"
@@ -409,9 +409,9 @@ for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-6" "claude-opus-4-5-202511
     echo "$ANTHROPIC_RESP" | jq -c '.usage | with_entries(select(.value | type == "number"))' > anthropic_usage.json 2>/dev/null || true
   fi
 
-	  printf '%s' "$ANTHROPIC_CONTENT" > anthropic_review.txt
-	  break
-	done
+  printf '%s' "$ANTHROPIC_CONTENT" > anthropic_review.txt
+  break
+done
 
 if [ ! -s anthropic_review.txt ]; then
   echo "API_ERROR" > anthropic_review.txt
@@ -734,10 +734,10 @@ else
     if [ "$OUTPUT_TOKENS" -lt 0 ]; then
       OUTPUT_TOKENS=0
     fi
-    echo "  Token usage:"
-    echo "    Prompt: $PROMPT_TOKENS"
-    echo "    Completion: $OUTPUT_TOTAL (reasoning: $REASONING_TOKENS, output: $OUTPUT_TOKENS)"
-    echo "    Total: $TOTAL_TOKENS"
+    echo "  Token usage:" >&2
+    echo "    Prompt: $PROMPT_TOKENS" >&2
+    echo "    Completion: $OUTPUT_TOTAL (reasoning: $REASONING_TOKENS, output: $OUTPUT_TOKENS)" >&2
+    echo "    Total: $TOTAL_TOKENS" >&2
 
     OPENAI_USAGE_API="chat_completions"
     OPENAI_USAGE_TOTAL_TOKENS="$TOTAL_TOKENS"
