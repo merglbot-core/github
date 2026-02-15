@@ -17,7 +17,9 @@ generator\_minute\_utc = (import\_minute\_utc - 20) \bmod 60
 ### Důležitá poznámka k časové zóně
 - BigQuery DTS transfery běží **v UTC** (nemění se s DST).
 - Pokud Deepnote umožňuje plánovat v **UTC**, použij UTC (nejstabilnější).
-- Pokud Deepnote plánuje v **lokálním čase**, doporučení níže ber jako **zimní (CET) přepočet** a v létě (CEST) počítej s posunem o +1h vůči UTC.
+- Pokud Deepnote plánuje v **lokálním čase** (`Europe/Prague`), převeď cron z UTC na lokální čas:
+  - **CET (zima)**: `local = UTC + 1h` (např. `50 4-14` UTC → `50 5-15` local)
+  - **CEST (léto)**: `local = UTC + 2h` (např. `50 4-14` UTC → `50 6-16` local)
 
 ### Doporučené schedule (UTC) per tenant / country
 Okna jsou nastavená tak, aby:
@@ -27,6 +29,11 @@ Okna jsou nastavená tak, aby:
 #### Denatura (`denatura-main`)
 - **denatura_cz** (import `:10` UTC → generator `:50` UTC): `50 4-14 * * *`
 - **denatura_sk** (import `:10` UTC → generator `:50` UTC): `50 12-14 * * *`
+
+#### Autodoplnky (GCS CSV producer pro readiness)
+Pozn.: Nejde o “forecast generator”, ale o producer, který zapisuje GCS CSV importované do `6_*` tabulek.
+
+- **autodoplnky_cz** (import `:10` UTC → producer `:50` UTC): `50 4-14 * * *`
 
 #### Proteinaco (`proteinaco-main`)
 - **proteinaco_cz** (import `:40` UTC → generator `:20` UTC): `20 5-15 * * *`
@@ -45,14 +52,14 @@ Okna jsou nastavená tak, aby:
 - **ruzovyslon_si** (import `:50` UTC → generator `:30` UTC): `30 13-15 * * *`
 
 #### Cerano / Livero (`cerano-main`)
-Pozn.: `13_*` importy zde typicky startují v **`:00` UTC** (ale některé configy mají 4h cadence). Schedule níže je „best effort“; SLA pro CZ ráno zajišťuje self‑heal guardrail.
+Pozn.: `13_*` importy zde typicky startují v **`:10` UTC** (např. `05:10Z`). Schedule níže je nastavená tak, aby se CSV přepsalo ~20 min před importem.
 
-- **cerano_cz**: `40 5-15 * * *`
-- **cerano_sk**: `40 13-15 * * *`
-- **cerano_hu**: `40 13-15 * * *`
-- **cerano_pl**: `40 13-15 * * *`
-- **livero_cz**: `40 5-15 * * *`
-- **livero_sk**: `40 13-15 * * *`
+- **cerano_cz** (import `:10` UTC → generator `:50` UTC): `50 4-14 * * *`
+- **cerano_sk** (import `:10` UTC → generator `:50` UTC): `50 12-14 * * *`
+- **cerano_hu** (import `:10` UTC → generator `:50` UTC): `50 12-14 * * *`
+- **cerano_pl** (import `:10` UTC → generator `:50` UTC): `50 12-14 * * *`
+- **livero_cz** (import `:10` UTC → generator `:50` UTC): `50 4-14 * * *`
+- **livero_sk** (import `:10` UTC → generator `:50` UTC): `50 12-14 * * *`
 
 ### Ruzovyslon — které Deepnote notebooky přenastavit
 Notebook mapping je v:
@@ -65,4 +72,3 @@ Prakticky:
 ### Kdy to nestačí (a proč máme self‑heal)
 - Pokud generátor logikou občas vyrobí D‑2 (např. kvůli GA4 latency / cutoff logice), samotný cron to úplně neeliminuje.
 - Proto je v plánu guardrail, který v 06:05 (CZ) a 14:05 (non‑CZ) ověří konzistenci a případně opraví `13_*` CSV z `final_prep_*`.
-
