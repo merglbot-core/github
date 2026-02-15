@@ -528,6 +528,7 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                     sessions_sum = _as_float(r.get("sessions_sum"))
                     revenue_sum = _as_float(r.get("revenue_db_sum"))
                     transactions_sum = _as_float(r.get("transactions_db_sum"))
+                    # Refunds/returns can make revenue negative; use abs() to avoid false "actuals_zero".
                     actuals_sum = abs(sessions_sum) + abs(revenue_sum) + abs(transactions_sum)
                     if cost_present == "yes":
                         cost_sum = _as_float(r.get("cost_sum"))

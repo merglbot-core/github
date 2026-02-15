@@ -209,7 +209,7 @@ jobs:
               except Exception:
                   return 0.0
 
-          EPS = 1e-9
+          EPS = 1e-9  # Float tolerance for "non-zero" sums (avoid precision noise)
 
           # Slack Block Kit limits / readability caps
           MAX_TENANTS_DISPLAY = 15
@@ -324,8 +324,8 @@ jobs:
 
           tenant_items: list[tuple[int, int, str, str]] = []
           for tenant, entries in tenant_map.items():
-              has_req_fail = any(st == "FAIL" and is_req for _, st, _, is_req, _, _ in entries)
-              has_opt_fail = any(st == "FAIL" and (not is_req) for _, st, _, is_req, _, _ in entries)
+              has_req_fail = any(e[1] == "FAIL" and e[3] for e in entries)
+              has_opt_fail = any(e[1] == "FAIL" and (not e[3]) for e in entries)
               tenant_items.append((0 if has_req_fail else 1, 0 if has_opt_fail else 1, tenant.lower(), tenant))
           tenant_items.sort()
 
