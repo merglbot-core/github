@@ -167,7 +167,7 @@ jobs:
           ignore-unfixed: true  # Don't fail on unfixable vulns
       
       - name: Upload Trivy results
-        uses: github/codeql-action/upload-sarif@b20883b0cd1f46c72ae0ba6d1090936928f9fa30  # v4
+        uses: github/codeql-action/upload-sarif@45cbd0c69e560cd9e7cd7f8c32362050c9b7ded2  # v4
         if: always()
         continue-on-error: true  # Don't fail if SARIF upload has permission issues
         with:
@@ -175,7 +175,7 @@ jobs:
       
       # Container Security: SBOM Generation
       - name: Generate SBOM
-        uses: anchore/sbom-action@deef08a0db64bfad603422135db61477b16cef56  # v0.22.1
+        uses: anchore/sbom-action@28d71544de8eaf1b958d335707167c5f783590ad  # v0.22.2
         with:
           image: ${{ steps.build.outputs.full_image }}
           format: 'cyclonedx-json'
