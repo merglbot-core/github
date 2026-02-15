@@ -350,9 +350,7 @@ fi
 printf '%s\n' "## PR DIFF (untrusted)"
 printf '%s\n' ""
 printf '%s\n' "<<<MERGLBOT_BEGIN_UNTRUSTED_PR_DIFF>>>"
-printf '%s\n' '```diff'
 printf '%s\n' "$PR_DIFF" | escape_untrusted
-printf '%s\n' '```'
 printf '%s\n' "<<<MERGLBOT_END_UNTRUSTED_PR_DIFF>>>"
 printf '%s\n' ""
 printf '%s\n' "---"
