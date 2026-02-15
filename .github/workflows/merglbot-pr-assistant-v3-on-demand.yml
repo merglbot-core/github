@@ -511,7 +511,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          : "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required}"
           : "${ANTHROPIC_API_VERSION:?ANTHROPIC_API_VERSION is required}"
 
           TMP_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/merglbot-pr-assistant-synthesis.XXXXXX")"
@@ -706,6 +705,14 @@ jobs:
           FALLBACK_REVIEW_FILE="openai_review.txt"
           if [ ! -s openai_review.txt ] || grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
             FALLBACK_REVIEW_FILE="anthropic_review.txt"
+          fi
+
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "WARN: ANTHROPIC_API_KEY is missing; skipping synthesis and emitting fallback review." >&2
+            SYNTHESIS_USAGE_API="skipped_no_key"
+            cp "$FALLBACK_REVIEW_FILE" final_review.txt
+            printf '%s\n' "{\"api\":\"${SYNTHESIS_USAGE_API}\",\"input_tokens\":0,\"output_tokens\":0,\"reasoning_tokens\":0,\"total_tokens\":0}" > synthesis_usage.json
+            exit 0
           fi
 
           echo "Calling Anthropic for synthesis (model: $ANTHROPIC_MODEL_FINAL)..."

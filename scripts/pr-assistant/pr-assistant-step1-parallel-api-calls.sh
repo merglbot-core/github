@@ -766,6 +766,8 @@ if [ -z "$OPENAI_MODEL_USED" ]; then
 fi
 echo "OPENAI_MODEL_USED=$OPENAI_MODEL_USED" >> "$GITHUB_ENV"
 
+: "${OPENAI_USAGE_OUTPUT_TOKENS:=0}"
+: "${OPENAI_USAGE_REASONING_TOKENS:=0}"
 OPENAI_USAGE_COMPLETION_TOKENS=$((OPENAI_USAGE_OUTPUT_TOKENS + OPENAI_USAGE_REASONING_TOKENS))
 
 if [ ! -f openai_usage.json ] || ! jq -e . openai_usage.json > /dev/null 2>&1; then

@@ -85,7 +85,7 @@ if [ -n "$ONLY_REPOS_RAW" ]; then
       fi
     done
     if [ "$in_target" != "true" ]; then
-      echo "ERROR: --only repo not in target list: $repo" >&2
+      echo "ERROR: --only repo not in target list: $repo (expected org/repo, e.g. merglbot-core/platform)" >&2
       exit 2
     fi
     ONLY_REPOS+=("$repo")
