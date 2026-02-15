@@ -145,6 +145,9 @@ for repo in "${TARGET_REPOS[@]}"; do
   mkdir -p "$(dirname "$dest_step1")"
   cp "$SOURCE_WORKFLOW" "$dest_workflow"
   cp "$SOURCE_STEP1" "$dest_step1"
-  chmod +x "$dest_step1" || true
+  if ! chmod +x "$dest_step1"; then
+    echo "ERROR: Failed to chmod +x: $dest_step1" >&2
+    exit 1
+  fi
   echo "✅    $repo"
 done

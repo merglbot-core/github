@@ -492,6 +492,7 @@ jobs:
       - name: Step 1 - Parallel API Calls
         if: success() && steps.context.outputs.skip_review != 'true'
         env:
+          PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_API_VERSION: "2023-06-01"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
