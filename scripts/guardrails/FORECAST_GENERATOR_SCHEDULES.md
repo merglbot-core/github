@@ -55,11 +55,11 @@ Pozn.: Nejde o “forecast generator”, ale o producer, který zapisuje GCS CSV
 Pozn.: `13_*` importy zde typicky startují v **`:10` UTC** (např. `05:10Z`). Schedule níže je nastavená tak, aby se CSV přepsalo ~20 min před importem.
 
 - **cerano_cz** (import `:10` UTC → generator `:50` UTC): `50 4-14 * * *`
-- **cerano_sk** (import `:10` UTC → generator `:50` UTC): `50 13-15 * * *`
-- **cerano_hu** (import `:10` UTC → generator `:50` UTC): `50 13-15 * * *`
-- **cerano_pl** (import `:10` UTC → generator `:50` UTC): `50 13-15 * * *`
+- **cerano_sk** (import `:10` UTC → generator `:50` UTC): `50 12-14 * * *`
+- **cerano_hu** (import `:10` UTC → generator `:50` UTC): `50 12-14 * * *`
+- **cerano_pl** (import `:10` UTC → generator `:50` UTC): `50 12-14 * * *`
 - **livero_cz** (import `:10` UTC → generator `:50` UTC): `50 4-14 * * *`
-- **livero_sk** (import `:10` UTC → generator `:50` UTC): `50 13-15 * * *`
+- **livero_sk** (import `:10` UTC → generator `:50` UTC): `50 12-14 * * *`
 
 ### Ruzovyslon — které Deepnote notebooky přenastavit
 Notebook mapping je v:
