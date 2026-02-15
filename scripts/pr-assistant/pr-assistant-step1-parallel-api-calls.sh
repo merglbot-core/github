@@ -9,8 +9,6 @@ set -euo pipefail
 : "${REVIEW_MODE:=full}"
 : "${PR_NUMBER:?PR_NUMBER is required}"
 : "${GITHUB_ENV:?GITHUB_ENV is required}"
-: "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required}"
-: "${ANTHROPIC_API_VERSION:?ANTHROPIC_API_VERSION is required}"
 
 echo "========================================="
 echo "STEP 1: PARALLEL AI ANALYSIS"
@@ -59,6 +57,23 @@ OPENAI_API_KEY_PRESENT="true"
 if [ -z "${OPENAI_API_KEY:-}" ]; then
   OPENAI_API_KEY_PRESENT="false"
   echo "WARN: OPENAI_API_KEY is missing; skipping OpenAI analysis." >&2
+fi
+
+ANTHROPIC_API_KEY_PRESENT="true"
+if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+  ANTHROPIC_API_KEY_PRESENT="false"
+  echo "WARN: ANTHROPIC_API_KEY is missing; skipping Anthropic analysis." >&2
+fi
+
+if [ "$ANTHROPIC_API_KEY_PRESENT" != "true" ] && [ "$OPENAI_API_KEY_PRESENT" != "true" ]; then
+  echo "ERROR: Both ANTHROPIC_API_KEY and OPENAI_API_KEY are missing; cannot run analysis." >&2
+  printf '%s' "API_ERROR" > anthropic_review.txt
+  printf '%s' "API_ERROR" > openai_review.txt
+  exit 0
+fi
+
+if [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then
+  : "${ANTHROPIC_API_VERSION:?ANTHROPIC_API_VERSION is required}"
 fi
 
 PR_TITLE=$(< pr_title.txt)
@@ -349,70 +364,74 @@ PROMPT_SIZE=$(wc -c < "$FULL_PROMPT_FILE" 2>/dev/null | tr -d ' ' || echo 0)
 echo "Prompt size: $PROMPT_SIZE chars"
 
 # ANTHROPIC CALL
-echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
-
 ANTHROPIC_MODEL_USED=""
-ANTHROPIC_MODELS_TRIED="|"
-for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-6" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
-  if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
-    continue
-  fi
-  case "$ANTHROPIC_MODELS_TRIED" in
-    *"|$MODEL_TO_TRY|"*) continue ;;
-  esac
-  ANTHROPIC_MODELS_TRIED="${ANTHROPIC_MODELS_TRIED}${MODEL_TO_TRY}|"
-  echo "  → Trying Anthropic model: $MODEL_TO_TRY"
+if [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then
+  echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
 
-  jq -n \
-    --arg model "$MODEL_TO_TRY" \
-    --rawfile prompt "$FULL_PROMPT_FILE" \
-    --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
-    '{
-      model: $model,
-      max_tokens: $max_tokens,
-      temperature: 0.2,
-      messages: [{role: "user", content: $prompt}]
-    }' > "$ANTHROPIC_PAYLOAD_FILE"
+  ANTHROPIC_MODELS_TRIED="|"
+  for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-6" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
+    if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
+      continue
+    fi
+    case "$ANTHROPIC_MODELS_TRIED" in
+      *"|$MODEL_TO_TRY|"*) continue ;;
+    esac
+    ANTHROPIC_MODELS_TRIED="${ANTHROPIC_MODELS_TRIED}${MODEL_TO_TRY}|"
+    echo "  → Trying Anthropic model: $MODEL_TO_TRY"
 
-  set +e
-  ANTHROPIC_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 "$ANTHROPIC_MESSAGES_URL" \
-    -H "content-type: application/json" \
-    -H "x-api-key: $ANTHROPIC_API_KEY" \
-    -H "anthropic-version: $ANTHROPIC_API_VERSION" \
-    -d @"$ANTHROPIC_PAYLOAD_FILE")
-  CURL_EXIT=$?
-  set -e
+    jq -n \
+      --arg model "$MODEL_TO_TRY" \
+      --rawfile prompt "$FULL_PROMPT_FILE" \
+      --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
+      '{
+        model: $model,
+        max_tokens: $max_tokens,
+        temperature: 0.2,
+        messages: [{role: "user", content: $prompt}]
+      }' > "$ANTHROPIC_PAYLOAD_FILE"
 
-  if [ "$CURL_EXIT" -ne 0 ] || ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
-    echo "  ERROR: Anthropic request failed or returned non-JSON (curl exit=$CURL_EXIT)" >&2
-    continue
-  fi
+    set +e
+    ANTHROPIC_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 "$ANTHROPIC_MESSAGES_URL" \
+      -H "content-type: application/json" \
+      -H "x-api-key: $ANTHROPIC_API_KEY" \
+      -H "anthropic-version: $ANTHROPIC_API_VERSION" \
+      -d @"$ANTHROPIC_PAYLOAD_FILE")
+    CURL_EXIT=$?
+    set -e
 
-  if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
-    err_msg="$(echo "$ANTHROPIC_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
-    echo "  ERROR: $err_msg" >&2
-    continue
-  fi
+    if [ "$CURL_EXIT" -ne 0 ] || ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
+      echo "  ERROR: Anthropic request failed or returned non-JSON (curl exit=$CURL_EXIT)" >&2
+      continue
+    fi
 
-  ANTHROPIC_CONTENT="$(echo "$ANTHROPIC_RESP" | jq -r '[.content[]? | select(.type=="text") | .text] | join("\n")')"
-  if [ -z "$ANTHROPIC_CONTENT" ] || [ "$ANTHROPIC_CONTENT" = "null" ]; then
-    echo "  ERROR: Anthropic response contained no content" >&2
-    continue
-  fi
-  
-  ANTHROPIC_MODEL_USED="$MODEL_TO_TRY"
-  echo "Success (model: $ANTHROPIC_MODEL_USED)"
-  echo "Words: $(echo "$ANTHROPIC_CONTENT" | wc -w)"
-  
-  # Save numeric-only token usage for downstream telemetry (no prompts, no secrets).
-  # This file is consumed by review-metrics.json generation.
-  if echo "$ANTHROPIC_RESP" | jq -e '.usage' > /dev/null 2>&1; then
-    echo "$ANTHROPIC_RESP" | jq -c '.usage | with_entries(select(.value | type == "number"))' > anthropic_usage.json 2>/dev/null || true
-  fi
+    if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
+      err_msg="$(echo "$ANTHROPIC_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
+      echo "  ERROR: $err_msg" >&2
+      continue
+    fi
 
-  printf '%s' "$ANTHROPIC_CONTENT" > anthropic_review.txt
-  break
-done
+    ANTHROPIC_CONTENT="$(echo "$ANTHROPIC_RESP" | jq -r '[.content[]? | select(.type=="text") | .text] | join("\n")')"
+    if [ -z "$ANTHROPIC_CONTENT" ] || [ "$ANTHROPIC_CONTENT" = "null" ]; then
+      echo "  ERROR: Anthropic response contained no content" >&2
+      continue
+    fi
+
+    ANTHROPIC_MODEL_USED="$MODEL_TO_TRY"
+    echo "Success (model: $ANTHROPIC_MODEL_USED)"
+    echo "Words: $(echo "$ANTHROPIC_CONTENT" | wc -w)"
+
+    # Save numeric-only token usage for downstream telemetry (no prompts, no secrets).
+    # This file is consumed by review-metrics.json generation.
+    if echo "$ANTHROPIC_RESP" | jq -e '.usage' > /dev/null 2>&1; then
+      echo "$ANTHROPIC_RESP" | jq -c '.usage | with_entries(select(.value | type == "number"))' > anthropic_usage.json 2>/dev/null || true
+    fi
+
+    printf '%s' "$ANTHROPIC_CONTENT" > anthropic_review.txt
+    break
+  done
+else
+  echo "Skipping Anthropic analysis (missing ANTHROPIC_API_KEY)." >&2
+fi
 
 if [ ! -s anthropic_review.txt ]; then
   echo "API_ERROR" > anthropic_review.txt
