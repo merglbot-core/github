@@ -28,7 +28,7 @@ if [ "$ANTHROPIC_MODEL" = "org_default" ]; then
   ANTHROPIC_MODEL=""
 fi
 if [ -z "$ANTHROPIC_MODEL" ]; then
-  ANTHROPIC_MODEL="claude-opus-4-5-20251101"
+  ANTHROPIC_MODEL="claude-opus-4-6"
 fi
 if [ -z "$OPENAI_MODEL" ]; then
   OPENAI_MODEL="gpt-5.2"
@@ -100,19 +100,19 @@ if [ "${REVIEW_MODE}" == "light" ]; then
   REVIEW_DEPTH="LIGHT"
   OUTPUT_INSTRUCTIONS="Output a CONCISE review (max 500 words). Focus only on critical and high priority issues."
   MAX_TOKENS_ANTHROPIC=8000
-  MAX_TOKENS_OPENAI=32000
+  MAX_TOKENS_OPENAI=8000
 else
   REVIEW_DEPTH="FULL"
   OUTPUT_INSTRUCTIONS="Output a COMPREHENSIVE review with detailed analysis, code examples, MERGLBOT rule references, and actionable checkboxes."
   MAX_TOKENS_ANTHROPIC=16000
-  MAX_TOKENS_OPENAI=65000
+  MAX_TOKENS_OPENAI=20000
 fi
 
 echo "Review depth: $REVIEW_DEPTH"
 
 # Build prompt using printf to file (single redirect)
 {
-printf '%s\n' "# Merglbot Multi-Model Code Review v3.3"
+printf '%s\n' "# Merglbot Multi-Model Code Review v3.4"
 printf '%s\n' ""
 printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence."
 printf '%s\n' ""
@@ -302,7 +302,7 @@ echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
 
 ANTHROPIC_MODEL_USED=""
 ANTHROPIC_MODELS_TRIED="|"
-for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
+for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-6" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
   if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
     continue
   fi

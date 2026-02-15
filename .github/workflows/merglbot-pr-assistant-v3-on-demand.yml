@@ -42,6 +42,7 @@ on:
         default: "org_default"
         options:
           - org_default
+          - claude-opus-4-6
           - claude-opus-4-5-20251101
           - claude-opus-4-5-20250929
           - claude-sonnet-4-5-20250929
@@ -57,13 +58,6 @@ on:
           - gpt-5.1
           - gpt-5
           - gpt-4-turbo
-      codex_model:
-        description: "OpenAI Codex model (specialist stage; full mode only)"
-        required: false
-        type: choice
-        default: "gpt-5.2-codex"
-        options:
-          - gpt-5.2-codex
 
 permissions:
   contents: read
@@ -458,9 +452,9 @@ jobs:
           PREV_SHA="${{ env.PREV_REVIEW_HEAD_SHA }}"
           HEAD_SHA="${{ env.PR_HEAD_SHA }}"
           
-          if [ "${SKIP_REASON:-}" == "potential_secret" ]; then
-            {
-              printf '%s\n' "## 🤖 Merglbot PR Assistant v3"
+            if [ "${SKIP_REASON:-}" == "potential_secret" ]; then
+              {
+              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.4"
               printf '%s\n' ""
               printf '%s\n' "⛔️ Skipped: potential secret-like material detected in the PR context."
               printf '%s\n' ""
@@ -471,17 +465,17 @@ jobs:
               printf '%s\n' "- Remove/rotate any exposed credentials"
               printf '%s\n' "- Re-trigger: \`@merglbot review\` after fix"
             } > comment.md
-          else
-            if [ -z "$PREV_SHA" ] || [ -z "$HEAD_SHA" ]; then
-              echo "Skip requested but missing SHA context."
-              exit 0
-            fi
-            {
-              printf '%s\n' "## 🤖 Merglbot PR Assistant v3"
+            else
+              if [ -z "$PREV_SHA" ] || [ -z "$HEAD_SHA" ]; then
+                echo "Skip requested but missing SHA context."
+                exit 0
+              fi
+              {
+              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.4"
               printf '%s\n' ""
               printf '%s\n' "⏭️ No new commits since last Merglbot review (\`${PREV_SHA:0:12}\`).  "
               printf '%s\n' "Current head: \`${HEAD_SHA:0:12}\`."
-            } > comment.md
+              } > comment.md
           fi
           
           gh pr comment "$PR_NUM" --body-file comment.md
@@ -500,13 +494,13 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20251101' }}
+          ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-6' }}
           OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
         run: |
           set -euo pipefail
           bash scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh
       - name: Step 2 - Codex Specialist Review
-        if: success() && steps.context.outputs.skip_review != 'true'
+        if: false # Disabled (FinOps): reduce OpenAI spend
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CODEX_MODEL: ${{ github.event.inputs.codex_model || vars.MERGLBOT_CODEX_MODEL || 'gpt-5.2-codex' }}
@@ -751,9 +745,9 @@ jobs:
       - name: Step 3 - Intelligent Synthesis
         if: success() && steps.context.outputs.skip_review != 'true'
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
-          ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20251101' }}
+          ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-6' }}
         run: |
           set -euo pipefail
           
@@ -776,13 +770,13 @@ jobs:
           ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
           if [ -z "$ANTHROPIC_MODEL" ]; then
-            ANTHROPIC_MODEL="claude-opus-4-5-20251101"
+            ANTHROPIC_MODEL="claude-opus-4-6"
           fi
           if [ -z "$OPENAI_MODEL" ]; then
             OPENAI_MODEL="gpt-5.2"
           fi
 
-          # Default synthesis usage telemetry (overwritten on successful OpenAI call).
+          # Default synthesis usage telemetry (overwritten on successful Anthropic call).
           SYNTHESIS_USAGE_API="skipped"
           SYNTHESIS_USAGE_INPUT_TOKENS=0
           SYNTHESIS_USAGE_OUTPUT_TOKENS=0
@@ -806,13 +800,6 @@ jobs:
             OPENAI_REVIEW=$(< openai_review.txt)
           fi
 
-          CODEX_REVIEW=""
-          CODEX_OK="false"
-          if [ -s codex_review.txt ] && ! grep -qx "API_ERROR" codex_review.txt 2>/dev/null && ! grep -qx "SKIPPED" codex_review.txt 2>/dev/null; then
-            CODEX_OK="true"
-            CODEX_REVIEW=$(< codex_review.txt)
-          fi
-
           echo "Input Reviews:"
           if [ "$ANTHROPIC_OK" == "true" ]; then
             echo "  Anthropic: $(printf '%s' "$ANTHROPIC_REVIEW" | wc -w) words"
@@ -824,11 +811,6 @@ jobs:
           else
             echo "  OpenAI: 0 words (failed)"
           fi
-          if [ "$CODEX_OK" == "true" ]; then
-            echo "  Codex: $(printf '%s' "$CODEX_REVIEW" | wc -w) words"
-          else
-            echo "  Codex: 0 words (skipped or failed)"
-          fi
           
           AVAILABLE_REVIEW_FILES=()
           if [ "$ANTHROPIC_OK" == "true" ]; then
@@ -836,9 +818,6 @@ jobs:
           fi
           if [ "$OPENAI_OK" == "true" ]; then
             AVAILABLE_REVIEW_FILES+=("openai_review.txt")
-          fi
-          if [ "$CODEX_OK" == "true" ]; then
-            AVAILABLE_REVIEW_FILES+=("codex_review.txt")
           fi
           SYNTH_INPUT_COUNT="${#AVAILABLE_REVIEW_FILES[@]}"
 
@@ -857,9 +836,9 @@ jobs:
           fi
           
           if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
-            MAX_SYNTH_TOKENS=25000
+            MAX_SYNTH_TOKENS=6000
           else
-            MAX_SYNTH_TOKENS=50000
+            MAX_SYNTH_TOKENS=12000
           fi
           
           # Build synthesis prompt (single redirect)
@@ -875,8 +854,7 @@ jobs:
           printf '%s\n' "4. Preserve code examples and MERGLBOT citations"
           printf '%s\n' "5. Always include SSOT Sync (Docs) section (or 'None')"
           printf '%s\n' "6. End with clear APPROVE or CHANGES NEEDED"
-          printf '%s\n' "7. If Codex Specialist Review is present, treat it as patch-focused guidance (minimal diffs + test plan)."
-          printf '%s\n' "8. Evidence-first: every kept finding must include file:line + a quoted diff excerpt; drop unverified speculation."
+          printf '%s\n' "7. Evidence-first: every kept finding must include file:line + a quoted diff excerpt; drop unverified speculation."
           printf '%s\n' ""
           printf '%s\n' "## Output Format"
           printf '%s\n' ""
@@ -934,18 +912,64 @@ jobs:
             printf '%s\n' "$OPENAI_REVIEW"
             printf '%s\n' ""
           fi
-          
-          if [ "$CODEX_OK" == "true" ]; then
-            CODEX_MODEL_FINAL="${CODEX_MODEL_USED:-gpt-5.2-codex}"
-            printf '%s\n' "## Codex Specialist Review ($CODEX_MODEL_FINAL)"
-            printf '%s\n' ""
-            printf '%s\n' "$CODEX_REVIEW"
-            printf '%s\n' ""
-          fi
           printf '%s\n' "Now synthesize into FINAL review."
           
           } > /tmp/synthesis_prompt.txt
 
+          # Pick fallback review (prefer OpenAI > Anthropic)
+          FALLBACK_REVIEW_FILE="openai_review.txt"
+          if [ ! -s openai_review.txt ] || grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
+            FALLBACK_REVIEW_FILE="anthropic_review.txt"
+          fi
+
+          echo "Calling Anthropic for synthesis (model: $ANTHROPIC_MODEL_FINAL)..."
+
+          jq -n \
+            --arg model "$ANTHROPIC_MODEL_FINAL" \
+            --rawfile prompt /tmp/synthesis_prompt.txt \
+            --argjson max_tokens "$MAX_SYNTH_TOKENS" \
+            '{
+              model: $model,
+              max_tokens: $max_tokens,
+              temperature: 0.2,
+              messages: [{role: "user", content: $prompt}]
+            }' > /tmp/anthropic_synthesis_payload.json
+
+          set +e
+          SYNTHESIS_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 https://api.anthropic.com/v1/messages \
+            -H "content-type: application/json" \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: $ANTHROPIC_API_VERSION" \
+            -d @/tmp/anthropic_synthesis_payload.json)
+          CURL_EXIT=$?
+          set -e
+
+          if [ "$CURL_EXIT" -ne 0 ] || ! echo "$SYNTHESIS_RESP" | jq -e . > /dev/null 2>&1; then
+            echo "ERROR: Synthesis request failed or returned non-JSON (curl exit=$CURL_EXIT)"
+            SYNTHESIS_USAGE_API="fallback"
+            cp "$FALLBACK_REVIEW_FILE" final_review.txt
+          elif echo "$SYNTHESIS_RESP" | jq -e ".error" > /dev/null 2>&1; then
+            echo "ERROR: $(echo "$SYNTHESIS_RESP" | jq -r '.error.message')"
+            SYNTHESIS_USAGE_API="fallback"
+            cp "$FALLBACK_REVIEW_FILE" final_review.txt
+          else
+            CONTENT=$(echo "$SYNTHESIS_RESP" | jq -r '.content[0].text // empty')
+            if [ -z "$CONTENT" ] || [ "$CONTENT" = "null" ]; then
+              echo "ERROR: Synthesis response contained no content"
+              SYNTHESIS_USAGE_API="fallback"
+              cp "$FALLBACK_REVIEW_FILE" final_review.txt
+            else
+              SYNTHESIS_USAGE_API="anthropic_messages"
+              SYNTHESIS_USAGE_INPUT_TOKENS="$(echo "$SYNTHESIS_RESP" | jq -r '.usage.input_tokens // 0' 2>/dev/null || echo 0)"
+              SYNTHESIS_USAGE_OUTPUT_TOKENS="$(echo "$SYNTHESIS_RESP" | jq -r '.usage.output_tokens // 0' 2>/dev/null || echo 0)"
+              SYNTHESIS_USAGE_REASONING_TOKENS=0
+              SYNTHESIS_USAGE_TOTAL_TOKENS=$((SYNTHESIS_USAGE_INPUT_TOKENS + SYNTHESIS_USAGE_OUTPUT_TOKENS))
+              echo "Words: $(printf '%s' "$CONTENT" | wc -w)"
+              printf '%s' "$CONTENT" > final_review.txt
+            fi
+          fi
+
+          : <<'OPENAI_SYNTHESIS_DISABLED'
           extract_output_text_responses() {
             local json="$1"
             local out=""
@@ -1197,6 +1221,8 @@ jobs:
           fi
           fi
           
+          OPENAI_SYNTHESIS_DISABLED
+
           # Persist synthesis token usage for metrics (best-effort; numeric only).
           printf '%s\n' "{\"api\":\"${SYNTHESIS_USAGE_API}\",\"input_tokens\":${SYNTHESIS_USAGE_INPUT_TOKENS},\"output_tokens\":${SYNTHESIS_USAGE_OUTPUT_TOKENS},\"reasoning_tokens\":${SYNTHESIS_USAGE_REASONING_TOKENS},\"total_tokens\":${SYNTHESIS_USAGE_TOTAL_TOKENS}}" > synthesis_usage.json
           
@@ -1210,9 +1236,8 @@ jobs:
         if: success() && steps.context.outputs.skip_review != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20251101' }}
+          ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-6' }}
           OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
-          CODEX_MODEL: ${{ github.event.inputs.codex_model || vars.MERGLBOT_CODEX_MODEL || 'gpt-5.2-codex' }}
         run: |
           set -euo pipefail
           
@@ -1230,15 +1255,11 @@ jobs:
 
           ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
-          CODEX_MODEL="$(sanitize_model "${CODEX_MODEL:-}")"
           if [ -z "$ANTHROPIC_MODEL" ]; then
-            ANTHROPIC_MODEL="claude-opus-4-5-20251101"
+            ANTHROPIC_MODEL="claude-opus-4-6"
           fi
           if [ -z "$OPENAI_MODEL" ]; then
             OPENAI_MODEL="gpt-5.2"
-          fi
-          if [ -z "$CODEX_MODEL" ]; then
-            CODEX_MODEL="gpt-5.2-codex"
           fi
 
           PR_NUM="${{ env.PR_NUMBER }}"
@@ -1277,7 +1298,6 @@ jobs:
           
           OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
-          CODEX_MODEL_FINAL="${CODEX_MODEL_USED:-$CODEX_MODEL}"
           
           OPENAI_CONFIG_DESC="reasoning=high (Responses API; fallback Chat) 🧠"
           if [ "$OPENAI_MODEL_FINAL" = "gpt-4-turbo" ]; then
@@ -1285,28 +1305,22 @@ jobs:
           elif echo "$OPENAI_MODEL_FINAL" | grep -Eqi '^o[13]'; then
             OPENAI_CONFIG_DESC="Chat Completions (max_completion_tokens)"
           fi
-
-          CODEX_CONFIG_DESC="reasoning=high (Responses API)"
           
           ANTHROPIC_WORDS=$(wc -w < anthropic_review.txt 2>/dev/null || echo "0")
           OPENAI_WORDS=$(wc -w < openai_review.txt 2>/dev/null || echo "0")
-          CODEX_WORDS="0"
-          if [ -f codex_review.txt ] && ! grep -qx "SKIPPED" codex_review.txt 2>/dev/null && ! grep -qx "API_ERROR" codex_review.txt 2>/dev/null; then
-            CODEX_WORDS=$(wc -w < codex_review.txt 2>/dev/null || echo "0")
-          fi
           FINAL_WORDS=$(wc -w < final_review.txt 2>/dev/null || echo "0")
           
           echo "Building PR comment..."
           
           if [ ! -s final_review.txt ] || grep -q "^API_ERROR$" final_review.txt; then
             {
-              echo "## 🤖 Merglbot PR Assistant v3"
+              echo "## 🤖 Merglbot PR Assistant v3.4"
               echo ""
               echo "❌ Review generation failed. Please check workflow logs."
             } > comment.md
           else
             {
-              echo "## 🤖 Merglbot PR Assistant v3"
+              echo "## 🤖 Merglbot PR Assistant v3.4"
               echo ""
               cat final_review.txt
               echo ""
@@ -1321,8 +1335,7 @@ jobs:
               echo "|-------|-------|--------|"
               echo "| Primary Analysis | Anthropic \`$ANTHROPIC_MODEL_FINAL\` | temp=0.2 |"
               echo "| Secondary Analysis | OpenAI \`$OPENAI_MODEL_FINAL\` | $OPENAI_CONFIG_DESC |"
-              echo "| Codex Specialist | OpenAI \`$CODEX_MODEL_FINAL\` | $CODEX_CONFIG_DESC |"
-              echo "| Final Synthesis | OpenAI \`$OPENAI_MODEL_FINAL\` | $OPENAI_CONFIG_DESC |"
+              echo "| Final Synthesis | Anthropic \`$ANTHROPIC_MODEL_FINAL\` | temp=0.2 |"
               echo ""
               echo "### Review Statistics"
               echo ""
@@ -1334,7 +1347,6 @@ jobs:
               echo "| Head SHA | \`${PR_HEAD_SHA:0:12}\` |"
               echo "| Anthropic Output | $ANTHROPIC_WORDS words |"
               echo "| OpenAI Output | $OPENAI_WORDS words |"
-              echo "| Codex Output | $CODEX_WORDS words |"
               echo "| Final Review | $FINAL_WORDS words |"
               echo ""
               echo "### Bugbot Sources Analyzed"
@@ -1397,7 +1409,7 @@ jobs:
           SKIP_REASON="${{ steps.context.outputs.skip_reason }}"
           if [ "$SKIPPED" == "true" ]; then
             {
-              echo "## 🤖 Merglbot PR Assistant v3 - Summary"
+              echo "## 🤖 Merglbot PR Assistant v3.4 - Summary"
               echo ""
               echo "- **PR**: #${{ env.PR_NUMBER }}"
               if [ "$SKIP_REASON" == "potential_secret" ]; then
@@ -1425,7 +1437,7 @@ jobs:
           fi
           
           {
-            echo "## 🤖 Merglbot PR Assistant v3 - Summary"
+            echo "## 🤖 Merglbot PR Assistant v3.4 - Summary"
             echo ""
             echo "| Field | Value |"
             echo "|-------|-------|"
@@ -1441,7 +1453,6 @@ jobs:
             echo "|--------|-------|"
             echo "| Anthropic | $(wc -w < anthropic_review.txt 2>/dev/null || echo 0) words |"
             echo "| OpenAI | $(wc -w < openai_review.txt 2>/dev/null || echo 0) words |"
-            echo "| Codex | $(wc -w < codex_review.txt 2>/dev/null || echo 0) words |"
             echo "| Final | $(wc -w < final_review.txt 2>/dev/null || echo 0) words |"
             echo ""
             echo "### Bugbot Sources"
@@ -1453,9 +1464,8 @@ jobs:
       - name: Save Review Metrics (Feedback Loop)
         if: always() && steps.context.outputs.skip_review != 'true'
         env:
-          ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-5-20251101' }}
+          ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-6' }}
           OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
-          CODEX_MODEL: ${{ github.event.inputs.codex_model || vars.MERGLBOT_CODEX_MODEL || 'gpt-5.2-codex' }}
         run: |
           # Create metrics JSON for feedback loop analysis
           sanitize_model() {
@@ -1472,15 +1482,11 @@ jobs:
 
           ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
-          CODEX_MODEL="$(sanitize_model "${CODEX_MODEL:-}")"
           if [ -z "$ANTHROPIC_MODEL" ]; then
-            ANTHROPIC_MODEL="claude-opus-4-5-20251101"
+            ANTHROPIC_MODEL="claude-opus-4-6"
           fi
           if [ -z "$OPENAI_MODEL" ]; then
             OPENAI_MODEL="gpt-5.2"
-          fi
-          if [ -z "$CODEX_MODEL" ]; then
-            CODEX_MODEL="gpt-5.2-codex"
           fi
 
           TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -1489,14 +1495,9 @@ jobs:
           
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
           OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
-          CODEX_MODEL_FINAL="${CODEX_MODEL_USED:-$CODEX_MODEL}"
           
           ANTHROPIC_WORDS=$(wc -w < anthropic_review.txt 2>/dev/null || echo 0)
           OPENAI_WORDS=$(wc -w < openai_review.txt 2>/dev/null || echo 0)
-          CODEX_WORDS=0
-          if [ -f codex_review.txt ] && ! grep -qx "SKIPPED" codex_review.txt 2>/dev/null && ! grep -qx "API_ERROR" codex_review.txt 2>/dev/null; then
-            CODEX_WORDS=$(wc -w < codex_review.txt 2>/dev/null || echo 0)
-          fi
           FINAL_WORDS=$(wc -w < final_review.txt 2>/dev/null || echo 0)
           
           BUGBOT_COUNT="0"
@@ -1550,10 +1551,6 @@ jobs:
           if [ -f openai_usage.json ] && jq -e . openai_usage.json > /dev/null 2>&1; then
             OPENAI_USAGE_JSON="$(jq -c . openai_usage.json)"
           fi
-          CODEX_USAGE_JSON="{}"
-          if [ -f codex_usage.json ] && jq -e . codex_usage.json > /dev/null 2>&1; then
-            CODEX_USAGE_JSON="$(jq -c . codex_usage.json)"
-          fi
           SYNTHESIS_USAGE_JSON="{}"
           if [ -f synthesis_usage.json ] && jq -e . synthesis_usage.json > /dev/null 2>&1; then
             SYNTHESIS_USAGE_JSON="$(jq -c . synthesis_usage.json)"
@@ -1578,19 +1575,16 @@ jobs:
             "pr_author": "$(cat pr_author.txt 2>/dev/null || echo '')",
             "models": {
               "anthropic": "$ANTHROPIC_MODEL_FINAL",
-              "openai": "$OPENAI_MODEL_FINAL",
-              "codex": "$CODEX_MODEL_FINAL"
+              "openai": "$OPENAI_MODEL_FINAL"
             },
             "usage": {
               "anthropic": $ANTHROPIC_USAGE_JSON,
               "openai": $OPENAI_USAGE_JSON,
-              "codex": $CODEX_USAGE_JSON,
               "synthesis": $SYNTHESIS_USAGE_JSON
             },
             "output": {
               "anthropic_words": $ANTHROPIC_WORDS,
               "openai_words": $OPENAI_WORDS,
-              "codex_words": $CODEX_WORDS,
               "final_words": $FINAL_WORDS
             },
             "findings": {
