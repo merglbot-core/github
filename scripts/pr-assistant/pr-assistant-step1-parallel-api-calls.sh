@@ -393,7 +393,7 @@ for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-6" "claude-opus-4-5-202511
     continue
   fi
 
-  ANTHROPIC_CONTENT=$(echo "$ANTHROPIC_RESP" | jq -r '.content[0].text // empty')
+  ANTHROPIC_CONTENT="$(echo "$ANTHROPIC_RESP" | jq -r '[.content[]? | select(.type=="text") | .text] | join("\n")')"
   if [ -z "$ANTHROPIC_CONTENT" ] || [ "$ANTHROPIC_CONTENT" = "null" ]; then
     echo "  ERROR: Anthropic response contained no content" >&2
     continue
@@ -544,6 +544,8 @@ call_openai_responses() {
       cat > "$usage_file" << EOF
 {
   "api": "responses",
+  "prompt_tokens": ${input_tokens},
+  "completion_tokens": ${output_total},
   "input_tokens": ${input_tokens},
   "output_tokens": ${output_tokens},
   "reasoning_tokens": ${reasoning_tokens},
@@ -760,10 +762,14 @@ if [ -z "$OPENAI_MODEL_USED" ]; then
 fi
 echo "OPENAI_MODEL_USED=$OPENAI_MODEL_USED" >> "$GITHUB_ENV"
 
+OPENAI_USAGE_COMPLETION_TOKENS=$((OPENAI_USAGE_OUTPUT_TOKENS + OPENAI_USAGE_REASONING_TOKENS))
+
 if [ ! -f openai_usage.json ] || ! jq -e . openai_usage.json > /dev/null 2>&1; then
   cat > openai_usage.json << EOF
 {
   "api": "${OPENAI_USAGE_API}",
+  "prompt_tokens": ${OPENAI_USAGE_INPUT_TOKENS},
+  "completion_tokens": ${OPENAI_USAGE_COMPLETION_TOKENS},
   "input_tokens": ${OPENAI_USAGE_INPUT_TOKENS},
   "output_tokens": ${OPENAI_USAGE_OUTPUT_TOKENS},
   "reasoning_tokens": ${OPENAI_USAGE_REASONING_TOKENS},
