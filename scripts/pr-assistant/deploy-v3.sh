@@ -2,8 +2,11 @@
 # Purpose: Deploy PR Assistant v3 workflow copy to all Merglbot repos (issue_comment trigger cannot be workflow_call).
 # Usage:
 #   ./scripts/pr-assistant/deploy-v3.sh --dry-run
-#   ./scripts/pr-assistant/deploy-v3.sh --only merglbot-core,merglbot-public --dry-run
+#   ./scripts/pr-assistant/deploy-v3.sh --only merglbot-core/platform,merglbot-public/docs --dry-run
 #   ./scripts/pr-assistant/deploy-v3.sh
+#
+# Notes:
+# - --only values must exactly match entries in target-repos.txt (org/repo format).
 
 set -euo pipefail
 
