@@ -389,7 +389,8 @@ for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-6" "claude-opus-4-5-202511
   fi
 
   if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
-    echo "  ERROR: $(echo "$ANTHROPIC_RESP" | jq -r '.error.message')" >&2
+    err_msg="$(echo "$ANTHROPIC_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
+    echo "  ERROR: $err_msg" >&2
     continue
   fi
 
@@ -512,7 +513,8 @@ call_openai_responses() {
       continue
     fi
     if echo "$resp" | jq -e ".error" > /dev/null 2>&1; then
-      echo "  ERROR: $(echo "$resp" | jq -r '.error.message')" >&2
+      err_msg="$(echo "$resp" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
+      echo "  ERROR: $err_msg" >&2
       continue
     fi
 
@@ -637,7 +639,8 @@ else
       fi
 
       if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
-        echo "  ERROR: $(echo "$OPENAI_RESP" | jq -r '.error.message')" >&2
+        err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
+        echo "  ERROR: $err_msg" >&2
         continue
       fi
 
@@ -710,7 +713,8 @@ else
     fi
 
     if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
-      echo "  ERROR: $(echo "$OPENAI_RESP" | jq -r '.error.message')" >&2
+      err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
+      echo "  ERROR: $err_msg" >&2
       continue
     fi
 
