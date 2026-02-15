@@ -209,6 +209,8 @@ jobs:
               except Exception:
                   return 0.0
 
+          EPS = 1e-9
+
           # Slack Block Kit limits / readability caps
           MAX_TENANTS_DISPLAY = 15
           MAX_REQ_FAILURES_DISPLAY = 10
@@ -279,7 +281,7 @@ jobs:
               }
           )
 
-          tenant_map: dict[str, list[tuple[str, str, str, bool, int, float]]] = defaultdict(list)
+          tenant_map: dict[str, list[tuple[str, str, str, bool, int, float, float, float, str]]] = defaultdict(list)
           req_fail_list: list[tuple[str, str, str, str, str]] = []
           opt_fail_list: list[tuple[str, str, str, str, str]] = []
 
@@ -294,8 +296,23 @@ jobs:
                       is_req = (row.get("is_required") or "").strip() == "yes"
                       row_count = _to_int(row.get("row_count"))
                       actuals_sum = _to_float(row.get("actuals_sum"))
+                      revenue_db_sum = _to_float(row.get("revenue_db_sum"))
+                      cost_sum = _to_float(row.get("cost_sum"))
+                      cost_present = (row.get("cost_present") or "").strip().lower()
 
-                      tenant_map[tenant].append((country, st, reason, is_req, row_count, actuals_sum))
+                      tenant_map[tenant].append(
+                          (
+                              country,
+                              st,
+                              reason,
+                              is_req,
+                              row_count,
+                              actuals_sum,
+                              revenue_db_sum,
+                              cost_sum,
+                              cost_present,
+                          )
+                      )
 
                       if st == "FAIL":
                           if is_req:
@@ -315,8 +332,8 @@ jobs:
           tenant_limit = MAX_TENANTS_DISPLAY
           for _, _, _, tenant in tenant_items[:tenant_limit]:
               entries = tenant_map.get(tenant, [])
-              decorated: list[tuple[int, int, str, str, str, str, bool, int, float]] = []
-              for country, st, reason, is_req, row_count, actuals_sum in entries:
+              decorated: list[tuple[int, int, str, str, str, str, bool, int, float, float, float, str]] = []
+              for country, st, reason, is_req, row_count, actuals_sum, revenue_db_sum, cost_sum, cost_present in entries:
                   fail_rank = 0 if st == "FAIL" else 1
                   sev_rank = 0 if (st == "FAIL" and is_req) else 1 if st == "FAIL" else 2
                   decorated.append(
@@ -330,22 +347,40 @@ jobs:
                           is_req,
                           row_count,
                           actuals_sum,
+                          revenue_db_sum,
+                          cost_sum,
+                          cost_present,
                       )
                   )
               decorated.sort()
 
               badges: list[str] = []
               detail_lines: list[str] = []
-              for _, _, _, country, st, reason, is_req, row_count, actuals_sum in decorated:
+              for _, _, _, country, st, reason, is_req, row_count, actuals_sum, revenue_db_sum, cost_sum, cost_present in decorated:
                   if st == "PASS":
-                      badges.append(f"✅ `{country}`")
+                      rev_icon = "✅" if abs(revenue_db_sum) > EPS else "⚠️"
+                      if cost_present == "yes":
+                          cost_icon = "✅" if abs(cost_sum) > EPS else "⚠️"
+                      else:
+                          cost_icon = "⚠️"
+                      metrics = f"(rev {rev_icon} cost {cost_icon})"
+                  else:
+                      metrics = "(rev ❌ cost ❌)"
+
+                  if st == "PASS":
+                      badges.append(f"✅ `{country}` {metrics}")
                   else:
                       icon = "❌" if is_req else "⚠️"
-                      badges.append(f"{icon} `{country}`")
+                      badges.append(f"{icon} `{country}` {metrics}")
 
                       det = reason or "FAIL"
                       if det in ("no_rows_for_date", "actuals_zero"):
-                          det = f"{det} ({row_count} rows, sum={actuals_sum:.6f})"
+                          det = (
+                              f"{det} ({row_count} rows, sum={actuals_sum:.6f}, "
+                              f"rev={revenue_db_sum:.6f}, cost={cost_sum:.6f})"
+                          )
+                      else:
+                          det = f"{det} (rev={revenue_db_sum:.6f}, cost={cost_sum:.6f})"
                       detail_lines.append(f"• {icon} `{country}` — _{det}_")
 
               section_text = f"*📊 {tenant}*\n" + "  ".join(badges)
