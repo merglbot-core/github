@@ -19,7 +19,7 @@ generator\_minute\_utc = (import\_minute\_utc - 20) \bmod 60
 - Pokud Deepnote umožňuje plánovat v **UTC**, použij UTC (nejstabilnější).
 - Pokud Deepnote plánuje v **lokálním čase** (`Europe/Prague`), převeď cron z UTC na lokální čas:
   - **CET (zima)**: `local = UTC + 1h` (např. `50 4-14` UTC → `50 5-15` local)
-  - **CEST (léto)**: `local = UTC + 2h` (tj. oproti CET posuň ještě o +1h)
+  - **CEST (léto)**: `local = UTC + 2h` (např. `50 4-14` UTC → `50 6-16` local)
 
 ### Doporučené schedule (UTC) per tenant / country
 Okna jsou nastavená tak, aby:
