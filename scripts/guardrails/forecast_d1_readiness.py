@@ -252,6 +252,10 @@ def _as_float(value: object) -> float:
         return 0.0
 
 
+def _fmt6(value: object) -> str:
+    return f"{_as_float(value):.6f}"
+
+
 def _infer_slot_auto(now_local: datetime, *, gh_schedule: str = "") -> str:
     """
     Infer slot for scheduled runs.
@@ -470,7 +474,7 @@ def _write_md(
             row_count = r.row_count
             actuals_sum = r.actuals_sum
             cost_sum = r.cost_sum
-            if r.reason.startswith("14_"):
+            if (r.reason or "").startswith("14_"):
                 table_fq = r.table_fq_14 or r.table_fq
                 dom = (r.domain or "").strip() or "?"
                 reason = f"{r.reason} (domain={dom})"
@@ -478,7 +482,7 @@ def _write_md(
                 actuals_sum = r.actuals_sum_14
                 cost_sum = r.cost_sum_14
             lines.append(
-                f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{table_fq}` | `{reason}` | {row_count} | {actuals_sum:.6f} | {cost_sum:.6f} |"
+                f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{table_fq}` | `{reason}` | {row_count} | {_fmt6(actuals_sum)} | {_fmt6(cost_sum)} |"
             )
         lines.append("")
 
@@ -493,7 +497,7 @@ def _write_md(
             row_count = r.row_count
             actuals_sum = r.actuals_sum
             cost_sum = r.cost_sum
-            if r.reason.startswith("14_"):
+            if (r.reason or "").startswith("14_"):
                 table_fq = r.table_fq_14 or r.table_fq
                 dom = (r.domain or "").strip() or "?"
                 reason = f"{r.reason} (domain={dom})"
@@ -501,7 +505,7 @@ def _write_md(
                 actuals_sum = r.actuals_sum_14
                 cost_sum = r.cost_sum_14
             lines.append(
-                f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{table_fq}` | `{reason}` | {row_count} | {actuals_sum:.6f} | {cost_sum:.6f} |"
+                f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{table_fq}` | `{reason}` | {row_count} | {_fmt6(actuals_sum)} | {_fmt6(cost_sum)} |"
             )
         lines.append("")
 
@@ -684,22 +688,36 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                 required14: tuple[str, ...] = REQUIRED_COLUMNS_14_COMMON + REQUIRED_COLUMNS_14_DOMAIN + REQUIRED_COLUMNS_14_COUNTRY
                 where_14 = ""
                 params14 = [f"d:STRING:{patch_date}"]
+                dom_norm = (dom or "").strip()
+                country_param = (spec.country or "").strip().lower()
+                invalid_filter_reason = ""
 
                 # Prefer domain filtering when available; fallback to country for all-countries 14_* tables.
-                if "domain" in cols14:
+                if "domain" in cols14 and dom_norm:
                     required14 = REQUIRED_COLUMNS_14_COMMON + REQUIRED_COLUMNS_14_DOMAIN
                     where_14 = "CAST(date AS STRING)=@d AND domain=@dom"
-                    params14.append(f"dom:STRING:{dom}")
-                elif "country" in cols14:
+                    params14.append(f"dom:STRING:{dom_norm}")
+                elif "country" in cols14 and country_param:
                     required14 = REQUIRED_COLUMNS_14_COMMON + REQUIRED_COLUMNS_14_COUNTRY
                     where_14 = "CAST(date AS STRING)=@d AND LOWER(CAST(country AS STRING))=@c"
-                    country_param = (spec.country or "").strip().lower()
                     params14.append(f"c:STRING:{country_param}")
+                elif "domain" in cols14:
+                    required14 = REQUIRED_COLUMNS_14_COMMON + REQUIRED_COLUMNS_14_DOMAIN
+                    invalid_filter_reason = "14_invalid_filter_value:domain"
+                elif "country" in cols14:
+                    required14 = REQUIRED_COLUMNS_14_COMMON + REQUIRED_COLUMNS_14_COUNTRY
+                    invalid_filter_reason = "14_invalid_filter_value:country"
 
                 missing14 = [col for col in required14 if col not in cols14]
                 if missing14:
                     status_14 = "FAIL"
                     reason_14 = "14_missing_columns:" + ",".join(missing14)
+                elif invalid_filter_reason:
+                    status_14 = "FAIL"
+                    reason_14 = invalid_filter_reason
+                elif not where_14:
+                    status_14 = "FAIL"
+                    reason_14 = "14_internal_error_empty_where"
                 else:
                     select_parts_14 = [
                         "COUNT(1) AS row_count_14",
