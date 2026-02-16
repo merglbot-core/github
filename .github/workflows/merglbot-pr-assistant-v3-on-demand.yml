@@ -519,6 +519,7 @@ jobs:
           ANTHROPIC_SYNTHESIS_PAYLOAD_FILE="${TMP_DIR}/anthropic_synthesis_payload.json"
 
           ANTHROPIC_MESSAGES_URL="${ANTHROPIC_MESSAGES_URL:-https://api.anthropic.com/v1/messages}"
+          ANTHROPIC_MESSAGES_URL="$(printf '%s' "$ANTHROPIC_MESSAGES_URL" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
           
           echo "========================================="
           echo "STEP 3: INTELLIGENT SYNTHESIS"
@@ -706,6 +707,18 @@ jobs:
           if [ ! -s anthropic_review.txt ] || grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null; then
             FALLBACK_REVIEW_FILE="openai_review.txt"
           fi
+
+          case "$ANTHROPIC_MESSAGES_URL" in
+            https://api.anthropic.com/*)
+              ;;
+            *)
+              echo "ERROR: Disallowed ANTHROPIC_MESSAGES_URL host; skipping synthesis and emitting fallback review." >&2
+              SYNTHESIS_USAGE_API="skipped_invalid_url"
+              cp "$FALLBACK_REVIEW_FILE" final_review.txt
+              printf '%s\n' "{\"api\":\"${SYNTHESIS_USAGE_API}\",\"input_tokens\":0,\"output_tokens\":0,\"reasoning_tokens\":0,\"total_tokens\":0}" > synthesis_usage.json
+              exit 0
+              ;;
+          esac
 
           if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
             echo "WARN: ANTHROPIC_API_KEY is missing; skipping synthesis and emitting fallback review." >&2

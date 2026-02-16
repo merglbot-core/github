@@ -25,6 +25,29 @@ ANTHROPIC_MESSAGES_URL="${ANTHROPIC_MESSAGES_URL:-https://api.anthropic.com/v1/m
 OPENAI_RESPONSES_URL="${OPENAI_RESPONSES_URL:-https://api.openai.com/v1/responses}"
 OPENAI_CHAT_COMPLETIONS_URL="${OPENAI_CHAT_COMPLETIONS_URL:-https://api.openai.com/v1/chat/completions}"
 
+trim_ws() {
+  printf '%s' "${1:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+ANTHROPIC_MESSAGES_URL="$(trim_ws "$ANTHROPIC_MESSAGES_URL")"
+OPENAI_RESPONSES_URL="$(trim_ws "$OPENAI_RESPONSES_URL")"
+OPENAI_CHAT_COMPLETIONS_URL="$(trim_ws "$OPENAI_CHAT_COMPLETIONS_URL")"
+
+ANTHROPIC_URL_ALLOWED="false"
+case "$ANTHROPIC_MESSAGES_URL" in
+  https://api.anthropic.com/*) ANTHROPIC_URL_ALLOWED="true" ;;
+esac
+
+OPENAI_URLS_ALLOWED="true"
+case "$OPENAI_RESPONSES_URL" in
+  https://api.openai.com/*) ;;
+  *) OPENAI_URLS_ALLOWED="false" ;;
+esac
+case "$OPENAI_CHAT_COMPLETIONS_URL" in
+  https://api.openai.com/*) ;;
+  *) OPENAI_URLS_ALLOWED="false" ;;
+esac
+
 sanitize_model() {
   local raw="${1:-}"
   raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
@@ -53,15 +76,27 @@ if [ -z "$OPENAI_MODEL" ]; then
   OPENAI_MODEL="gpt-5.2"
 fi
 
+OPENAI_SKIP_REASON=""
 OPENAI_API_KEY_PRESENT="true"
-if [ -z "${OPENAI_API_KEY:-}" ]; then
+if [ "$OPENAI_URLS_ALLOWED" != "true" ]; then
   OPENAI_API_KEY_PRESENT="false"
+  OPENAI_SKIP_REASON="invalid_url"
+  echo "ERROR: Disallowed OpenAI API URL override; skipping OpenAI analysis." >&2
+elif [ -z "${OPENAI_API_KEY:-}" ]; then
+  OPENAI_API_KEY_PRESENT="false"
+  OPENAI_SKIP_REASON="no_key"
   echo "WARN: OPENAI_API_KEY is missing; skipping OpenAI analysis." >&2
 fi
 
+ANTHROPIC_SKIP_REASON=""
 ANTHROPIC_API_KEY_PRESENT="true"
-if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+if [ "$ANTHROPIC_URL_ALLOWED" != "true" ]; then
   ANTHROPIC_API_KEY_PRESENT="false"
+  ANTHROPIC_SKIP_REASON="invalid_url"
+  echo "ERROR: Disallowed Anthropic API URL override; skipping Anthropic analysis." >&2
+elif [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+  ANTHROPIC_API_KEY_PRESENT="false"
+  ANTHROPIC_SKIP_REASON="no_key"
   echo "WARN: ANTHROPIC_API_KEY is missing; skipping Anthropic analysis." >&2
 fi
 
@@ -428,7 +463,7 @@ if [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then
     break
   done
 else
-  echo "Skipping Anthropic analysis (missing ANTHROPIC_API_KEY)." >&2
+  echo "Skipping Anthropic analysis (reason: ${ANTHROPIC_SKIP_REASON:-no_key})." >&2
 fi
 
 if [ ! -s anthropic_review.txt ]; then
@@ -543,19 +578,19 @@ call_openai_responses() {
     fi
 
     # Log token usage if present (do not fail if missing)
-    local total_tokens input_tokens output_total reasoning_tokens output_tokens
+    local total_tokens input_tokens output_total reasoning_tokens non_reasoning_output_tokens
     total_tokens="$(echo "$resp" | jq -r '.usage.total_tokens // 0' 2>/dev/null || echo 0)"
     input_tokens="$(echo "$resp" | jq -r '.usage.input_tokens // .usage.prompt_tokens // 0' 2>/dev/null || echo 0)"
     output_total="$(echo "$resp" | jq -r '.usage.output_tokens // .usage.completion_tokens // 0' 2>/dev/null || echo 0)"
     reasoning_tokens="$(echo "$resp" | jq -r '.usage.output_tokens_details.reasoning_tokens // .usage.completion_tokens_details.reasoning_tokens // 0' 2>/dev/null || echo 0)"
-    output_tokens=$((output_total - reasoning_tokens))
-    if [ "$output_tokens" -lt 0 ]; then
-      output_tokens=0
+    non_reasoning_output_tokens=$((output_total - reasoning_tokens))
+    if [ "$non_reasoning_output_tokens" -lt 0 ]; then
+      non_reasoning_output_tokens=0
     fi
-    if [ "$total_tokens" != "0" ] || [ "$input_tokens" != "0" ] || [ "$output_tokens" != "0" ]; then
+    if [ "$total_tokens" != "0" ] || [ "$input_tokens" != "0" ] || [ "$output_total" != "0" ]; then
       echo "  Token usage:" >&2
       echo "    Input: $input_tokens" >&2
-      echo "    Output: $output_tokens (reasoning: $reasoning_tokens)" >&2
+      echo "    Output: $output_total (reasoning: $reasoning_tokens, non-reasoning: $non_reasoning_output_tokens)" >&2
       echo "    Total: $total_tokens" >&2
     fi
 
@@ -566,7 +601,8 @@ call_openai_responses() {
   "prompt_tokens": ${input_tokens},
   "completion_tokens": ${output_total},
   "input_tokens": ${input_tokens},
-  "output_tokens": ${output_tokens},
+  "output_tokens": ${output_total},
+  "non_reasoning_output_tokens": ${non_reasoning_output_tokens},
   "reasoning_tokens": ${reasoning_tokens},
   "total_tokens": ${total_tokens}
 }
@@ -585,6 +621,7 @@ OPENAI_USAGE_API="unknown"
 OPENAI_USAGE_INPUT_TOKENS=0
 OPENAI_USAGE_OUTPUT_TOKENS=0
 OPENAI_USAGE_REASONING_TOKENS=0
+OPENAI_USAGE_NON_REASONING_OUTPUT_TOKENS=0
 OPENAI_USAGE_TOTAL_TOKENS=0
 
 # OPENAI CALL
@@ -592,7 +629,7 @@ echo "Calling OpenAI (requested: $OPENAI_MODEL)..."
 
 OPENAI_MODEL_USED=""
 if [ "$OPENAI_API_KEY_PRESENT" != "true" ]; then
-  OPENAI_USAGE_API="skipped_no_key"
+  OPENAI_USAGE_API="skipped_${OPENAI_SKIP_REASON:-no_key}"
   printf '%s' "API_ERROR" > openai_review.txt
 else
   OPENAI_MODELS_TRIED="|"
@@ -682,9 +719,10 @@ else
       OPENAI_USAGE_INPUT_TOKENS="$(echo "$OPENAI_RESP" | jq -r '.usage.prompt_tokens // 0' 2>/dev/null || echo 0)"
       OUTPUT_TOTAL="$(echo "$OPENAI_RESP" | jq -r '.usage.completion_tokens // 0' 2>/dev/null || echo 0)"
       OPENAI_USAGE_REASONING_TOKENS="$(echo "$OPENAI_RESP" | jq -r '.usage.completion_tokens_details.reasoning_tokens // 0' 2>/dev/null || echo 0)"
-      OPENAI_USAGE_OUTPUT_TOKENS=$((OUTPUT_TOTAL - OPENAI_USAGE_REASONING_TOKENS))
-      if [ "$OPENAI_USAGE_OUTPUT_TOKENS" -lt 0 ]; then
-        OPENAI_USAGE_OUTPUT_TOKENS=0
+      OPENAI_USAGE_OUTPUT_TOKENS="$OUTPUT_TOTAL"
+      OPENAI_USAGE_NON_REASONING_OUTPUT_TOKENS=$((OUTPUT_TOTAL - OPENAI_USAGE_REASONING_TOKENS))
+      if [ "$OPENAI_USAGE_NON_REASONING_OUTPUT_TOKENS" -lt 0 ]; then
+        OPENAI_USAGE_NON_REASONING_OUTPUT_TOKENS=0
       fi
       break
     fi
@@ -753,20 +791,21 @@ else
     PROMPT_TOKENS=$(echo "$OPENAI_RESP" | jq -r '.usage.prompt_tokens // 0')
     OUTPUT_TOTAL=$(echo "$OPENAI_RESP" | jq -r '.usage.completion_tokens // 0')
     REASONING_TOKENS=$(echo "$OPENAI_RESP" | jq -r '.usage.completion_tokens_details.reasoning_tokens // 0')
-    OUTPUT_TOKENS=$((OUTPUT_TOTAL - REASONING_TOKENS))
-    if [ "$OUTPUT_TOKENS" -lt 0 ]; then
-      OUTPUT_TOKENS=0
+    NON_REASONING_OUTPUT_TOKENS=$((OUTPUT_TOTAL - REASONING_TOKENS))
+    if [ "$NON_REASONING_OUTPUT_TOKENS" -lt 0 ]; then
+      NON_REASONING_OUTPUT_TOKENS=0
     fi
     echo "  Token usage:" >&2
     echo "    Prompt: $PROMPT_TOKENS" >&2
-    echo "    Completion: $OUTPUT_TOTAL (reasoning: $REASONING_TOKENS, output: $OUTPUT_TOKENS)" >&2
+    echo "    Completion: $OUTPUT_TOTAL (reasoning: $REASONING_TOKENS, non-reasoning: $NON_REASONING_OUTPUT_TOKENS)" >&2
     echo "    Total: $TOTAL_TOKENS" >&2
 
     OPENAI_USAGE_API="chat_completions"
     OPENAI_USAGE_TOTAL_TOKENS="$TOTAL_TOKENS"
     OPENAI_USAGE_INPUT_TOKENS="$PROMPT_TOKENS"
-    OPENAI_USAGE_OUTPUT_TOKENS="$OUTPUT_TOKENS"
     OPENAI_USAGE_REASONING_TOKENS="$REASONING_TOKENS"
+    OPENAI_USAGE_OUTPUT_TOKENS="$OUTPUT_TOTAL"
+    OPENAI_USAGE_NON_REASONING_OUTPUT_TOKENS="$NON_REASONING_OUTPUT_TOKENS"
 
     echo "Words: $(echo "$CONTENT" | wc -w)"
     printf '%s' "$CONTENT" > openai_review.txt
@@ -785,7 +824,11 @@ echo "OPENAI_MODEL_USED=$OPENAI_MODEL_USED" >> "$GITHUB_ENV"
 
 : "${OPENAI_USAGE_OUTPUT_TOKENS:=0}"
 : "${OPENAI_USAGE_REASONING_TOKENS:=0}"
-OPENAI_USAGE_COMPLETION_TOKENS=$((OPENAI_USAGE_OUTPUT_TOKENS + OPENAI_USAGE_REASONING_TOKENS))
+: "${OPENAI_USAGE_NON_REASONING_OUTPUT_TOKENS:=$((OPENAI_USAGE_OUTPUT_TOKENS - OPENAI_USAGE_REASONING_TOKENS))}"
+if [ "$OPENAI_USAGE_NON_REASONING_OUTPUT_TOKENS" -lt 0 ]; then
+  OPENAI_USAGE_NON_REASONING_OUTPUT_TOKENS=0
+fi
+OPENAI_USAGE_COMPLETION_TOKENS="$OPENAI_USAGE_OUTPUT_TOKENS"
 
 if [ ! -f openai_usage.json ] || ! jq -e . openai_usage.json > /dev/null 2>&1; then
   cat > openai_usage.json << EOF
@@ -795,6 +838,7 @@ if [ ! -f openai_usage.json ] || ! jq -e . openai_usage.json > /dev/null 2>&1; t
   "completion_tokens": ${OPENAI_USAGE_COMPLETION_TOKENS},
   "input_tokens": ${OPENAI_USAGE_INPUT_TOKENS},
   "output_tokens": ${OPENAI_USAGE_OUTPUT_TOKENS},
+  "non_reasoning_output_tokens": ${OPENAI_USAGE_NON_REASONING_OUTPUT_TOKENS},
   "reasoning_tokens": ${OPENAI_USAGE_REASONING_TOKENS},
   "total_tokens": ${OPENAI_USAGE_TOTAL_TOKENS}
 }
