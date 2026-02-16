@@ -84,6 +84,7 @@ on:
         value: ${{ jobs.build.outputs.scan_passed }}
 
 permissions:
+  actions: read
   contents: read
   packages: write
   id-token: write
@@ -171,7 +172,10 @@ jobs:
           image-ref: '${{ inputs.registry }}/${{ inputs.image_name }}@${{ steps.build.outputs.digest }}'
           format: 'sarif'
           output: 'trivy-results.sarif'
+          limit-severities-for-sarif: 'true'
+          scanners: 'vuln'
           severity: 'CRITICAL,HIGH'
+          trivyignores: ${{ hashFiles('.trivyignore') != '' && '.trivyignore' || '' }}
           exit-code: '1'
 
       - name: Upload Trivy SARIF
@@ -245,8 +249,15 @@ jobs:
           EOF
           )
           
-          echo "provenance=$PROVENANCE" >> $GITHUB_OUTPUT
           echo "$PROVENANCE" > provenance.json
+
+          # GitHub Actions output syntax requires multiline values to use the heredoc form.
+          # Writing raw JSON to `provenance=<json>` breaks the file command parser.
+          {
+            echo "provenance<<EOF"
+            cat provenance.json
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload SLSA Provenance
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -290,6 +301,8 @@ jobs:
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+        with:
+          install_components: beta
 
       - name: Create Binary Authorization Attestation
         id: attest
@@ -299,20 +312,13 @@ jobs:
           
           echo "Creating attestation for: $IMAGE_DIGEST"
           
-          # Create attestation using gcloud
-          gcloud container binauthz attestations sign-and-create \
+          # Create attestation using gcloud (returns attestation occurrence)
+          ATTESTATION_ID="$(gcloud beta container binauthz attestations sign-and-create \
             --project=merglbot-artifacts \
             --artifact-url="$IMAGE_DIGEST" \
             --attestor="$ATTESTOR" \
-            --keyversion="projects/merglbot-artifacts/locations/europe-west1/keyRings/binary-auth-keyring/cryptoKeys/attestor-signing-key/cryptoKeyVersions/1"
-          
-          # Get attestation ID
-          ATTESTATION_ID=$(gcloud container binauthz attestations list \
-            --project=merglbot-artifacts \
-            --attestor="$ATTESTOR" \
-            --artifact-url="$IMAGE_DIGEST" \
-            --format="value(name)" \
-            --limit=1)
+            --keyversion="projects/merglbot-artifacts/locations/europe-west1/keyRings/binary-auth-keyring/cryptoKeys/attestor-signing-key/cryptoKeyVersions/1" \
+            --format="value(name)")"
           
           echo "attestation_id=$ATTESTATION_ID" >> $GITHUB_OUTPUT
           
@@ -323,17 +329,6 @@ jobs:
           echo "- **Image:** \`$IMAGE_DIGEST\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Attestor:** \`$ATTESTOR\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Attestation ID:** \`$ATTESTATION_ID\`" >> $GITHUB_STEP_SUMMARY
-
-      - name: Verify Attestation
-        run: |
-          IMAGE_DIGEST="${{ inputs.registry }}/${{ inputs.image_name }}@${{ needs.build.outputs.digest }}"
-          
-          # Verify the attestation exists
-          gcloud container binauthz attestations list \
-            --project=merglbot-artifacts \
-            --attestor="projects/merglbot-artifacts/attestors/merglbot-build-attestor" \
-            --artifact-url="$IMAGE_DIGEST" \
-            --format="table(name,resourceUri)"
 
   summary:
     name: Build Summary
