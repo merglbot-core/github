@@ -106,17 +106,17 @@ if [ "$ANTHROPIC_API_KEY_PRESENT" != "true" ] && [ "$OPENAI_API_KEY_PRESENT" != 
   printf '%s' "API_ERROR" > anthropic_review.txt
   printf '%s' "API_ERROR" > openai_review.txt
 
-	safe_reason() {
-	  printf '%s' "${1:-}" | tr -d '\r\n' | grep -Eo '^[A-Za-z0-9._-]+' || true
-	}
+  safe_reason() {
+    printf '%s' "${1:-}" | tr -d '\r\n' | grep -Eo '^[A-Za-z0-9._-]+' || true
+  }
 
-	mkdir -p "$(dirname "$STEP1_REASON_FILE")"
-	printf '%s\n' \
-	  "reason=missing_api_keys" \
-	  "anthropic_skip_reason=$(safe_reason "${ANTHROPIC_SKIP_REASON:-}")" \
-	  "openai_skip_reason=$(safe_reason "${OPENAI_SKIP_REASON:-}")" \
-	  > "${STEP1_REASON_FILE}"
-	exit 1
+  mkdir -p "$(dirname "$STEP1_REASON_FILE")"
+  printf '%s\n' \
+    "reason=missing_api_keys" \
+    "anthropic_skip_reason=$(safe_reason "${ANTHROPIC_SKIP_REASON:-}")" \
+    "openai_skip_reason=$(safe_reason "${OPENAI_SKIP_REASON:-}")" \
+    > "${STEP1_REASON_FILE}"
+  exit 1
 fi
 
 if [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then

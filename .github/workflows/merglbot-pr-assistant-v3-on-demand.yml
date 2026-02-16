@@ -1261,11 +1261,18 @@ jobs:
             --argjson anthropic_usage "$ANTHROPIC_USAGE_JSON_SAFE" \
             --argjson openai_usage "$OPENAI_USAGE_JSON_SAFE" \
             --argjson synthesis_usage "$SYNTHESIS_USAGE_JSON_SAFE" \
-            '{
-              timestamp: $timestamp,
-              repository: $repository,
-              pr_number: ($pr_number | tonumber? // 0),
-              review_mode: $review_mode,
+            '
+              def toint:
+                if type == "number" then .
+                elif type == "string" and test("^[0-9]+$") then tonumber
+                else 0
+                end;
+
+              {
+                timestamp: $timestamp,
+                repository: $repository,
+                pr_number: ($pr_number | toint),
+                review_mode: $review_mode,
                 trigger: $trigger,
                 run_id: $run_id,
                 workflow: $workflow,
@@ -1273,34 +1280,35 @@ jobs:
                 actor: $actor,
                 comment_author: $comment_author,
                 pr_author: $pr_author,
-              models: {
-                anthropic: $anthropic_model,
-                openai: $openai_model
-              },
-              usage: {
-                anthropic: $anthropic_usage,
-                openai: $openai_usage,
-                synthesis: $synthesis_usage
-              },
-              output: {
-                anthropic_words: ($anthropic_words | tonumber? // 0),
-                openai_words: ($openai_words | tonumber? // 0),
-                final_words: ($final_words | tonumber? // 0)
-              },
-              findings: {
-                critical: ($critical_count | tonumber? // 0),
-                high: ($high_count | tonumber? // 0),
-                medium: ($medium_count | tonumber? // 0),
-                low: ($low_count | tonumber? // 0)
-              },
-              verdict: $verdict,
-              bugbot: {
-                source_count: ($bugbot_count | tonumber? // 0),
-                sources: $bugbot_sources
-              },
-              status: $status,
-              review_status: $review_status
-            }' > metrics/review-metrics.json
+                models: {
+                  anthropic: $anthropic_model,
+                  openai: $openai_model
+                },
+                usage: {
+                  anthropic: $anthropic_usage,
+                  openai: $openai_usage,
+                  synthesis: $synthesis_usage
+                },
+                output: {
+                  anthropic_words: ($anthropic_words | toint),
+                  openai_words: ($openai_words | toint),
+                  final_words: ($final_words | toint)
+                },
+                findings: {
+                  critical: ($critical_count | toint),
+                  high: ($high_count | toint),
+                  medium: ($medium_count | toint),
+                  low: ($low_count | toint)
+                },
+                verdict: $verdict,
+                bugbot: {
+                  source_count: ($bugbot_count | toint),
+                  sources: $bugbot_sources
+                },
+                status: $status,
+                review_status: $review_status
+              }
+            ' > metrics/review-metrics.json
           
           echo "📊 Review metrics saved to metrics/review-metrics.json"
           if ! jq -c '{timestamp,repository,pr_number,review_mode,models,findings,verdict,status,review_status}' metrics/review-metrics.json; then
