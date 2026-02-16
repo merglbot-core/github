@@ -1114,7 +1114,8 @@ jobs:
               printf '%s' "{}"
               return 0
             fi
-            printf '%s' "$raw" | jq -c 'if type == "object" then . else {} end' 2>/dev/null || printf '%s' "{}"
+            # Be resilient to multi-document JSON streams: slurp and take the first object.
+            printf '%s' "$raw" | jq -c -s 'if (length > 0 and (.[0] | type == "object")) then .[0] else {} end' 2>/dev/null || printf '%s' "{}"
           }
           
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
