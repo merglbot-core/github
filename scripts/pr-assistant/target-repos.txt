@@ -2,6 +2,10 @@
 # One repo per line. Used by:
 # - deploy-v3.sh (copy PR Assistant workflow)
 # - improvement digest (cross-repo metrics)
+# Intended to cover all ACTIVE platform repos (SSOT: merglbot-public/docs/REPOSITORY_MAP.md),
+# excluding:
+# - merglbot-core/github (canonical workflow source; do not deploy copy into itself)
+# - archived/read-only repos (listed at bottom)
 merglbot-core/ai_prompts
 merglbot-core/dataform
 merglbot-core/fb-viz-api
@@ -9,22 +13,31 @@ merglbot-core/infra
 merglbot-core/merglbot-admin
 merglbot-core/platform
 merglbot-core/tf-modules-
+merglbot-public/kazdavterina-web
+merglbot-public/livero-web
 merglbot-public/docs
 merglbot-public/website
+merglbot-cerano/cerano-web
+merglbot-cerano/feed-generator
 merglbot-cerano/product-forecasting
 merglbot-denatura/denatura-fb-viz
 merglbot-denatura/marketing_actions_detector
 merglbot-denatura/marketing-planning
 merglbot-proteinaco/abc_product_material_analysis
+merglbot-proteinaco/btf-legacy-implementation
 merglbot-proteinaco/btf-viz
 merglbot-proteinaco/proteinaco-web
 merglbot-proteinaco/viz-api
 merglbot-ruzovyslon/business_forecasting
+merglbot-ruzovyslon/data-pipelines
 merglbot-ruzovyslon/kbc_data_quality_metodology
 merglbot-ruzovyslon/ruzovyslon-web
 merglbot-ruzovyslon/viz-api
 merglbot-extractors/facebook-extractor
 merglbot-milan-private/fakturoid
+merglbot-autodoplnky/autodoplnky-web
+merglbot-hodinarstvibechyne/hodinarstvi-web
+merglbot-kiteboarding/kiteboarding-web
 
 # Archived/read-only (excluded from rollouts):
 # - merglbot-denatura/denatura-btf-data
