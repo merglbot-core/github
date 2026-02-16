@@ -211,6 +211,18 @@ jobs:
 
           EPS = 1e-9  # Float tolerance for "non-zero" sums (avoid precision noise)
 
+          def slack_escape(s: str) -> str:
+              """Escape Slack link primitives, stabilize mrkdwn code spans, and break @mentions."""
+              return (
+                  s.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;")
+                   .replace("`", "ˋ")       # prevent breaking inline code spans
+                   .replace("\n", " ")
+                   .replace("\r", " ")
+                   .replace("@", "@\u200b")  # zero-width space breaks mentions
+              )
+
           # Slack Block Kit limits / readability caps
           MAX_TENANTS_DISPLAY = 15
           MAX_REQ_FAILURES_DISPLAY = 10
@@ -274,12 +286,10 @@ jobs:
               header_text = f"❓ Forecast D-1 Readiness: UNKNOWN (status={status_norm or '?'})"
 
           blocks: list[dict] = []
-          blocks.append(
-              {
-                  "type": "header",
-                  "text": {"type": "plain_text", "text": header_text, "emoji": True},
-              }
-          )
+          # header_text format: "EMOJI Forecast D-1 Readiness: STATUS" (emoji first)
+          icon, sep, rest = header_text.partition(" ")
+          header_mrkdwn = f"{icon} *{rest}*" if sep else f"*{header_text}*"
+          blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": header_mrkdwn}})
 
           tenant_map: dict[str, list[tuple[str, str, str, bool, int, float, float, float, str]]] = defaultdict(list)
           req_fail_list: list[tuple[str, str, str, str, str]] = []
@@ -354,25 +364,20 @@ jobs:
                   )
               decorated.sort()
 
-              badges: list[str] = []
-              detail_lines: list[str] = []
+              country_lines: list[str] = []
               for _, _, _, country, st, reason, is_req, row_count, actuals_sum, revenue_db_sum, cost_sum, cost_present in decorated:
                   if st == "PASS":
+                      icon = "✅"
                       rev_icon = "✅" if abs(revenue_db_sum) > EPS else "⚠️"
                       if cost_present == "yes":
                           cost_icon = "✅" if abs(cost_sum) > EPS else "⚠️"
                       else:
                           cost_icon = "⚠️"
                       metrics = f"(rev {rev_icon} cost {cost_icon})"
-                  else:
-                      metrics = "(rev ❌ cost ❌)"
-
-                  if st == "PASS":
-                      badges.append(f"✅ `{country}` {metrics}")
+                      country_lines.append(f"    {icon} `{slack_escape(country)}` {metrics}")
                   else:
                       icon = "❌" if is_req else "⚠️"
-                      badges.append(f"{icon} `{country}` {metrics}")
-
+                      metrics = "(rev ❌ cost ❌)"
                       det = reason or "FAIL"
                       if det in ("no_rows_for_date", "actuals_zero"):
                           det = (
@@ -381,11 +386,9 @@ jobs:
                           )
                       else:
                           det = f"{det} (rev={revenue_db_sum:.6f}, cost={cost_sum:.6f})"
-                      detail_lines.append(f"• {icon} `{country}` — _{det}_")
+                      country_lines.append(f"    {icon} `{slack_escape(country)}` {metrics} — `{slack_escape(det)}`")
 
-              section_text = f"*📊 {tenant}*\n" + "  ".join(badges)
-              if detail_lines:
-                  section_text += "\n" + "\n".join(detail_lines)
+              section_text = "\n".join([f"🏢 `{slack_escape(tenant)}`", *country_lines]).rstrip()
 
               blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": section_text}})
 
@@ -403,10 +406,10 @@ jobs:
           blocks.append({"type": "divider"})
 
           req_mark = "✓" if req_failed == 0 else "❌"
-          ctx = f"📅 {patch_date} │ 🕐 {slot_disp} {tz_abbrev} │ Policy: {policy} │ Required: {req_ok}/{req_total} {req_mark}"
+          ctx = f"📅 {patch_date}  |  🕐 {slot_disp} {tz_abbrev}  |  Policy: {policy}  |  Required: {req_ok}/{req_total} {req_mark}"
           if opt_total > 0:
               opt_mark = "⚠️" if opt_failed > 0 else "✓"
-              ctx += f" │ Optional: {opt_failed}/{opt_total} {opt_mark}"
+              ctx += f"  |  Optional: {opt_failed}/{opt_total} {opt_mark}"
 
           blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": ctx}]})
 
