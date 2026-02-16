@@ -61,8 +61,8 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
-  issues: read
+  pull-requests: write
+  issues: write
   checks: read
 
 concurrency:
@@ -79,6 +79,11 @@ jobs:
     name: Check Trigger
     runs-on: ubuntu-latest
     timeout-minutes: 5  # Lightweight trigger parsing; should finish in seconds
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      checks: read
     if: |
       (github.event_name == 'issue_comment' && 
        github.event.issue.pull_request && 
@@ -528,11 +533,27 @@ jobs:
           REASON="unknown"
           ANTHROPIC_SKIP_REASON=""
           OPENAI_SKIP_REASON=""
+          
+          sanitize_reason() {
+            local raw="${1:-}"
+            raw="$(printf '%s' "$raw" | tr -d '\r\n')"
+            if [ -n "$raw" ] && ! [[ "$raw" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              raw=""
+            fi
+            printf '%s' "$raw"
+          }
 
           if [ -f step1_fail_reason.txt ]; then
             REASON="$(grep -m1 '^reason=' step1_fail_reason.txt | cut -d= -f2- || true)"
             ANTHROPIC_SKIP_REASON="$(grep -m1 '^anthropic_skip_reason=' step1_fail_reason.txt | cut -d= -f2- || true)"
             OPENAI_SKIP_REASON="$(grep -m1 '^openai_skip_reason=' step1_fail_reason.txt | cut -d= -f2- || true)"
+          fi
+          
+          REASON="$(sanitize_reason "${REASON:-}")"
+          ANTHROPIC_SKIP_REASON="$(sanitize_reason "${ANTHROPIC_SKIP_REASON:-}")"
+          OPENAI_SKIP_REASON="$(sanitize_reason "${OPENAI_SKIP_REASON:-}")"
+          if [ -z "$REASON" ]; then
+            REASON="unknown"
           fi
 
           {
@@ -540,11 +561,11 @@ jobs:
             printf '%s\n' ""
             printf '%s\n' "⛔️ Review failed during Step 1 (model API calls)."
             printf '%s\n' ""
-            printf '%s\n' "**Reason:** ${REASON:-unknown}"
+            printf '%s\n' "**Reason:** \`${REASON:-unknown}\`"
             if [ -n "$ANTHROPIC_SKIP_REASON" ] || [ -n "$OPENAI_SKIP_REASON" ]; then
               printf '%s\n' ""
-              printf '%s\n' "**Anthropic:** ${ANTHROPIC_SKIP_REASON:-}"
-              printf '%s\n' "**OpenAI:** ${OPENAI_SKIP_REASON:-}"
+              printf '%s\n' "**Anthropic:** \`${ANTHROPIC_SKIP_REASON:-}\`"
+              printf '%s\n' "**OpenAI:** \`${OPENAI_SKIP_REASON:-}\`"
             fi
             printf '%s\n' ""
             printf '%s\n' "**Next steps:**"
