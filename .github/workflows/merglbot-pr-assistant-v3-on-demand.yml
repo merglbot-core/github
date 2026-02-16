@@ -61,8 +61,8 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write # required for `gh pr comment` (PR review output)
-  issues: write # required for reactions and some PR comment flows
+  pull-requests: read
+  issues: read
   checks: read
 
 concurrency:
@@ -79,6 +79,9 @@ jobs:
     name: Check Trigger
     runs-on: ubuntu-latest
     timeout-minutes: 5  # Lightweight trigger parsing; should finish in seconds
+    permissions:
+      contents: read
+      pull-requests: read
     if: |
       (github.event_name == 'issue_comment' && 
        github.event.issue.pull_request && 
@@ -189,6 +192,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30  # Context gather + LLM calls; typical 10-20m
     
+    permissions:
+      contents: read
+      pull-requests: write # required for `gh pr comment` (PR review output)
+      issues: write # required for PR comments and reactions via Issues API
+      checks: read
+
     env:
       ANTHROPIC_API_VERSION: "2023-06-01"
       PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
@@ -199,16 +208,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        # Verify pin: git ls-remote --tags https://github.com/actions/checkout | grep -E 'refs/tags/v6\\.0\\.2$'
         with:
           fetch-depth: 0
-      
-      - name: React to Comment
-        if: github.event_name == 'issue_comment'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
-            -f content='eyes' || true
       
       - name: Gather Full PR Context
         id: context
@@ -445,7 +447,7 @@ jobs:
           # Security pre-scan: if PR context contains secret-like patterns, skip AI review to avoid exfiltration to LLM APIs.
           # IMPORTANT: never print the matching line(s) to logs.
           if [ "$SKIP_REVIEW" != "true" ]; then
-            SECRET_PATTERN='-----BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY-----|-----BEGIN PRIVATE KEY-----|xox[baprs]-|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|gh[orsu]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}'
+            SECRET_PATTERN='-----BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY-----|-----BEGIN PRIVATE KEY-----|xox[baprs]-|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|gh[oprsu]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}'
             for SECRET_SCAN_FILE in pr_diff.txt pr_title.txt pr_body.txt bugbot_findings.txt changed_files.txt pr_checks_summary.txt; do
               if [ -s "$SECRET_SCAN_FILE" ] && grep -Eqi "$SECRET_PATTERN" "$SECRET_SCAN_FILE"; then
                 echo "⛔️ Potential secret-like material detected in PR context; skipping AI review."
@@ -499,17 +501,9 @@ jobs:
           fi
           
           gh pr comment "$PR_NUM" --body-file comment.md
-          
-          if [ "${{ github.event_name }}" == "issue_comment" ]; then
-            REACTION="hooray"
-            if [ "${SKIP_REASON:-}" == "potential_secret" ]; then
-              REACTION="confused"
-            fi
-            gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
-              -f content="$REACTION" || true
-          fi
 
       - name: Step 1 - Parallel API Calls
+        id: step1
         if: success() && steps.context.outputs.skip_review != 'true'
         env:
           PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
@@ -518,9 +512,86 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-6' }}
           OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
+          STEP1_REASON_FILE: ${{ runner.temp }}/merglbot-step1-fail-reason.txt
         run: |
           set -euo pipefail
           bash scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh
+
+      - name: Step 1 Failure Comment
+        if: always() && steps.step1.outcome == 'failure' && steps.context.outputs.skip_review != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
+          STEP1_REASON_FILE: ${{ runner.temp }}/merglbot-step1-fail-reason.txt
+        run: |
+          set -euo pipefail
+          PR_NUM="${PR_NUMBER:-}"
+          if [ -z "${PR_NUM:-}" ]; then
+            echo "WARN: PR number unavailable; cannot post failure comment" >&2
+            exit 0
+          fi
+          REASON="unknown"
+          ANTHROPIC_SKIP_REASON=""
+          OPENAI_SKIP_REASON=""
+          
+          sanitize_reason() {
+            local raw="${1:-}"
+            raw="$(printf '%s' "$raw" | tr -d '\r\n')"
+            if [ -n "$raw" ] && ! [[ "$raw" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              raw=""
+            fi
+            printf '%s' "$raw"
+          }
+
+          STEP1_REASON_FILE="${STEP1_REASON_FILE:-}"
+          if [ -n "$STEP1_REASON_FILE" ] && [ -f "$STEP1_REASON_FILE" ]; then
+            REASON="$(grep -m1 '^reason=' "$STEP1_REASON_FILE" | cut -d= -f2- || true)"
+            ANTHROPIC_SKIP_REASON="$(grep -m1 '^anthropic_skip_reason=' "$STEP1_REASON_FILE" | cut -d= -f2- || true)"
+            OPENAI_SKIP_REASON="$(grep -m1 '^openai_skip_reason=' "$STEP1_REASON_FILE" | cut -d= -f2- || true)"
+          fi
+          
+          REASON="$(sanitize_reason "${REASON:-}")"
+          ANTHROPIC_SKIP_REASON="$(sanitize_reason "${ANTHROPIC_SKIP_REASON:-}")"
+          OPENAI_SKIP_REASON="$(sanitize_reason "${OPENAI_SKIP_REASON:-}")"
+          if [ -z "$REASON" ]; then
+            REASON="unknown"
+          fi
+
+          {
+            printf '%s\n' "## 🤖 Merglbot PR Assistant v3.4"
+            printf '%s\n' ""
+            printf '%s\n' "⛔️ Review failed during Step 1 (model API calls)."
+            printf '%s\n' ""
+            printf '%s\n' "**Reason:** \`${REASON:-unknown}\`"
+            if [ -n "$ANTHROPIC_SKIP_REASON" ] || [ -n "$OPENAI_SKIP_REASON" ]; then
+              printf '%s\n' ""
+              printf '%s\n' "**Anthropic:** \`${ANTHROPIC_SKIP_REASON:-}\`"
+              printf '%s\n' "**OpenAI:** \`${OPENAI_SKIP_REASON:-}\`"
+            fi
+            printf '%s\n' ""
+            printf '%s\n' "**Next steps:**"
+            printf '%s\n' "- Ensure required Actions secrets are configured and visible"
+            printf '%s\n' "- Re-run the workflow"
+          } > step1_failure_comment.md
+          
+          MARKER="<!-- MERGLBOT_STEP1_FAILURE -->"
+          printf '%s\n' "" >> step1_failure_comment.md
+          printf '%s\n' "$MARKER" >> step1_failure_comment.md
+
+          EXISTING_ID=""
+          if ! EXISTING_ID="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUM/comments" --paginate --jq '.[] | select(.body? and (.body | contains("<!-- MERGLBOT_STEP1_FAILURE -->"))) | .id' 2>/dev/null | head -n 1)"; then
+            echo "WARN: Failed to list PR comments for Step 1 failure dedupe; posting a new comment" >&2
+            EXISTING_ID=""
+          fi
+          if [ -n "${EXISTING_ID:-}" ] && [ "$EXISTING_ID" != "null" ]; then
+            if ! jq -n --rawfile body step1_failure_comment.md '{body:$body}' | gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$EXISTING_ID" --input -; then
+              echo "WARN: Failed to update existing Step 1 failure comment" >&2
+            fi
+          else
+            if ! gh pr comment "$PR_NUM" --body-file step1_failure_comment.md; then
+              echo "WARN: Failed to post PR comment (check GITHUB_TOKEN permissions)" >&2
+            fi
+          fi
       - name: Step 3 - Intelligent Synthesis
         if: success() && steps.context.outputs.skip_review != 'true'
         env:
@@ -970,11 +1041,6 @@ jobs:
           
           gh pr comment "$PR_NUM" --body-file comment.md
           echo "Review posted to PR #$PR_NUM"
-          
-          if [ "${{ github.event_name }}" == "issue_comment" ]; then
-            gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
-              -f content='rocket' || true
-          fi
       
       - name: Workflow Summary
         run: |
@@ -1039,6 +1105,14 @@ jobs:
         env:
           ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-6' }}
           OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
+          REPO: ${{ github.repository }}
+          TRIGGER: ${{ github.event_name }}
+          RUN_ID: ${{ github.run_id }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          ACTOR: ${{ github.actor }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login || '' }}
+          JOB_STATUS: ${{ job.status }}
         run: |
           # Create metrics JSON for feedback loop analysis
           sanitize_model() {
@@ -1065,6 +1139,21 @@ jobs:
           TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
           PR_NUM="${{ env.PR_NUMBER }}"
           REVIEW_MODE="${{ env.REVIEW_MODE }}"
+
+          REVIEW_STATUS="failed"
+          if [ -s final_review.txt ] && ! grep -qx "API_ERROR" final_review.txt 2>/dev/null; then
+            REVIEW_STATUS="success"
+          fi
+
+          normalize_usage_json() {
+            local raw="${1:-}"
+            if [ -z "$raw" ]; then
+              printf '%s' "{}"
+              return 0
+            fi
+            # Be resilient to multi-document JSON streams: slurp and take the first object.
+            printf '%s' "$raw" | jq -c -s 'if (length > 0 and (.[0] | type == "object")) then .[0] else {} end' 2>/dev/null || printf '%s' "{}"
+          }
           
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
           OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
@@ -1133,50 +1222,98 @@ jobs:
             ANTHROPIC_USAGE_JSON="$(jq -c . anthropic_usage.json)"
           fi
           
-          cat > metrics/review-metrics.json << METRICS_EOF
-          {
-            "timestamp": "$TIMESTAMP",
-            "repository": "${{ github.repository }}",
-            "pr_number": $PR_NUM,
-            "review_mode": "$REVIEW_MODE",
-            "trigger": "${{ github.event_name }}",
-            "run_id": "${{ github.run_id }}",
-            "workflow": "${{ github.workflow }}",
-            "workflow_ref": "${{ github.workflow_ref }}",
-            "actor": "${{ github.actor }}",
-            "comment_author": "${{ github.event.comment.user.login || '' }}",
-            "pr_author": "$(cat pr_author.txt 2>/dev/null || echo '')",
-            "models": {
-              "anthropic": "$ANTHROPIC_MODEL_FINAL",
-              "openai": "$OPENAI_MODEL_FINAL"
-            },
-            "usage": {
-              "anthropic": $ANTHROPIC_USAGE_JSON,
-              "openai": $OPENAI_USAGE_JSON,
-              "synthesis": $SYNTHESIS_USAGE_JSON
-            },
-            "output": {
-              "anthropic_words": $ANTHROPIC_WORDS,
-              "openai_words": $OPENAI_WORDS,
-              "final_words": $FINAL_WORDS
-            },
-            "findings": {
-              "critical": $CRITICAL_COUNT,
-              "high": $HIGH_COUNT,
-              "medium": $MEDIUM_COUNT,
-              "low": $LOW_COUNT
-            },
-            "verdict": "$VERDICT",
-            "bugbot": {
-              "source_count": $BUGBOT_COUNT,
-              "sources": "$BUGBOT_SOURCES"
-            },
-            "status": "${{ job.status }}"
-          }
-          METRICS_EOF
+          ANTHROPIC_USAGE_JSON="${ANTHROPIC_USAGE_JSON:-{}}"
+          OPENAI_USAGE_JSON="${OPENAI_USAGE_JSON:-{}}"
+          SYNTHESIS_USAGE_JSON="${SYNTHESIS_USAGE_JSON:-{}}"
+
+          PR_AUTHOR="$(cat pr_author.txt 2>/dev/null || echo '')"
+
+          ANTHROPIC_USAGE_JSON_SAFE="$(normalize_usage_json "$ANTHROPIC_USAGE_JSON")"
+          OPENAI_USAGE_JSON_SAFE="$(normalize_usage_json "$OPENAI_USAGE_JSON")"
+          SYNTHESIS_USAGE_JSON_SAFE="$(normalize_usage_json "$SYNTHESIS_USAGE_JSON")"
+
+          jq -n \
+            --arg timestamp "$TIMESTAMP" \
+            --arg repository "$REPO" \
+            --arg pr_number "$PR_NUM" \
+            --arg review_mode "$REVIEW_MODE" \
+            --arg trigger "$TRIGGER" \
+            --arg run_id "$RUN_ID" \
+            --arg workflow "$WORKFLOW_NAME" \
+            --arg workflow_ref "$WORKFLOW_REF" \
+            --arg actor "$ACTOR" \
+            --arg comment_author "$COMMENT_AUTHOR" \
+            --arg pr_author "$PR_AUTHOR" \
+            --arg anthropic_model "$ANTHROPIC_MODEL_FINAL" \
+            --arg openai_model "$OPENAI_MODEL_FINAL" \
+            --arg anthropic_words "$ANTHROPIC_WORDS" \
+            --arg openai_words "$OPENAI_WORDS" \
+            --arg final_words "$FINAL_WORDS" \
+            --arg critical_count "$CRITICAL_COUNT" \
+            --arg high_count "$HIGH_COUNT" \
+            --arg medium_count "$MEDIUM_COUNT" \
+            --arg low_count "$LOW_COUNT" \
+            --arg verdict "$VERDICT" \
+            --arg bugbot_count "$BUGBOT_COUNT" \
+            --arg bugbot_sources "$BUGBOT_SOURCES" \
+            --arg status "${JOB_STATUS:-unknown}" \
+            --arg review_status "$REVIEW_STATUS" \
+            --argjson anthropic_usage "$ANTHROPIC_USAGE_JSON_SAFE" \
+            --argjson openai_usage "$OPENAI_USAGE_JSON_SAFE" \
+            --argjson synthesis_usage "$SYNTHESIS_USAGE_JSON_SAFE" \
+            '
+              def toint:
+                if type == "number" then .
+                elif type == "string" and test("^[0-9]+$") then tonumber
+                else 0
+                end;
+
+              {
+                timestamp: $timestamp,
+                repository: $repository,
+                pr_number: ($pr_number | toint),
+                review_mode: $review_mode,
+                trigger: $trigger,
+                run_id: $run_id,
+                workflow: $workflow,
+                workflow_ref: $workflow_ref,
+                actor: $actor,
+                comment_author: $comment_author,
+                pr_author: $pr_author,
+                models: {
+                  anthropic: $anthropic_model,
+                  openai: $openai_model
+                },
+                usage: {
+                  anthropic: $anthropic_usage,
+                  openai: $openai_usage,
+                  synthesis: $synthesis_usage
+                },
+                output: {
+                  anthropic_words: ($anthropic_words | toint),
+                  openai_words: ($openai_words | toint),
+                  final_words: ($final_words | toint)
+                },
+                findings: {
+                  critical: ($critical_count | toint),
+                  high: ($high_count | toint),
+                  medium: ($medium_count | toint),
+                  low: ($low_count | toint)
+                },
+                verdict: $verdict,
+                bugbot: {
+                  source_count: ($bugbot_count | toint),
+                  sources: $bugbot_sources
+                },
+                status: $status,
+                review_status: $review_status
+              }
+            ' > metrics/review-metrics.json
           
-          echo "📊 Review metrics saved"
-          cat metrics/review-metrics.json
+          echo "📊 Review metrics saved to metrics/review-metrics.json"
+          if ! jq -c '{timestamp,repository,pr_number,review_mode,models,findings,verdict,status,review_status}' metrics/review-metrics.json; then
+            echo "WARN: metrics validation failed" >&2
+          fi
       
       - name: Upload Metrics Artifact
         if: always() && steps.context.outputs.skip_review != 'true'
