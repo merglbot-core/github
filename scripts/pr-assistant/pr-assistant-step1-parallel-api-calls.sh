@@ -104,10 +104,15 @@ if [ "$ANTHROPIC_API_KEY_PRESENT" != "true" ] && [ "$OPENAI_API_KEY_PRESENT" != 
   echo "ERROR: Both ANTHROPIC_API_KEY and OPENAI_API_KEY are missing; cannot run analysis." >&2
   printf '%s' "API_ERROR" > anthropic_review.txt
   printf '%s' "API_ERROR" > openai_review.txt
+
+  safe_reason() {
+    printf '%s' "${1:-}" | tr -d '\r\n' | grep -Eo '^[A-Za-z0-9._-]+' || true
+  }
+
   printf '%s\n' \
     "reason=missing_api_keys" \
-    "anthropic_skip_reason=${ANTHROPIC_SKIP_REASON:-}" \
-    "openai_skip_reason=${OPENAI_SKIP_REASON:-}" \
+    "anthropic_skip_reason=$(safe_reason "${ANTHROPIC_SKIP_REASON:-}")" \
+    "openai_skip_reason=$(safe_reason "${OPENAI_SKIP_REASON:-}")" \
     > step1_fail_reason.txt
   exit 1
 fi

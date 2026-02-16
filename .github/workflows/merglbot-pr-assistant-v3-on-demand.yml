@@ -82,8 +82,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      issues: read
-      checks: read
     if: |
       (github.event_name == 'issue_comment' && 
        github.event.issue.pull_request && 
@@ -571,22 +569,23 @@ jobs:
             printf '%s\n' "**Next steps:**"
             printf '%s\n' "- Ensure required Actions secrets are configured and visible"
             printf '%s\n' "- Re-run the workflow"
-          } > comment.md
+          } > step1_failure_comment.md
           
           MARKER="<!-- MERGLBOT_STEP1_FAILURE -->"
-          printf '%s\n' "" >> comment.md
-          printf '%s\n' "$MARKER" >> comment.md
+          printf '%s\n' "" >> step1_failure_comment.md
+          printf '%s\n' "$MARKER" >> step1_failure_comment.md
 
           EXISTING_ID=""
           if gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUM/comments" --paginate > pr_issue_comments.json 2>/dev/null; then
             EXISTING_ID="$(jq -r --arg marker "$MARKER" '.[] | select(.body? and (.body | contains($marker))) | .id' pr_issue_comments.json | head -n 1 || true)"
           fi
+          rm -f pr_issue_comments.json || true
           if [ -n "${EXISTING_ID:-}" ] && [ "$EXISTING_ID" != "null" ]; then
-            if ! gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$EXISTING_ID" -f body="$(cat comment.md)"; then
+            if ! gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$EXISTING_ID" -f body=@step1_failure_comment.md; then
               echo "WARN: Failed to update existing Step 1 failure comment" >&2
             fi
           else
-            if ! gh pr comment "$PR_NUM" --body-file comment.md; then
+            if ! gh pr comment "$PR_NUM" --body-file step1_failure_comment.md; then
               echo "WARN: Failed to post PR comment (check GITHUB_TOKEN permissions)" >&2
             fi
           fi
