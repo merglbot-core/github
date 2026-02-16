@@ -500,6 +500,7 @@ jobs:
           gh pr comment "$PR_NUM" --body-file comment.md
 
       - name: Step 1 - Parallel API Calls
+        id: step1
         if: success() && steps.context.outputs.skip_review != 'true'
         env:
           PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
@@ -513,7 +514,7 @@ jobs:
           bash scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh
 
       - name: Step 1 Failure Comment
-        if: failure() && steps.context.outcome == 'success' && steps.context.outputs.skip_review != 'true'
+        if: always() && steps.step1.outcome == 'failure' && steps.context.outputs.skip_review != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -524,9 +525,9 @@ jobs:
           OPENAI_SKIP_REASON=""
 
           if [ -f step1_fail_reason.txt ]; then
-            REASON="$(awk -F= '/^reason=/{print $2}' step1_fail_reason.txt | head -n 1 || true)"
-            ANTHROPIC_SKIP_REASON="$(awk -F= '/^anthropic_skip_reason=/{print $2}' step1_fail_reason.txt | head -n 1 || true)"
-            OPENAI_SKIP_REASON="$(awk -F= '/^openai_skip_reason=/{print $2}' step1_fail_reason.txt | head -n 1 || true)"
+            REASON="$(grep -m1 '^reason=' step1_fail_reason.txt | cut -d= -f2- || true)"
+            ANTHROPIC_SKIP_REASON="$(grep -m1 '^anthropic_skip_reason=' step1_fail_reason.txt | cut -d= -f2- || true)"
+            OPENAI_SKIP_REASON="$(grep -m1 '^openai_skip_reason=' step1_fail_reason.txt | cut -d= -f2- || true)"
           fi
 
           {
@@ -546,7 +547,9 @@ jobs:
             printf '%s\n' "- Re-run the workflow"
           } > comment.md
 
-          gh pr comment "$PR_NUM" --body-file comment.md || true
+          if ! gh pr comment "$PR_NUM" --body-file comment.md; then
+            echo "WARN: Failed to post PR comment (check GITHUB_TOKEN permissions)" >&2
+          fi
       - name: Step 3 - Intelligent Synthesis
         if: success() && steps.context.outputs.skip_review != 'true'
         env:
@@ -1067,7 +1070,6 @@ jobs:
           WORKFLOW_REF: ${{ github.workflow_ref }}
           ACTOR: ${{ github.actor }}
           COMMENT_AUTHOR: ${{ github.event.comment.user.login || '' }}
-          JOB_STATUS: ${{ job.status }}
         run: |
           # Create metrics JSON for feedback loop analysis
           sanitize_model() {
@@ -1094,6 +1096,11 @@ jobs:
           TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
           PR_NUM="${{ env.PR_NUMBER }}"
           REVIEW_MODE="${{ env.REVIEW_MODE }}"
+
+          REVIEW_STATUS="failed"
+          if [ -s final_review.txt ] && ! grep -qx "API_ERROR" final_review.txt 2>/dev/null; then
+            REVIEW_STATUS="success"
+          fi
           
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
           OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
@@ -1189,13 +1196,13 @@ jobs:
               --arg high_count "$HIGH_COUNT" \
               --arg medium_count "$MEDIUM_COUNT" \
               --arg low_count "$LOW_COUNT" \
-              --arg verdict "$VERDICT" \
-              --arg bugbot_count "$BUGBOT_COUNT" \
-              --arg bugbot_sources "$BUGBOT_SOURCES" \
-              --arg status "$JOB_STATUS" \
-              --arg anthropic_usage_json "$ANTHROPIC_USAGE_JSON" \
-              --arg openai_usage_json "$OPENAI_USAGE_JSON" \
-              --arg synthesis_usage_json "$SYNTHESIS_USAGE_JSON" \
+            --arg verdict "$VERDICT" \
+            --arg bugbot_count "$BUGBOT_COUNT" \
+            --arg bugbot_sources "$BUGBOT_SOURCES" \
+            --arg status "$REVIEW_STATUS" \
+            --arg anthropic_usage_json "$ANTHROPIC_USAGE_JSON" \
+            --arg openai_usage_json "$OPENAI_USAGE_JSON" \
+            --arg synthesis_usage_json "$SYNTHESIS_USAGE_JSON" \
               '{
                 timestamp: $timestamp,
                 repository: $repository,
@@ -1236,8 +1243,8 @@ jobs:
               status: $status
             }' > metrics/review-metrics.json
           
-          echo "📊 Review metrics saved"
-          cat metrics/review-metrics.json
+          echo "📊 Review metrics saved to metrics/review-metrics.json"
+          jq -c '{timestamp,repository,pr_number,review_mode,models,findings,verdict,status}' metrics/review-metrics.json || true
       
       - name: Upload Metrics Artifact
         if: always() && steps.context.outputs.skip_review != 'true'
