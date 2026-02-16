@@ -521,7 +521,7 @@ jobs:
                   }
               )
 
-          payload = {"text": header_text_plain, "blocks": blocks}
+          payload = {"text": slack_escape(header_text_plain), "blocks": blocks}
           print(json.dumps(payload))
           PY
           )"

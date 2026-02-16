@@ -24,6 +24,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -41,6 +42,8 @@ REQUIRED_COLUMNS_14 = ("date", "domain", "sessions", "revenue_db", "transactions
 OPTIONAL_COLUMN_COST = "cost"
 
 DOMAIN_OVERRIDES: dict[tuple[str, str], str] = {}
+
+_BQ_FQ_TABLE_RE = re.compile(r"^[A-Za-z0-9_\-]+(\.[A-Za-z0-9_\-]+){2}$")
 
 
 @dataclass(frozen=True)
@@ -137,10 +140,22 @@ def _parse_date_local(value: str, tz: ZoneInfo) -> date:
     return date.fromisoformat(value)
 
 
+def _normalize_table_fq(table_fq: str, *, allow_empty: bool = False) -> str:
+    t = (table_fq or "").strip()
+    if not t:
+        if allow_empty:
+            return ""
+        raise ValueError("invalid_bq_table:empty")
+    if "`" in t or "\n" in t or "\r" in t or not _BQ_FQ_TABLE_RE.match(t):
+        raise ValueError(f"invalid_bq_table:{t}")
+    return t
+
+
 def _split_table_fq(table_fq: str) -> tuple[str, str, str]:
-    parts = (table_fq or "").split(".", 2)
+    table_fq = _normalize_table_fq(table_fq)
+    parts = table_fq.split(".", 2)
     if len(parts) != 3:
-        raise ValueError(f"Invalid table FQ name: {table_fq!r} (expected project.dataset.table)")
+        raise ValueError(f"invalid_bq_table:{table_fq}")
     return parts[0], parts[1], parts[2]
 
 
@@ -316,7 +331,7 @@ def _load_specs(csv_path: Path) -> list[PipelineSpec]:
                     country=row["country"].strip(),
                     # Preserve spaces in table names (legacy can have leading spaces in other columns).
                     bq_table_13=row["bq_table_13"],
-                    bq_table_14=row["bq_table_14"],
+                    bq_table_14=row.get("bq_table_14", ""),
                 )
             )
     if not specs:
@@ -547,7 +562,8 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
         error_snippet = ""
 
         try:
-            meta = _bq_show_table_json(job_project_id=spec.project_id, table_fq=spec.bq_table_13)
+            table_fq_13 = _normalize_table_fq(spec.bq_table_13)
+            meta = _bq_show_table_json(job_project_id=spec.project_id, table_fq=table_fq_13)
             fields = meta.get("schema", {}).get("fields", []) or []
             cols = {str(f.get("name", "") or "").strip().lower() for f in fields if isinstance(f, dict)}
             missing = [c for c in REQUIRED_COLUMNS if c not in cols]
@@ -569,7 +585,7 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                 sql = (
                     "SELECT "
                     + ", ".join(select_parts)
-                    + f" FROM `{spec.bq_table_13}`"
+                    + f" FROM `{table_fq_13}`"
                     + " WHERE CAST(date AS STRING)=@d"
                 )
 
@@ -598,7 +614,9 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
         except Exception as exc:  # noqa: BLE001
             msg = str(exc)
             kind = "bq_error"
-            if msg.startswith("not_found:"):
+            if msg.startswith("invalid_bq_table:"):
+                kind = "invalid_bq_table"
+            elif msg.startswith("not_found:"):
                 kind = "not_found"
             elif msg.startswith("forbidden:"):
                 kind = "forbidden"
@@ -631,7 +649,8 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
             status_14 = "FAIL"
             reason_14 = "14_bq_error"
             try:
-                meta14 = _bq_show_table_json(job_project_id=spec.project_id, table_fq=table_fq_14)
+                table_fq_14_norm = _normalize_table_fq(table_fq_14)
+                meta14 = _bq_show_table_json(job_project_id=spec.project_id, table_fq=table_fq_14_norm)
                 fields14 = meta14.get("schema", {}).get("fields", []) or []
                 cols14 = {str(f.get("name", "") or "").strip().lower() for f in fields14 if isinstance(f, dict)}
                 missing14 = [c for c in REQUIRED_COLUMNS_14 if c not in cols14]
@@ -653,7 +672,7 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                     sql14 = (
                         "SELECT "
                         + ", ".join(select_parts_14)
-                        + f" FROM `{table_fq_14}`"
+                        + f" FROM `{table_fq_14_norm}`"
                         + " WHERE CAST(date AS STRING)=@d AND domain=@dom"
                     )
                     out14 = _bq_query_csv(
@@ -684,7 +703,9 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc)
                 kind = "bq_error"
-                if msg.startswith("not_found:"):
+                if msg.startswith("invalid_bq_table:"):
+                    kind = "invalid_bq_table"
+                elif msg.startswith("not_found:"):
                     kind = "not_found"
                 elif msg.startswith("forbidden:"):
                     kind = "forbidden"
