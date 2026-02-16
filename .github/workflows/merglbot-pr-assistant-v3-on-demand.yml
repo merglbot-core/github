@@ -398,13 +398,31 @@ jobs:
             fi
           done
           
-          gh api "repos/${{ github.repository }}/pulls/$PR_NUM/comments" --paginate > review_comments.json 2>/dev/null || echo "[]" > review_comments.json
-          REVIEW_COMMENT_COUNT=$(jq -r '[.[] | select(.outdated != true)] | length' review_comments.json 2>/dev/null || echo "0")
-          if [ "$REVIEW_COMMENT_COUNT" -gt 0 ]; then
+          if ! gh api "repos/${{ github.repository }}/pulls/$PR_NUM/comments" --paginate > review_comments.json 2>/dev/null; then
+            echo "::warning::Failed to fetch PR review comments; continuing with none"
+            echo "[]" > review_comments.json
+          fi
+          REVIEW_BOT_LOGIN_ALLOWLIST_JSON='["cursor[bot]","gemini-code-assist[bot]","github-copilot[bot]","coderabbitai[bot]","snyk-bot","qodo-ai[bot]","pr-agent[bot]"]'
+          : "${LAST_REVIEW_CREATED_AT:=}"
+
+          # Fail-closed: only ingest bot review comments after we have a valid cutoff timestamp.
+          # This prevents historical-comment DoS / prompt-injection surface and keeps the context bounded.
+          if [ -z "$LAST_REVIEW_CREATED_AT" ]; then
+            echo "::notice::LAST_REVIEW_CREATED_AT not set; skipping review comments ingestion"
+            echo "[]" > review_comments_filtered.json
+          else
+            if ! jq -c --arg cutoff "$LAST_REVIEW_CREATED_AT" --argjson allowed "$REVIEW_BOT_LOGIN_ALLOWLIST_JSON" 'def ts($s): try ($s | fromdateiso8601) catch null; (ts($cutoff)) as $cutoff_ts | if ($cutoff_ts == null) then [] else [ .[] | select(.outdated != true) | select(.user? and ($allowed | index(.user.login))) | (ts(.created_at) as $t | select($t != null and $t > $cutoff_ts)) ] end' review_comments.json > review_comments_filtered.json 2>/dev/null; then
+              echo "::warning::Failed to filter review comments; using empty list"
+              echo "[]" > review_comments_filtered.json
+            fi
+          fi
+
+          REVIEW_COMMENT_COUNT=$(jq -r 'length' review_comments_filtered.json 2>/dev/null || echo "0")
+          if [ "${REVIEW_COMMENT_COUNT:-0}" -gt 0 ]; then
             {
-              echo "### Existing Review Comments"
+              echo "### Existing Bot Review Comments"
               echo ""
-              jq -r '[.[] | select(.outdated != true)] | sort_by(.created_at) | .[-50:] | .[] | "**\(.user.login)** on \(.path): \(.body)"' review_comments.json 2>/dev/null || echo "None"
+              jq -r 'sort_by(.created_at) | .[-50:] | .[] | "**\(.user.login)** on \((.path // "unknown")): \((.body // "")[0:1000])"' review_comments_filtered.json 2>/dev/null || echo "None"
               echo ""
             } >> bugbot_findings.txt
           fi
