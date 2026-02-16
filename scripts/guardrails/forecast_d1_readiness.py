@@ -24,6 +24,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -37,7 +38,15 @@ from zoneinfo import ZoneInfo
 EPS = 1e-9
 
 REQUIRED_COLUMNS = ("date", "sessions", "revenue_db", "transactions_db")
+REQUIRED_COLUMNS_14_COMMON = ("date", "sessions", "revenue_db", "transactions_db")
+REQUIRED_COLUMNS_14_DOMAIN = ("domain",)
+REQUIRED_COLUMNS_14_COUNTRY = ("country",)
 OPTIONAL_COLUMN_COST = "cost"
+
+DOMAIN_OVERRIDES: dict[tuple[str, str], str] = {}
+
+_BQ_FQ_TABLE_RE = re.compile(r"^[A-Za-z0-9_\-]+(\.[A-Za-z0-9_\-]+){2}$")
+_DOMAIN_RE = re.compile(r"^[a-z0-9._\-]+$")
 
 
 @dataclass(frozen=True)
@@ -46,6 +55,7 @@ class PipelineSpec:
     tenant: str
     country: str
     bq_table_13: str
+    bq_table_14: str
 
 
 @dataclass(frozen=True)
@@ -68,6 +78,20 @@ class ResultRow:
     cost_sum: float
     cost_present: str
     error_snippet: str
+    status_13: str
+    reason_13: str
+    table_fq_14: str
+    domain: str
+    status_14: str
+    reason_14: str
+    row_count_14: int
+    sessions_sum_14: float
+    revenue_db_sum_14: float
+    transactions_db_sum_14: float
+    actuals_sum_14: float
+    cost_sum_14: float
+    cost_present_14: str
+    error_snippet_14: str
 
 
 def _run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -119,10 +143,22 @@ def _parse_date_local(value: str, tz: ZoneInfo) -> date:
     return date.fromisoformat(value)
 
 
+def _normalize_table_fq(table_fq: str, *, allow_empty: bool = False) -> str:
+    t = (table_fq or "").strip()
+    if not t:
+        if allow_empty:
+            return ""
+        raise ValueError("invalid_bq_table:empty")
+    if "`" in t or "\n" in t or "\r" in t or not _BQ_FQ_TABLE_RE.match(t):
+        raise ValueError(f"invalid_bq_table:{t}")
+    return t
+
+
 def _split_table_fq(table_fq: str) -> tuple[str, str, str]:
-    parts = (table_fq or "").split(".", 2)
+    table_fq = _normalize_table_fq(table_fq)
+    parts = table_fq.split(".", 2)
     if len(parts) != 3:
-        raise ValueError(f"Invalid table FQ name: {table_fq!r} (expected project.dataset.table)")
+        raise ValueError(f"invalid_bq_table:{table_fq}")
     return parts[0], parts[1], parts[2]
 
 
@@ -217,6 +253,15 @@ def _as_float(value: object) -> float:
         return 0.0
 
 
+def _fmt6(value: object) -> str:
+    if value is None:
+        return "—"
+    try:
+        return f"{float(value):.6f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
 def _infer_slot_auto(now_local: datetime, *, gh_schedule: str = "") -> str:
     """
     Infer slot for scheduled runs.
@@ -298,6 +343,7 @@ def _load_specs(csv_path: Path) -> list[PipelineSpec]:
                     country=row["country"].strip(),
                     # Preserve spaces in table names (legacy can have leading spaces in other columns).
                     bq_table_13=row["bq_table_13"],
+                    bq_table_14=row.get("bq_table_14", ""),
                 )
             )
     if not specs:
@@ -329,6 +375,20 @@ def _write_csv(path: Path, rows: list[ResultRow]) -> None:
                 "cost_sum",
                 "cost_present",
                 "error_snippet",
+                "status_13",
+                "reason_13",
+                "table_fq_14",
+                "domain",
+                "status_14",
+                "reason_14",
+                "row_count_14",
+                "sessions_sum_14",
+                "revenue_db_sum_14",
+                "transactions_db_sum_14",
+                "actuals_sum_14",
+                "cost_sum_14",
+                "cost_present_14",
+                "error_snippet_14",
             ]
         )
         for r in rows:
@@ -352,8 +412,49 @@ def _write_csv(path: Path, rows: list[ResultRow]) -> None:
                     f"{r.cost_sum:.6f}",
                     r.cost_present,
                     r.error_snippet,
+                    r.status_13,
+                    r.reason_13,
+                    r.table_fq_14,
+                    r.domain,
+                    r.status_14,
+                    r.reason_14,
+                    str(r.row_count_14),
+                    f"{r.sessions_sum_14:.6f}",
+                    f"{r.revenue_db_sum_14:.6f}",
+                    f"{r.transactions_db_sum_14:.6f}",
+                    f"{r.actuals_sum_14:.6f}",
+                    f"{r.cost_sum_14:.6f}",
+                    r.cost_present_14,
+                    r.error_snippet_14,
                 ]
             )
+
+
+def _domain_for(tenant: str, country: str) -> str:
+    """Build domain string from tenant+country with validation."""
+    key = ((tenant or "").strip().lower(), (country or "").strip().lower())
+    dom = DOMAIN_OVERRIDES.get(key, f"{key[0]}.{key[1]}")
+    dom = (dom or "").strip().lower()
+    if dom and not _DOMAIN_RE.match(dom):
+        raise ValueError(f"invalid_domain:{dom}")
+    return dom
+
+
+def _md_row_data(r) -> tuple:
+    """Extract row data for MD table, handling 14_* overrides."""
+    table_fq = r.table_fq
+    reason = r.reason
+    row_count = r.row_count
+    actuals_sum = r.actuals_sum
+    cost_sum = r.cost_sum
+    if (r.reason or "").startswith("14_"):
+        table_fq = r.table_fq_14 or r.table_fq
+        dom = (r.domain or "").strip() or "?"
+        reason = f"{r.reason} (domain={dom})"
+        row_count = r.row_count_14
+        actuals_sum = r.actuals_sum_14
+        cost_sum = r.cost_sum_14
+    return table_fq, reason, row_count, actuals_sum, cost_sum
 
 
 def _write_md(
@@ -395,8 +496,9 @@ def _write_md(
         lines.append("| Project | Tenant | Country | Table | Reason | row_count | actuals_sum | cost_sum |")
         lines.append("|---|---|---|---|---|---:|---:|---:|")
         for r in required_fail[:20]:
+            table_fq, reason, row_count, actuals_sum, cost_sum = _md_row_data(r)
             lines.append(
-                f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{r.table_fq}` | `{r.reason}` | {r.row_count} | {r.actuals_sum:.6f} | {r.cost_sum:.6f} |"
+                f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{table_fq}` | `{reason}` | {row_count} | {_fmt6(actuals_sum)} | {_fmt6(cost_sum)} |"
             )
         lines.append("")
 
@@ -406,8 +508,9 @@ def _write_md(
         lines.append("| Project | Tenant | Country | Table | Reason | row_count | actuals_sum | cost_sum |")
         lines.append("|---|---|---|---|---|---:|---:|---:|")
         for r in optional_fail[:20]:
+            table_fq, reason, row_count, actuals_sum, cost_sum = _md_row_data(r)
             lines.append(
-                f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{r.table_fq}` | `{r.reason}` | {r.row_count} | {r.actuals_sum:.6f} | {r.cost_sum:.6f} |"
+                f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{table_fq}` | `{reason}` | {row_count} | {_fmt6(actuals_sum)} | {_fmt6(cost_sum)} |"
             )
         lines.append("")
 
@@ -482,8 +585,8 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
 
         print(f"[check] {spec.project_id} {spec.tenant}/{spec.country} (required={'yes' if req else 'no'})", file=sys.stderr)
 
-        status = "FAIL"
-        reason = "bq_error"
+        status_13 = "FAIL"
+        reason_13 = "bq_error"
         row_count = 0
         sessions_sum = 0.0
         revenue_sum = 0.0
@@ -494,15 +597,16 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
         error_snippet = ""
 
         try:
-            meta = _bq_show_table_json(job_project_id=spec.project_id, table_fq=spec.bq_table_13)
+            table_fq_13 = _normalize_table_fq(spec.bq_table_13)
+            meta = _bq_show_table_json(job_project_id=spec.project_id, table_fq=table_fq_13)
             fields = meta.get("schema", {}).get("fields", []) or []
             cols = {str(f.get("name", "") or "").strip().lower() for f in fields if isinstance(f, dict)}
             missing = [c for c in REQUIRED_COLUMNS if c not in cols]
             cost_present = "yes" if OPTIONAL_COLUMN_COST in cols else "no"
 
             if missing:
-                status = "FAIL"
-                reason = "missing_columns:" + ",".join(missing)
+                status_13 = "FAIL"
+                reason_13 = "missing_columns:" + ",".join(missing)
             else:
                 select_parts = [
                     "COUNT(1) AS row_count",
@@ -516,7 +620,7 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                 sql = (
                     "SELECT "
                     + ", ".join(select_parts)
-                    + f" FROM `{spec.bq_table_13}`"
+                    + f" FROM `{table_fq_13}`"
                     + " WHERE CAST(date AS STRING)=@d"
                 )
 
@@ -534,30 +638,167 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                         cost_sum = _as_float(r.get("cost_sum"))
 
                 if row_count <= 0:
-                    status = "FAIL"
-                    reason = "no_rows_for_date"
+                    status_13 = "FAIL"
+                    reason_13 = "no_rows_for_date"
                 elif actuals_sum <= EPS:
-                    status = "FAIL"
-                    reason = "actuals_zero"
+                    status_13 = "FAIL"
+                    reason_13 = "actuals_zero"
                 else:
-                    status = "PASS"
-                    reason = ""
+                    status_13 = "PASS"
+                    reason_13 = ""
         except Exception as exc:  # noqa: BLE001
             msg = str(exc)
             kind = "bq_error"
-            if msg.startswith("not_found:"):
+            if msg.startswith("invalid_bq_table:"):
+                kind = "invalid_bq_table"
+            elif msg.startswith("not_found:"):
                 kind = "not_found"
             elif msg.startswith("forbidden:"):
                 kind = "forbidden"
             elif msg.startswith("bq_error:"):
                 kind = "bq_error"
 
-            reason = kind
+            reason_13 = kind
             if "stderr(first" in msg:
                 error_snippet = msg.split("stderr(first", 1)[-1]
                 error_snippet = error_snippet[-800:]
             else:
                 error_snippet = msg[:800]
+
+        table_fq_14 = spec.bq_table_14
+        has_14 = bool((table_fq_14 or "").strip())
+        dom = ""
+        status_14 = ""
+        reason_14 = ""
+        row_count_14 = 0
+        sessions_sum_14 = 0.0
+        revenue_sum_14 = 0.0
+        transactions_sum_14 = 0.0
+        actuals_sum_14 = 0.0
+        cost_sum_14 = 0.0
+        cost_present_14 = "no"
+        error_snippet_14 = ""
+
+        dom = ""
+        if has_14:
+            status_14 = "FAIL"
+            reason_14 = "14_bq_error"
+            try:
+                dom = _domain_for(spec.tenant, spec.country)
+                table_fq_14_norm = _normalize_table_fq(table_fq_14)
+                meta14 = _bq_show_table_json(job_project_id=spec.project_id, table_fq=table_fq_14_norm)
+                fields14 = meta14.get("schema", {}).get("fields", []) or []
+                cols14 = {str(f.get("name", "") or "").strip().lower() for f in fields14 if isinstance(f, dict)}
+                cost_present_14 = "yes" if OPTIONAL_COLUMN_COST in cols14 else "no"
+
+                required14: tuple[str, ...] = REQUIRED_COLUMNS_14_COMMON + REQUIRED_COLUMNS_14_DOMAIN + REQUIRED_COLUMNS_14_COUNTRY
+                where_14 = ""
+                params14 = [f"d:STRING:{patch_date}"]
+                dom_norm = (dom or "").strip()
+                country_param = (spec.country or "").strip().lower()
+                invalid_filter_reason = ""
+
+                # Prefer domain filtering when available; fallback to country for all-countries 14_* tables.
+                if "domain" in cols14 and dom_norm:
+                    required14 = REQUIRED_COLUMNS_14_COMMON + REQUIRED_COLUMNS_14_DOMAIN
+                    where_14 = "CAST(date AS STRING)=@d AND domain=@dom"
+                    params14.append(f"dom:STRING:{dom_norm}")
+                elif "country" in cols14 and country_param:
+                    required14 = REQUIRED_COLUMNS_14_COMMON + REQUIRED_COLUMNS_14_COUNTRY
+                    where_14 = "CAST(date AS STRING)=@d AND LOWER(CAST(country AS STRING))=@c"
+                    params14.append(f"c:STRING:{country_param}")
+                elif "domain" in cols14:
+                    required14 = REQUIRED_COLUMNS_14_COMMON + REQUIRED_COLUMNS_14_DOMAIN
+                    invalid_filter_reason = "14_invalid_filter_value:domain"
+                elif "country" in cols14:
+                    required14 = REQUIRED_COLUMNS_14_COMMON + REQUIRED_COLUMNS_14_COUNTRY
+                    invalid_filter_reason = "14_invalid_filter_value:country"
+
+                missing14 = [col for col in required14 if col not in cols14]
+                if missing14:
+                    status_14 = "FAIL"
+                    reason_14 = "14_missing_columns:" + ",".join(missing14)
+                elif invalid_filter_reason:
+                    status_14 = "FAIL"
+                    reason_14 = invalid_filter_reason
+                elif not where_14:
+                    status_14 = "FAIL"
+                    reason_14 = "14_internal_error_empty_where"
+                else:
+                    select_parts_14 = [
+                        "COUNT(1) AS row_count_14",
+                        "IFNULL(SUM(sessions), 0) AS sessions_sum_14",
+                        "IFNULL(SUM(revenue_db), 0) AS revenue_db_sum_14",
+                        "IFNULL(SUM(transactions_db), 0) AS transactions_db_sum_14",
+                    ]
+                    if cost_present_14 == "yes":
+                        select_parts_14.append("IFNULL(SUM(cost), 0) AS cost_sum_14")
+
+                    sql14 = (
+                        "SELECT "
+                        + ", ".join(select_parts_14)
+                        + f" FROM `{table_fq_14_norm}`"
+                        + " WHERE "
+                        + where_14
+                    )
+                    out14 = _bq_query_csv(
+                        job_project_id=spec.project_id,
+                        sql=sql14,
+                        parameters=params14,
+                    )
+                    qrows14 = _parse_csv_rows(out14)
+                    if qrows14:
+                        r14 = qrows14[0]
+                        row_count_14 = _as_int(r14.get("row_count_14"))
+                        sessions_sum_14 = _as_float(r14.get("sessions_sum_14"))
+                        revenue_sum_14 = _as_float(r14.get("revenue_db_sum_14"))
+                        transactions_sum_14 = _as_float(r14.get("transactions_db_sum_14"))
+                        actuals_sum_14 = abs(sessions_sum_14) + abs(revenue_sum_14) + abs(transactions_sum_14)
+                        if cost_present_14 == "yes":
+                            cost_sum_14 = _as_float(r14.get("cost_sum_14"))
+
+                    if row_count_14 <= 0:
+                        status_14 = "FAIL"
+                        reason_14 = "14_no_rows_for_date"
+                    elif actuals_sum_14 <= EPS:
+                        status_14 = "FAIL"
+                        reason_14 = "14_actuals_zero"
+                    else:
+                        status_14 = "PASS"
+                        reason_14 = ""
+            except Exception as exc:  # noqa: BLE001
+                msg = str(exc)
+                kind = "bq_error"
+                if msg.startswith("invalid_domain:"):
+                    kind = "invalid_domain"
+                elif msg.startswith("invalid_bq_table:"):
+                    kind = "invalid_bq_table"
+                elif msg.startswith("not_found:"):
+                    kind = "not_found"
+                elif msg.startswith("forbidden:"):
+                    kind = "forbidden"
+                elif msg.startswith("bq_error:"):
+                    kind = "bq_error"
+
+                status_14 = "FAIL"
+                reason_14 = f"14_{kind}"
+                if "stderr(first" in msg:
+                    error_snippet_14 = msg.split("stderr(first", 1)[-1]
+                    error_snippet_14 = error_snippet_14[-800:]
+                else:
+                    error_snippet_14 = msg[:800]
+
+        status = "FAIL"
+        reason = ""
+        if status_13 != "PASS":
+            status = "FAIL"
+            reason = reason_13
+        elif has_14 and status_14 != "PASS":
+            status = "FAIL"
+            reason = reason_14
+        else:
+            status = "PASS"
+            reason = ""
 
         if status != "PASS":
             if req:
@@ -585,6 +826,20 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                 cost_sum=cost_sum,
                 cost_present=cost_present,
                 error_snippet=error_snippet,
+                status_13=status_13,
+                reason_13=reason_13,
+                table_fq_14=table_fq_14,
+                domain=dom,
+                status_14=status_14,
+                reason_14=reason_14,
+                row_count_14=row_count_14,
+                sessions_sum_14=sessions_sum_14,
+                revenue_db_sum_14=revenue_sum_14,
+                transactions_db_sum_14=transactions_sum_14,
+                actuals_sum_14=actuals_sum_14,
+                cost_sum_14=cost_sum_14,
+                cost_present_14=cost_present_14,
+                error_snippet_14=error_snippet_14,
             )
         )
 
