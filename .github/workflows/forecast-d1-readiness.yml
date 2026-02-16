@@ -379,80 +379,80 @@ jobs:
               tenant_items.append((0 if has_req_fail else 1, 0 if has_opt_fail else 1, tenant.lower(), tenant))
           tenant_items.sort()
 
-            tenant_limit = MAX_TENANTS_DISPLAY
-            for _, _, _, tenant in tenant_items[:tenant_limit]:
-                entries = tenant_map.get(tenant, [])
-                decorated: list[tuple[int, int, str, int]] = []
-                for idx, e in enumerate(entries):
-                    country = str(e.get("country", "") or "?")
-                    st = str(e.get("status", "") or "?")
-                    is_req = bool(e.get("is_required"))
-                    fail_rank = 0 if st == "FAIL" else 1
-                    sev_rank = 0 if (st == "FAIL" and is_req) else 1 if st == "FAIL" else 2
-                    decorated.append((fail_rank, sev_rank, country.lower(), idx))
-                decorated.sort()
+          tenant_limit = MAX_TENANTS_DISPLAY
+          for _, _, _, tenant in tenant_items[:tenant_limit]:
+              entries = tenant_map.get(tenant, [])
+              decorated: list[tuple[int, int, str, int]] = []
+              for idx, e in enumerate(entries):
+                  country = str(e.get("country", "") or "?")
+                  st = str(e.get("status", "") or "?")
+                  is_req = bool(e.get("is_required"))
+                  fail_rank = 0 if st == "FAIL" else 1
+                  sev_rank = 0 if (st == "FAIL" and is_req) else 1 if st == "FAIL" else 2
+                  decorated.append((fail_rank, sev_rank, country.lower(), idx))
+              decorated.sort()
 
-                country_lines: list[str] = []
-                for _, _, _, idx in decorated:
-                    e = entries[idx]
-                    country = str(e.get("country", "") or "?")
-                    st = str(e.get("status", "") or "?")
-                    reason = str(e.get("reason", "") or "").strip()
-                    is_req = bool(e.get("is_required"))
-                    row_count = _to_int(e.get("row_count"))
-                    actuals_sum = _to_float(e.get("actuals_sum"))
-                    revenue_db_sum = _to_float(e.get("revenue_db_sum"))
-                    cost_sum = _to_float(e.get("cost_sum"))
-                    cost_present = str(e.get("cost_present", "") or "").strip().lower()
-                    status_13 = str(e.get("status_13", "") or "").strip() or st
-                    table_fq_14 = str(e.get("table_fq_14", "") or "")
-                    domain = str(e.get("domain", "") or "")
-                    status_14 = str(e.get("status_14", "") or "").strip()
-                    row_count_14 = _to_int(e.get("row_count_14"))
-                    actuals_sum_14 = _to_float(e.get("actuals_sum_14"))
-                    revenue_db_sum_14 = _to_float(e.get("revenue_db_sum_14"))
-                    cost_sum_14 = _to_float(e.get("cost_sum_14"))
+              country_lines: list[str] = []
+              for _, _, _, idx in decorated:
+                  e = entries[idx]
+                  country = str(e.get("country", "") or "?")
+                  st = str(e.get("status", "") or "?")
+                  reason = str(e.get("reason", "") or "").strip()
+                  is_req = bool(e.get("is_required"))
+                  row_count = _to_int(e.get("row_count"))
+                  actuals_sum = _to_float(e.get("actuals_sum"))
+                  revenue_db_sum = _to_float(e.get("revenue_db_sum"))
+                  cost_sum = _to_float(e.get("cost_sum"))
+                  cost_present = str(e.get("cost_present", "") or "").strip().lower()
+                  status_13 = str(e.get("status_13", "") or "").strip() or st
+                  table_fq_14 = str(e.get("table_fq_14", "") or "")
+                  domain = str(e.get("domain", "") or "")
+                  status_14 = str(e.get("status_14", "") or "").strip()
+                  row_count_14 = _to_int(e.get("row_count_14"))
+                  actuals_sum_14 = _to_float(e.get("actuals_sum_14"))
+                  revenue_db_sum_14 = _to_float(e.get("revenue_db_sum_14"))
+                  cost_sum_14 = _to_float(e.get("cost_sum_14"))
 
-                    if status_13 == "PASS":
-                        rev_icon = "✅" if abs(revenue_db_sum) > EPS else "⚠️"
-                        if cost_present == "yes":
-                            cost_icon = "✅" if abs(cost_sum) > EPS else "⚠️"
-                        else:
-                            cost_icon = "⚠️"
-                    else:
-                        rev_icon = "❌"
-                        cost_icon = "❌"
+                  if status_13 == "PASS":
+                      rev_icon = "✅" if abs(revenue_db_sum) > EPS else "⚠️"
+                      if cost_present == "yes":
+                          cost_icon = "✅" if abs(cost_sum) > EPS else "⚠️"
+                      else:
+                          cost_icon = "⚠️"
+                  else:
+                      rev_icon = "❌"
+                      cost_icon = "❌"
 
-                    extra_14 = ""
-                    if table_fq_14.strip():
-                        icon_14 = "✅" if status_14 == "PASS" else "❌" if status_14 == "FAIL" else "❓"
-                        extra_14 = f", 14 {icon_14}"
+                  extra_14 = ""
+                  if table_fq_14.strip():
+                      icon_14 = "✅" if status_14 == "PASS" else "❌" if status_14 == "FAIL" else "❓"
+                      extra_14 = f", 14 {icon_14}"
 
-                    metrics = f"(rev {rev_icon} cost {cost_icon}{extra_14})"
+                  metrics = f"(rev {rev_icon} cost {cost_icon}{extra_14})"
 
-                    if st == "PASS":
-                        icon = "✅"
-                        country_lines.append(f"    {icon} `{slack_escape(country)}` {metrics}")
-                    else:
-                        icon = "❌" if is_req else "⚠️"
-                        det = reason or "FAIL"
-                        if det.startswith("14_"):
-                            det = (
-                                f"{det} (domain={domain or '?'}, rows={row_count_14}, sum_14={actuals_sum_14:.6f}, "
-                                f"rev_14={revenue_db_sum_14:.6f}, cost_14={cost_sum_14:.6f})"
-                            )
-                        elif det in ("no_rows_for_date", "actuals_zero"):
-                            det = (
-                                f"{det} ({row_count} rows, sum={actuals_sum:.6f}, "
-                                f"rev={revenue_db_sum:.6f}, cost={cost_sum:.6f})"
-                            )
-                        else:
-                            det = f"{det} (rev={revenue_db_sum:.6f}, cost={cost_sum:.6f})"
-                        country_lines.append(f"    {icon} `{slack_escape(country)}` {metrics} — `{slack_escape(det)}`")
+                  if st == "PASS":
+                      icon = "✅"
+                      country_lines.append(f"    {icon} `{slack_escape(country)}` {metrics}")
+                  else:
+                      icon = "❌" if is_req else "⚠️"
+                      det = reason or "FAIL"
+                      if det.startswith("14_"):
+                          det = (
+                              f"{det} (domain={domain or '?'}, rows={row_count_14}, sum_14={actuals_sum_14:.6f}, "
+                              f"rev_14={revenue_db_sum_14:.6f}, cost_14={cost_sum_14:.6f})"
+                          )
+                      elif det in ("no_rows_for_date", "actuals_zero"):
+                          det = (
+                              f"{det} ({row_count} rows, sum={actuals_sum:.6f}, "
+                              f"rev={revenue_db_sum:.6f}, cost={cost_sum:.6f})"
+                          )
+                      else:
+                          det = f"{det} (rev={revenue_db_sum:.6f}, cost={cost_sum:.6f})"
+                      country_lines.append(f"    {icon} `{slack_escape(country)}` {metrics} — `{slack_escape(det)}`")
 
-                section_text = "\n".join([f"🏢 `{slack_escape(tenant)}`", *country_lines]).rstrip()
+              section_text = "\n".join([f"🏢 `{slack_escape(tenant)}`", *country_lines]).rstrip()
 
-                blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": section_text}})
+              blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": section_text}})
 
           if len(tenant_items) > tenant_limit:
               blocks.append(
