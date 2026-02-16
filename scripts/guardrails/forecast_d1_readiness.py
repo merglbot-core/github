@@ -463,8 +463,20 @@ def _write_md(
         lines.append("| Project | Tenant | Country | Table | Reason | row_count | actuals_sum | cost_sum |")
         lines.append("|---|---|---|---|---|---:|---:|---:|")
         for r in required_fail[:20]:
+            table_fq = r.table_fq
+            reason = r.reason
+            row_count = r.row_count
+            actuals_sum = r.actuals_sum
+            cost_sum = r.cost_sum
+            if r.reason.startswith("14_"):
+                table_fq = r.table_fq_14 or r.table_fq
+                dom = (r.domain or "").strip() or "?"
+                reason = f"{r.reason} (domain={dom})"
+                row_count = r.row_count_14
+                actuals_sum = r.actuals_sum_14
+                cost_sum = r.cost_sum_14
             lines.append(
-                f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{r.table_fq}` | `{r.reason}` | {r.row_count} | {r.actuals_sum:.6f} | {r.cost_sum:.6f} |"
+                f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{table_fq}` | `{reason}` | {row_count} | {actuals_sum:.6f} | {cost_sum:.6f} |"
             )
         lines.append("")
 
@@ -474,8 +486,20 @@ def _write_md(
         lines.append("| Project | Tenant | Country | Table | Reason | row_count | actuals_sum | cost_sum |")
         lines.append("|---|---|---|---|---|---:|---:|---:|")
         for r in optional_fail[:20]:
+            table_fq = r.table_fq
+            reason = r.reason
+            row_count = r.row_count
+            actuals_sum = r.actuals_sum
+            cost_sum = r.cost_sum
+            if r.reason.startswith("14_"):
+                table_fq = r.table_fq_14 or r.table_fq
+                dom = (r.domain or "").strip() or "?"
+                reason = f"{r.reason} (domain={dom})"
+                row_count = r.row_count_14
+                actuals_sum = r.actuals_sum_14
+                cost_sum = r.cost_sum_14
             lines.append(
-                f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{r.table_fq}` | `{r.reason}` | {r.row_count} | {r.actuals_sum:.6f} | {r.cost_sum:.6f} |"
+                f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{table_fq}` | `{reason}` | {row_count} | {actuals_sum:.6f} | {cost_sum:.6f} |"
             )
         lines.append("")
 
