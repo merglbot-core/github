@@ -512,6 +512,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-6' }}
           OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
+          STEP1_REASON_FILE: ${{ runner.temp }}/merglbot-step1-fail-reason.txt
         run: |
           set -euo pipefail
           bash scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh
@@ -521,6 +522,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
+          STEP1_REASON_FILE: ${{ runner.temp }}/merglbot-step1-fail-reason.txt
         run: |
           set -euo pipefail
           PR_NUM="${PR_NUMBER:-}"
@@ -541,10 +543,11 @@ jobs:
             printf '%s' "$raw"
           }
 
-          if [ -f step1_fail_reason.txt ]; then
-            REASON="$(grep -m1 '^reason=' step1_fail_reason.txt | cut -d= -f2- || true)"
-            ANTHROPIC_SKIP_REASON="$(grep -m1 '^anthropic_skip_reason=' step1_fail_reason.txt | cut -d= -f2- || true)"
-            OPENAI_SKIP_REASON="$(grep -m1 '^openai_skip_reason=' step1_fail_reason.txt | cut -d= -f2- || true)"
+          STEP1_REASON_FILE="${STEP1_REASON_FILE:-}"
+          if [ -n "$STEP1_REASON_FILE" ] && [ -f "$STEP1_REASON_FILE" ]; then
+            REASON="$(grep -m1 '^reason=' "$STEP1_REASON_FILE" | cut -d= -f2- || true)"
+            ANTHROPIC_SKIP_REASON="$(grep -m1 '^anthropic_skip_reason=' "$STEP1_REASON_FILE" | cut -d= -f2- || true)"
+            OPENAI_SKIP_REASON="$(grep -m1 '^openai_skip_reason=' "$STEP1_REASON_FILE" | cut -d= -f2- || true)"
           fi
           
           REASON="$(sanitize_reason "${REASON:-}")"

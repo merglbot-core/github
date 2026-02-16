@@ -20,6 +20,7 @@ trap 'rm -rf -- "$TMP_DIR"' EXIT
 FULL_PROMPT_FILE="${TMP_DIR}/full_prompt.txt"
 ANTHROPIC_PAYLOAD_FILE="${TMP_DIR}/anthropic_payload.json"
 OPENAI_PAYLOAD_FILE="${TMP_DIR}/openai_payload.json"
+STEP1_REASON_FILE="${STEP1_REASON_FILE:-${RUNNER_TEMP:-/tmp}/merglbot-step1-fail-reason.txt}"
 
 ANTHROPIC_MESSAGES_URL="${ANTHROPIC_MESSAGES_URL:-https://api.anthropic.com/v1/messages}"
 OPENAI_RESPONSES_URL="${OPENAI_RESPONSES_URL:-https://api.openai.com/v1/responses}"
@@ -105,16 +106,17 @@ if [ "$ANTHROPIC_API_KEY_PRESENT" != "true" ] && [ "$OPENAI_API_KEY_PRESENT" != 
   printf '%s' "API_ERROR" > anthropic_review.txt
   printf '%s' "API_ERROR" > openai_review.txt
 
-  safe_reason() {
-    printf '%s' "${1:-}" | tr -d '\r\n' | grep -Eo '^[A-Za-z0-9._-]+' || true
-  }
+	safe_reason() {
+	  printf '%s' "${1:-}" | tr -d '\r\n' | grep -Eo '^[A-Za-z0-9._-]+' || true
+	}
 
-  printf '%s\n' \
-    "reason=missing_api_keys" \
-    "anthropic_skip_reason=$(safe_reason "${ANTHROPIC_SKIP_REASON:-}")" \
-    "openai_skip_reason=$(safe_reason "${OPENAI_SKIP_REASON:-}")" \
-    > step1_fail_reason.txt
-  exit 1
+	mkdir -p "$(dirname "$STEP1_REASON_FILE")"
+	printf '%s\n' \
+	  "reason=missing_api_keys" \
+	  "anthropic_skip_reason=$(safe_reason "${ANTHROPIC_SKIP_REASON:-}")" \
+	  "openai_skip_reason=$(safe_reason "${OPENAI_SKIP_REASON:-}")" \
+	  > "${STEP1_REASON_FILE}"
+	exit 1
 fi
 
 if [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then
