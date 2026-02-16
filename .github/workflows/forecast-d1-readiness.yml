@@ -379,26 +379,26 @@ jobs:
               tenant_items.append((0 if has_req_fail else 1, 0 if has_opt_fail else 1, tenant.lower(), tenant))
           tenant_items.sort()
 
-	          tenant_limit = MAX_TENANTS_DISPLAY
-	          for _, _, _, tenant in tenant_items[:tenant_limit]:
-	              entries = tenant_map.get(tenant, [])
-	              decorated: list[tuple[int, int, str, int]] = []
-	              for idx, e in enumerate(entries):
-	                  country = str(e.get("country", "") or "?")
-	                  st = str(e.get("status", "") or "?")
-	                  is_req = bool(e.get("is_required"))
-	                  fail_rank = 0 if st == "FAIL" else 1
-	                  sev_rank = 0 if (st == "FAIL" and is_req) else 1 if st == "FAIL" else 2
-	                  decorated.append((fail_rank, sev_rank, country.lower(), idx))
-	              decorated.sort()
+            tenant_limit = MAX_TENANTS_DISPLAY
+            for _, _, _, tenant in tenant_items[:tenant_limit]:
+                entries = tenant_map.get(tenant, [])
+                decorated: list[tuple[int, int, str, int]] = []
+                for idx, e in enumerate(entries):
+                    country = str(e.get("country", "") or "?")
+                    st = str(e.get("status", "") or "?")
+                    is_req = bool(e.get("is_required"))
+                    fail_rank = 0 if st == "FAIL" else 1
+                    sev_rank = 0 if (st == "FAIL" and is_req) else 1 if st == "FAIL" else 2
+                    decorated.append((fail_rank, sev_rank, country.lower(), idx))
+                decorated.sort()
 
-	              country_lines: list[str] = []
-	              for _, _, _, idx in decorated:
-	                  e = entries[idx]
-	                  country = str(e.get("country", "") or "?")
-	                  st = str(e.get("status", "") or "?")
-	                  reason = str(e.get("reason", "") or "").strip()
-	                  is_req = bool(e.get("is_required"))
+                country_lines: list[str] = []
+                for _, _, _, idx in decorated:
+                    e = entries[idx]
+                    country = str(e.get("country", "") or "?")
+                    st = str(e.get("status", "") or "?")
+                    reason = str(e.get("reason", "") or "").strip()
+                    is_req = bool(e.get("is_required"))
                   row_count = _to_int(e.get("row_count"))
                   actuals_sum = _to_float(e.get("actuals_sum"))
                   revenue_db_sum = _to_float(e.get("revenue_db_sum"))
