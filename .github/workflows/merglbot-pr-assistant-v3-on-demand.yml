@@ -399,12 +399,13 @@ jobs:
           done
           
           gh api "repos/${{ github.repository }}/pulls/$PR_NUM/comments" --paginate > review_comments.json 2>/dev/null || echo "[]" > review_comments.json
-          REVIEW_COMMENT_COUNT=$(jq -r --arg cutoff "$LAST_REVIEW_CREATED_AT" '[.[] | select(.outdated != true) | select(($cutoff == "") or (.created_at > $cutoff)) | select(.user.type == "Bot") | select(.user.login | test("cursor|gemini|copilot|coderabbit|qodo|pr-agent|snyk|sonar|codacy|deepsource"; "i"))] | length' review_comments.json 2>/dev/null || echo "0")
+          REVIEW_BOT_LOGIN_ALLOWLIST_JSON='["cursor[bot]","gemini-code-assist[bot]","github-copilot[bot]","coderabbitai[bot]","snyk-bot","qodo-ai[bot]","pr-agent[bot]"]'
+          REVIEW_COMMENT_COUNT=$(jq -r --arg cutoff "$LAST_REVIEW_CREATED_AT" --argjson allowed "$REVIEW_BOT_LOGIN_ALLOWLIST_JSON" '[.[] | select(.outdated != true) | select(($cutoff == "") or ((.created_at | fromdateiso8601) > ($cutoff | fromdateiso8601))) | select(.user.type == "Bot") | select($allowed | index(.user.login))] | length' review_comments.json 2>/dev/null || echo "0")
           if [ "$REVIEW_COMMENT_COUNT" -gt 0 ]; then
             {
               echo "### Existing Bot Review Comments"
               echo ""
-              jq -r --arg cutoff "$LAST_REVIEW_CREATED_AT" '[.[] | select(.outdated != true) | select(($cutoff == "") or (.created_at > $cutoff)) | select(.user.type == "Bot") | select(.user.login | test("cursor|gemini|copilot|coderabbit|qodo|pr-agent|snyk|sonar|codacy|deepsource"; "i"))] | sort_by(.created_at) | .[-50:] | .[] | "**\(.user.login)** on \((.path // "unknown")): \((.body // "")[0:1000])"' review_comments.json 2>/dev/null || echo "None"
+              jq -r --arg cutoff "$LAST_REVIEW_CREATED_AT" --argjson allowed "$REVIEW_BOT_LOGIN_ALLOWLIST_JSON" '[.[] | select(.outdated != true) | select(($cutoff == "") or ((.created_at | fromdateiso8601) > ($cutoff | fromdateiso8601))) | select(.user.type == "Bot") | select($allowed | index(.user.login))] | sort_by(.created_at) | .[-50:] | .[] | "**\(.user.login)** on \((.path // "unknown")): \((.body // "")[0:1000])"' review_comments.json 2>/dev/null || echo "None"
               echo ""
             } >> bugbot_findings.txt
           fi
