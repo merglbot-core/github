@@ -1060,6 +1060,14 @@ jobs:
         env:
           ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-6' }}
           OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.2' }}
+          REPO: ${{ github.repository }}
+          TRIGGER: ${{ github.event_name }}
+          RUN_ID: ${{ github.run_id }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          ACTOR: ${{ github.actor }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login || '' }}
+          JOB_STATUS: ${{ job.status }}
         run: |
           # Create metrics JSON for feedback loop analysis
           sanitize_model() {
@@ -1154,14 +1162,10 @@ jobs:
             ANTHROPIC_USAGE_JSON="$(jq -c . anthropic_usage.json)"
           fi
           
-          REPO="${{ github.repository }}"
-          TRIGGER="${{ github.event_name }}"
-          RUN_ID="${{ github.run_id }}"
-          WORKFLOW_NAME="${{ github.workflow }}"
-          WORKFLOW_REF="${{ github.workflow_ref }}"
-          ACTOR="${{ github.actor }}"
-          COMMENT_AUTHOR="${{ github.event.comment.user.login || '' }}"
-          JOB_STATUS="${{ job.status }}"
+          ANTHROPIC_USAGE_JSON="${ANTHROPIC_USAGE_JSON:-{}}"
+          OPENAI_USAGE_JSON="${OPENAI_USAGE_JSON:-{}}"
+          SYNTHESIS_USAGE_JSON="${SYNTHESIS_USAGE_JSON:-{}}"
+
           PR_AUTHOR="$(cat pr_author.txt 2>/dev/null || echo '')"
 
           jq -n \
