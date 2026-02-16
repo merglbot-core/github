@@ -410,11 +410,8 @@ jobs:
           if [ -z "$LAST_REVIEW_CREATED_AT" ]; then
             echo "::notice::LAST_REVIEW_CREATED_AT not set; skipping review comments ingestion"
             echo "[]" > review_comments_filtered.json
-          elif ! date -d "$LAST_REVIEW_CREATED_AT" +%s >/dev/null 2>&1; then
-            echo "::warning::Invalid LAST_REVIEW_CREATED_AT; skipping review comments ingestion"
-            echo "[]" > review_comments_filtered.json
           else
-            if ! jq -c --arg cutoff "$LAST_REVIEW_CREATED_AT" --argjson allowed "$REVIEW_BOT_LOGIN_ALLOWLIST_JSON" 'def ts($s): try ($s | fromdateiso8601) catch 0; [ .[] | select(.outdated != true) | select(ts(.created_at) > ts($cutoff)) | select(.user? and ($allowed | index(.user.login))) ]' review_comments.json > review_comments_filtered.json 2>/dev/null; then
+            if ! jq -c --arg cutoff "$LAST_REVIEW_CREATED_AT" --argjson allowed "$REVIEW_BOT_LOGIN_ALLOWLIST_JSON" 'def ts($s): try ($s | fromdateiso8601) catch null; (ts($cutoff)) as $cutoff_ts | if ($cutoff_ts == null) then [] else [ .[] | select(.outdated != true) | select(.user? and ($allowed | index(.user.login))) | (ts(.created_at) as $t | select($t != null and $t > $cutoff_ts)) ] end' review_comments.json > review_comments_filtered.json 2>/dev/null; then
               echo "::warning::Failed to filter review comments; using empty list"
               echo "[]" > review_comments_filtered.json
             fi
