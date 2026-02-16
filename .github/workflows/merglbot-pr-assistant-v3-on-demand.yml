@@ -575,13 +575,9 @@ jobs:
           printf '%s\n' "" >> step1_failure_comment.md
           printf '%s\n' "$MARKER" >> step1_failure_comment.md
 
-          EXISTING_ID=""
-          if gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUM/comments" --paginate > pr_issue_comments.json 2>/dev/null; then
-            EXISTING_ID="$(jq -r --arg marker "$MARKER" '.[] | select(.body? and (.body | contains($marker))) | .id' pr_issue_comments.json | head -n 1 || true)"
-          fi
-          rm -f pr_issue_comments.json || true
+          EXISTING_ID="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUM/comments" --paginate 2>/dev/null | jq -r --arg marker "$MARKER" '.[] | select(.body? and (.body | contains($marker))) | .id' | head -n 1 || true)"
           if [ -n "${EXISTING_ID:-}" ] && [ "$EXISTING_ID" != "null" ]; then
-            if ! gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$EXISTING_ID" -f body=@step1_failure_comment.md; then
+            if ! gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$EXISTING_ID" -f body="$(cat step1_failure_comment.md)"; then
               echo "WARN: Failed to update existing Step 1 failure comment" >&2
             fi
           else
