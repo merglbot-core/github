@@ -104,6 +104,11 @@ if [ "$ANTHROPIC_API_KEY_PRESENT" != "true" ] && [ "$OPENAI_API_KEY_PRESENT" != 
   echo "ERROR: Both ANTHROPIC_API_KEY and OPENAI_API_KEY are missing; cannot run analysis." >&2
   printf '%s' "API_ERROR" > anthropic_review.txt
   printf '%s' "API_ERROR" > openai_review.txt
+  printf '%s\n' \
+    "reason=missing_api_keys" \
+    "anthropic_skip_reason=${ANTHROPIC_SKIP_REASON:-}" \
+    "openai_skip_reason=${OPENAI_SKIP_REASON:-}" \
+    > step1_fail_reason.txt
   exit 1
 fi
 
