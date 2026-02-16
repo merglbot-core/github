@@ -12,10 +12,10 @@ merglbot-core/fb-viz-api
 merglbot-core/infra
 merglbot-core/merglbot-admin
 merglbot-core/platform
-merglbot-core/tf-modules-
+merglbot-core/tf-modules-  # NOTE: repo name intentionally ends with '-' (matches GitHub repo slug)
+merglbot-public/docs
 merglbot-public/kazdavterina-web
 merglbot-public/livero-web
-merglbot-public/docs
 merglbot-public/website
 merglbot-cerano/cerano-web
 merglbot-cerano/feed-generator
