@@ -2,11 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Merglbot Enterprise Expected Organization Settings",
   "description": "Baseline configuration for all Merglbot organizations. Used by org-settings-watch.yml to detect drift.",
-  "version": "1.0.0",
-  "last_updated": "2025-11-27",
+  "version": "1.0.1",
+  "last_updated": "2026-01-31",
   
   "organizations": [
     "merglbot-core",
+    "merglbot-shared",
     "merglbot-public", 
     "merglbot-denatura",
     "merglbot-extractors",
@@ -42,4 +43,3 @@
     "two_factor_disabled": "HIGH"
   }
 }
-
