@@ -398,10 +398,15 @@ jobs:
             fi
           done
           
-          gh api "repos/${{ github.repository }}/pulls/$PR_NUM/comments" --paginate > review_comments.json 2>/dev/null || echo "[]" > review_comments.json
+          if ! gh api "repos/${{ github.repository }}/pulls/$PR_NUM/comments" --paginate > review_comments.json 2>/dev/null; then
+            echo "::warning::Failed to fetch PR review comments; continuing with none"
+            echo "[]" > review_comments.json
+          fi
           REVIEW_BOT_LOGIN_ALLOWLIST_JSON='["cursor[bot]","gemini-code-assist[bot]","github-copilot[bot]","coderabbitai[bot]","snyk-bot","qodo-ai[bot]","pr-agent[bot]"]'
           : "${LAST_REVIEW_CREATED_AT:=}"
 
+          # Fail-closed: only ingest bot review comments after we have a valid cutoff timestamp.
+          # This prevents historical-comment DoS / prompt-injection surface and keeps the context bounded.
           if [ -z "$LAST_REVIEW_CREATED_AT" ]; then
             echo "::notice::LAST_REVIEW_CREATED_AT not set; skipping review comments ingestion"
             echo "[]" > review_comments_filtered.json
