@@ -390,7 +390,7 @@ jobs:
                   fail_rank = 0 if st == "FAIL" else 1
                   sev_rank = 0 if (st == "FAIL" and is_req) else 1 if st == "FAIL" else 2
                   decorated.append((fail_rank, sev_rank, country.lower(), e))
-              decorated.sort()
+              decorated.sort(key=lambda t: (t[0], t[1], t[2]))
 
               country_lines: list[str] = []
               for _, _, _, e in decorated:
