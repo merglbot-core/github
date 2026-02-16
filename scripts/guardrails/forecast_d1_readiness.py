@@ -38,7 +38,9 @@ from zoneinfo import ZoneInfo
 EPS = 1e-9
 
 REQUIRED_COLUMNS = ("date", "sessions", "revenue_db", "transactions_db")
-REQUIRED_COLUMNS_14 = ("date", "domain", "sessions", "revenue_db", "transactions_db")
+REQUIRED_COLUMNS_14_COMMON = ("date", "sessions", "revenue_db", "transactions_db")
+REQUIRED_COLUMNS_14_DOMAIN = ("domain",)
+REQUIRED_COLUMNS_14_COUNTRY = ("country",)
 OPTIONAL_COLUMN_COST = "cost"
 
 DOMAIN_OVERRIDES: dict[tuple[str, str], str] = {}
@@ -677,9 +679,24 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                 meta14 = _bq_show_table_json(job_project_id=spec.project_id, table_fq=table_fq_14_norm)
                 fields14 = meta14.get("schema", {}).get("fields", []) or []
                 cols14 = {str(f.get("name", "") or "").strip().lower() for f in fields14 if isinstance(f, dict)}
-                missing14 = [c for c in REQUIRED_COLUMNS_14 if c not in cols14]
                 cost_present_14 = "yes" if OPTIONAL_COLUMN_COST in cols14 else "no"
 
+                required14: tuple[str, ...] = REQUIRED_COLUMNS_14_COMMON + REQUIRED_COLUMNS_14_DOMAIN + REQUIRED_COLUMNS_14_COUNTRY
+                where_14 = ""
+                params14 = [f"d:STRING:{patch_date}"]
+
+                # Prefer domain filtering when available; fallback to country for all-countries 14_* tables.
+                if "domain" in cols14:
+                    required14 = REQUIRED_COLUMNS_14_COMMON + REQUIRED_COLUMNS_14_DOMAIN
+                    where_14 = "CAST(date AS STRING)=@d AND domain=@dom"
+                    params14.append(f"dom:STRING:{dom}")
+                elif "country" in cols14:
+                    required14 = REQUIRED_COLUMNS_14_COMMON + REQUIRED_COLUMNS_14_COUNTRY
+                    where_14 = "CAST(date AS STRING)=@d AND LOWER(CAST(country AS STRING))=@c"
+                    country_param = (spec.country or "").strip().lower()
+                    params14.append(f"c:STRING:{country_param}")
+
+                missing14 = [col for col in required14 if col not in cols14]
                 if missing14:
                     status_14 = "FAIL"
                     reason_14 = "14_missing_columns:" + ",".join(missing14)
@@ -697,12 +714,13 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                         "SELECT "
                         + ", ".join(select_parts_14)
                         + f" FROM `{table_fq_14_norm}`"
-                        + " WHERE CAST(date AS STRING)=@d AND domain=@dom"
+                        + " WHERE "
+                        + where_14
                     )
                     out14 = _bq_query_csv(
                         job_project_id=spec.project_id,
                         sql=sql14,
-                        parameters=[f"d:STRING:{patch_date}", f"dom:STRING:{dom}"],
+                        parameters=params14,
                     )
                     qrows14 = _parse_csv_rows(out14)
                     if qrows14:
