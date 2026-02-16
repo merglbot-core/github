@@ -517,9 +517,14 @@ jobs:
         if: always() && steps.step1.outcome == 'failure' && steps.context.outputs.skip_review != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
         run: |
           set -euo pipefail
-          PR_NUM="${{ env.PR_NUMBER }}"
+          PR_NUM="${PR_NUMBER:-}"
+          if [ -z "${PR_NUM:-}" ]; then
+            echo "WARN: PR number unavailable; cannot post failure comment" >&2
+            exit 0
+          fi
           REASON="unknown"
           ANTHROPIC_SKIP_REASON=""
           OPENAI_SKIP_REASON=""
@@ -543,7 +548,7 @@ jobs:
             fi
             printf '%s\n' ""
             printf '%s\n' "**Next steps:**"
-            printf '%s\n' "- Ensure `ANTHROPIC_API_KEY` and/or `OPENAI_API_KEY` Actions secrets are configured and visible"
+            printf '%s\n' "- Ensure required Actions secrets are configured and visible"
             printf '%s\n' "- Re-run the workflow"
           } > comment.md
 
@@ -1070,6 +1075,7 @@ jobs:
           WORKFLOW_REF: ${{ github.workflow_ref }}
           ACTOR: ${{ github.actor }}
           COMMENT_AUTHOR: ${{ github.event.comment.user.login || '' }}
+          JOB_STATUS: ${{ job.status }}
         run: |
           # Create metrics JSON for feedback loop analysis
           sanitize_model() {
@@ -1101,6 +1107,15 @@ jobs:
           if [ -s final_review.txt ] && ! grep -qx "API_ERROR" final_review.txt 2>/dev/null; then
             REVIEW_STATUS="success"
           fi
+
+          normalize_usage_json() {
+            local raw="${1:-}"
+            if [ -z "$raw" ]; then
+              printf '%s' "{}"
+              return 0
+            fi
+            printf '%s' "$raw" | jq -c 'if type == "object" then . else {} end' 2>/dev/null || printf '%s' "{}"
+          }
           
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
           OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
@@ -1175,39 +1190,44 @@ jobs:
 
           PR_AUTHOR="$(cat pr_author.txt 2>/dev/null || echo '')"
 
-            jq -n \
-              --arg timestamp "$TIMESTAMP" \
-              --arg repository "$REPO" \
-              --arg pr_number "$PR_NUM" \
-              --arg review_mode "$REVIEW_MODE" \
-              --arg trigger "$TRIGGER" \
-              --arg run_id "$RUN_ID" \
-              --arg workflow "$WORKFLOW_NAME" \
-              --arg workflow_ref "$WORKFLOW_REF" \
-              --arg actor "$ACTOR" \
-              --arg comment_author "$COMMENT_AUTHOR" \
-              --arg pr_author "$PR_AUTHOR" \
-              --arg anthropic_model "$ANTHROPIC_MODEL_FINAL" \
-              --arg openai_model "$OPENAI_MODEL_FINAL" \
-              --arg anthropic_words "$ANTHROPIC_WORDS" \
-              --arg openai_words "$OPENAI_WORDS" \
-              --arg final_words "$FINAL_WORDS" \
-              --arg critical_count "$CRITICAL_COUNT" \
-              --arg high_count "$HIGH_COUNT" \
-              --arg medium_count "$MEDIUM_COUNT" \
-              --arg low_count "$LOW_COUNT" \
+          ANTHROPIC_USAGE_JSON_SAFE="$(normalize_usage_json "$ANTHROPIC_USAGE_JSON")"
+          OPENAI_USAGE_JSON_SAFE="$(normalize_usage_json "$OPENAI_USAGE_JSON")"
+          SYNTHESIS_USAGE_JSON_SAFE="$(normalize_usage_json "$SYNTHESIS_USAGE_JSON")"
+
+          jq -n \
+            --arg timestamp "$TIMESTAMP" \
+            --arg repository "$REPO" \
+            --arg pr_number "$PR_NUM" \
+            --arg review_mode "$REVIEW_MODE" \
+            --arg trigger "$TRIGGER" \
+            --arg run_id "$RUN_ID" \
+            --arg workflow "$WORKFLOW_NAME" \
+            --arg workflow_ref "$WORKFLOW_REF" \
+            --arg actor "$ACTOR" \
+            --arg comment_author "$COMMENT_AUTHOR" \
+            --arg pr_author "$PR_AUTHOR" \
+            --arg anthropic_model "$ANTHROPIC_MODEL_FINAL" \
+            --arg openai_model "$OPENAI_MODEL_FINAL" \
+            --arg anthropic_words "$ANTHROPIC_WORDS" \
+            --arg openai_words "$OPENAI_WORDS" \
+            --arg final_words "$FINAL_WORDS" \
+            --arg critical_count "$CRITICAL_COUNT" \
+            --arg high_count "$HIGH_COUNT" \
+            --arg medium_count "$MEDIUM_COUNT" \
+            --arg low_count "$LOW_COUNT" \
             --arg verdict "$VERDICT" \
             --arg bugbot_count "$BUGBOT_COUNT" \
             --arg bugbot_sources "$BUGBOT_SOURCES" \
-            --arg status "$REVIEW_STATUS" \
-            --arg anthropic_usage_json "$ANTHROPIC_USAGE_JSON" \
-            --arg openai_usage_json "$OPENAI_USAGE_JSON" \
-            --arg synthesis_usage_json "$SYNTHESIS_USAGE_JSON" \
-              '{
-                timestamp: $timestamp,
-                repository: $repository,
-                pr_number: ($pr_number | tonumber? // 0),
-                review_mode: $review_mode,
+            --arg status "${JOB_STATUS:-unknown}" \
+            --arg review_status "$REVIEW_STATUS" \
+            --argjson anthropic_usage "$ANTHROPIC_USAGE_JSON_SAFE" \
+            --argjson openai_usage "$OPENAI_USAGE_JSON_SAFE" \
+            --argjson synthesis_usage "$SYNTHESIS_USAGE_JSON_SAFE" \
+            '{
+              timestamp: $timestamp,
+              repository: $repository,
+              pr_number: ($pr_number | tonumber? // 0),
+              review_mode: $review_mode,
                 trigger: $trigger,
                 run_id: $run_id,
                 workflow: $workflow,
@@ -1215,20 +1235,20 @@ jobs:
                 actor: $actor,
                 comment_author: $comment_author,
                 pr_author: $pr_author,
-                models: {
-                  anthropic: $anthropic_model,
-                  openai: $openai_model
-                },
-                usage: {
-                  anthropic: (($anthropic_usage_json | fromjson? // {}) | if type == "object" then . else {} end),
-                  openai: (($openai_usage_json | fromjson? // {}) | if type == "object" then . else {} end),
-                  synthesis: (($synthesis_usage_json | fromjson? // {}) | if type == "object" then . else {} end)
-                },
-                output: {
-                  anthropic_words: ($anthropic_words | tonumber? // 0),
-                  openai_words: ($openai_words | tonumber? // 0),
-                  final_words: ($final_words | tonumber? // 0)
-                },
+              models: {
+                anthropic: $anthropic_model,
+                openai: $openai_model
+              },
+              usage: {
+                anthropic: $anthropic_usage,
+                openai: $openai_usage,
+                synthesis: $synthesis_usage
+              },
+              output: {
+                anthropic_words: ($anthropic_words | tonumber? // 0),
+                openai_words: ($openai_words | tonumber? // 0),
+                final_words: ($final_words | tonumber? // 0)
+              },
               findings: {
                 critical: ($critical_count | tonumber? // 0),
                 high: ($high_count | tonumber? // 0),
@@ -1240,11 +1260,14 @@ jobs:
                 source_count: ($bugbot_count | tonumber? // 0),
                 sources: $bugbot_sources
               },
-              status: $status
+              status: $status,
+              review_status: $review_status
             }' > metrics/review-metrics.json
           
           echo "📊 Review metrics saved to metrics/review-metrics.json"
-          jq -c '{timestamp,repository,pr_number,review_mode,models,findings,verdict,status}' metrics/review-metrics.json || true
+          if ! jq -c '{timestamp,repository,pr_number,review_mode,models,findings,verdict,status,review_status}' metrics/review-metrics.json; then
+            echo "WARN: metrics validation failed" >&2
+          fi
       
       - name: Upload Metrics Artifact
         if: always() && steps.context.outputs.skip_review != 'true'
