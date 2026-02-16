@@ -130,26 +130,26 @@ if [ -f pr_diff_range.txt ]; then
   DIFF_RANGE=$(< pr_diff_range.txt)
 fi
 
-  PR_DIFF_RAW=""
-  if [ -f pr_diff.txt ]; then
-    PR_DIFF_RAW=$(< pr_diff.txt)
-  fi
-  PR_DIFF_SIZE=${#PR_DIFF_RAW}
-  if [ "$PR_DIFF_SIZE" -gt 100000 ]; then
-    PR_DIFF="$(python3 -c 'import sys; s=sys.stdin.buffer.read().decode("utf-8", "replace"); sys.stdout.write(s[:50000] + "\n\n... (snip) ...\n\n" + s[-50000:])' <<< "$PR_DIFF_RAW")"
-  else
-    PR_DIFF="$PR_DIFF_RAW"
-  fi
-  
-  PREV_REVIEW=""
-  if [ -f prev_merglbot_review.txt ]; then
-    PREV_REVIEW=$(python3 -c 'from pathlib import Path; import sys; p=Path("prev_merglbot_review.txt"); sys.stdout.write(p.read_text(encoding="utf-8", errors="replace")[:20000])' 2>/dev/null || true)
-  fi
-  
-  NEW_COMMITS=""
-  if [ -f new_commits.txt ]; then
-    NEW_COMMITS=$(python3 -c 'from pathlib import Path; import sys; p=Path("new_commits.txt"); sys.stdout.write(p.read_text(encoding="utf-8", errors="replace")[:5000])' 2>/dev/null || true)
-  fi
+PR_DIFF_RAW=""
+if [ -f pr_diff.txt ]; then
+  PR_DIFF_RAW=$(< pr_diff.txt)
+fi
+PR_DIFF_SIZE=${#PR_DIFF_RAW}
+if [ "$PR_DIFF_SIZE" -gt 100000 ]; then
+  PR_DIFF="$(python3 -c 'import sys; s=sys.stdin.buffer.read().decode("utf-8", "replace"); sys.stdout.write(s[:50000] + "\n\n... (snip) ...\n\n" + s[-50000:])' <<< "$PR_DIFF_RAW")"
+else
+  PR_DIFF="$PR_DIFF_RAW"
+fi
+
+PREV_REVIEW=""
+if [ -f prev_merglbot_review.txt ]; then
+  PREV_REVIEW=$(python3 -c 'from pathlib import Path; import sys; p=Path("prev_merglbot_review.txt"); sys.stdout.write(p.read_text(encoding="utf-8", errors="replace")[:20000])' 2>/dev/null || true)
+fi
+
+NEW_COMMITS=""
+if [ -f new_commits.txt ]; then
+  NEW_COMMITS=$(python3 -c 'from pathlib import Path; import sys; p=Path("new_commits.txt"); sys.stdout.write(p.read_text(encoding="utf-8", errors="replace")[:5000])' 2>/dev/null || true)
+fi
 
 CHANGED_FILES="$(head -100 changed_files.txt 2>/dev/null | tr '\n' ', ' || true)"
 
@@ -467,7 +467,7 @@ else
 fi
 
 if [ ! -s anthropic_review.txt ]; then
-  echo "API_ERROR" > anthropic_review.txt
+  printf '%s' "API_ERROR" > anthropic_review.txt
 fi
 
 if [ ! -f anthropic_usage.json ] || ! jq -e . anthropic_usage.json > /dev/null 2>&1; then
@@ -814,7 +814,7 @@ else
 fi
 
 if [ ! -s openai_review.txt ]; then
-  echo "API_ERROR" > openai_review.txt
+  printf '%s' "API_ERROR" > openai_review.txt
 fi
 
 if [ -z "$OPENAI_MODEL_USED" ]; then
