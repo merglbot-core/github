@@ -46,6 +46,7 @@ OPTIONAL_COLUMN_COST = "cost"
 DOMAIN_OVERRIDES: dict[tuple[str, str], str] = {}
 
 _BQ_FQ_TABLE_RE = re.compile(r"^[A-Za-z0-9_\-]+(\.[A-Za-z0-9_\-]+){2}$")
+_DOMAIN_RE = re.compile(r"^[a-z0-9._\-]+$")
 
 
 @dataclass(frozen=True)
@@ -430,9 +431,30 @@ def _write_csv(path: Path, rows: list[ResultRow]) -> None:
 
 
 def _domain_for(tenant: str, country: str) -> str:
+    """Build domain string from tenant+country with validation."""
     key = ((tenant or "").strip().lower(), (country or "").strip().lower())
     dom = DOMAIN_OVERRIDES.get(key, f"{key[0]}.{key[1]}")
-    return (dom or "").strip().lower()
+    dom = (dom or "").strip().lower()
+    if dom and not _DOMAIN_RE.match(dom):
+        raise ValueError(f"invalid_domain:{dom}")
+    return dom
+
+
+def _md_row_data(r) -> tuple:
+    """Extract row data for MD table, handling 14_* overrides."""
+    table_fq = r.table_fq
+    reason = r.reason
+    row_count = r.row_count
+    actuals_sum = r.actuals_sum
+    cost_sum = r.cost_sum
+    if (r.reason or "").startswith("14_"):
+        table_fq = r.table_fq_14 or r.table_fq
+        dom = (r.domain or "").strip() or "?"
+        reason = f"{r.reason} (domain={dom})"
+        row_count = r.row_count_14
+        actuals_sum = r.actuals_sum_14
+        cost_sum = r.cost_sum_14
+    return table_fq, reason, row_count, actuals_sum, cost_sum
 
 
 def _write_md(
@@ -474,18 +496,7 @@ def _write_md(
         lines.append("| Project | Tenant | Country | Table | Reason | row_count | actuals_sum | cost_sum |")
         lines.append("|---|---|---|---|---|---:|---:|---:|")
         for r in required_fail[:20]:
-            table_fq = r.table_fq
-            reason = r.reason
-            row_count = r.row_count
-            actuals_sum = r.actuals_sum
-            cost_sum = r.cost_sum
-            if (r.reason or "").startswith("14_"):
-                table_fq = r.table_fq_14 or r.table_fq
-                dom = (r.domain or "").strip() or "?"
-                reason = f"{r.reason} (domain={dom})"
-                row_count = r.row_count_14
-                actuals_sum = r.actuals_sum_14
-                cost_sum = r.cost_sum_14
+            table_fq, reason, row_count, actuals_sum, cost_sum = _md_row_data(r)
             lines.append(
                 f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{table_fq}` | `{reason}` | {row_count} | {_fmt6(actuals_sum)} | {_fmt6(cost_sum)} |"
             )
@@ -497,18 +508,7 @@ def _write_md(
         lines.append("| Project | Tenant | Country | Table | Reason | row_count | actuals_sum | cost_sum |")
         lines.append("|---|---|---|---|---|---:|---:|---:|")
         for r in optional_fail[:20]:
-            table_fq = r.table_fq
-            reason = r.reason
-            row_count = r.row_count
-            actuals_sum = r.actuals_sum
-            cost_sum = r.cost_sum
-            if (r.reason or "").startswith("14_"):
-                table_fq = r.table_fq_14 or r.table_fq
-                dom = (r.domain or "").strip() or "?"
-                reason = f"{r.reason} (domain={dom})"
-                row_count = r.row_count_14
-                actuals_sum = r.actuals_sum_14
-                cost_sum = r.cost_sum_14
+            table_fq, reason, row_count, actuals_sum, cost_sum = _md_row_data(r)
             lines.append(
                 f"| `{r.project_id}` | `{r.tenant}` | `{r.country}` | `{table_fq}` | `{reason}` | {row_count} | {_fmt6(actuals_sum)} | {_fmt6(cost_sum)} |"
             )
