@@ -253,7 +253,12 @@ def _as_float(value: object) -> float:
 
 
 def _fmt6(value: object) -> str:
-    return f"{_as_float(value):.6f}"
+    if value is None:
+        return "—"
+    try:
+        return f"{float(value):.6f}"
+    except (TypeError, ValueError):
+        return "—"
 
 
 def _infer_slot_auto(now_local: datetime, *, gh_schedule: str = "") -> str:
