@@ -317,6 +317,11 @@ jobs:
           
           SKIP_REVIEW="false"
           SKIP_REASON="none"
+          write_skip_outputs() {
+            echo "skip_review=${SKIP_REVIEW:-false}" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=${SKIP_REASON:-}" >> "$GITHUB_OUTPUT"
+          }
+          trap write_skip_outputs EXIT
           if [ "$DIFF_SCOPE_MODE" != "full" ] && [ -n "$PREV_REVIEW_HEAD_SHA" ] && [ "$PREV_REVIEW_HEAD_SHA" == "$PR_HEAD_SHA" ]; then
             SKIP_REVIEW="true"
             SKIP_REASON="no_new_commits"
@@ -450,9 +455,6 @@ jobs:
               fi
             done
           fi
-          
-          echo "skip_review=$SKIP_REVIEW" >> "$GITHUB_OUTPUT"
-          echo "skip_reason=$SKIP_REASON" >> "$GITHUB_OUTPUT"
           
           echo "========================================="
           echo "CONTEXT GATHERING COMPLETE"
