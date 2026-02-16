@@ -211,6 +211,15 @@ jobs:
 
           EPS = 1e-9  # Float tolerance for "non-zero" sums (avoid precision noise)
 
+          def slack_escape(s: str) -> str:
+              """Escape mrkdwn special chars to prevent injection/mentions."""
+              return (
+                  s.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;")
+                   .replace("@", "@\u200b")  # zero-width space breaks mentions
+              )
+
           # Slack Block Kit limits / readability caps
           MAX_TENANTS_DISPLAY = 15
           MAX_REQ_FAILURES_DISPLAY = 10
@@ -274,6 +283,7 @@ jobs:
               header_text = f"❓ Forecast D-1 Readiness: UNKNOWN (status={status_norm or '?'})"
 
           blocks: list[dict] = []
+          # header_text format: "EMOJI Forecast D-1 Readiness: STATUS" (emoji first)
           icon, sep, rest = header_text.partition(" ")
           header_mrkdwn = f"{icon} *{rest}*" if sep else f"*{header_text}*"
           blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": header_mrkdwn}})
@@ -361,7 +371,7 @@ jobs:
                       else:
                           cost_icon = "⚠️"
                       metrics = f"(rev {rev_icon} cost {cost_icon})"
-                      country_lines.append(f"    {icon} {country} {metrics}")
+                      country_lines.append(f"    {icon} `{slack_escape(country)}` {metrics}")
                   else:
                       icon = "❌" if is_req else "⚠️"
                       metrics = "(rev ❌ cost ❌)"
@@ -373,9 +383,9 @@ jobs:
                           )
                       else:
                           det = f"{det} (rev={revenue_db_sum:.6f}, cost={cost_sum:.6f})"
-                      country_lines.append(f"    {icon} {country} {metrics} — _{det}_")
+                      country_lines.append(f"    {icon} `{slack_escape(country)}` {metrics} — _{slack_escape(det)}_")
 
-              section_text = "\n".join([f"🏢 *{tenant}*", *country_lines]).rstrip()
+              section_text = "\n".join([f"🏢 *{slack_escape(tenant)}*", *country_lines]).rstrip()
 
               blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": section_text}})
 
