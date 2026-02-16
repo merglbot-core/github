@@ -212,7 +212,7 @@ jobs:
           EPS = 1e-9  # Float tolerance for "non-zero" sums (avoid precision noise)
 
           def slack_escape(s: str) -> str:
-              """Escape mrkdwn special chars to prevent injection/mentions."""
+              """Escape Slack link/mention primitives + break @mentions (HTML entities baseline)."""
               return (
                   s.replace("&", "&amp;")
                    .replace("<", "&lt;")
@@ -383,9 +383,9 @@ jobs:
                           )
                       else:
                           det = f"{det} (rev={revenue_db_sum:.6f}, cost={cost_sum:.6f})"
-                      country_lines.append(f"    {icon} `{slack_escape(country)}` {metrics} — _{slack_escape(det)}_")
+                      country_lines.append(f"    {icon} `{slack_escape(country)}` {metrics} — `{slack_escape(det)}`")
 
-              section_text = "\n".join([f"🏢 *{slack_escape(tenant)}*", *country_lines]).rstrip()
+              section_text = "\n".join([f"🏢 `{slack_escape(tenant)}`", *country_lines]).rstrip()
 
               blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": section_text}})
 
