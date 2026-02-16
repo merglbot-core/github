@@ -212,11 +212,14 @@ jobs:
           EPS = 1e-9  # Float tolerance for "non-zero" sums (avoid precision noise)
 
           def slack_escape(s: str) -> str:
-              """Escape Slack link/mention primitives + break @mentions (HTML entities baseline)."""
+              """Escape Slack link primitives, stabilize mrkdwn code spans, and break @mentions."""
               return (
                   s.replace("&", "&amp;")
                    .replace("<", "&lt;")
                    .replace(">", "&gt;")
+                   .replace("`", "ˋ")       # prevent breaking inline code spans
+                   .replace("\n", " ")
+                   .replace("\r", " ")
                    .replace("@", "@\u200b")  # zero-width space breaks mentions
               )
 
