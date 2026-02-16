@@ -104,7 +104,7 @@ if [ "$ANTHROPIC_API_KEY_PRESENT" != "true" ] && [ "$OPENAI_API_KEY_PRESENT" != 
   echo "ERROR: Both ANTHROPIC_API_KEY and OPENAI_API_KEY are missing; cannot run analysis." >&2
   printf '%s' "API_ERROR" > anthropic_review.txt
   printf '%s' "API_ERROR" > openai_review.txt
-  exit 0
+  exit 1
 fi
 
 if [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then

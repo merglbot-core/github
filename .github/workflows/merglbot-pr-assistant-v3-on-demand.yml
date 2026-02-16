@@ -61,8 +61,8 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write # required for `gh pr comment` (PR review output)
-  issues: write # required for reactions and some PR comment flows
+  pull-requests: read
+  issues: read
   checks: read
 
 concurrency:
@@ -189,6 +189,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30  # Context gather + LLM calls; typical 10-20m
     
+    permissions:
+      contents: read
+      pull-requests: write # required for `gh pr comment` (PR review output)
+      issues: write # required for PR comments via Issues API
+      checks: read
+
     env:
       ANTHROPIC_API_VERSION: "2023-06-01"
       PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
@@ -201,14 +207,6 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 0
-      
-      - name: React to Comment
-        if: github.event_name == 'issue_comment'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
-            -f content='eyes' || true
       
       - name: Gather Full PR Context
         id: context
@@ -445,7 +443,7 @@ jobs:
           # Security pre-scan: if PR context contains secret-like patterns, skip AI review to avoid exfiltration to LLM APIs.
           # IMPORTANT: never print the matching line(s) to logs.
           if [ "$SKIP_REVIEW" != "true" ]; then
-            SECRET_PATTERN='-----BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY-----|-----BEGIN PRIVATE KEY-----|xox[baprs]-|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|gh[orsu]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}'
+            SECRET_PATTERN='-----BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY-----|-----BEGIN PRIVATE KEY-----|xox[baprs]-|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|gh[oprsu]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}'
             for SECRET_SCAN_FILE in pr_diff.txt pr_title.txt pr_body.txt bugbot_findings.txt changed_files.txt pr_checks_summary.txt; do
               if [ -s "$SECRET_SCAN_FILE" ] && grep -Eqi "$SECRET_PATTERN" "$SECRET_SCAN_FILE"; then
                 echo "⛔️ Potential secret-like material detected in PR context; skipping AI review."
@@ -499,15 +497,6 @@ jobs:
           fi
           
           gh pr comment "$PR_NUM" --body-file comment.md
-          
-          if [ "${{ github.event_name }}" == "issue_comment" ]; then
-            REACTION="hooray"
-            if [ "${SKIP_REASON:-}" == "potential_secret" ]; then
-              REACTION="confused"
-            fi
-            gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
-              -f content="$REACTION" || true
-          fi
 
       - name: Step 1 - Parallel API Calls
         if: success() && steps.context.outputs.skip_review != 'true'
@@ -970,11 +959,6 @@ jobs:
           
           gh pr comment "$PR_NUM" --body-file comment.md
           echo "Review posted to PR #$PR_NUM"
-          
-          if [ "${{ github.event_name }}" == "issue_comment" ]; then
-            gh api repos/${{ github.repository }}/issues/comments/${{ github.event.comment.id }}/reactions \
-              -f content='rocket' || true
-          fi
       
       - name: Workflow Summary
         run: |
