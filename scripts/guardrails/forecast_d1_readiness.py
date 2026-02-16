@@ -679,11 +679,12 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
         cost_present_14 = "no"
         error_snippet_14 = ""
 
+        dom = ""
         if has_14:
-            dom = _domain_for(spec.tenant, spec.country)
             status_14 = "FAIL"
             reason_14 = "14_bq_error"
             try:
+                dom = _domain_for(spec.tenant, spec.country)
                 table_fq_14_norm = _normalize_table_fq(table_fq_14)
                 meta14 = _bq_show_table_json(job_project_id=spec.project_id, table_fq=table_fq_14_norm)
                 fields14 = meta14.get("schema", {}).get("fields", []) or []
@@ -768,7 +769,9 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
             except Exception as exc:  # noqa: BLE001
                 msg = str(exc)
                 kind = "bq_error"
-                if msg.startswith("invalid_bq_table:"):
+                if msg.startswith("invalid_domain:"):
+                    kind = "invalid_domain"
+                elif msg.startswith("invalid_bq_table:"):
                     kind = "invalid_bq_table"
                 elif msg.startswith("not_found:"):
                     kind = "not_found"
