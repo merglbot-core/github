@@ -194,11 +194,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30  # Context gather + LLM calls; typical 10-20m
     
-    permissions:
-      contents: read
-      pull-requests: write # required for `gh pr comment` (PR review output)
-      issues: write # required for PR comments via Issues API
-      checks: read
+	    permissions:
+	      contents: read
+	      pull-requests: write # required for `gh pr comment` (PR review output)
+	      issues: write # required for PR comments and reactions via Issues API
+	      checks: read
 
     env:
       ANTHROPIC_API_VERSION: "2023-06-01"
