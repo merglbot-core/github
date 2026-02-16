@@ -398,17 +398,24 @@ jobs:
             fi
           done
           
-          gh api "repos/${{ github.repository }}/pulls/$PR_NUM/comments" --paginate > review_comments.json 2>/dev/null || echo "[]" > review_comments.json
-          REVIEW_BOT_LOGIN_ALLOWLIST_JSON='["cursor[bot]","gemini-code-assist[bot]","github-copilot[bot]","coderabbitai[bot]","snyk-bot","qodo-ai[bot]","pr-agent[bot]"]'
-          REVIEW_COMMENT_COUNT=$(jq -r --arg cutoff "$LAST_REVIEW_CREATED_AT" --argjson allowed "$REVIEW_BOT_LOGIN_ALLOWLIST_JSON" 'def ts($s): try ($s | fromdateiso8601) catch 0; [.[] | select(.outdated != true) | select(($cutoff == "") or (ts(.created_at) > ts($cutoff))) | select(.user? and .user.type == "Bot") | select($allowed | index(.user.login))] | length' review_comments.json 2>/dev/null || echo "0")
-          if [ "$REVIEW_COMMENT_COUNT" -gt 0 ]; then
-            {
-              echo "### Existing Bot Review Comments"
-              echo ""
-              jq -r --arg cutoff "$LAST_REVIEW_CREATED_AT" --argjson allowed "$REVIEW_BOT_LOGIN_ALLOWLIST_JSON" 'def ts($s): try ($s | fromdateiso8601) catch 0; [.[] | select(.outdated != true) | select(($cutoff == "") or (ts(.created_at) > ts($cutoff))) | select(.user? and .user.type == "Bot") | select($allowed | index(.user.login))] | sort_by(.created_at) | .[-50:] | .[] | "**\(.user.login)** on \((.path // "unknown")): \((.body // "")[0:1000])"' review_comments.json 2>/dev/null || echo "None"
-              echo ""
-            } >> bugbot_findings.txt
-          fi
+	          gh api "repos/${{ github.repository }}/pulls/$PR_NUM/comments" --paginate > review_comments.json 2>/dev/null || echo "[]" > review_comments.json
+	          REVIEW_BOT_LOGIN_ALLOWLIST_JSON='["cursor[bot]","gemini-code-assist[bot]","github-copilot[bot]","coderabbitai[bot]","snyk-bot","qodo-ai[bot]","pr-agent[bot]"]'
+	          REVIEW_COMMENT_COUNT="0"
+	          if ! REVIEW_COMMENT_COUNT="$(jq -er --arg cutoff "$LAST_REVIEW_CREATED_AT" --argjson allowed "$REVIEW_BOT_LOGIN_ALLOWLIST_JSON" 'def ts($s): try ($s | fromdateiso8601) catch 0; [.[] | select(.outdated != true) | select(($cutoff == "") or (ts(.created_at) > ts($cutoff))) | select(.user? and .user.type == "Bot") | select($allowed | index(.user.login))] | length' review_comments.json 2>/dev/null)"; then
+	            echo "::warning::Failed to parse review comments JSON; defaulting to safe value"
+	            REVIEW_COMMENT_COUNT="1"
+	          fi
+
+	          if [ "${REVIEW_COMMENT_COUNT:-0}" -gt 0 ]; then
+	            {
+	              echo "### Existing Bot Review Comments"
+	              echo ""
+	              if ! jq -r --arg cutoff "$LAST_REVIEW_CREATED_AT" --argjson allowed "$REVIEW_BOT_LOGIN_ALLOWLIST_JSON" 'def ts($s): try ($s | fromdateiso8601) catch 0; [.[] | select(.outdated != true) | select(($cutoff == "") or (ts(.created_at) > ts($cutoff))) | select(.user? and .user.type == "Bot") | select($allowed | index(.user.login))] | sort_by(.created_at) | .[-50:] | .[] | "**\(.user.login)** on \((.path // "unknown")): \((.body // "")[0:1000])"' review_comments.json 2>/dev/null; then
+	                echo "None"
+	              fi
+	              echo ""
+	            } >> bugbot_findings.txt
+	          fi
           
           BUGBOT_SIZE=$(wc -c < bugbot_findings.txt)
           if [ "$BUGBOT_SIZE" -lt 20 ]; then
