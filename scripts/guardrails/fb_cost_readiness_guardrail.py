@@ -253,7 +253,7 @@ def _run_object_check(
     def fmt_blob(b: storage.Blob | None) -> tuple[str, str, str]:
         if b is None:
             return "", "", ""
-        updated = getattr(b, "updated", None) or getattr(b, "time_created", None)
+        updated = getattr(b, "time_created", None) or getattr(b, "updated", None)
         if updated is None:
             updated_utc = ""
             updated_local = ""
