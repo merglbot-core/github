@@ -145,6 +145,7 @@ def _csv_sum_spend_for_date(csv_text: str, *, date_start: str) -> tuple[int, flo
 
     row_count = 0
     sum_spend = 0.0
+    parse_errors = 0
     for row in reader:
         if str(row.get("date_start") or "").strip() != date_start:
             continue
@@ -153,11 +154,15 @@ def _csv_sum_spend_for_date(csv_text: str, *, date_start: str) -> tuple[int, flo
         try:
             sum_spend += float(raw) if raw else 0.0
         except (ValueError, TypeError):
-            # Treat parse errors as 0 for robustness; surface a warning for triage.
-            print(
-                f"WARNING: Could not parse spend value {raw!r} for date_start={date_start}",
-                file=sys.stderr,
-            )
+            parse_errors += 1
+            # Treat parse errors as 0 for robustness. Log once per CSV to avoid spamming.
+            continue
+    if parse_errors:
+        print(
+            f"WARNING: spend parse errors for date_start={date_start} "
+            f"({parse_errors} row(s)); treating as 0.0",
+            file=sys.stderr,
+        )
     return row_count, sum_spend
 
 

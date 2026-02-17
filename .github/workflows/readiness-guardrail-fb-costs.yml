@@ -191,16 +191,16 @@ jobs:
           PY
           )"
 
+          # Slack notification is best-effort. For security, log only HTTP code (no response body).
           http_code="$(
-            curl -sS -o /tmp/slack_response.txt -w "%{http_code}" -X POST "$SLACK_WEBHOOK_URL" \
+            curl -sS -o /dev/null -w "%{http_code}" -X POST "$SLACK_WEBHOOK_URL" \
               -H 'Content-Type: application/json' \
               --data "$PAYLOAD" || true
           )"
 
           echo "Slack HTTP: $http_code"
-          if [ -s /tmp/slack_response.txt ]; then
-            echo "Slack response:"
-            cat /tmp/slack_response.txt
+          if [ "$http_code" != "200" ]; then
+            echo "WARN: Slack webhook returned non-200." >&2
           fi
 
       - name: Fail workflow if guardrail failed
