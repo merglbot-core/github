@@ -115,7 +115,7 @@ jobs:
           retention-days: 90
 
       - name: Slack alert (FAIL-only)
-        if: steps.guardrail.outputs.exit_code != '0' && inputs.dry_run != true
+        if: steps.guardrail.outputs.exit_code != '0' && inputs.dry_run != true && inputs.dry_run != 'true'
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
@@ -192,14 +192,17 @@ jobs:
           )"
 
           # Slack notification is best-effort. For security, log only HTTP code (no response body).
-          http_code="$(
-            curl -sS -o /dev/null -w "%{http_code}" -X POST "$SLACK_WEBHOOK_URL" \
-              -H 'Content-Type: application/json' \
-              --data "$PAYLOAD" || true
-          )"
+          set +e
+          http_code="$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$SLACK_WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            --data "$PAYLOAD")"
+          curl_exit=$?
+          set -e
 
           echo "Slack HTTP: $http_code"
-          if [ "$http_code" != "200" ]; then
+          if [ "$curl_exit" != "0" ]; then
+            echo "WARN: curl failed (exit=$curl_exit); Slack not notified." >&2
+          elif [ "$http_code" != "200" ]; then
             echo "WARN: Slack webhook returned non-200." >&2
           fi
 
