@@ -152,9 +152,12 @@ def _csv_sum_spend_for_date(csv_text: str, *, date_start: str) -> tuple[int, flo
         raw = str(row.get("spend") or "").strip()
         try:
             sum_spend += float(raw) if raw else 0.0
-        except Exception:
-            # Treat parse errors as 0 for robustness; diagnostics are in row_count.
-            pass
+        except (ValueError, TypeError):
+            # Treat parse errors as 0 for robustness; surface a warning for triage.
+            print(
+                f"WARNING: Could not parse spend value {raw!r} for date_start={date_start}",
+                file=sys.stderr,
+            )
     return row_count, sum_spend
 
 
@@ -167,8 +170,8 @@ def _pick_generation_asof(
     if not blobs:
         return None, None
     def updated_ts(b: storage.Blob) -> datetime:
-        # updated is preferred; time_created fallback.
-        ts = getattr(b, "updated", None) or getattr(b, "time_created", None)
+        # Prefer time_created for generation ordering; updated can change on metadata updates.
+        ts = getattr(b, "time_created", None) or getattr(b, "updated", None)
         if ts is None:
             return datetime.fromtimestamp(0, tz=UTC)
         return _as_utc(ts)
@@ -198,6 +201,8 @@ def _run_object_check(
             if b.name == object_name
         ]
     except (Forbidden, NotFound) as exc:
+        # Avoid leaking internal details into Slack by keeping the reason coarse-grained.
+        reason = exc.__class__.__name__
         return ObjectResult(
             group_id=spec.group_id,
             mode=spec.mode,
@@ -207,7 +212,7 @@ def _run_object_check(
             date_start=date_start_str,
             sla_local=sla_local_dt.strftime("%H:%M"),
             status="FAIL",
-            reason=f"{exc.__class__.__name__}: {exc.message}",
+            reason=reason,
             asof_generation="",
             asof_updated_utc="",
             asof_updated_local="",
@@ -482,9 +487,14 @@ def run(*, csv_path: Path, outdir: Path, tz_name: str, date_local_str: str, mode
     checked_at_utc = datetime.now(tz=UTC)
     date_start = date_local - date.resolution
 
+    if mode and mode not in {"merged", "separate"}:
+        raise ValueError(f"Invalid --mode: {mode!r} (expected merged|separate)")
+
     specs = _load_specs(csv_path)
     if mode:
         specs = [s for s in specs if s.mode == mode]
+    if not specs:
+        raise ValueError("No producer specs matched the selected mode/config.")
 
     client = storage.Client()
 

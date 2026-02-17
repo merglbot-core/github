@@ -65,14 +65,22 @@ jobs:
           set -euo pipefail
           OUTDIR="guardrail-out"
 
-          CMD="python scripts/guardrails/fb_cost_readiness_guardrail.py --outdir $OUTDIR --timezone Europe/Prague --mode merged"
-          if [ -n "${DATE_LOCAL}" ]; then
-            CMD="$CMD --date-local ${DATE_LOCAL}"
+          cmd=(python scripts/guardrails/fb_cost_readiness_guardrail.py
+               --outdir "$OUTDIR"
+               --timezone "Europe/Prague"
+               --mode "merged")
+
+          if [[ -n "${DATE_LOCAL:-}" ]]; then
+            if ! [[ "${DATE_LOCAL}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+              echo "ERROR: Invalid DATE_LOCAL format (expected YYYY-MM-DD): ${DATE_LOCAL}" >&2
+              exit 1
+            fi
+            cmd+=(--date-local "$DATE_LOCAL")
           fi
 
-          echo "Running: $CMD"
+          echo "Running: ${cmd[*]}"
           EXIT=0
-          $CMD || EXIT=$?
+          "${cmd[@]}" || EXIT=$?
 
           echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
           echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
@@ -183,11 +191,18 @@ jobs:
           PY
           )"
 
-          curl -sS -X POST "$SLACK_WEBHOOK_URL" \
-            -H 'Content-Type: application/json' \
-            --data "$PAYLOAD"
+          http_code="$(
+            curl -sS -o /tmp/slack_response.txt -w "%{http_code}" -X POST "$SLACK_WEBHOOK_URL" \
+              -H 'Content-Type: application/json' \
+              --data "$PAYLOAD" || true
+          )"
+
+          echo "Slack HTTP: $http_code"
+          if [ -s /tmp/slack_response.txt ]; then
+            echo "Slack response:"
+            cat /tmp/slack_response.txt
+          fi
 
       - name: Fail workflow if guardrail failed
         if: steps.guardrail.outputs.exit_code != '0'
         run: exit 1
-
