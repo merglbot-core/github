@@ -175,9 +175,13 @@ jobs:
           if gh release view "$VERSION" >/dev/null 2>&1; then
             echo "Release $VERSION already exists, skipping release creation (idempotent)"
           else
+            if [ ! -f CHANGELOG_TEMP.md ]; then
+              echo "::error::CHANGELOG_TEMP.md is missing; cannot create release notes."
+              exit 1
+            fi
             gh release create "$VERSION" \
               --title "Release $VERSION" \
-              --notes "${{ steps.changelog.outputs.changelog }}" \
+              --notes-file CHANGELOG_TEMP.md \
               --verify-tag \
               --latest
             echo "Release $VERSION created"
@@ -192,7 +196,11 @@ jobs:
           else
             echo "### 🎉 Release v${{ steps.version.outputs.version }} Created" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "${{ steps.changelog.outputs.changelog }}" >> $GITHUB_STEP_SUMMARY
+            if [ -f CHANGELOG_TEMP.md ]; then
+              cat CHANGELOG_TEMP.md >> $GITHUB_STEP_SUMMARY
+            else
+              echo "_Changelog file missing._" >> $GITHUB_STEP_SUMMARY
+            fi
           fi
   
   notify:
