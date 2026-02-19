@@ -351,8 +351,16 @@ jobs:
                                   "cost_present": cost_present,
                               }
                           )
-          except Exception:
-              pass
+          except Exception as exc:
+              import sys
+
+              msg = str(exc).replace("\n", " ").replace("\r", " ").strip()
+              if len(msg) > 200:
+                  msg = msg[:200] + "…"
+              print(
+                  f"⚠️ Failed to parse channels CSV (forecast_d1_readiness_channels_report.csv): {exc.__class__.__name__}: {msg}",
+                  file=sys.stderr,
+              )
 
           try:
               with open(report_csv, "r", encoding="utf-8", newline="") as f:

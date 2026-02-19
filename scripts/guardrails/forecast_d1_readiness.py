@@ -690,7 +690,7 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
         cost_sum = 0.0
         cost_present = "no"
         error_snippet = ""
-        cols: set[str] = set()
+        cols: set[str] = set()  # table_13 column names (lowercased); populated when bq show succeeds
         table13_exception_kind = ""
         table_fq_13 = ""
 
@@ -817,6 +817,8 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                 agg: dict[str, tuple[int, float, float]] = {}
                 ch_query_kind = ""
                 try:
+                    # NOTE: Table FQ name is validated by `_normalize_table_fq` (no backticks/newlines; strict `project.dataset.table`).
+                    table_fq_13_safe = _normalize_table_fq(table_fq_13)
                     select_parts_ch = [
                         "CAST(channel AS STRING) AS channel",
                         "COUNT(1) AS row_count",
@@ -828,7 +830,7 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                     sql_ch = (
                         "SELECT "
                         + ", ".join(select_parts_ch)
-                        + f" FROM `{table_fq_13}`"
+                        + f" FROM `{table_fq_13_safe}`"
                         + " WHERE CAST(date AS STRING)=@d"
                         + " GROUP BY channel"
                     )
