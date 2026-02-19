@@ -1,27 +1,24 @@
-name: Forecast D-1 Readiness Guardrail (08:00/10:00/15:00 Europe/Prague)
+name: Forecast D-1 Readiness Guardrail (hourly 09:15–16:15 Europe/Prague)
 
 on:
   schedule:
-    # GitHub cron is UTC. To keep 08:00/10:00/15:00 Europe/Prague stable across DST, we schedule both
-    # CET and CEST equivalents and let the script auto-noop outside the local window.
+    # GitHub cron is UTC. To keep 09:15–16:15 Europe/Prague stable across DST, we schedule a UTC superset
+    # and let the script auto-NOOP outside the local execution window.
     #
-    # 08:00 Europe/Prague:
-    # - CET  (UTC+1): 07:00 UTC
-    # - CEST (UTC+2): 06:00 UTC
-    - cron: "0 7 * * *"
-    - cron: "0 6 * * *"
+    # Local window (Europe/Prague):
+    # - CET  (UTC+1): 09:15–16:15 local -> 08:15–15:15 UTC
+    # - CEST (UTC+2): 09:15–16:15 local -> 07:15–14:15 UTC
     #
-    # 10:00 Europe/Prague:
-    # - CET  (UTC+1): 09:00 UTC
-    # - CEST (UTC+2): 08:00 UTC
-    - cron: "0 9 * * *"
-    - cron: "0 8 * * *"
-    #
-    # 15:00 Europe/Prague:
-    # - CET  (UTC+1): 14:00 UTC
-    # - CEST (UTC+2): 13:00 UTC
-    - cron: "0 14 * * *"
-    - cron: "0 13 * * *"
+    # UTC superset: 07:15–15:15 UTC (9 crons). Script gating yields exactly 8 local runs/day.
+    - cron: "15 7 * * *"
+    - cron: "15 8 * * *"
+    - cron: "15 9 * * *"
+    - cron: "15 10 * * *"
+    - cron: "15 11 * * *"
+    - cron: "15 12 * * *"
+    - cron: "15 13 * * *"
+    - cron: "15 14 * * *"
+    - cron: "15 15 * * *"
 
   workflow_dispatch:
     inputs:
@@ -173,12 +170,14 @@ jobs:
           OUTDIR="${{ steps.guardrail.outputs.outdir }}"
           SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
           REPORT_CSV="${OUTDIR}/forecast_d1_readiness_report.csv"
+          CHANNELS_CSV="${OUTDIR}/forecast_d1_readiness_channels_report.csv"
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           PAYLOAD="$(
             SUMMARY_JSON="$SUMMARY_JSON" \
             REPORT_CSV="$REPORT_CSV" \
+            CHANNELS_CSV="$CHANNELS_CSV" \
             RUN_URL="$RUN_URL" \
             GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
               python - <<'PY'
@@ -190,6 +189,7 @@ jobs:
 
           summary_path = os.environ.get("SUMMARY_JSON", "")
           report_csv = os.environ.get("REPORT_CSV", "")
+          channels_csv = os.environ.get("CHANNELS_CSV", "")
           run_url = os.environ.get("RUN_URL", "")
           repo = os.environ.get("GITHUB_REPOSITORY", "")
 
@@ -227,12 +227,14 @@ jobs:
           MAX_TENANTS_DISPLAY = 15
           MAX_REQ_FAILURES_DISPLAY = 10
           MAX_OPT_FAILURES_DISPLAY = 5
+          MAX_CHANNEL_LINES_PER_TENANT = 25
 
           status = "?"
           slot = ""
           policy = ""
           patch_date = ""
           now_local = ""
+          gh_schedule = ""
           req_failed = 0
           opt_failed = 0
           req_total = 0
@@ -245,6 +247,7 @@ jobs:
               policy = str(s.get("required_policy", "") or "")
               patch_date = str(s.get("patch_date_local", "") or "")
               now_local = str(s.get("now_local", "") or "")
+              gh_schedule = str(s.get("github_event_schedule", "") or "")
               req_failed = _to_int(s.get("required_failed"))
               opt_failed = _to_int(s.get("optional_failed"))
               req_total = _to_int(s.get("required_total"))
@@ -268,7 +271,16 @@ jobs:
           slot_disp = ""
           try:
               if slot and slot.isdigit():
-                  slot_disp = f"{int(slot):02d}:00"
+                  minute = 0
+                  try:
+                      parts = (gh_schedule or "").strip().split()
+                      if len(parts) >= 2 and parts[0].isdigit():
+                          m = int(parts[0])
+                          if 0 <= m <= 59:
+                              minute = m
+                  except Exception:
+                      minute = 0
+                  slot_disp = f"{int(slot):02d}:{minute:02d}"
           except Exception:
               pass
 
@@ -310,8 +322,45 @@ jobs:
           blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": header_mrkdwn}})
 
           tenant_map: dict[str, list[dict[str, object]]] = defaultdict(list)
+          channels_map: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
           req_fail_list: list[tuple[str, str, str, str, str]] = []
           opt_fail_list: list[tuple[str, str, str, str, str]] = []
+
+          try:
+              if channels_csv and os.path.exists(channels_csv):
+                  with open(channels_csv, "r", encoding="utf-8", newline="") as f:
+                      reader = csv.DictReader(f)
+                      for row in reader:
+                          tenant = (row.get("tenant") or "").strip() or "?"
+                          country = (row.get("country") or "").strip() or "?"
+                          channel = (row.get("channel") or "").strip() or "?"
+                          st = (row.get("status") or "").strip() or "?"
+                          reason = (row.get("reason") or "").strip()
+                          row_count = _to_int(row.get("row_count"))
+                          revenue_db_sum = _to_float(row.get("revenue_db_sum"))
+                          cost_sum = _to_float(row.get("cost_sum"))
+                          cost_present = (row.get("cost_present") or "").strip().lower()
+                          channels_map[(tenant.lower(), country.lower())].append(
+                              {
+                                  "channel": channel,
+                                  "status": st,
+                                  "reason": reason,
+                                  "row_count": row_count,
+                                  "revenue_db_sum": revenue_db_sum,
+                                  "cost_sum": cost_sum,
+                                  "cost_present": cost_present,
+                              }
+                          )
+          except Exception as exc:
+              import sys
+
+              msg = str(exc).replace("\n", " ").replace("\r", " ").strip()
+              if len(msg) > 200:
+                  msg = msg[:200] + "…"
+              print(
+                  f"⚠️ Failed to parse channels CSV (forecast_d1_readiness_channels_report.csv): {exc.__class__.__name__}: {msg}",
+                  file=sys.stderr,
+              )
 
           try:
               with open(report_csv, "r", encoding="utf-8", newline="") as f:
@@ -393,6 +442,8 @@ jobs:
               decorated.sort()
 
               country_lines: list[str] = []
+              channel_lines_added = 0
+              channel_lines_truncated = False
               for _, _, _, idx in decorated:
                   e = entries[idx]
                   country = str(e.get("country", "") or "?")
@@ -449,6 +500,42 @@ jobs:
                       else:
                           det = f"{det} (rev={revenue_db_sum:.6f}, cost={cost_sum:.6f})"
                       country_lines.append(f"    {icon} `{slack_escape(country)}` {metrics} — `{slack_escape(det)}`")
+
+                  if not channel_lines_truncated:
+                      ch_items = channels_map.get((str(tenant).strip().lower(), str(country).strip().lower()), [])
+                      for ch in ch_items:
+                          if channel_lines_added >= MAX_CHANNEL_LINES_PER_TENANT:
+                              country_lines.append("        • _(channel details truncated; see artifact)_")
+                              channel_lines_truncated = True
+                              break
+
+                          ch_name = str(ch.get("channel", "") or "?")
+                          ch_status = str(ch.get("status", "") or "?").strip().upper()
+                          ch_reason = str(ch.get("reason", "") or "").strip()
+                          ch_rev = _to_float(ch.get("revenue_db_sum"))
+                          ch_cost = _to_float(ch.get("cost_sum"))
+                          ch_cost_present = str(ch.get("cost_present", "") or "").strip().lower()
+
+                          if status_13 != "PASS":
+                              rev_icon = "❌"
+                              cost_icon = "❌"
+                              suffix = ""
+                          elif ch_status in ("SKIP", "ERROR"):
+                              rev_icon = "⚠️"
+                              cost_icon = "⚠️"
+                              suffix = f" — `{slack_escape(ch_reason or ch_status)}`" if (ch_reason or ch_status) else ""
+                          else:
+                              rev_icon = "✅" if abs(ch_rev) > EPS else "⚠️"
+                              if ch_cost_present == "yes":
+                                  cost_icon = "✅" if abs(ch_cost) > EPS else "⚠️"
+                              else:
+                                  cost_icon = "⚠️"
+                              suffix = ""
+
+                          country_lines.append(
+                              f"        • {slack_escape(ch_name)}: rev {rev_icon} cost {cost_icon}{suffix}"
+                          )
+                          channel_lines_added += 1
 
               section_text = "\n".join([f"🏢 `{slack_escape(tenant)}`", *country_lines]).rstrip()
 

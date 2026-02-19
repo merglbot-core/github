@@ -7,13 +7,13 @@ Purpose:
 - Designed to run from GitHub Actions with WIF/OIDC and Cloud SDK (bq) available.
 
 Business policy (Europe/Prague):
-- 08:00 + 10:00: required scope = country=cz; non-CZ is informational only.
-- 15:00: required scope = all.
+- Scheduled hourly at 09:15–16:15.
+- Required scope = all (all countries required) for every scheduled run.
 
 DST-safe scheduling:
-- Workflow schedules both CET/CEST cron equivalents.
-- Script uses GITHUB_EVENT_SCHEDULE + local UTC offset to NOOP the "wrong" cron,
-  ensuring only one Slack notification per slot/day.
+- Workflow schedules a UTC superset (07:15–15:15 UTC).
+- Script uses GITHUB_EVENT_SCHEDULE + local UTC offset to NOOP outside the local execution window,
+  ensuring only one run per local slot/day.
 
 Never logs secret values.
 """
@@ -92,6 +92,38 @@ class ResultRow:
     cost_sum_14: float
     cost_present_14: str
     error_snippet_14: str
+
+
+@dataclass(frozen=True)
+class ChannelResultRow:
+    tenant: str
+    country: str
+    channel: str
+    row_count: int
+    revenue_db_sum: float
+    cost_sum: float
+    cost_present: str
+    status: str
+    reason: str
+
+
+def _norm_key(value: str) -> str:
+    return (value or "").strip().casefold()
+
+
+def _wanted_channels(tenant: str, country: str) -> list[str]:
+    t = (tenant or "").strip().lower()
+    c = (country or "").strip().lower()
+    if not t or not c:
+        return []
+
+    if t in ("proteinaco", "denatura", "cerano", "livero"):
+        return ["Google Ads", "Facebook"]
+    if t == "autodoplnky" and c == "cz":
+        return ["Google Ads", "Facebook"]
+    if t == "ruzovyslon":
+        return ["Google ads pmax"]
+    return []
 
 
 def _run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -272,46 +304,28 @@ def _infer_slot_auto(now_local: datetime, *, gh_schedule: str = "") -> str:
 
     gh_schedule = (gh_schedule or "").strip()
     if gh_schedule:
+        parts = gh_schedule.split()
+        if len(parts) < 2:
+            return "noop"
+        try:
+            utc_minute = int(parts[0])
+            utc_hour = int(parts[1])
+        except ValueError:
+            return "noop"
+
+        if utc_minute != 15:
+            return "noop"
+
         offset = now_local.utcoffset() or timedelta(0)
-        is_cet = offset == timedelta(hours=1)
-        is_cest = offset == timedelta(hours=2)
-
-        # Workflow crons (UTC) in `.github/workflows/forecast-d1-readiness.yml`
-        cet_08 = "0 7 * * *"   # 08:00 Europe/Prague (UTC+1)
-        cet_10 = "0 9 * * *"   # 10:00 Europe/Prague (UTC+1)
-        cet_15 = "0 14 * * *"  # 15:00 Europe/Prague (UTC+1)
-
-        cest_08 = "0 6 * * *"   # 08:00 Europe/Prague (UTC+2)
-        cest_10 = "0 8 * * *"   # 10:00 Europe/Prague (UTC+2)
-        cest_15 = "0 13 * * *"  # 15:00 Europe/Prague (UTC+2)
-
-        if is_cet:
-            if gh_schedule == cet_08:
-                return "08"
-            if gh_schedule == cet_10:
-                return "10"
-            if gh_schedule == cet_15:
-                return "15"
-            return "noop"
-
-        if is_cest:
-            if gh_schedule == cest_08:
-                return "08"
-            if gh_schedule == cest_10:
-                return "10"
-            if gh_schedule == cest_15:
-                return "15"
-            return "noop"
-
+        offset_hours = int(offset.total_seconds() // 3600)
+        local_hour = utc_hour + offset_hours
+        if 9 <= local_hour <= 16:
+            return f"{local_hour:02d}"
         return "noop"
 
     # Fallback: allow any time within the local hour (handles common delays).
-    if now_local.hour == 8:
-        return "08"
-    if now_local.hour == 10:
-        return "10"
-    if now_local.hour == 15:
-        return "15"
+    if 9 <= now_local.hour <= 16:
+        return f"{now_local.hour:02d}"
     return "noop"
 
 
@@ -427,6 +441,39 @@ def _write_csv(path: Path, rows: list[ResultRow]) -> None:
                     r.cost_present_14,
                     r.error_snippet_14,
                 ]
+                )
+
+
+def _write_channels_csv(path: Path, rows: list[ChannelResultRow]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(
+            [
+                "tenant",
+                "country",
+                "channel",
+                "row_count",
+                "revenue_db_sum",
+                "cost_sum",
+                "cost_present",
+                "status",
+                "reason",
+            ]
+        )
+        for r in rows:
+            w.writerow(
+                [
+                    r.tenant,
+                    r.country,
+                    r.channel,
+                    str(r.row_count),
+                    f"{r.revenue_db_sum:.6f}",
+                    f"{r.cost_sum:.6f}",
+                    r.cost_present,
+                    r.status,
+                    r.reason,
+                ]
             )
 
 
@@ -471,6 +518,7 @@ def _write_md(
     optional_total: int,
     optional_failed: int,
     rows: list[ResultRow],
+    channel_rows: list[ChannelResultRow],
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
@@ -514,6 +562,52 @@ def _write_md(
             )
         lines.append("")
 
+    lines.append("## Channel checks (selected)")
+    lines.append("")
+    lines.append("Full detail in artifact `forecast_d1_readiness_channels_report.csv`.")
+    lines.append("")
+
+    if channel_rows:
+        # Map main guardrail status per tenant/country to drive icon semantics.
+        status13_map: dict[tuple[str, str], str] = {}
+        for r in rows:
+            key = ((r.tenant or "").strip().lower(), (r.country or "").strip().lower())
+            status13_map[key] = (r.status_13 or "").strip()
+
+        lines.append("| Tenant | Country | Channel | rev | cost | status | reason |")
+        lines.append("|---|---|---|---|---|---|---|")
+
+        MAX_CHANNEL_MD_ROWS = 200
+        for cr in channel_rows[:MAX_CHANNEL_MD_ROWS]:
+            key = ((cr.tenant or "").strip().lower(), (cr.country or "").strip().lower())
+            st13 = (status13_map.get(key, "") or "").strip()
+
+            rev_icon = "❌"
+            cost_icon = "❌"
+            if st13 == "PASS":
+                if cr.status in ("SKIP", "ERROR"):
+                    rev_icon = "⚠️"
+                    cost_icon = "⚠️"
+                else:
+                    rev_icon = "✅" if abs(cr.revenue_db_sum) > EPS else "⚠️"
+                    if (cr.cost_present or "").strip().lower() == "yes":
+                        cost_icon = "✅" if abs(cr.cost_sum) > EPS else "⚠️"
+                    else:
+                        cost_icon = "⚠️"
+
+            reason = cr.reason if (cr.reason or "").strip() else "—"
+            lines.append(
+                f"| `{cr.tenant}` | `{cr.country}` | `{cr.channel}` | {rev_icon} | {cost_icon} | `{cr.status}` | `{reason}` |"
+            )
+
+        if len(channel_rows) > MAX_CHANNEL_MD_ROWS:
+            lines.append("")
+            lines.append("_... truncated; see CSV._")
+            lines.append("")
+    else:
+        lines.append("_No channel checks configured._")
+        lines.append("")
+
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
@@ -548,7 +642,7 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                 },
             )
             return 0
-        required_policy = "cz_only" if slot in ("08", "10") else "all"
+        required_policy = "all"
     else:
         raise ValueError(f"Invalid mode: {mode}")
 
@@ -571,6 +665,7 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
         return (country or "").strip().lower() == "cz"
 
     rows: list[ResultRow] = []
+    channel_rows: list[ChannelResultRow] = []
     required_total = 0
     required_failed = 0
     optional_total = 0
@@ -595,6 +690,9 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
         cost_sum = 0.0
         cost_present = "no"
         error_snippet = ""
+        cols: set[str] = set()  # table_13 column names (lowercased); populated when bq show succeeds
+        table13_exception_kind = ""
+        table_fq_13 = ""
 
         try:
             table_fq_13 = _normalize_table_fq(spec.bq_table_13)
@@ -659,11 +757,145 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                 kind = "bq_error"
 
             reason_13 = kind
+            table13_exception_kind = kind
             if "stderr(first" in msg:
                 error_snippet = msg.split("stderr(first", 1)[-1]
                 error_snippet = error_snippet[-800:]
             else:
                 error_snippet = msg[:800]
+
+        wanted = _wanted_channels(spec.tenant, spec.country)
+        if wanted:
+            default_cost_present = cost_present if cost_present in ("yes", "no") else "no"
+            if table13_exception_kind:
+                for ch_name in wanted:
+                    channel_rows.append(
+                        ChannelResultRow(
+                            tenant=spec.tenant,
+                            country=spec.country,
+                            channel=ch_name,
+                            row_count=0,
+                            revenue_db_sum=0.0,
+                            cost_sum=0.0,
+                            cost_present=default_cost_present,
+                            status="ERROR",
+                            reason=table13_exception_kind,
+                        )
+                    )
+            elif status_13 != "PASS":
+                for ch_name in wanted:
+                    channel_rows.append(
+                        ChannelResultRow(
+                            tenant=spec.tenant,
+                            country=spec.country,
+                            channel=ch_name,
+                            row_count=0,
+                            revenue_db_sum=0.0,
+                            cost_sum=0.0,
+                            cost_present=default_cost_present,
+                            status="SKIP",
+                            reason=f"guardrail_not_pass:{reason_13 or 'FAIL'}",
+                        )
+                    )
+            elif "channel" not in cols:
+                for ch_name in wanted:
+                    channel_rows.append(
+                        ChannelResultRow(
+                            tenant=spec.tenant,
+                            country=spec.country,
+                            channel=ch_name,
+                            row_count=0,
+                            revenue_db_sum=0.0,
+                            cost_sum=0.0,
+                            cost_present=default_cost_present,
+                            status="SKIP",
+                            reason="missing_channel_column",
+                        )
+                    )
+            else:
+                # 1 query per tenant/country (domain) to get per-channel revenue/cost.
+                agg: dict[str, tuple[int, float, float]] = {}
+                ch_query_kind = ""
+                try:
+                    # NOTE: Table FQ name is validated by `_normalize_table_fq` (no backticks/newlines; strict `project.dataset.table`).
+                    table_fq_13_safe = _normalize_table_fq(table_fq_13)
+                    select_parts_ch = [
+                        "CAST(channel AS STRING) AS channel",
+                        "COUNT(1) AS row_count",
+                        "IFNULL(SUM(revenue_db), 0) AS revenue_db_sum",
+                    ]
+                    if default_cost_present == "yes":
+                        select_parts_ch.append("IFNULL(SUM(cost), 0) AS cost_sum")
+
+                    sql_ch = (
+                        "SELECT "
+                        + ", ".join(select_parts_ch)
+                        + f" FROM `{table_fq_13_safe}`"
+                        + " WHERE CAST(date AS STRING)=@d"
+                        + " GROUP BY channel"
+                    )
+                    out_ch = _bq_query_csv(
+                        job_project_id=spec.project_id,
+                        sql=sql_ch,
+                        parameters=[f"d:STRING:{patch_date}"],
+                    )
+                    qrows_ch = _parse_csv_rows(out_ch)
+                    for row_ch in qrows_ch:
+                        ch_val = str(row_ch.get("channel") or "").strip()
+                        k = _norm_key(ch_val)
+                        if not k:
+                            continue
+                        rc = _as_int(row_ch.get("row_count"))
+                        rev = _as_float(row_ch.get("revenue_db_sum"))
+                        cost = _as_float(row_ch.get("cost_sum")) if default_cost_present == "yes" else 0.0
+                        prev = agg.get(k)
+                        if prev is None:
+                            agg[k] = (rc, rev, cost)
+                        else:
+                            agg[k] = (prev[0] + rc, prev[1] + rev, prev[2] + cost)
+                except Exception as exc:  # noqa: BLE001
+                    msg = str(exc)
+                    kind = "bq_error"
+                    if msg.startswith("invalid_bq_table:"):
+                        kind = "invalid_bq_table"
+                    elif msg.startswith("not_found:"):
+                        kind = "not_found"
+                    elif msg.startswith("forbidden:"):
+                        kind = "forbidden"
+                    elif msg.startswith("bq_error:"):
+                        kind = "bq_error"
+                    ch_query_kind = kind
+
+                for ch_name in wanted:
+                    if ch_query_kind:
+                        channel_rows.append(
+                            ChannelResultRow(
+                                tenant=spec.tenant,
+                                country=spec.country,
+                                channel=ch_name,
+                                row_count=0,
+                                revenue_db_sum=0.0,
+                                cost_sum=0.0,
+                                cost_present=default_cost_present,
+                                status="ERROR",
+                                reason=ch_query_kind,
+                            )
+                        )
+                    else:
+                        rc, rev, cost = agg.get(_norm_key(ch_name), (0, 0.0, 0.0))
+                        channel_rows.append(
+                            ChannelResultRow(
+                                tenant=spec.tenant,
+                                country=spec.country,
+                                channel=ch_name,
+                                row_count=rc,
+                                revenue_db_sum=rev,
+                                cost_sum=cost,
+                                cost_present=default_cost_present,
+                                status="OK",
+                                reason="",
+                            )
+                        )
 
         table_fq_14 = spec.bq_table_14
         has_14 = bool((table_fq_14 or "").strip())
@@ -846,10 +1078,12 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
     status = "FAIL" if required_failed > 0 else "PASS"
 
     report_csv = outdir / "forecast_d1_readiness_report.csv"
+    channels_csv = outdir / "forecast_d1_readiness_channels_report.csv"
     report_md = outdir / "forecast_d1_readiness_report.md"
     summary_json = outdir / "forecast_d1_readiness_summary.json"
 
     _write_csv(report_csv, rows)
+    _write_channels_csv(channels_csv, channel_rows)
     _write_md(
         report_md,
         tz_name=tz_name,
@@ -863,6 +1097,7 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
         optional_total=optional_total,
         optional_failed=optional_failed,
         rows=rows,
+        channel_rows=channel_rows,
     )
     _write_json_summary(
         summary_json,
