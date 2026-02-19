@@ -69,6 +69,6 @@ Prakticky:
 - CZ: `forecasting_cz` (soubor `forecasting_new_monhly_plan_diss_14_03_2025.ipynb`) → použij CZ cron
 - non‑CZ: `forecasting_sk|hu|bg|hr|ro|si` → použij non‑CZ cron
 
-### Kdy to nestačí (a proč máme self‑heal)
+### Kdy to nestačí (a co dělat)
 - Pokud generátor logikou občas vyrobí D‑2 (např. kvůli GA4 latency / cutoff logice), samotný cron to úplně neeliminuje.
-- Proto je v plánu guardrail, který v 06:05 (CZ) a 14:05 (non‑CZ) ověří konzistenci a případně opraví `13_*` CSV z `final_prep_*`.
+- Guardrails jsou **check-only** (alert/triage) — data se opravují u zdroje (generátor / upstream data) a pak se nechá doběhnout DTS import.
