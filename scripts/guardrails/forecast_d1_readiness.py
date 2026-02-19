@@ -117,8 +117,12 @@ def _wanted_channels(tenant: str, country: str) -> list[str]:
     if not t or not c:
         return []
 
-    if t in ("proteinaco", "denatura", "cerano", "livero"):
+    if t in ("proteinaco", "cerano", "livero"):
         return ["Google Ads", "Facebook"]
+    if t == "denatura":
+        # Denatura's BigQuery `channel` values are granular (e.g. "Google ads pmax/sea/brand/...").
+        # We keep the check exact-match and pick the long-term highest-cost Google Ads channel.
+        return ["Google ads pmax", "Facebook"]
     if t == "autodoplnky" and c == "cz":
         return ["Google Ads", "Facebook"]
     if t == "ruzovyslon":
