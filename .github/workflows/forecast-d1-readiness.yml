@@ -246,6 +246,9 @@ jobs:
         if: always() && steps.guardrail.outputs.status != 'NOOP' && inputs.dry_run != true
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL_FINAL_DATA_ALERTS || secrets.SLACK_WEBHOOK_URL }}
+          OUTDIR: ${{ steps.guardrail.outputs.outdir }}
+          OUTDIR_D2: ${{ steps.guardrail_d2.outputs.outdir }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
 
@@ -254,17 +257,13 @@ jobs:
             exit 0
           fi
 
-          OUTDIR="${{ steps.guardrail.outputs.outdir }}"
           SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
           REPORT_CSV="${OUTDIR}/forecast_d1_readiness_report.csv"
           CHANNELS_CSV="${OUTDIR}/forecast_d1_readiness_channels_report.csv"
 
-          OUTDIR_D2="${{ steps.guardrail_d2.outputs.outdir }}"
           SUMMARY_JSON_D2="${OUTDIR_D2}/forecast_d1_readiness_summary.json"
           REPORT_CSV_D2="${OUTDIR_D2}/forecast_d1_readiness_report.csv"
           CHANNELS_CSV_D2="${OUTDIR_D2}/forecast_d1_readiness_channels_report.csv"
-
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           PAYLOAD="$(
             SUMMARY_JSON="$SUMMARY_JSON" \
@@ -1012,6 +1011,8 @@ jobs:
         if: always() && steps.stats.outputs.status != 'NOOP' && inputs.dry_run != true
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL_FINAL_DATA_ALERTS || secrets.SLACK_WEBHOOK_URL }}
+          OUTDIR: ${{ steps.stats.outputs.outdir }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
 
@@ -1020,11 +1021,9 @@ jobs:
             exit 0
           fi
 
-          OUTDIR="${{ steps.stats.outputs.outdir }}"
           SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
           REPORT_CSV="${OUTDIR}/forecast_d1_readiness_success_rate_report.csv"
           CHANNELS_CSV="${OUTDIR}/forecast_d1_readiness_success_rate_channels_report.csv"
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           PAYLOAD="$(
             SUMMARY_JSON="$SUMMARY_JSON" \
