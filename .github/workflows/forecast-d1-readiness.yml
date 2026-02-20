@@ -90,14 +90,19 @@ jobs:
           set -euo pipefail
           OUTDIR="forecast-d1-readiness-out"
 
-          CMD="python scripts/guardrails/forecast_d1_readiness.py --outdir $OUTDIR --timezone Europe/Prague --mode ${MODE}"
-          if [ -n "${PATCH_DATE_LOCAL}" ]; then
-            CMD="$CMD --patch-date-local ${PATCH_DATE_LOCAL}"
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+          )
+          if [[ -n "${PATCH_DATE_LOCAL:-}" ]]; then
+            CMD+=( --patch-date-local "$PATCH_DATE_LOCAL" )
           fi
 
-          echo "Running: $CMD"
+          echo "Running: ${CMD[*]}"
           EXIT=0
-          $CMD || EXIT=$?
+          "${CMD[@]}" || EXIT=$?
 
           echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
           echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
@@ -170,11 +175,17 @@ jobs:
           PY
           )"
 
-          CMD="python scripts/guardrails/forecast_d1_readiness.py --outdir $OUTDIR --timezone Europe/Prague --mode ${MODE} --patch-date-local ${PATCH_DATE_LOCAL_D2}"
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+            --patch-date-local "$PATCH_DATE_LOCAL_D2"
+          )
 
-          echo "Running: $CMD"
+          echo "Running: ${CMD[*]}"
           EXIT=0
-          $CMD || EXIT=$?
+          "${CMD[@]}" || EXIT=$?
 
           echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
           echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
@@ -953,14 +964,20 @@ jobs:
           set -euo pipefail
           OUTDIR="forecast-d1-readiness-stats-out"
 
-          CMD="python scripts/guardrails/forecast_d1_readiness.py --outdir $OUTDIR --timezone Europe/Prague --mode ${MODE} --kind success_rate_30d"
-          if [ -n "${PATCH_DATE_LOCAL}" ]; then
-            CMD="$CMD --patch-date-local ${PATCH_DATE_LOCAL}"
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+            --kind "success_rate_30d"
+          )
+          if [[ -n "${PATCH_DATE_LOCAL:-}" ]]; then
+            CMD+=( --patch-date-local "$PATCH_DATE_LOCAL" )
           fi
 
-          echo "Running: $CMD"
+          echo "Running: ${CMD[*]}"
           EXIT=0
-          $CMD || EXIT=$?
+          "${CMD[@]}" || EXIT=$?
 
           echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
           echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
