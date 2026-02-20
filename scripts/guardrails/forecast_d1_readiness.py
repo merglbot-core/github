@@ -7,7 +7,7 @@ Purpose:
 - Designed to run from GitHub Actions with WIF/OIDC and Cloud SDK (bq) available.
 
 Business policy (Europe/Prague):
-- Readiness: scheduled hourly at 09:15–16:15 (required scope = all for every scheduled run).
+- Readiness: scheduled hourly at 08:20–15:20 (required scope = all for every scheduled run).
 - Success rate (30d): scheduled daily at 10:00 (informational).
 
 DST-safe scheduling:
@@ -364,18 +364,18 @@ def _infer_slot_auto(now_local: datetime, *, gh_schedule: str = "") -> str:
         except ValueError:
             return "noop"
 
-        if utc_minute != 15:
+        if utc_minute != 20:
             return "noop"
 
         offset = now_local.utcoffset() or timedelta(0)
         offset_hours = int(offset.total_seconds() // 3600)
         local_hour = utc_hour + offset_hours
-        if 9 <= local_hour <= 16:
+        if 8 <= local_hour <= 15:
             return f"{local_hour:02d}"
         return "noop"
 
     # Fallback: allow any time within the local hour (handles common delays).
-    if 9 <= now_local.hour <= 16:
+    if 8 <= now_local.hour <= 15:
         return f"{now_local.hour:02d}"
     return "noop"
 

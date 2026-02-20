@@ -1,24 +1,24 @@
-name: Forecast D-1 Readiness Guardrail (hourly 09:15–16:15 Europe/Prague)
+name: Forecast D-1 Readiness Guardrail (hourly 08:20–15:20 Europe/Prague)
 
 on:
   schedule:
-    # GitHub cron is UTC. To keep 09:15–16:15 Europe/Prague stable across DST, we schedule a UTC superset
+    # GitHub cron is UTC. To keep 08:20–15:20 Europe/Prague stable across DST, we schedule a UTC superset
     # and let the script auto-NOOP outside the local execution window.
     #
     # Local window (Europe/Prague):
-    # - CET  (UTC+1): 09:15–16:15 local -> 08:15–15:15 UTC
-    # - CEST (UTC+2): 09:15–16:15 local -> 07:15–14:15 UTC
+    # - CET  (UTC+1): 08:20–15:20 local -> 07:20–14:20 UTC
+    # - CEST (UTC+2): 08:20–15:20 local -> 06:20–13:20 UTC
     #
-    # UTC superset: 07:15–15:15 UTC (9 crons). Script gating yields exactly 8 local runs/day.
-    - cron: "15 7 * * *"
-    - cron: "15 8 * * *"
-    - cron: "15 9 * * *"
-    - cron: "15 10 * * *"
-    - cron: "15 11 * * *"
-    - cron: "15 12 * * *"
-    - cron: "15 13 * * *"
-    - cron: "15 14 * * *"
-    - cron: "15 15 * * *"
+    # UTC superset: 06:20–14:20 UTC (9 crons). Script gating yields exactly 8 local runs/day.
+    - cron: "20 6 * * *"
+    - cron: "20 7 * * *"
+    - cron: "20 8 * * *"
+    - cron: "20 9 * * *"
+    - cron: "20 10 * * *"
+    - cron: "20 11 * * *"
+    - cron: "20 12 * * *"
+    - cron: "20 13 * * *"
+    - cron: "20 14 * * *"
 
     # Daily success-rate report at 10:00 Europe/Prague (DST-safe via UTC superset + script NOOP gating).
     # - CEST (UTC+2): 10:00 local -> 08:00 UTC
@@ -57,7 +57,7 @@ jobs:
     if: >-
       ${{
         github.event_name == 'workflow_dispatch' ||
-        (github.event_name == 'schedule' && startsWith(github.event.schedule, '15 '))
+        (github.event_name == 'schedule' && startsWith(github.event.schedule, '20 '))
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
