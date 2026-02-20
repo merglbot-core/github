@@ -589,8 +589,8 @@ jobs:
                           actuals_sum_14 = _to_float(row.get("actuals_sum_14"))
                           revenue_db_sum_14 = _to_float(row.get("revenue_db_sum_14"))
                           cost_sum_14 = _to_float(row.get("cost_sum_14"))
-                          key = (tenant.lower(), country.lower())
-                          report_map_d2[key] = {
+                          tenant_country = (tenant.lower(), country.lower())
+                          report_map_d2[tenant_country] = {
                               "country": country,
                               "status": st,
                               "reason": reason,
@@ -683,8 +683,8 @@ jobs:
                   revenue_db_sum_14 = _to_float(e.get("revenue_db_sum_14"))
                   cost_sum_14 = _to_float(e.get("cost_sum_14"))
 
-                  d2_key = (str(tenant).strip().lower(), str(country).strip().lower())
-                  e2 = report_map_d2.get(d2_key, {})
+                  tenant_country_d2 = (str(tenant).strip().lower(), str(country).strip().lower())
+                  e2 = report_map_d2.get(tenant_country_d2, {})
                   missing_d2 = not bool(e2)
                   status_13_d2 = str(e2.get("status_13", "") or "").strip().upper()
                   rev_sum_d2 = _to_float(e2.get("revenue_db_sum"))
@@ -733,10 +733,10 @@ jobs:
                   )
 
                   if not channel_lines_truncated:
-                      ch_key = (str(tenant).strip().lower(), str(country).strip().lower())
-                      ch_items = channels_map.get(ch_key, [])
-                      ch_items_d2 = channels_map_d2.get(ch_key, [])
-                      ch_d2_by_key = {
+                      tenant_country = (str(tenant).strip().lower(), str(country).strip().lower())
+                      ch_items = channels_map.get(tenant_country, [])
+                      ch_items_d2 = channels_map_d2.get(tenant_country, [])
+                      ch_d2_map = {
                           (str(x.get("channel", "") or "").strip().casefold()): x for x in ch_items_d2 if isinstance(x, dict)
                       }
 
@@ -769,7 +769,7 @@ jobs:
                                   d1_cost_icon = "⚠️"
                               suffix = ""
 
-                          ch2 = ch_d2_by_key.get(ch_name.strip().casefold(), {})
+                          ch2 = ch_d2_map.get(ch_name.strip().casefold(), {})
                           if not ch2:
                               d2_rev_icon = "—" if missing_d2 else "⚠️"
                               d2_cost_icon = "—" if missing_d2 else "⚠️"
@@ -1169,14 +1169,19 @@ jobs:
           tenant_items = sorted([(t.lower(), t) for t in tenant_map.keys()])
           for _, tenant in tenant_items[:MAX_TENANTS_DISPLAY]:
               entries = tenant_map.get(tenant, [])
-              entries.sort(key=lambda r: (str(r.get("country") or "").lower(),))
+              decorated_entries: list[tuple[str, dict[str, object]]] = []
+              for r in entries:
+                  c = str(r.get("country") or "").lower()
+                  decorated_entries.append((c, r))
+              decorated_entries.sort()
+              entries_sorted = [r for _, r in decorated_entries]
 
               row_items: list[tuple[str, list[str], str]] = []
               row_items.append(("country/channel", ["D1 rev", "D1 cost", "D1 14", "D2 rev", "D2 cost", "D2 14"], ""))
 
               channel_lines_added = 0
               channel_lines_truncated = False
-              for r in entries:
+              for r in entries_sorted:
                   country = (r.get("country") or "?").strip()
                   d1_rev = rate_cell(r.get("d1_rev_rate"))
                   d1_cost = rate_cell(r.get("d1_cost_rate"))
