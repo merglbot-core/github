@@ -20,6 +20,12 @@ on:
     - cron: "15 14 * * *"
     - cron: "15 15 * * *"
 
+    # Daily success-rate report at 10:00 Europe/Prague (DST-safe via UTC superset + script NOOP gating).
+    # - CEST (UTC+2): 10:00 local -> 08:00 UTC
+    # - CET  (UTC+1): 10:00 local -> 09:00 UTC
+    - cron: "0 8 * * *"
+    - cron: "0 9 * * *"
+
   workflow_dispatch:
     inputs:
       patch_date_local:
@@ -31,6 +37,11 @@ on:
         required: false
         type: boolean
         default: true
+      send_success_rate:
+        description: "Also send daily 30d success-rate message (10:00-style)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -43,6 +54,11 @@ concurrency:
 jobs:
   run:
     name: Forecast D-1 readiness
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'schedule' && startsWith(github.event.schedule, '15 '))
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -120,6 +136,75 @@ jobs:
             echo "optional_total=0" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Run forecast D-2 readiness (info only)
+        id: guardrail_d2
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL_D1: ${{ steps.guardrail.outputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-out-d2"
+          mkdir -p "$OUTDIR"
+
+          PATCH_DATE_LOCAL_D1="${PATCH_DATE_LOCAL_D1:-}"
+          if [ -z "${PATCH_DATE_LOCAL_D1}" ]; then
+            echo "ℹ️ Missing D-1 patch_date_local; skipping D-2 run."
+            echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+            echo "status=NOOP" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PATCH_DATE_LOCAL_D2="$(
+            PATCH_DATE_LOCAL_D1="$PATCH_DATE_LOCAL_D1" python - <<'PY'
+          from datetime import date, timedelta
+          import os
+
+          d = date.fromisoformat(os.environ["PATCH_DATE_LOCAL_D1"])
+          print((d - timedelta(days=1)).isoformat())
+          PY
+          )"
+
+          CMD="python scripts/guardrails/forecast_d1_readiness.py --outdir $OUTDIR --timezone Europe/Prague --mode ${MODE} --patch-date-local ${PATCH_DATE_LOCAL_D2}"
+
+          echo "Running: $CMD"
+          EXIT=0
+          $CMD || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"slot={_v('slot')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"required_policy={_v('required_policy')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=${PATCH_DATE_LOCAL_D2}" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Add report to step summary
         if: always() && steps.guardrail.outputs.outdir != ''
         run: |
@@ -152,7 +237,9 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: forecast-d1-readiness-${{ github.run_id }}
-          path: ${{ steps.guardrail.outputs.outdir }}/
+          path: |
+            ${{ steps.guardrail.outputs.outdir }}/
+            ${{ steps.guardrail_d2.outputs.outdir }}/
           retention-days: 90
 
       - name: Slack alert (PASS/FAIL)
@@ -172,12 +259,20 @@ jobs:
           REPORT_CSV="${OUTDIR}/forecast_d1_readiness_report.csv"
           CHANNELS_CSV="${OUTDIR}/forecast_d1_readiness_channels_report.csv"
 
+          OUTDIR_D2="${{ steps.guardrail_d2.outputs.outdir }}"
+          SUMMARY_JSON_D2="${OUTDIR_D2}/forecast_d1_readiness_summary.json"
+          REPORT_CSV_D2="${OUTDIR_D2}/forecast_d1_readiness_report.csv"
+          CHANNELS_CSV_D2="${OUTDIR_D2}/forecast_d1_readiness_channels_report.csv"
+
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           PAYLOAD="$(
             SUMMARY_JSON="$SUMMARY_JSON" \
             REPORT_CSV="$REPORT_CSV" \
             CHANNELS_CSV="$CHANNELS_CSV" \
+            SUMMARY_JSON_D2="$SUMMARY_JSON_D2" \
+            REPORT_CSV_D2="$REPORT_CSV_D2" \
+            CHANNELS_CSV_D2="$CHANNELS_CSV_D2" \
             RUN_URL="$RUN_URL" \
             GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
               python - <<'PY'
@@ -190,6 +285,9 @@ jobs:
           summary_path = os.environ.get("SUMMARY_JSON", "")
           report_csv = os.environ.get("REPORT_CSV", "")
           channels_csv = os.environ.get("CHANNELS_CSV", "")
+          summary_path_d2 = os.environ.get("SUMMARY_JSON_D2", "")
+          report_csv_d2 = os.environ.get("REPORT_CSV_D2", "")
+          channels_csv_d2 = os.environ.get("CHANNELS_CSV_D2", "")
           run_url = os.environ.get("RUN_URL", "")
           repo = os.environ.get("GITHUB_REPOSITORY", "")
 
@@ -239,6 +337,7 @@ jobs:
           opt_failed = 0
           req_total = 0
           opt_total = 0
+          patch_date_d2 = ""
           try:
               with open(summary_path, "r", encoding="utf-8") as f:
                   s = json.load(f)
@@ -252,6 +351,14 @@ jobs:
               opt_failed = _to_int(s.get("optional_failed"))
               req_total = _to_int(s.get("required_total"))
               opt_total = _to_int(s.get("optional_total"))
+          except Exception:
+              pass
+
+          try:
+              if summary_path_d2 and os.path.exists(summary_path_d2):
+                  with open(summary_path_d2, "r", encoding="utf-8") as f:
+                      s2 = json.load(f)
+                  patch_date_d2 = str(s2.get("patch_date_local", "") or "")
           except Exception:
               pass
 
@@ -302,7 +409,7 @@ jobs:
               title_text = f"Forecast D-1 Readiness: UNKNOWN (status={status_norm or '?'})"
 
           header_info_parts: list[str] = []
-          header_info_parts.append(f"📅 {patch_date or '?'}")
+          header_info_parts.append(f"📅 D-1 {patch_date or '?'} | D-2 {patch_date_d2 or '?'}")
           time_part = slot_disp or (slot if slot else "?")
           header_info_parts.append(f"🕐 {time_part} {tz_abbrev}")
           header_info_parts.append(f"Policy: {policy or '?'}")
@@ -311,7 +418,9 @@ jobs:
           header_text_plain = f"{icon} {title_text}" + (f" — {header_info_plain}" if header_info_plain else "")
 
           info_mrkdwn_parts: list[str] = []
-          info_mrkdwn_parts.append(f"📅 `{slack_escape(patch_date or '?')}`")
+          info_mrkdwn_parts.append(
+              f"📅 D-1 `{slack_escape(patch_date or '?')}` | D-2 `{slack_escape(patch_date_d2 or '?')}`"
+          )
           info_mrkdwn_parts.append(f"🕐 `{slack_escape(time_part)} {tz_abbrev}`")
           info_mrkdwn_parts.append(f"Policy: `{slack_escape(policy or '?')}`")
 
@@ -322,7 +431,9 @@ jobs:
           blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": header_mrkdwn}})
 
           tenant_map: dict[str, list[dict[str, object]]] = defaultdict(list)
+          report_map_d2: dict[tuple[str, str], dict[str, object]] = {}
           channels_map: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
+          channels_map_d2: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
           req_fail_list: list[tuple[str, str, str, str, str]] = []
           opt_fail_list: list[tuple[str, str, str, str, str]] = []
 
@@ -359,6 +470,42 @@ jobs:
                   msg = msg[:200] + "…"
               print(
                   f"⚠️ Failed to parse channels CSV (forecast_d1_readiness_channels_report.csv): {exc.__class__.__name__}: {msg}",
+                  file=sys.stderr,
+              )
+
+          try:
+              if channels_csv_d2 and os.path.exists(channels_csv_d2):
+                  with open(channels_csv_d2, "r", encoding="utf-8", newline="") as f:
+                      reader = csv.DictReader(f)
+                      for row in reader:
+                          tenant = (row.get("tenant") or "").strip() or "?"
+                          country = (row.get("country") or "").strip() or "?"
+                          channel = (row.get("channel") or "").strip() or "?"
+                          st = (row.get("status") or "").strip() or "?"
+                          reason = (row.get("reason") or "").strip()
+                          row_count = _to_int(row.get("row_count"))
+                          revenue_db_sum = _to_float(row.get("revenue_db_sum"))
+                          cost_sum = _to_float(row.get("cost_sum"))
+                          cost_present = (row.get("cost_present") or "").strip().lower()
+                          channels_map_d2[(tenant.lower(), country.lower())].append(
+                              {
+                                  "channel": channel,
+                                  "status": st,
+                                  "reason": reason,
+                                  "row_count": row_count,
+                                  "revenue_db_sum": revenue_db_sum,
+                                  "cost_sum": cost_sum,
+                                  "cost_present": cost_present,
+                              }
+                          )
+          except Exception as exc:
+              import sys
+
+              msg = str(exc).replace("\n", " ").replace("\r", " ").strip()
+              if len(msg) > 200:
+                  msg = msg[:200] + "…"
+              print(
+                  f"⚠️ Failed to parse channels CSV D-2 (forecast_d1_readiness_channels_report.csv): {exc.__class__.__name__}: {msg}",
                   file=sys.stderr,
               )
 
@@ -421,6 +568,50 @@ jobs:
           except Exception:
               pass
 
+          try:
+              if report_csv_d2 and os.path.exists(report_csv_d2):
+                  with open(report_csv_d2, "r", encoding="utf-8", newline="") as f:
+                      reader = csv.DictReader(f)
+                      for row in reader:
+                          tenant = (row.get("tenant") or "").strip() or "?"
+                          country = (row.get("country") or "").strip() or "?"
+                          st = (row.get("status") or "").strip() or "?"
+                          reason = (row.get("reason") or "").strip()
+                          row_count = _to_int(row.get("row_count"))
+                          actuals_sum = _to_float(row.get("actuals_sum"))
+                          revenue_db_sum = _to_float(row.get("revenue_db_sum"))
+                          cost_sum = _to_float(row.get("cost_sum"))
+                          cost_present = (row.get("cost_present") or "").strip().lower()
+                          status_13 = (row.get("status_13") or "").strip() or st
+                          table_fq_14 = (row.get("table_fq_14") or "").strip()
+                          domain = (row.get("domain") or "").strip()
+                          status_14 = (row.get("status_14") or "").strip()
+                          row_count_14 = _to_int(row.get("row_count_14"))
+                          actuals_sum_14 = _to_float(row.get("actuals_sum_14"))
+                          revenue_db_sum_14 = _to_float(row.get("revenue_db_sum_14"))
+                          cost_sum_14 = _to_float(row.get("cost_sum_14"))
+                          key = (tenant.lower(), country.lower())
+                          report_map_d2[key] = {
+                              "country": country,
+                              "status": st,
+                              "reason": reason,
+                              "row_count": row_count,
+                              "actuals_sum": actuals_sum,
+                              "revenue_db_sum": revenue_db_sum,
+                              "cost_sum": cost_sum,
+                              "cost_present": cost_present,
+                              "status_13": status_13,
+                              "table_fq_14": table_fq_14,
+                              "domain": domain,
+                              "status_14": status_14,
+                              "row_count_14": row_count_14,
+                              "actuals_sum_14": actuals_sum_14,
+                              "revenue_db_sum_14": revenue_db_sum_14,
+                              "cost_sum_14": cost_sum_14,
+                          }
+          except Exception:
+              pass
+
           tenant_items: list[tuple[int, int, str, str]] = []
           for tenant, entries in tenant_map.items():
               has_req_fail = any(str(e.get("status", "")) == "FAIL" and bool(e.get("is_required")) for e in entries)
@@ -441,7 +632,36 @@ jobs:
                   decorated.append((fail_rank, sev_rank, country.lower(), idx))
               decorated.sort()
 
-              country_lines: list[str] = []
+              def _icon14(entry: dict[str, object]) -> str:
+                  table_fq_14 = str(entry.get("table_fq_14", "") or "")
+                  if not table_fq_14.strip():
+                      return "—"
+                  st14 = str(entry.get("status_14", "") or "").strip().upper()
+                  if st14 == "PASS":
+                      return "✅"
+                  if st14 == "FAIL":
+                      return "❌"
+                  return "❓"
+
+              def _rev_cost_icons(
+                  *, status_13: str, revenue_db_sum: float, cost_sum: float, cost_present: str, missing: bool = False
+              ) -> tuple[str, str]:
+                  if missing:
+                      return "—", "—"
+                  if status_13 == "PASS":
+                      rev_icon = "✅" if abs(revenue_db_sum) > EPS else "⚠️"
+                      if cost_present == "yes":
+                          cost_icon = "✅" if abs(cost_sum) > EPS else "⚠️"
+                      else:
+                          cost_icon = "⚠️"
+                      return rev_icon, cost_icon
+                  return "❌", "❌"
+
+              row_items: list[tuple[str, list[str], str]] = []
+              row_items.append(
+                  ("country/channel", ["D1 rev", "D1 cost", "D1 14", "D2 rev", "D2 cost", "D2 14"], "")
+              )
+
               channel_lines_added = 0
               channel_lines_truncated = False
               for _, _, _, idx in decorated:
@@ -464,26 +684,30 @@ jobs:
                   revenue_db_sum_14 = _to_float(e.get("revenue_db_sum_14"))
                   cost_sum_14 = _to_float(e.get("cost_sum_14"))
 
-                  if status_13 == "PASS":
-                      rev_icon = "✅" if abs(revenue_db_sum) > EPS else "⚠️"
-                      if cost_present == "yes":
-                          cost_icon = "✅" if abs(cost_sum) > EPS else "⚠️"
-                      else:
-                          cost_icon = "⚠️"
-                  else:
-                      rev_icon = "❌"
-                      cost_icon = "❌"
+                  d2_key = (str(tenant).strip().lower(), str(country).strip().lower())
+                  e2 = report_map_d2.get(d2_key, {})
+                  missing_d2 = not bool(e2)
+                  status_13_d2 = str(e2.get("status_13", "") or "").strip().upper()
+                  rev_sum_d2 = _to_float(e2.get("revenue_db_sum"))
+                  cost_sum_d2 = _to_float(e2.get("cost_sum"))
+                  cost_present_d2 = str(e2.get("cost_present", "") or "").strip().lower()
 
-                  extra_14 = ""
-                  if table_fq_14.strip():
-                      icon_14 = "✅" if status_14 == "PASS" else "❌" if status_14 == "FAIL" else "❓"
-                      extra_14 = f", 14 {icon_14}"
-
-                  metrics = f"(rev {rev_icon} cost {cost_icon}{extra_14})"
+                  d1_rev_icon, d1_cost_icon = _rev_cost_icons(
+                      status_13=status_13, revenue_db_sum=revenue_db_sum, cost_sum=cost_sum, cost_present=cost_present
+                  )
+                  d2_rev_icon, d2_cost_icon = _rev_cost_icons(
+                      status_13=status_13_d2,
+                      revenue_db_sum=rev_sum_d2,
+                      cost_sum=cost_sum_d2,
+                      cost_present=cost_present_d2,
+                      missing=missing_d2,
+                  )
+                  d1_14_icon = _icon14(e)
+                  d2_14_icon = "—" if missing_d2 else _icon14(e2)
 
                   if st == "PASS":
                       icon = "✅"
-                      country_lines.append(f"    {icon} `{slack_escape(country)}` {metrics}")
+                      suffix = ""
                   else:
                       icon = "❌" if is_req else "⚠️"
                       det = reason or "FAIL"
@@ -499,13 +723,27 @@ jobs:
                           )
                       else:
                           det = f"{det} (rev={revenue_db_sum:.6f}, cost={cost_sum:.6f})"
-                      country_lines.append(f"    {icon} `{slack_escape(country)}` {metrics} — `{slack_escape(det)}`")
+                      suffix = f" — `{slack_escape(det)}`"
+
+                  row_items.append(
+                      (
+                          f"{icon} {slack_escape(country)}",
+                          [d1_rev_icon, d1_cost_icon, d1_14_icon, d2_rev_icon, d2_cost_icon, d2_14_icon],
+                          suffix,
+                      )
+                  )
 
                   if not channel_lines_truncated:
-                      ch_items = channels_map.get((str(tenant).strip().lower(), str(country).strip().lower()), [])
+                      ch_key = (str(tenant).strip().lower(), str(country).strip().lower())
+                      ch_items = channels_map.get(ch_key, [])
+                      ch_items_d2 = channels_map_d2.get(ch_key, [])
+                      ch_d2_by_key = {
+                          (str(x.get("channel", "") or "").strip().casefold()): x for x in ch_items_d2 if isinstance(x, dict)
+                      }
+
                       for ch in ch_items:
                           if channel_lines_added >= MAX_CHANNEL_LINES_PER_TENANT:
-                              country_lines.append("        • _(channel details truncated; see artifact)_")
+                              row_items.append(("  • _(channel details truncated; see artifact)_", ["", "", "", "", "", ""], ""))
                               channel_lines_truncated = True
                               break
 
@@ -517,27 +755,83 @@ jobs:
                           ch_cost_present = str(ch.get("cost_present", "") or "").strip().lower()
 
                           if status_13 != "PASS":
-                              rev_icon = "❌"
-                              cost_icon = "❌"
+                              d1_rev_icon = "❌"
+                              d1_cost_icon = "❌"
                               suffix = ""
                           elif ch_status in ("SKIP", "ERROR"):
-                              rev_icon = "⚠️"
-                              cost_icon = "⚠️"
+                              d1_rev_icon = "⚠️"
+                              d1_cost_icon = "⚠️"
                               suffix = f" — `{slack_escape(ch_reason or ch_status)}`" if (ch_reason or ch_status) else ""
                           else:
-                              rev_icon = "✅" if abs(ch_rev) > EPS else "⚠️"
+                              d1_rev_icon = "✅" if abs(ch_rev) > EPS else "⚠️"
                               if ch_cost_present == "yes":
-                                  cost_icon = "✅" if abs(ch_cost) > EPS else "⚠️"
+                                  d1_cost_icon = "✅" if abs(ch_cost) > EPS else "⚠️"
                               else:
-                                  cost_icon = "⚠️"
+                                  d1_cost_icon = "⚠️"
                               suffix = ""
 
-                          country_lines.append(
-                              f"        • {slack_escape(ch_name)}: rev {rev_icon} cost {cost_icon}{suffix}"
+                          ch2 = ch_d2_by_key.get(ch_name.strip().casefold(), {})
+                          if not ch2:
+                              d2_rev_icon = "—" if missing_d2 else "⚠️"
+                              d2_cost_icon = "—" if missing_d2 else "⚠️"
+                              if not suffix and not missing_d2:
+                                  suffix = " — `D-2:missing_channel_row`"
+                          else:
+                              ch2_status = str(ch2.get("status", "") or "?").strip().upper()
+                              ch2_reason = str(ch2.get("reason", "") or "").strip()
+                              ch2_rev = _to_float(ch2.get("revenue_db_sum"))
+                              ch2_cost = _to_float(ch2.get("cost_sum"))
+                              ch2_cost_present = str(ch2.get("cost_present", "") or "").strip().lower()
+                              if status_13_d2 != "PASS":
+                                  d2_rev_icon = "❌"
+                                  d2_cost_icon = "❌"
+                              elif ch2_status in ("SKIP", "ERROR"):
+                                  d2_rev_icon = "⚠️"
+                                  d2_cost_icon = "⚠️"
+                                  if not suffix and (ch2_reason or ch2_status):
+                                      suffix = f" — `D-2:{slack_escape(ch2_reason or ch2_status)}`"
+                              else:
+                                  d2_rev_icon = "✅" if abs(ch2_rev) > EPS else "⚠️"
+                                  if ch2_cost_present == "yes":
+                                      d2_cost_icon = "✅" if abs(ch2_cost) > EPS else "⚠️"
+                                  else:
+                                      d2_cost_icon = "⚠️"
+
+                          row_items.append(
+                              (
+                                  f"  • {slack_escape(ch_name)}",
+                                  [d1_rev_icon, d1_cost_icon, "—", d2_rev_icon, d2_cost_icon, "—"],
+                                  suffix,
+                              )
                           )
                           channel_lines_added += 1
 
-              section_text = "\n".join([f"🏢 `{slack_escape(tenant)}`", *country_lines]).rstrip()
+              label_w = max(len(lbl) for lbl, _, _ in row_items) if row_items else 10
+              cell_w = 7
+
+              def _cell(v: str) -> str:
+                  v = (v or "").strip()
+                  if len(v) > cell_w:
+                      v = v[:cell_w]
+                  return v.center(cell_w)
+
+              table_lines: list[str] = []
+              for i, (lbl, cells, suffix) in enumerate(row_items):
+                  if i == 1:
+                      # separator (after header)
+                      sep = (
+                          ("-" * label_w)
+                          + "-+-"
+                          + "-+-".join(["-" * cell_w for _ in range(6)])
+                      )
+                      table_lines.append(sep)
+                  padded_cells = (cells + [""] * 6)[:6]
+                  line = f"{lbl.ljust(label_w)} | " + " | ".join(_cell(c) for c in padded_cells)
+                  if suffix:
+                      line += suffix
+                  table_lines.append(line.rstrip())
+
+              section_text = "\n".join([f"🏢 `{slack_escape(tenant)}`", *table_lines]).rstrip()
 
               blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": section_text}})
 
@@ -556,7 +850,7 @@ jobs:
 
           req_mark = "✓" if req_failed == 0 else "❌"
           ctx = (
-              f"📅 `{slack_escape(patch_date or '?')}`  |  🕐 `{slack_escape(time_part)} {tz_abbrev}`  |  "
+              f"📅 D-1 `{slack_escape(patch_date or '?')}` | D-2 `{slack_escape(patch_date_d2 or '?')}`  |  🕐 `{slack_escape(time_part)} {tz_abbrev}`  |  "
               f"Policy: `{slack_escape(policy or '?')}`  |  Required: {req_ok}/{req_total} {req_mark}"
           )
           if opt_total > 0:
@@ -620,4 +914,351 @@ jobs:
 
       - name: Fail workflow if guardrail failed
         if: steps.guardrail.outputs.exit_code != '0'
+        run: exit 1
+
+  stats_30d:
+    name: Forecast D-1 success rate (30d)
+    if: >-
+      ${{
+        (github.event_name == 'schedule' && startsWith(github.event.schedule, '0 ')) ||
+        (github.event_name == 'workflow_dispatch' && inputs.send_success_rate == true)
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Setup Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Authenticate to GCP via WIF (and install gcloud/bq/gsutil)
+        uses: ./.github/actions/setup-gcp-auth
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - name: Run success rate (30d)
+        id: stats
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL: ${{ inputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-stats-out"
+
+          CMD="python scripts/guardrails/forecast_d1_readiness.py --outdir $OUTDIR --timezone Europe/Prague --mode ${MODE} --kind success_rate_30d"
+          if [ -n "${PATCH_DATE_LOCAL}" ]; then
+            CMD="$CMD --patch-date-local ${PATCH_DATE_LOCAL}"
+          fi
+
+          echo "Running: $CMD"
+          EXIT=0
+          $CMD || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"window_start={_v('window_start')}")
+          print(f"window_end={_v('window_end')}")
+          print(f"window_start_d2={_v('window_start_d2')}")
+          print(f"window_end_d2={_v('window_end_d2')}")
+          print(f"days={_v('days', '30')}")
+          print(f"errors_total={_v('errors_total', '0')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "window_start=" >> "$GITHUB_OUTPUT"
+            echo "window_end=" >> "$GITHUB_OUTPUT"
+            echo "window_start_d2=" >> "$GITHUB_OUTPUT"
+            echo "window_end_d2=" >> "$GITHUB_OUTPUT"
+            echo "days=30" >> "$GITHUB_OUTPUT"
+            echo "errors_total=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload stats artifacts
+        if: always() && steps.stats.outputs.outdir != ''
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: forecast-d1-readiness-stats-${{ github.run_id }}
+          path: ${{ steps.stats.outputs.outdir }}/
+          retention-days: 90
+
+      - name: Slack alert (30d success rate)
+        if: always() && steps.stats.outputs.status != 'NOOP' && inputs.dry_run != true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL_FINAL_DATA_ALERTS || secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SLACK_WEBHOOK_URL}" ]; then
+            echo "ℹ️ No Slack webhook secret configured (SLACK_WEBHOOK_URL_FINAL_DATA_ALERTS or SLACK_WEBHOOK_URL); skipping Slack notification."
+            exit 0
+          fi
+
+          OUTDIR="${{ steps.stats.outputs.outdir }}"
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          REPORT_CSV="${OUTDIR}/forecast_d1_readiness_success_rate_report.csv"
+          CHANNELS_CSV="${OUTDIR}/forecast_d1_readiness_success_rate_channels_report.csv"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          PAYLOAD="$(
+            SUMMARY_JSON="$SUMMARY_JSON" \
+            REPORT_CSV="$REPORT_CSV" \
+            CHANNELS_CSV="$CHANNELS_CSV" \
+            RUN_URL="$RUN_URL" \
+              python - <<'PY'
+          import csv
+          from collections import defaultdict
+          from datetime import datetime, timedelta
+          import json
+          import os
+
+          summary_path = os.environ.get("SUMMARY_JSON", "")
+          report_csv = os.environ.get("REPORT_CSV", "")
+          channels_csv = os.environ.get("CHANNELS_CSV", "")
+          run_url = os.environ.get("RUN_URL", "")
+
+          def _to_int(v: object) -> int:
+              try:
+                  if v is None:
+                      return 0
+                  return int(float(str(v).strip() or "0"))
+              except Exception:
+                  return 0
+
+          def slack_escape(s: str) -> str:
+              return (
+                  s.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;")
+                   .replace("`", "ˋ")
+                   .replace("\n", " ")
+                   .replace("\r", " ")
+                   .replace("@", "@\u200b")
+              )
+
+          # Slack Block Kit limits / readability caps
+          MAX_TENANTS_DISPLAY = 15
+          MAX_CHANNEL_LINES_PER_TENANT = 25
+
+          # Color thresholds
+          GREEN_AT = 90
+          YELLOW_AT = 70
+
+          def rate_cell(v: object) -> str:
+              s = str(v or "").strip()
+              if not s:
+                  return "—"
+              try:
+                  p = int(float(s))
+              except Exception:
+                  return "—"
+              if p >= GREEN_AT:
+                  return f"🟩{p}%"
+              if p >= YELLOW_AT:
+                  return f"🟨{p}%"
+              return f"🟥{p}%"
+
+          status = "?"
+          patch_date = ""
+          now_local = ""
+          gh_schedule = ""
+          window_start = ""
+          window_end = ""
+          window_start_d2 = ""
+          window_end_d2 = ""
+          days = "30"
+          errors_total = 0
+          try:
+              with open(summary_path, "r", encoding="utf-8") as f:
+                  s = json.load(f)
+              status = str(s.get("status", "?"))
+              patch_date = str(s.get("patch_date_local", "") or "")
+              now_local = str(s.get("now_local", "") or "")
+              gh_schedule = str(s.get("github_event_schedule", "") or "")
+              window_start = str(s.get("window_start", "") or "")
+              window_end = str(s.get("window_end", "") or "")
+              window_start_d2 = str(s.get("window_start_d2", "") or "")
+              window_end_d2 = str(s.get("window_end_d2", "") or "")
+              days = str(s.get("days", "30") or "30")
+              errors_total = _to_int(s.get("errors_total"))
+          except Exception:
+              pass
+
+          tz_abbrev = "Europe/Prague"
+          try:
+              dt = datetime.fromisoformat(now_local)
+              off = dt.utcoffset()
+              if off == timedelta(hours=1):
+                  tz_abbrev = "CET"
+              elif off == timedelta(hours=2):
+                  tz_abbrev = "CEST"
+          except Exception:
+              pass
+
+          time_part = "10:00"
+          try:
+              parts = (gh_schedule or "").strip().split()
+              if len(parts) >= 2 and parts[0].isdigit():
+                  m = int(parts[0])
+                  if 0 <= m <= 59:
+                      time_part = f"10:{m:02d}"
+          except Exception:
+              pass
+
+          icon = "✅" if errors_total == 0 else "⚠️"
+          title_text = "Forecast D-1 Readiness: 30d Success Rate"
+          header_mrkdwn = (
+              f"{icon} *{slack_escape(title_text)}* — "
+              f"📅 D-1 `{slack_escape(window_start or '?')}`→`{slack_escape(window_end or '?')}` "
+              f"| D-2 `{slack_escape(window_start_d2 or '?')}`→`{slack_escape(window_end_d2 or '?')}` "
+              f"| 🕐 `{slack_escape(time_part)} {tz_abbrev}`"
+          )
+
+          blocks: list[dict] = []
+          blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": header_mrkdwn}})
+
+          tenant_map: dict[str, list[dict[str, object]]] = defaultdict(list)
+          channels_map: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
+
+          try:
+              with open(report_csv, "r", encoding="utf-8", newline="") as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      tenant = (row.get("tenant") or "").strip() or "?"
+                      country = (row.get("country") or "").strip() or "?"
+                      tenant_map[tenant].append(row)
+          except Exception:
+              pass
+
+          try:
+              if channels_csv and os.path.exists(channels_csv):
+                  with open(channels_csv, "r", encoding="utf-8", newline="") as f:
+                      reader = csv.DictReader(f)
+                      for row in reader:
+                          tenant = (row.get("tenant") or "").strip() or "?"
+                          country = (row.get("country") or "").strip() or "?"
+                          channels_map[(tenant.lower(), country.lower())].append(row)
+          except Exception:
+              pass
+
+          tenant_items = sorted([(t.lower(), t) for t in tenant_map.keys()])
+          for _, tenant in tenant_items[:MAX_TENANTS_DISPLAY]:
+              entries = tenant_map.get(tenant, [])
+              entries.sort(key=lambda r: (str(r.get("country") or "").lower(),))
+
+              row_items: list[tuple[str, list[str], str]] = []
+              row_items.append(("country/channel", ["D1 rev", "D1 cost", "D1 14", "D2 rev", "D2 cost", "D2 14"], ""))
+
+              channel_lines_added = 0
+              channel_lines_truncated = False
+              for r in entries:
+                  country = (r.get("country") or "?").strip()
+                  d1_rev = rate_cell(r.get("d1_rev_rate"))
+                  d1_cost = rate_cell(r.get("d1_cost_rate"))
+                  d1_14 = rate_cell(r.get("d1_14_rate"))
+                  d2_rev = rate_cell(r.get("d2_rev_rate"))
+                  d2_cost = rate_cell(r.get("d2_cost_rate"))
+                  d2_14 = rate_cell(r.get("d2_14_rate"))
+                  row_items.append((f"✅ {slack_escape(country)}", [d1_rev, d1_cost, d1_14, d2_rev, d2_cost, d2_14], ""))
+
+                  if not channel_lines_truncated:
+                      ch_items = channels_map.get((tenant.lower(), country.lower()), [])
+                      for ch in ch_items:
+                          if channel_lines_added >= MAX_CHANNEL_LINES_PER_TENANT:
+                              row_items.append(("  • _(channel details truncated; see artifact)_", ["", "", "", "", "", ""], ""))
+                              channel_lines_truncated = True
+                              break
+                          ch_name = (ch.get("channel") or "?").strip()
+                          d1_rev = rate_cell(ch.get("d1_rev_rate"))
+                          d1_cost = rate_cell(ch.get("d1_cost_rate"))
+                          d2_rev = rate_cell(ch.get("d2_rev_rate"))
+                          d2_cost = rate_cell(ch.get("d2_cost_rate"))
+                          row_items.append((f"  • {slack_escape(ch_name)}", [d1_rev, d1_cost, "—", d2_rev, d2_cost, "—"], ""))
+                          channel_lines_added += 1
+
+              label_w = max(len(lbl) for lbl, _, _ in row_items) if row_items else 10
+              cell_w = 7
+
+              def _cell(v: str) -> str:
+                  v = (v or "").strip()
+                  if len(v) > cell_w:
+                      v = v[:cell_w]
+                  return v.center(cell_w)
+
+              table_lines: list[str] = []
+              for i, (lbl, cells, suffix) in enumerate(row_items):
+                  if i == 1:
+                      sep = ("-" * label_w) + "-+-" + "-+-".join(["-" * cell_w for _ in range(6)])
+                      table_lines.append(sep)
+                  padded_cells = (cells + [""] * 6)[:6]
+                  line = f"{lbl.ljust(label_w)} | " + " | ".join(_cell(c) for c in padded_cells)
+                  if suffix:
+                      line += suffix
+                  table_lines.append(line.rstrip())
+
+              section_text = "\n".join([f"🏢 `{slack_escape(tenant)}`", *table_lines]).rstrip()
+              blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": section_text}})
+
+          if len(tenant_items) > MAX_TENANTS_DISPLAY:
+              blocks.append(
+                  {
+                      "type": "section",
+                      "text": {
+                          "type": "mrkdwn",
+                          "text": f"_(+{len(tenant_items) - MAX_TENANTS_DISPLAY} more tenants in artifact)_",
+                      },
+                  }
+              )
+
+          if run_url:
+              blocks.append(
+                  {
+                      "type": "actions",
+                      "elements": [
+                          {
+                              "type": "button",
+                              "text": {"type": "plain_text", "text": "View Run Details"},
+                              "url": run_url,
+                          }
+                      ],
+                  }
+              )
+
+          payload = {"text": slack_escape(title_text), "blocks": blocks}
+          print(json.dumps(payload))
+          PY
+          )"
+
+          curl -sS -X POST "$SLACK_WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            --data "$PAYLOAD"
+
+      - name: Fail workflow if stats failed
+        if: steps.stats.outputs.exit_code != '0'
         run: exit 1

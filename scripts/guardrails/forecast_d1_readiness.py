@@ -7,12 +7,12 @@ Purpose:
 - Designed to run from GitHub Actions with WIF/OIDC and Cloud SDK (bq) available.
 
 Business policy (Europe/Prague):
-- Scheduled hourly at 09:15–16:15.
-- Required scope = all (all countries required) for every scheduled run.
+- Readiness: scheduled hourly at 09:15–16:15 (required scope = all for every scheduled run).
+- Success rate (30d): scheduled daily at 10:00 (informational).
 
 DST-safe scheduling:
-- Workflow schedules a UTC superset (07:15–15:15 UTC).
-- Script uses GITHUB_EVENT_SCHEDULE + local UTC offset to NOOP outside the local execution window,
+- Workflow schedules UTC supersets.
+- Script uses GITHUB_EVENT_SCHEDULE + local UTC offset to NOOP outside intended local execution windows,
   ensuring only one run per local slot/day.
 
 Never logs secret values.
@@ -107,6 +107,35 @@ class ChannelResultRow:
     reason: str
 
 
+@dataclass(frozen=True)
+class SuccessRateRow:
+    tenant: str
+    country: str
+    days: int
+    d1_rev_rate: Optional[int]
+    d1_cost_rate: Optional[int]
+    d1_14_rate: Optional[int]
+    d2_rev_rate: Optional[int]
+    d2_cost_rate: Optional[int]
+    d2_14_rate: Optional[int]
+    status: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class SuccessRateChannelRow:
+    tenant: str
+    country: str
+    channel: str
+    days: int
+    d1_rev_rate: Optional[int]
+    d1_cost_rate: Optional[int]
+    d2_rev_rate: Optional[int]
+    d2_cost_rate: Optional[int]
+    status: str
+    reason: str
+
+
 def _norm_key(value: str) -> str:
     return (value or "").strip().casefold()
 
@@ -177,6 +206,24 @@ def _parse_date_local(value: str, tz: ZoneInfo) -> date:
     if not value:
         return datetime.now(tz=tz).date()
     return date.fromisoformat(value)
+
+
+def _date_range_inclusive(start: date, end: date) -> list[date]:
+    if end < start:
+        return []
+    n = (end - start).days
+    return [start + timedelta(days=i) for i in range(n + 1)]
+
+
+def _pct(ok_days: int, days: int) -> int:
+    if days <= 0:
+        return 0
+    if ok_days <= 0:
+        return 0
+    if ok_days >= days:
+        return 100
+    # Round to nearest integer (avoid bankers rounding).
+    return int((ok_days * 100) / days + 0.5)
 
 
 def _normalize_table_fq(table_fq: str, *, allow_empty: bool = False) -> str:
@@ -333,6 +380,37 @@ def _infer_slot_auto(now_local: datetime, *, gh_schedule: str = "") -> str:
     return "noop"
 
 
+def _should_run_success_rate_auto(now_local: datetime, *, gh_schedule: str = "") -> bool:
+    """
+    DST-safe gating for daily 10:00 Europe/Prague success-rate runs.
+
+    The workflow schedules a UTC superset (08:00 and 09:00 UTC); we pick the one
+    that maps to 10:00 local time based on the current local UTC offset.
+    """
+
+    gh_schedule = (gh_schedule or "").strip()
+    if gh_schedule:
+        parts = gh_schedule.split()
+        if len(parts) < 2:
+            return False
+        try:
+            utc_minute = int(parts[0])
+            utc_hour = int(parts[1])
+        except ValueError:
+            return False
+
+        if utc_minute != 0:
+            return False
+
+        offset = now_local.utcoffset() or timedelta(0)
+        offset_hours = int(offset.total_seconds() // 3600)
+        local_hour = utc_hour + offset_hours
+        return local_hour == 10
+
+    # Fallback: allow within the local hour (handles common scheduling delays).
+    return now_local.hour == 10
+
+
 def _load_specs(csv_path: Path) -> list[PipelineSpec]:
     required = {
         "project_id",
@@ -481,6 +559,78 @@ def _write_channels_csv(path: Path, rows: list[ChannelResultRow]) -> None:
             )
 
 
+def _write_success_rate_csv(path: Path, rows: list[SuccessRateRow]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(
+            [
+                "tenant",
+                "country",
+                "days",
+                "d1_rev_rate",
+                "d1_cost_rate",
+                "d1_14_rate",
+                "d2_rev_rate",
+                "d2_cost_rate",
+                "d2_14_rate",
+                "status",
+                "reason",
+            ]
+        )
+        for r in rows:
+            w.writerow(
+                [
+                    r.tenant,
+                    r.country,
+                    str(r.days),
+                    "" if r.d1_rev_rate is None else str(r.d1_rev_rate),
+                    "" if r.d1_cost_rate is None else str(r.d1_cost_rate),
+                    "" if r.d1_14_rate is None else str(r.d1_14_rate),
+                    "" if r.d2_rev_rate is None else str(r.d2_rev_rate),
+                    "" if r.d2_cost_rate is None else str(r.d2_cost_rate),
+                    "" if r.d2_14_rate is None else str(r.d2_14_rate),
+                    r.status,
+                    r.reason,
+                ]
+            )
+
+
+def _write_success_rate_channels_csv(path: Path, rows: list[SuccessRateChannelRow]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(
+            [
+                "tenant",
+                "country",
+                "channel",
+                "days",
+                "d1_rev_rate",
+                "d1_cost_rate",
+                "d2_rev_rate",
+                "d2_cost_rate",
+                "status",
+                "reason",
+            ]
+        )
+        for r in rows:
+            w.writerow(
+                [
+                    r.tenant,
+                    r.country,
+                    r.channel,
+                    str(r.days),
+                    "" if r.d1_rev_rate is None else str(r.d1_rev_rate),
+                    "" if r.d1_cost_rate is None else str(r.d1_cost_rate),
+                    "" if r.d2_rev_rate is None else str(r.d2_rev_rate),
+                    "" if r.d2_cost_rate is None else str(r.d2_cost_rate),
+                    r.status,
+                    r.reason,
+                ]
+            )
+
+
 def _domain_for(tenant: str, country: str) -> str:
     """Build domain string from tenant+country with validation."""
     key = ((tenant or "").strip().lower(), (country or "").strip().lower())
@@ -620,7 +770,430 @@ def _write_json_summary(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: str, mode: str) -> int:
+def run_success_rate_30d(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: str, mode: str) -> int:
+    tz = ZoneInfo(tz_name)
+    now_local = datetime.now(tz=tz)
+
+    gh_schedule = (os.environ.get("GITHUB_EVENT_SCHEDULE", "") or "").strip()
+    if mode == "auto":
+        if not _should_run_success_rate_auto(now_local, gh_schedule=gh_schedule):
+            outdir.mkdir(parents=True, exist_ok=True)
+            _write_json_summary(
+                outdir / "forecast_d1_readiness_summary.json",
+                {
+                    "status": "NOOP",
+                    "reason": "Outside execution window for auto mode",
+                    "timezone": tz_name,
+                    "patch_date_local": "",
+                    "github_event_schedule": gh_schedule,
+                    "now_local": now_local.isoformat(),
+                    "mode": mode,
+                    "kind": "success_rate_30d",
+                },
+            )
+            return 0
+    elif mode != "manual":
+        raise ValueError(f"Invalid mode: {mode}")
+
+    _ensure_cmd_available("bq")
+
+    if patch_date_local_str.strip():
+        end_date = _parse_date_local(patch_date_local_str, tz)
+    else:
+        end_date = (datetime.now(tz=tz).date() - timedelta(days=1))
+
+    query_start = end_date - timedelta(days=30)
+    query_end = end_date
+    d1_start = end_date - timedelta(days=29)
+    d1_end = end_date
+    d2_start = end_date - timedelta(days=30)
+    d2_end = end_date - timedelta(days=1)
+
+    all_dates = [d.isoformat() for d in _date_range_inclusive(query_start, query_end)]
+    d1_dates = [d.isoformat() for d in _date_range_inclusive(d1_start, d1_end)]
+    d2_dates = [d.isoformat() for d in _date_range_inclusive(d2_start, d2_end)]
+    days = 30
+
+    outdir.mkdir(parents=True, exist_ok=True)
+    checked_at_utc = datetime.now(tz=UTC)
+    specs = _load_specs(config_csv)
+
+    rows: list[SuccessRateRow] = []
+    channel_rows: list[SuccessRateChannelRow] = []
+    errors_total = 0
+
+    def _cols(meta: dict) -> set[str]:
+        fields = meta.get("schema", {}).get("fields", []) or []
+        return {str(f.get("name", "") or "").strip().lower() for f in fields if isinstance(f, dict)}
+
+    def _kind_from_exc(exc: Exception) -> str:
+        msg = str(exc)
+        kind = "bq_error"
+        if msg.startswith("invalid_domain:"):
+            kind = "invalid_domain"
+        elif msg.startswith("invalid_bq_table:"):
+            kind = "invalid_bq_table"
+        elif msg.startswith("not_found:"):
+            kind = "not_found"
+        elif msg.startswith("forbidden:"):
+            kind = "forbidden"
+        elif msg.startswith("bq_error:"):
+            kind = "bq_error"
+        elif msg.startswith("14_"):
+            kind = msg.split(":", 1)[0]
+        return kind
+
+    for spec in specs:
+        wanted = _wanted_channels(spec.tenant, spec.country)
+
+        d1_rev_rate: Optional[int] = None
+        d1_cost_rate: Optional[int] = None
+        d1_14_rate: Optional[int] = None
+        d2_rev_rate: Optional[int] = None
+        d2_cost_rate: Optional[int] = None
+        d2_14_rate: Optional[int] = None
+        status = "OK"
+        reason = ""
+
+        cost_present = "no"
+        channel_present = False
+        status13_by_date: dict[str, str] = {d: "FAIL" for d in all_dates}
+
+        try:
+            table_fq_13 = _normalize_table_fq(spec.bq_table_13)
+            meta13 = _bq_show_table_json(job_project_id=spec.project_id, table_fq=table_fq_13)
+            cols13 = _cols(meta13)
+            cost_present = "yes" if OPTIONAL_COLUMN_COST in cols13 else "no"
+            channel_present = "channel" in cols13
+
+            select_parts = [
+                "CAST(date AS STRING) AS d",
+                "COUNT(1) AS row_count",
+                "IFNULL(SUM(sessions), 0) AS sessions_sum",
+                "IFNULL(SUM(revenue_db), 0) AS revenue_db_sum",
+                "IFNULL(SUM(transactions_db), 0) AS transactions_db_sum",
+            ]
+            if cost_present == "yes":
+                select_parts.append("IFNULL(SUM(cost), 0) AS cost_sum")
+
+            sql = (
+                "SELECT "
+                + ", ".join(select_parts)
+                + f" FROM `{table_fq_13}`"
+                + " WHERE CAST(date AS STRING) BETWEEN @start AND @end"
+                + " GROUP BY d"
+                + " ORDER BY d"
+            )
+            out = _bq_query_csv(
+                job_project_id=spec.project_id,
+                sql=sql,
+                parameters=[f"start:STRING:{query_start.isoformat()}", f"end:STRING:{query_end.isoformat()}"],
+            )
+            qrows = _parse_csv_rows(out)
+            daily13: dict[str, dict[str, object]] = {}
+            for r in qrows:
+                d = (r.get("d") or "").strip()
+                if d:
+                    daily13[d] = r
+
+            rev_green: dict[str, bool] = {}
+            cost_green: dict[str, Optional[bool]] = {}
+            for d in all_dates:
+                r = daily13.get(d, {})
+                row_count = _as_int(r.get("row_count"))
+                sessions_sum = _as_float(r.get("sessions_sum"))
+                revenue_sum = _as_float(r.get("revenue_db_sum"))
+                transactions_sum = _as_float(r.get("transactions_db_sum"))
+                cost_sum = _as_float(r.get("cost_sum")) if cost_present == "yes" else 0.0
+
+                actuals_sum = abs(sessions_sum) + abs(revenue_sum) + abs(transactions_sum)
+                st13 = "PASS" if (row_count > 0 and actuals_sum > EPS) else "FAIL"
+                status13_by_date[d] = st13
+                rev_green[d] = st13 == "PASS" and abs(revenue_sum) > EPS
+                if cost_present == "yes":
+                    cost_green[d] = st13 == "PASS" and abs(cost_sum) > EPS
+                else:
+                    cost_green[d] = None
+
+            d1_rev_rate = _pct(sum(1 for d in d1_dates if rev_green.get(d)), days)
+            d2_rev_rate = _pct(sum(1 for d in d2_dates if rev_green.get(d)), days)
+            if cost_present == "yes":
+                d1_cost_rate = _pct(sum(1 for d in d1_dates if cost_green.get(d)), days)
+                d2_cost_rate = _pct(sum(1 for d in d2_dates if cost_green.get(d)), days)
+
+            table_fq_14_raw = (spec.bq_table_14 or "").strip()
+            if table_fq_14_raw:
+                try:
+                    table_fq_14 = _normalize_table_fq(table_fq_14_raw)
+                    dom = _domain_for(spec.tenant, spec.country)
+                    meta14 = _bq_show_table_json(job_project_id=spec.project_id, table_fq=table_fq_14)
+                    cols14 = _cols(meta14)
+
+                    dom_norm = (dom or "").strip()
+                    country_param = (spec.country or "").strip().lower()
+                    required14: tuple[str, ...] = REQUIRED_COLUMNS_14_COMMON
+                    where_14 = ""
+                    params14 = [f"start:STRING:{query_start.isoformat()}", f"end:STRING:{query_end.isoformat()}"]
+                    if "domain" in cols14 and dom_norm:
+                        required14 = REQUIRED_COLUMNS_14_COMMON + REQUIRED_COLUMNS_14_DOMAIN
+                        where_14 = "CAST(date AS STRING) BETWEEN @start AND @end AND domain=@dom"
+                        params14.append(f"dom:STRING:{dom_norm}")
+                    elif "country" in cols14 and country_param:
+                        required14 = REQUIRED_COLUMNS_14_COMMON + REQUIRED_COLUMNS_14_COUNTRY
+                        where_14 = "CAST(date AS STRING) BETWEEN @start AND @end AND LOWER(CAST(country AS STRING))=@c"
+                        params14.append(f"c:STRING:{country_param}")
+                    elif "domain" in cols14:
+                        raise RuntimeError("14_invalid_filter_value:domain")
+                    elif "country" in cols14:
+                        raise RuntimeError("14_invalid_filter_value:country")
+                    else:
+                        raise RuntimeError("14_internal_error_empty_where")
+
+                    missing14 = [col for col in required14 if col not in cols14]
+                    if missing14:
+                        raise RuntimeError("14_missing_columns:" + ",".join(missing14))
+
+                    select_parts_14 = [
+                        "CAST(date AS STRING) AS d",
+                        "COUNT(1) AS row_count_14",
+                        "IFNULL(SUM(sessions), 0) AS sessions_sum_14",
+                        "IFNULL(SUM(revenue_db), 0) AS revenue_db_sum_14",
+                        "IFNULL(SUM(transactions_db), 0) AS transactions_db_sum_14",
+                    ]
+                    sql14 = (
+                        "SELECT "
+                        + ", ".join(select_parts_14)
+                        + f" FROM `{table_fq_14}`"
+                        + " WHERE "
+                        + where_14
+                        + " GROUP BY d"
+                        + " ORDER BY d"
+                    )
+                    out14 = _bq_query_csv(job_project_id=spec.project_id, sql=sql14, parameters=params14)
+                    qrows14 = _parse_csv_rows(out14)
+                    daily14: dict[str, dict[str, object]] = {}
+                    for r14 in qrows14:
+                        d = (r14.get("d") or "").strip()
+                        if d:
+                            daily14[d] = r14
+
+                    pass14: dict[str, bool] = {}
+                    for d in all_dates:
+                        r14 = daily14.get(d, {})
+                        row_count_14 = _as_int(r14.get("row_count_14"))
+                        sessions_sum_14 = _as_float(r14.get("sessions_sum_14"))
+                        revenue_sum_14 = _as_float(r14.get("revenue_db_sum_14"))
+                        transactions_sum_14 = _as_float(r14.get("transactions_db_sum_14"))
+                        actuals_sum_14 = abs(sessions_sum_14) + abs(revenue_sum_14) + abs(transactions_sum_14)
+                        pass14[d] = row_count_14 > 0 and actuals_sum_14 > EPS
+
+                    d1_14_rate = _pct(sum(1 for d in d1_dates if pass14.get(d)), days)
+                    d2_14_rate = _pct(sum(1 for d in d2_dates if pass14.get(d)), days)
+                except Exception as exc14:  # noqa: BLE001
+                    errors_total += 1
+                    kind14 = _kind_from_exc(exc14)
+                    reason = (reason + ";" if reason else "") + f"14_error:{kind14}"
+
+            if wanted:
+                if not channel_present:
+                    for ch_name in wanted:
+                        channel_rows.append(
+                            SuccessRateChannelRow(
+                                tenant=spec.tenant,
+                                country=spec.country,
+                                channel=ch_name,
+                                days=days,
+                                d1_rev_rate=None,
+                                d1_cost_rate=None,
+                                d2_rev_rate=None,
+                                d2_cost_rate=None,
+                                status="SKIP",
+                                reason="missing_channel_column",
+                            )
+                        )
+                else:
+                    params_ch = [f"start:STRING:{query_start.isoformat()}", f"end:STRING:{query_end.isoformat()}"]
+                    placeholders: list[str] = []
+                    for i, ch_name in enumerate(wanted):
+                        ch_norm = _norm_key(ch_name)
+                        if not ch_norm:
+                            continue
+                        p_name = f"ch{i}"
+                        placeholders.append(f"@{p_name}")
+                        params_ch.append(f"{p_name}:STRING:{ch_norm.lower()}")
+                    if placeholders:
+                        try:
+                            select_parts_ch = [
+                                "CAST(date AS STRING) AS d",
+                                "LOWER(CAST(channel AS STRING)) AS ch",
+                                "COUNT(1) AS row_count",
+                                "IFNULL(SUM(revenue_db), 0) AS revenue_db_sum",
+                            ]
+                            if cost_present == "yes":
+                                select_parts_ch.append("IFNULL(SUM(cost), 0) AS cost_sum")
+
+                            sql_ch = (
+                                "SELECT "
+                                + ", ".join(select_parts_ch)
+                                + f" FROM `{table_fq_13}`"
+                                + " WHERE CAST(date AS STRING) BETWEEN @start AND @end"
+                                + " AND LOWER(CAST(channel AS STRING)) IN ("
+                                + ", ".join(placeholders)
+                                + ")"
+                                + " GROUP BY d, ch"
+                                + " ORDER BY d, ch"
+                            )
+                            out_ch = _bq_query_csv(job_project_id=spec.project_id, sql=sql_ch, parameters=params_ch)
+                            qrows_ch = _parse_csv_rows(out_ch)
+                            daily_ch: dict[tuple[str, str], dict[str, object]] = {}
+                            for rch in qrows_ch:
+                                d = (rch.get("d") or "").strip()
+                                ch = (rch.get("ch") or "").strip().lower()
+                                if d and ch:
+                                    daily_ch[(d, ch)] = rch
+
+                            for ch_name in wanted:
+                                ch_key = _norm_key(ch_name).lower()
+                                rev_green_ch: dict[str, bool] = {}
+                                cost_green_ch: dict[str, Optional[bool]] = {}
+                                for d in all_dates:
+                                    rch = daily_ch.get((d, ch_key), {})
+                                    rev_sum = _as_float(rch.get("revenue_db_sum"))
+                                    cost_sum = _as_float(rch.get("cost_sum")) if cost_present == "yes" else 0.0
+
+                                    st13 = status13_by_date.get(d, "FAIL")
+                                    rev_green_ch[d] = st13 == "PASS" and abs(rev_sum) > EPS
+                                    if cost_present == "yes":
+                                        cost_green_ch[d] = st13 == "PASS" and abs(cost_sum) > EPS
+                                    else:
+                                        cost_green_ch[d] = None
+
+                                d1_rev = _pct(sum(1 for d in d1_dates if rev_green_ch.get(d)), days)
+                                d2_rev = _pct(sum(1 for d in d2_dates if rev_green_ch.get(d)), days)
+                                d1_cost = None
+                                d2_cost = None
+                                if cost_present == "yes":
+                                    d1_cost = _pct(sum(1 for d in d1_dates if cost_green_ch.get(d)), days)
+                                    d2_cost = _pct(sum(1 for d in d2_dates if cost_green_ch.get(d)), days)
+
+                                channel_rows.append(
+                                    SuccessRateChannelRow(
+                                        tenant=spec.tenant,
+                                        country=spec.country,
+                                        channel=ch_name,
+                                        days=days,
+                                        d1_rev_rate=d1_rev,
+                                        d1_cost_rate=d1_cost,
+                                        d2_rev_rate=d2_rev,
+                                        d2_cost_rate=d2_cost,
+                                        status="OK",
+                                        reason="",
+                                    )
+                                )
+                        except Exception as exc_ch:  # noqa: BLE001
+                            errors_total += 1
+                            kind_ch = _kind_from_exc(exc_ch)
+                            for ch_name in wanted:
+                                channel_rows.append(
+                                    SuccessRateChannelRow(
+                                        tenant=spec.tenant,
+                                        country=spec.country,
+                                        channel=ch_name,
+                                        days=days,
+                                        d1_rev_rate=None,
+                                        d1_cost_rate=None,
+                                        d2_rev_rate=None,
+                                        d2_cost_rate=None,
+                                        status="ERROR",
+                                        reason=kind_ch,
+                                    )
+                                )
+        except Exception as exc:  # noqa: BLE001
+            errors_total += 1
+            status = "ERROR"
+            reason = _kind_from_exc(exc)
+            d1_rev_rate = None
+            d1_cost_rate = None
+            d1_14_rate = None
+            d2_rev_rate = None
+            d2_cost_rate = None
+            d2_14_rate = None
+            if wanted:
+                for ch_name in wanted:
+                    channel_rows.append(
+                        SuccessRateChannelRow(
+                            tenant=spec.tenant,
+                            country=spec.country,
+                            channel=ch_name,
+                            days=days,
+                            d1_rev_rate=None,
+                            d1_cost_rate=None,
+                            d2_rev_rate=None,
+                            d2_cost_rate=None,
+                            status="ERROR",
+                            reason=reason,
+                        )
+                    )
+
+        rows.append(
+            SuccessRateRow(
+                tenant=spec.tenant,
+                country=spec.country,
+                days=days,
+                d1_rev_rate=d1_rev_rate,
+                d1_cost_rate=d1_cost_rate,
+                d1_14_rate=d1_14_rate,
+                d2_rev_rate=d2_rev_rate,
+                d2_cost_rate=d2_cost_rate,
+                d2_14_rate=d2_14_rate,
+                status=status,
+                reason=reason,
+            )
+        )
+
+    report_csv = outdir / "forecast_d1_readiness_success_rate_report.csv"
+    channels_csv = outdir / "forecast_d1_readiness_success_rate_channels_report.csv"
+    summary_json = outdir / "forecast_d1_readiness_summary.json"
+
+    _write_success_rate_csv(report_csv, rows)
+    _write_success_rate_channels_csv(channels_csv, channel_rows)
+    _write_json_summary(
+        summary_json,
+        {
+            "status": "PASS",
+            "timezone": tz_name,
+            "patch_date_local": end_date.isoformat(),
+            "window_start": d1_start.isoformat(),
+            "window_end": d1_end.isoformat(),
+            "window_start_d2": d2_start.isoformat(),
+            "window_end_d2": d2_end.isoformat(),
+            "days": days,
+            "github_event_schedule": gh_schedule,
+            "now_local": now_local.isoformat(),
+            "checked_at_utc": checked_at_utc.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "pipelines_total": len(specs),
+            "errors_total": errors_total,
+            "mode": mode,
+            "kind": "success_rate_30d",
+        },
+    )
+
+    return 0
+
+
+def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: str, mode: str, kind: str) -> int:
+    kind = (kind or "").strip()
+    if kind == "success_rate_30d":
+        return run_success_rate_30d(
+            config_csv=config_csv,
+            outdir=outdir,
+            tz_name=tz_name,
+            patch_date_local_str=patch_date_local_str,
+            mode=mode,
+        )
+    if kind != "readiness":
+        raise ValueError(f"Invalid kind: {kind}")
+
     tz = ZoneInfo(tz_name)
     now_local = datetime.now(tz=tz)
 
@@ -643,6 +1216,7 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                     "now_local": now_local.isoformat(),
                     "timezone": tz_name,
                     "mode": mode,
+                    "kind": "readiness",
                 },
             )
             return 0
@@ -1120,6 +1694,7 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
             "optional_total": optional_total,
             "optional_failed": optional_failed,
             "mode": mode,
+            "kind": "readiness",
         },
     )
 
@@ -1140,6 +1715,7 @@ def main() -> int:
         help="Date to check (YYYY-MM-DD, evaluated in --timezone). Default: yesterday in --timezone.",
     )
     ap.add_argument("--mode", default="auto", choices=["auto", "manual"])
+    ap.add_argument("--kind", default="readiness", choices=["readiness", "success_rate_30d"])
     ap.add_argument("--outdir", default="forecast-d1-readiness-out")
     args = ap.parse_args()
 
@@ -1150,6 +1726,7 @@ def main() -> int:
             tz_name=args.timezone,
             patch_date_local_str=args.patch_date_local.strip(),
             mode=args.mode.strip(),
+            kind=args.kind.strip(),
         )
     except Exception as exc:  # noqa: BLE001
         # Best-effort summary so CI can Slack even on unexpected errors.
@@ -1166,6 +1743,7 @@ def main() -> int:
                 "reason": "unexpected_error",
                 "error": str(exc)[:800],
                 "mode": args.mode,
+                "kind": args.kind,
             },
         )
         print(f"[error] Unexpected failure: {exc}", file=sys.stderr)
