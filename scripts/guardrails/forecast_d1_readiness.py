@@ -802,17 +802,21 @@ def run_success_rate_30d(*, config_csv: Path, outdir: Path, tz_name: str, patch_
     else:
         end_date = (datetime.now(tz=tz).date() - timedelta(days=1))
 
-    query_start = end_date - timedelta(days=30)
-    query_end = end_date
-    d1_start = end_date - timedelta(days=29)
     d1_end = end_date
-    d2_start = end_date - timedelta(days=30)
+    d1_start = end_date - timedelta(days=29)
     d2_end = end_date - timedelta(days=1)
+    d2_start = end_date - timedelta(days=30)
+
+    # We query a 31-day superset to cover both 30-day windows:
+    # - D-1: [end_date-29, end_date]
+    # - D-2: [end_date-30, end_date-1]
+    query_start = min(d1_start, d2_start)
+    query_end = max(d1_end, d2_end)
 
     all_dates = [d.isoformat() for d in _date_range_inclusive(query_start, query_end)]
     d1_dates = [d.isoformat() for d in _date_range_inclusive(d1_start, d1_end)]
     d2_dates = [d.isoformat() for d in _date_range_inclusive(d2_start, d2_end)]
-    days = 30
+    days = len(d1_dates)
 
     outdir.mkdir(parents=True, exist_ok=True)
     checked_at_utc = datetime.now(tz=UTC)
@@ -1155,12 +1159,14 @@ def run_success_rate_30d(*, config_csv: Path, outdir: Path, tz_name: str, patch_
     channels_csv = outdir / "forecast_d1_readiness_success_rate_channels_report.csv"
     summary_json = outdir / "forecast_d1_readiness_summary.json"
 
+    status = "PASS" if errors_total == 0 else "WARN"
+
     _write_success_rate_csv(report_csv, rows)
     _write_success_rate_channels_csv(channels_csv, channel_rows)
     _write_json_summary(
         summary_json,
         {
-            "status": "PASS",
+            "status": status,
             "timezone": tz_name,
             "patch_date_local": end_date.isoformat(),
             "window_start": d1_start.isoformat(),

@@ -100,7 +100,9 @@ jobs:
             CMD+=( --patch-date-local "$PATCH_DATE_LOCAL" )
           fi
 
-          echo "Running: ${CMD[*]}"
+          printf 'Running:'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
           EXIT=0
           "${CMD[@]}" || EXIT=$?
 
@@ -152,6 +154,7 @@ jobs:
           set -euo pipefail
           OUTDIR="forecast-d1-readiness-out-d2"
           mkdir -p "$OUTDIR"
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
 
           PATCH_DATE_LOCAL_D1="${PATCH_DATE_LOCAL_D1:-}"
           if [ -z "${PATCH_DATE_LOCAL_D1}" ]; then
@@ -183,7 +186,9 @@ jobs:
             --patch-date-local "$PATCH_DATE_LOCAL_D2"
           )
 
-          echo "Running: ${CMD[*]}"
+          printf 'Running:'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
           EXIT=0
           "${CMD[@]}" || EXIT=$?
 
@@ -301,35 +306,14 @@ jobs:
           run_url = os.environ.get("RUN_URL", "")
           repo = os.environ.get("GITHUB_REPOSITORY", "")
 
-          def _to_int(v: object) -> int:
-              try:
-                  if v is None:
-                      return 0
-                  return int(float(str(v).strip() or "0"))
-              except Exception:
-                  return 0
-
-          def _to_float(v: object) -> float:
-              try:
-                  if v is None:
-                      return 0.0
-                  return float(str(v).strip() or "0")
-              except Exception:
-                  return 0.0
+          from scripts.guardrails.slack_formatter import (
+              _to_float,
+              _to_int,
+              render_table_section_mrkdwn,
+              slack_escape,
+          )
 
           EPS = 1e-9  # Float tolerance for "non-zero" sums (avoid precision noise)
-
-          def slack_escape(s: str) -> str:
-              """Escape Slack link primitives, stabilize mrkdwn code spans, and break @mentions."""
-              return (
-                  s.replace("&", "&amp;")
-                   .replace("<", "&lt;")
-                   .replace(">", "&gt;")
-                   .replace("`", "ˋ")       # prevent breaking inline code spans
-                   .replace("\n", " ")
-                   .replace("\r", " ")
-                   .replace("@", "@\u200b")  # zero-width space breaks mentions
-              )
 
           # Slack Block Kit limits / readability caps
           MAX_TENANTS_DISPLAY = 15
@@ -816,32 +800,7 @@ jobs:
                           )
                           channel_lines_added += 1
 
-              label_w = max(len(lbl) for lbl, _, _ in row_items) if row_items else 10
-              cell_w = 7
-
-              def _cell(v: str) -> str:
-                  v = (v or "").strip()
-                  if len(v) > cell_w:
-                      v = v[:cell_w]
-                  return v.center(cell_w)
-
-              table_lines: list[str] = []
-              for i, (lbl, cells, suffix) in enumerate(row_items):
-                  if i == 1:
-                      # separator (after header)
-                      sep = (
-                          ("-" * label_w)
-                          + "-+-"
-                          + "-+-".join(["-" * cell_w for _ in range(6)])
-                      )
-                      table_lines.append(sep)
-                  padded_cells = (cells + [""] * 6)[:6]
-                  line = f"{lbl.ljust(label_w)} | " + " | ".join(_cell(c) for c in padded_cells)
-                  if suffix:
-                      line += suffix
-                  table_lines.append(line.rstrip())
-
-              section_text = "\n".join([f"🏢 `{slack_escape(tenant)}`", *table_lines]).rstrip()
+              section_text = render_table_section_mrkdwn(tenant=tenant, row_items=row_items)
 
               blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": section_text}})
 
@@ -963,6 +922,7 @@ jobs:
         run: |
           set -euo pipefail
           OUTDIR="forecast-d1-readiness-stats-out"
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
 
           CMD=(
             python scripts/guardrails/forecast_d1_readiness.py
@@ -975,7 +935,9 @@ jobs:
             CMD+=( --patch-date-local "$PATCH_DATE_LOCAL" )
           fi
 
-          echo "Running: ${CMD[*]}"
+          printf 'Running:'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
           EXIT=0
           "${CMD[@]}" || EXIT=$?
 
@@ -1059,24 +1021,7 @@ jobs:
           channels_csv = os.environ.get("CHANNELS_CSV", "")
           run_url = os.environ.get("RUN_URL", "")
 
-          def _to_int(v: object) -> int:
-              try:
-                  if v is None:
-                      return 0
-                  return int(float(str(v).strip() or "0"))
-              except Exception:
-                  return 0
-
-          def slack_escape(s: str) -> str:
-              return (
-                  s.replace("&", "&amp;")
-                   .replace("<", "&lt;")
-                   .replace(">", "&gt;")
-                   .replace("`", "ˋ")
-                   .replace("\n", " ")
-                   .replace("\r", " ")
-                   .replace("@", "@\u200b")
-              )
+          from scripts.guardrails.slack_formatter import _to_int, render_table_section_mrkdwn, slack_escape
 
           # Slack Block Kit limits / readability caps
           MAX_TENANTS_DISPLAY = 15
@@ -1223,27 +1168,7 @@ jobs:
                           row_items.append((f"  • {slack_escape(ch_name)}", [d1_rev, d1_cost, "—", d2_rev, d2_cost, "—"], ""))
                           channel_lines_added += 1
 
-              label_w = max(len(lbl) for lbl, _, _ in row_items) if row_items else 10
-              cell_w = 7
-
-              def _cell(v: str) -> str:
-                  v = (v or "").strip()
-                  if len(v) > cell_w:
-                      v = v[:cell_w]
-                  return v.center(cell_w)
-
-              table_lines: list[str] = []
-              for i, (lbl, cells, suffix) in enumerate(row_items):
-                  if i == 1:
-                      sep = ("-" * label_w) + "-+-" + "-+-".join(["-" * cell_w for _ in range(6)])
-                      table_lines.append(sep)
-                  padded_cells = (cells + [""] * 6)[:6]
-                  line = f"{lbl.ljust(label_w)} | " + " | ".join(_cell(c) for c in padded_cells)
-                  if suffix:
-                      line += suffix
-                  table_lines.append(line.rstrip())
-
-              section_text = "\n".join([f"🏢 `{slack_escape(tenant)}`", *table_lines]).rstrip()
+              section_text = render_table_section_mrkdwn(tenant=tenant, row_items=row_items)
               blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": section_text}})
 
           if len(tenant_items) > MAX_TENANTS_DISPLAY:
