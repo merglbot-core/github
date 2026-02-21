@@ -276,18 +276,22 @@ jobs:
           SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
           REPORT_CSV="${OUTDIR}/forecast_d1_readiness_report.csv"
           CHANNELS_CSV="${OUTDIR}/forecast_d1_readiness_channels_report.csv"
+          CHANNELS14_CSV="${OUTDIR}/forecast_d1_readiness_channels14_report.csv"
 
           SUMMARY_JSON_D2="${OUTDIR_D2}/forecast_d1_readiness_summary.json"
           REPORT_CSV_D2="${OUTDIR_D2}/forecast_d1_readiness_report.csv"
           CHANNELS_CSV_D2="${OUTDIR_D2}/forecast_d1_readiness_channels_report.csv"
+          CHANNELS14_CSV_D2="${OUTDIR_D2}/forecast_d1_readiness_channels14_report.csv"
 
           PAYLOAD="$(
             SUMMARY_JSON="$SUMMARY_JSON" \
             REPORT_CSV="$REPORT_CSV" \
             CHANNELS_CSV="$CHANNELS_CSV" \
+            CHANNELS14_CSV="$CHANNELS14_CSV" \
             SUMMARY_JSON_D2="$SUMMARY_JSON_D2" \
             REPORT_CSV_D2="$REPORT_CSV_D2" \
             CHANNELS_CSV_D2="$CHANNELS_CSV_D2" \
+            CHANNELS14_CSV_D2="$CHANNELS14_CSV_D2" \
             RUN_URL="$RUN_URL" \
             GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
               python - <<'PY'
@@ -300,9 +304,11 @@ jobs:
           summary_path = os.environ.get("SUMMARY_JSON", "")
           report_csv = os.environ.get("REPORT_CSV", "")
           channels_csv = os.environ.get("CHANNELS_CSV", "")
+          channels14_csv = os.environ.get("CHANNELS14_CSV", "")
           summary_path_d2 = os.environ.get("SUMMARY_JSON_D2", "")
           report_csv_d2 = os.environ.get("REPORT_CSV_D2", "")
           channels_csv_d2 = os.environ.get("CHANNELS_CSV_D2", "")
+          channels14_csv_d2 = os.environ.get("CHANNELS14_CSV_D2", "")
           run_url = os.environ.get("RUN_URL", "")
           repo = os.environ.get("GITHUB_REPOSITORY", "")
 
@@ -428,6 +434,8 @@ jobs:
           report_map_d2: dict[tuple[str, str], dict[str, object]] = {}
           channels_map: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
           channels_map_d2: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
+          channels14_map: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
+          channels14_map_d2: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
           req_fail_list: list[tuple[str, str, str, str, str]] = []
           opt_fail_list: list[tuple[str, str, str, str, str]] = []
 
@@ -468,6 +476,38 @@ jobs:
               )
 
           try:
+              if channels14_csv and os.path.exists(channels14_csv):
+                  with open(channels14_csv, "r", encoding="utf-8", newline="") as f:
+                      reader = csv.DictReader(f)
+                      for row in reader:
+                          tenant = (row.get("tenant") or "").strip() or "?"
+                          country = (row.get("country") or "").strip() or "?"
+                          channel = (row.get("channel") or "").strip() or "?"
+                          st = (row.get("status") or "").strip() or "?"
+                          reason = (row.get("reason") or "").strip()
+                          row_count = _to_int(row.get("row_count"))
+                          actuals_sum = _to_float(row.get("actuals_sum"))
+                          channels14_map[(tenant.lower(), country.lower())].append(
+                              {
+                                  "channel": channel,
+                                  "status": st,
+                                  "reason": reason,
+                                  "row_count": row_count,
+                                  "actuals_sum": actuals_sum,
+                              }
+                          )
+          except Exception as exc:
+              import sys
+
+              msg = str(exc).replace("\n", " ").replace("\r", " ").strip()
+              if len(msg) > 200:
+                  msg = msg[:200] + "…"
+              print(
+                  f"⚠️ Failed to parse channels14 CSV (forecast_d1_readiness_channels14_report.csv): {exc.__class__.__name__}: {msg}",
+                  file=sys.stderr,
+              )
+
+          try:
               if channels_csv_d2 and os.path.exists(channels_csv_d2):
                   with open(channels_csv_d2, "r", encoding="utf-8", newline="") as f:
                       reader = csv.DictReader(f)
@@ -500,6 +540,38 @@ jobs:
                   msg = msg[:200] + "…"
               print(
                   f"⚠️ Failed to parse channels CSV D-2 (forecast_d1_readiness_channels_report.csv): {exc.__class__.__name__}: {msg}",
+                  file=sys.stderr,
+              )
+
+          try:
+              if channels14_csv_d2 and os.path.exists(channels14_csv_d2):
+                  with open(channels14_csv_d2, "r", encoding="utf-8", newline="") as f:
+                      reader = csv.DictReader(f)
+                      for row in reader:
+                          tenant = (row.get("tenant") or "").strip() or "?"
+                          country = (row.get("country") or "").strip() or "?"
+                          channel = (row.get("channel") or "").strip() or "?"
+                          st = (row.get("status") or "").strip() or "?"
+                          reason = (row.get("reason") or "").strip()
+                          row_count = _to_int(row.get("row_count"))
+                          actuals_sum = _to_float(row.get("actuals_sum"))
+                          channels14_map_d2[(tenant.lower(), country.lower())].append(
+                              {
+                                  "channel": channel,
+                                  "status": st,
+                                  "reason": reason,
+                                  "row_count": row_count,
+                                  "actuals_sum": actuals_sum,
+                              }
+                          )
+          except Exception as exc:
+              import sys
+
+              msg = str(exc).replace("\n", " ").replace("\r", " ").strip()
+              if len(msg) > 200:
+                  msg = msg[:200] + "…"
+              print(
+                  f"⚠️ Failed to parse channels14 CSV D-2 (forecast_d1_readiness_channels14_report.csv): {exc.__class__.__name__}: {msg}",
                   file=sys.stderr,
               )
 
@@ -734,6 +806,14 @@ jobs:
                       ch_d2_map = {
                           (str(x.get("channel", "") or "").strip().casefold()): x for x in ch_items_d2 if isinstance(x, dict)
                       }
+                      ch14_items = channels14_map.get(tenant_country, [])
+                      ch14_items_d2 = channels14_map_d2.get(tenant_country, [])
+                      ch14_map = {
+                          (str(x.get("channel", "") or "").strip().casefold()): x for x in ch14_items if isinstance(x, dict)
+                      }
+                      ch14_d2_map = {
+                          (str(x.get("channel", "") or "").strip().casefold()): x for x in ch14_items_d2 if isinstance(x, dict)
+                      }
 
                       for ch in ch_items:
                           if channel_lines_added >= MAX_CHANNEL_LINES_PER_TENANT:
@@ -747,6 +827,46 @@ jobs:
                           ch_rev = _to_float(ch.get("revenue_db_sum"))
                           ch_cost = _to_float(ch.get("cost_sum"))
                           ch_cost_present = str(ch.get("cost_present", "") or "").strip().lower()
+
+                          table_fq_14_d2 = str(e2.get("table_fq_14", "") or "") if not missing_d2 else ""
+                          status_14_d2 = str(e2.get("status_14", "") or "").strip().upper() if not missing_d2 else ""
+
+                          d1_14_icon_ch = "—"
+                          if table_fq_14.strip():
+                              if (status_14 or "").strip().upper() != "PASS":
+                                  d1_14_icon_ch = "❌"
+                              else:
+                                  ch14 = ch14_map.get(ch_name.strip().casefold(), {})
+                                  if not ch14:
+                                      d1_14_icon_ch = "⚠️"
+                                  else:
+                                      ch14_status = str(ch14.get("status", "") or "?").strip().upper()
+                                      ch14_row_count = _to_int(ch14.get("row_count"))
+                                      ch14_actuals_sum = _to_float(ch14.get("actuals_sum"))
+                                      if ch14_status in ("SKIP", "ERROR"):
+                                          d1_14_icon_ch = "⚠️"
+                                      else:
+                                          d1_14_icon_ch = "✅" if (ch14_row_count > 0 and abs(ch14_actuals_sum) > EPS) else "⚠️"
+
+                          d2_14_icon_ch = "—" if missing_d2 else "⚠️"
+                          if missing_d2:
+                              d2_14_icon_ch = "—"
+                          elif not table_fq_14_d2.strip():
+                              d2_14_icon_ch = "—"
+                          elif status_14_d2 != "PASS":
+                              d2_14_icon_ch = "❌"
+                          else:
+                              ch14_2 = ch14_d2_map.get(ch_name.strip().casefold(), {})
+                              if not ch14_2:
+                                  d2_14_icon_ch = "⚠️"
+                              else:
+                                  ch14_2_status = str(ch14_2.get("status", "") or "?").strip().upper()
+                                  ch14_2_row_count = _to_int(ch14_2.get("row_count"))
+                                  ch14_2_actuals_sum = _to_float(ch14_2.get("actuals_sum"))
+                                  if ch14_2_status in ("SKIP", "ERROR"):
+                                      d2_14_icon_ch = "⚠️"
+                                  else:
+                                      d2_14_icon_ch = "✅" if (ch14_2_row_count > 0 and abs(ch14_2_actuals_sum) > EPS) else "⚠️"
 
                           if status_13 != "PASS":
                               d1_rev_icon = "❌"
@@ -794,7 +914,7 @@ jobs:
                           row_items.append(
                               (
                                   f"  • {slack_escape(ch_name)}",
-                                  [d1_rev_icon, d1_cost_icon, "—", d2_rev_icon, d2_cost_icon, "—"],
+                                  [d1_rev_icon, d1_cost_icon, d1_14_icon_ch, d2_rev_icon, d2_cost_icon, d2_14_icon_ch],
                                   suffix,
                               )
                           )
