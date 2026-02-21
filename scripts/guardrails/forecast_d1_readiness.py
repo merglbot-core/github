@@ -108,6 +108,22 @@ class ChannelResultRow:
 
 
 @dataclass(frozen=True)
+class Channel14ResultRow:
+    tenant: str
+    country: str
+    channel: str
+    row_count: int
+    sessions_sum: float
+    revenue_db_sum: float
+    transactions_db_sum: float
+    actuals_sum: float
+    cost_sum: float
+    cost_present: str
+    status: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class SuccessRateRow:
     tenant: str
     country: str
@@ -559,6 +575,45 @@ def _write_channels_csv(path: Path, rows: list[ChannelResultRow]) -> None:
             )
 
 
+def _write_channels14_csv(path: Path, rows: list[Channel14ResultRow]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(
+            [
+                "tenant",
+                "country",
+                "channel",
+                "row_count",
+                "sessions_sum",
+                "revenue_db_sum",
+                "transactions_db_sum",
+                "actuals_sum",
+                "cost_sum",
+                "cost_present",
+                "status",
+                "reason",
+            ]
+        )
+        for r in rows:
+            w.writerow(
+                [
+                    r.tenant,
+                    r.country,
+                    r.channel,
+                    str(r.row_count),
+                    f"{r.sessions_sum:.6f}",
+                    f"{r.revenue_db_sum:.6f}",
+                    f"{r.transactions_db_sum:.6f}",
+                    f"{r.actuals_sum:.6f}",
+                    f"{r.cost_sum:.6f}",
+                    r.cost_present,
+                    r.status,
+                    r.reason,
+                ]
+            )
+
+
 def _write_success_rate_csv(path: Path, rows: list[SuccessRateRow]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as f:
@@ -673,6 +728,7 @@ def _write_md(
     optional_failed: int,
     rows: list[ResultRow],
     channel_rows: list[ChannelResultRow],
+    channel14_rows: list[Channel14ResultRow],
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
@@ -760,6 +816,49 @@ def _write_md(
             lines.append("")
     else:
         lines.append("_No channel checks configured._")
+        lines.append("")
+
+    lines.append("## Channel checks (selected, table 14)")
+    lines.append("")
+    lines.append("Full detail in artifact `forecast_d1_readiness_channels14_report.csv`.")
+    lines.append("")
+
+    if channel14_rows:
+        # Map table 14 status per tenant/country to drive icon semantics.
+        status14_map: dict[tuple[str, str], str] = {}
+        has14_map: dict[tuple[str, str], bool] = {}
+        for r in rows:
+            key = ((r.tenant or "").strip().lower(), (r.country or "").strip().lower())
+            status14_map[key] = (r.status_14 or "").strip().upper()
+            has14_map[key] = bool((r.table_fq_14 or "").strip())
+
+        lines.append("| Tenant | Country | Channel | 14 | status | reason |")
+        lines.append("|---|---|---|---|---|---|")
+
+        MAX_CHANNEL14_MD_ROWS = 200
+        for cr in channel14_rows[:MAX_CHANNEL14_MD_ROWS]:
+            key = ((cr.tenant or "").strip().lower(), (cr.country or "").strip().lower())
+            has14 = has14_map.get(key, False)
+            st14 = status14_map.get(key, "")
+
+            icon14 = "—"
+            if has14:
+                if st14 != "PASS":
+                    icon14 = "❌"
+                elif cr.status in ("SKIP", "ERROR"):
+                    icon14 = "⚠️"
+                else:
+                    icon14 = "✅" if (cr.row_count > 0 and cr.actuals_sum > EPS) else "⚠️"
+
+            reason = cr.reason if (cr.reason or "").strip() else "—"
+            lines.append(f"| `{cr.tenant}` | `{cr.country}` | `{cr.channel}` | {icon14} | `{cr.status}` | `{reason}` |")
+
+        if len(channel14_rows) > MAX_CHANNEL14_MD_ROWS:
+            lines.append("")
+            lines.append("_... truncated; see CSV._")
+            lines.append("")
+    else:
+        lines.append("_No table 14 channel checks configured._")
         lines.append("")
 
     path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
@@ -1250,6 +1349,7 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
 
     rows: list[ResultRow] = []
     channel_rows: list[ChannelResultRow] = []
+    channel14_rows: list[Channel14ResultRow] = []
     required_total = 0
     required_failed = 0
     optional_total = 0
@@ -1494,6 +1594,11 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
         cost_sum_14 = 0.0
         cost_present_14 = "no"
         error_snippet_14 = ""
+        cols14: set[str] = set()
+        where_14 = ""
+        params14: list[str] = []
+        table_fq_14_norm = ""
+        table14_exception_kind = ""
 
         dom = ""
         if has_14:
@@ -1598,11 +1703,175 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
 
                 status_14 = "FAIL"
                 reason_14 = f"14_{kind}"
+                table14_exception_kind = kind
                 if "stderr(first" in msg:
                     error_snippet_14 = msg.split("stderr(first", 1)[-1]
                     error_snippet_14 = error_snippet_14[-800:]
                 else:
                     error_snippet_14 = msg[:800]
+
+        if wanted and has_14:
+            default_cost_present_14 = cost_present_14 if cost_present_14 in ("yes", "no") else "no"
+            if table14_exception_kind:
+                for ch_name in wanted:
+                    channel14_rows.append(
+                        Channel14ResultRow(
+                            tenant=spec.tenant,
+                            country=spec.country,
+                            channel=ch_name,
+                            row_count=0,
+                            sessions_sum=0.0,
+                            revenue_db_sum=0.0,
+                            transactions_db_sum=0.0,
+                            actuals_sum=0.0,
+                            cost_sum=0.0,
+                            cost_present=default_cost_present_14,
+                            status="ERROR",
+                            reason=table14_exception_kind,
+                        )
+                    )
+            elif status_14 != "PASS":
+                for ch_name in wanted:
+                    channel14_rows.append(
+                        Channel14ResultRow(
+                            tenant=spec.tenant,
+                            country=spec.country,
+                            channel=ch_name,
+                            row_count=0,
+                            sessions_sum=0.0,
+                            revenue_db_sum=0.0,
+                            transactions_db_sum=0.0,
+                            actuals_sum=0.0,
+                            cost_sum=0.0,
+                            cost_present=default_cost_present_14,
+                            status="SKIP",
+                            reason=f"guardrail_not_pass:{reason_14 or 'FAIL'}",
+                        )
+                    )
+            elif "channel" not in cols14:
+                for ch_name in wanted:
+                    channel14_rows.append(
+                        Channel14ResultRow(
+                            tenant=spec.tenant,
+                            country=spec.country,
+                            channel=ch_name,
+                            row_count=0,
+                            sessions_sum=0.0,
+                            revenue_db_sum=0.0,
+                            transactions_db_sum=0.0,
+                            actuals_sum=0.0,
+                            cost_sum=0.0,
+                            cost_present=default_cost_present_14,
+                            status="SKIP",
+                            reason="missing_channel_column",
+                        )
+                    )
+            else:
+                agg14: dict[str, tuple[int, float, float, float, float]] = {}
+                ch14_query_kind = ""
+                try:
+                    params14_ch = list(params14)
+                    placeholders: list[str] = []
+                    for i, ch_name in enumerate(wanted):
+                        ch_key = _norm_key(ch_name)
+                        if not ch_key:
+                            continue
+                        p_name = f"ch{i}"
+                        placeholders.append(f"@{p_name}")
+                        params14_ch.append(f"{p_name}:STRING:{ch_key.lower()}")
+
+                    select_parts_ch14 = [
+                        "CAST(channel AS STRING) AS channel",
+                        "COUNT(1) AS row_count",
+                        "IFNULL(SUM(sessions), 0) AS sessions_sum",
+                        "IFNULL(SUM(revenue_db), 0) AS revenue_db_sum",
+                        "IFNULL(SUM(transactions_db), 0) AS transactions_db_sum",
+                    ]
+                    if default_cost_present_14 == "yes":
+                        select_parts_ch14.append("IFNULL(SUM(cost), 0) AS cost_sum")
+
+                    extra_where = ""
+                    if placeholders:
+                        extra_where = (
+                            " AND LOWER(CAST(channel AS STRING)) IN (" + ", ".join(placeholders) + ")"
+                        )
+
+                    sql14_ch = (
+                        "SELECT "
+                        + ", ".join(select_parts_ch14)
+                        + f" FROM `{table_fq_14_norm}`"
+                        + " WHERE "
+                        + where_14
+                        + extra_where
+                        + " GROUP BY channel"
+                    )
+                    out14_ch = _bq_query_csv(job_project_id=spec.project_id, sql=sql14_ch, parameters=params14_ch)
+                    qrows14_ch = _parse_csv_rows(out14_ch)
+                    for row_ch in qrows14_ch:
+                        ch_val = str(row_ch.get("channel") or "").strip()
+                        k = _norm_key(ch_val)
+                        if not k:
+                            continue
+                        rc = _as_int(row_ch.get("row_count"))
+                        sessions = _as_float(row_ch.get("sessions_sum"))
+                        rev = _as_float(row_ch.get("revenue_db_sum"))
+                        tx = _as_float(row_ch.get("transactions_db_sum"))
+                        cost = _as_float(row_ch.get("cost_sum")) if default_cost_present_14 == "yes" else 0.0
+                        prev = agg14.get(k)
+                        if prev is None:
+                            agg14[k] = (rc, sessions, rev, tx, cost)
+                        else:
+                            agg14[k] = (prev[0] + rc, prev[1] + sessions, prev[2] + rev, prev[3] + tx, prev[4] + cost)
+                except Exception as exc:  # noqa: BLE001
+                    msg = str(exc)
+                    kind = "bq_error"
+                    if msg.startswith("invalid_bq_table:"):
+                        kind = "invalid_bq_table"
+                    elif msg.startswith("not_found:"):
+                        kind = "not_found"
+                    elif msg.startswith("forbidden:"):
+                        kind = "forbidden"
+                    elif msg.startswith("bq_error:"):
+                        kind = "bq_error"
+                    ch14_query_kind = kind
+
+                for ch_name in wanted:
+                    if ch14_query_kind:
+                        channel14_rows.append(
+                            Channel14ResultRow(
+                                tenant=spec.tenant,
+                                country=spec.country,
+                                channel=ch_name,
+                                row_count=0,
+                                sessions_sum=0.0,
+                                revenue_db_sum=0.0,
+                                transactions_db_sum=0.0,
+                                actuals_sum=0.0,
+                                cost_sum=0.0,
+                                cost_present=default_cost_present_14,
+                                status="ERROR",
+                                reason=ch14_query_kind,
+                            )
+                        )
+                    else:
+                        rc, sessions, rev, tx, cost = agg14.get(_norm_key(ch_name), (0, 0.0, 0.0, 0.0, 0.0))
+                        actuals = abs(sessions) + abs(rev) + abs(tx)
+                        channel14_rows.append(
+                            Channel14ResultRow(
+                                tenant=spec.tenant,
+                                country=spec.country,
+                                channel=ch_name,
+                                row_count=rc,
+                                sessions_sum=sessions,
+                                revenue_db_sum=rev,
+                                transactions_db_sum=tx,
+                                actuals_sum=actuals,
+                                cost_sum=cost,
+                                cost_present=default_cost_present_14,
+                                status="OK",
+                                reason="",
+                            )
+                        )
 
         status = "FAIL"
         reason = ""
@@ -1663,11 +1932,13 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
 
     report_csv = outdir / "forecast_d1_readiness_report.csv"
     channels_csv = outdir / "forecast_d1_readiness_channels_report.csv"
+    channels14_csv = outdir / "forecast_d1_readiness_channels14_report.csv"
     report_md = outdir / "forecast_d1_readiness_report.md"
     summary_json = outdir / "forecast_d1_readiness_summary.json"
 
     _write_csv(report_csv, rows)
     _write_channels_csv(channels_csv, channel_rows)
+    _write_channels14_csv(channels14_csv, channel14_rows)
     _write_md(
         report_md,
         tz_name=tz_name,
@@ -1682,6 +1953,7 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
         optional_failed=optional_failed,
         rows=rows,
         channel_rows=channel_rows,
+        channel14_rows=channel14_rows,
     )
     _write_json_summary(
         summary_json,
