@@ -1123,11 +1123,13 @@ jobs:
           SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
           REPORT_CSV="${OUTDIR}/forecast_d1_readiness_success_rate_report.csv"
           CHANNELS_CSV="${OUTDIR}/forecast_d1_readiness_success_rate_channels_report.csv"
+          CHANNELS14_CSV="${OUTDIR}/forecast_d1_readiness_success_rate_channels14_report.csv"
 
           PAYLOAD="$(
             SUMMARY_JSON="$SUMMARY_JSON" \
             REPORT_CSV="$REPORT_CSV" \
             CHANNELS_CSV="$CHANNELS_CSV" \
+            CHANNELS14_CSV="$CHANNELS14_CSV" \
             RUN_URL="$RUN_URL" \
               python - <<'PY'
           import csv
@@ -1139,6 +1141,7 @@ jobs:
           summary_path = os.environ.get("SUMMARY_JSON", "")
           report_csv = os.environ.get("REPORT_CSV", "")
           channels_csv = os.environ.get("CHANNELS_CSV", "")
+          channels14_csv = os.environ.get("CHANNELS14_CSV", "")
           run_url = os.environ.get("RUN_URL", "")
 
           from scripts.guardrails.slack_formatter import _to_int, render_table_section_mrkdwn, slack_escape
@@ -1226,6 +1229,7 @@ jobs:
 
           tenant_map: dict[str, list[dict[str, object]]] = defaultdict(list)
           channels_map: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
+          channels14_map: dict[tuple[str, str, str], dict[str, object]] = {}
 
           try:
               with open(report_csv, "r", encoding="utf-8", newline="") as f:
@@ -1245,6 +1249,18 @@ jobs:
                           tenant = (row.get("tenant") or "").strip() or "?"
                           country = (row.get("country") or "").strip() or "?"
                           channels_map[(tenant.lower(), country.lower())].append(row)
+          except Exception:
+              pass
+
+          try:
+              if channels14_csv and os.path.exists(channels14_csv):
+                  with open(channels14_csv, "r", encoding="utf-8", newline="") as f:
+                      reader = csv.DictReader(f)
+                      for row in reader:
+                          tenant = (row.get("tenant") or "").strip() or "?"
+                          country = (row.get("country") or "").strip() or "?"
+                          channel = (row.get("channel") or "").strip() or "?"
+                          channels14_map[(tenant.lower(), country.lower(), channel.casefold())] = row
           except Exception:
               pass
 
@@ -1285,7 +1301,10 @@ jobs:
                           d1_cost = rate_cell(ch.get("d1_cost_rate"))
                           d2_rev = rate_cell(ch.get("d2_rev_rate"))
                           d2_cost = rate_cell(ch.get("d2_cost_rate"))
-                          row_items.append((f"  • {slack_escape(ch_name)}", [d1_rev, d1_cost, "—", d2_rev, d2_cost, "—"], ""))
+                          ch14 = channels14_map.get((tenant.lower(), country.lower(), ch_name.casefold()), {})
+                          d1_14 = rate_cell(ch14.get("d1_14_rate"))
+                          d2_14 = rate_cell(ch14.get("d2_14_rate"))
+                          row_items.append((f"  • {slack_escape(ch_name)}", [d1_rev, d1_cost, d1_14, d2_rev, d2_cost, d2_14], ""))
                           channel_lines_added += 1
 
               section_text = render_table_section_mrkdwn(tenant=tenant, row_items=row_items)
