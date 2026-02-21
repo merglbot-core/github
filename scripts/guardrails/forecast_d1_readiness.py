@@ -152,6 +152,18 @@ class SuccessRateChannelRow:
     reason: str
 
 
+@dataclass(frozen=True)
+class SuccessRateChannel14Row:
+    tenant: str
+    country: str
+    channel: str
+    days: int
+    d1_14_rate: Optional[int]
+    d2_14_rate: Optional[int]
+    status: str
+    reason: str
+
+
 def _norm_key(value: str) -> str:
     return (value or "").strip().casefold()
 
@@ -686,6 +698,37 @@ def _write_success_rate_channels_csv(path: Path, rows: list[SuccessRateChannelRo
             )
 
 
+def _write_success_rate_channels14_csv(path: Path, rows: list[SuccessRateChannel14Row]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(
+            [
+                "tenant",
+                "country",
+                "channel",
+                "days",
+                "d1_14_rate",
+                "d2_14_rate",
+                "status",
+                "reason",
+            ]
+        )
+        for r in rows:
+            w.writerow(
+                [
+                    r.tenant,
+                    r.country,
+                    r.channel,
+                    str(r.days),
+                    "" if r.d1_14_rate is None else str(r.d1_14_rate),
+                    "" if r.d2_14_rate is None else str(r.d2_14_rate),
+                    r.status,
+                    r.reason,
+                ]
+            )
+
+
 def _domain_for(tenant: str, country: str) -> str:
     """Build domain string from tenant+country with validation."""
     key = ((tenant or "").strip().lower(), (country or "").strip().lower())
@@ -923,6 +966,7 @@ def run_success_rate_30d(*, config_csv: Path, outdir: Path, tz_name: str, patch_
 
     rows: list[SuccessRateRow] = []
     channel_rows: list[SuccessRateChannelRow] = []
+    channel14_rows: list[SuccessRateChannel14Row] = []
     errors_total = 0
 
     def _cols(meta: dict) -> set[str]:
@@ -1025,6 +1069,11 @@ def run_success_rate_30d(*, config_csv: Path, outdir: Path, tz_name: str, patch_
                 d2_cost_rate = _pct(sum(1 for d in d2_dates if cost_green.get(d)), days)
 
             table_fq_14_raw = (spec.bq_table_14 or "").strip()
+            table_fq_14 = ""
+            cols14: set[str] = set()
+            where_14 = ""
+            params14: list[str] = []
+            table14_error_kind = ""
             if table_fq_14_raw:
                 try:
                     table_fq_14 = _normalize_table_fq(table_fq_14_raw)
@@ -1095,7 +1144,152 @@ def run_success_rate_30d(*, config_csv: Path, outdir: Path, tz_name: str, patch_
                 except Exception as exc14:  # noqa: BLE001
                     errors_total += 1
                     kind14 = _kind_from_exc(exc14)
+                    table14_error_kind = kind14
                     reason = (reason + ";" if reason else "") + f"14_error:{kind14}"
+
+            if wanted:
+                if not table_fq_14_raw:
+                    for ch_name in wanted:
+                        channel14_rows.append(
+                            SuccessRateChannel14Row(
+                                tenant=spec.tenant,
+                                country=spec.country,
+                                channel=ch_name,
+                                days=days,
+                                d1_14_rate=None,
+                                d2_14_rate=None,
+                                status="SKIP",
+                                reason="no_table_14",
+                            )
+                        )
+                elif table14_error_kind:
+                    for ch_name in wanted:
+                        channel14_rows.append(
+                            SuccessRateChannel14Row(
+                                tenant=spec.tenant,
+                                country=spec.country,
+                                channel=ch_name,
+                                days=days,
+                                d1_14_rate=None,
+                                d2_14_rate=None,
+                                status="ERROR",
+                                reason=table14_error_kind,
+                            )
+                        )
+                elif "channel" not in cols14:
+                    for ch_name in wanted:
+                        channel14_rows.append(
+                            SuccessRateChannel14Row(
+                                tenant=spec.tenant,
+                                country=spec.country,
+                                channel=ch_name,
+                                days=days,
+                                d1_14_rate=None,
+                                d2_14_rate=None,
+                                status="SKIP",
+                                reason="missing_channel_column",
+                            )
+                        )
+                else:
+                    params_ch14 = list(params14)
+                    placeholders14: list[str] = []
+                    for i, ch_name in enumerate(wanted):
+                        ch_norm = _norm_key(ch_name)
+                        if not ch_norm:
+                            continue
+                        p_name = f"ch{i}"
+                        placeholders14.append(f"@{p_name}")
+                        params_ch14.append(f"{p_name}:STRING:{ch_norm.lower()}")
+
+                    if placeholders14:
+                        try:
+                            select_parts_ch14 = [
+                                "CAST(date AS STRING) AS d",
+                                "LOWER(CAST(channel AS STRING)) AS ch",
+                                "COUNT(1) AS row_count",
+                                "IFNULL(SUM(sessions), 0) AS sessions_sum",
+                                "IFNULL(SUM(revenue_db), 0) AS revenue_db_sum",
+                                "IFNULL(SUM(transactions_db), 0) AS transactions_db_sum",
+                            ]
+                            sql_ch14 = (
+                                "SELECT "
+                                + ", ".join(select_parts_ch14)
+                                + f" FROM `{table_fq_14}`"
+                                + " WHERE "
+                                + where_14
+                                + " AND LOWER(CAST(channel AS STRING)) IN ("
+                                + ", ".join(placeholders14)
+                                + ")"
+                                + " GROUP BY d, ch"
+                                + " ORDER BY d, ch"
+                            )
+                            out_ch14 = _bq_query_csv(
+                                job_project_id=spec.project_id, sql=sql_ch14, parameters=params_ch14
+                            )
+                            qrows_ch14 = _parse_csv_rows(out_ch14)
+                            daily_ch14: dict[tuple[str, str], dict[str, object]] = {}
+                            for rch14 in qrows_ch14:
+                                d = (rch14.get("d") or "").strip()
+                                ch = (rch14.get("ch") or "").strip().lower()
+                                if d and ch:
+                                    daily_ch14[(d, ch)] = rch14
+
+                            for ch_name in wanted:
+                                ch_key = _norm_key(ch_name).lower()
+                                pass14_ch: dict[str, bool] = {}
+                                for d in all_dates:
+                                    rch14 = daily_ch14.get((d, ch_key), {})
+                                    row_count = _as_int(rch14.get("row_count"))
+                                    sessions_sum = _as_float(rch14.get("sessions_sum"))
+                                    revenue_sum = _as_float(rch14.get("revenue_db_sum"))
+                                    transactions_sum = _as_float(rch14.get("transactions_db_sum"))
+                                    actuals_sum = abs(sessions_sum) + abs(revenue_sum) + abs(transactions_sum)
+                                    pass14_ch[d] = row_count > 0 and actuals_sum > EPS
+
+                                d1_rate = _pct(sum(1 for d in d1_dates if pass14_ch.get(d)), days)
+                                d2_rate = _pct(sum(1 for d in d2_dates if pass14_ch.get(d)), days)
+                                channel14_rows.append(
+                                    SuccessRateChannel14Row(
+                                        tenant=spec.tenant,
+                                        country=spec.country,
+                                        channel=ch_name,
+                                        days=days,
+                                        d1_14_rate=d1_rate,
+                                        d2_14_rate=d2_rate,
+                                        status="OK",
+                                        reason="",
+                                    )
+                                )
+                        except Exception as exc_ch14:  # noqa: BLE001
+                            errors_total += 1
+                            kind_ch14 = _kind_from_exc(exc_ch14)
+                            for ch_name in wanted:
+                                channel14_rows.append(
+                                    SuccessRateChannel14Row(
+                                        tenant=spec.tenant,
+                                        country=spec.country,
+                                        channel=ch_name,
+                                        days=days,
+                                        d1_14_rate=None,
+                                        d2_14_rate=None,
+                                        status="ERROR",
+                                        reason=kind_ch14,
+                                    )
+                                )
+                    else:
+                        for ch_name in wanted:
+                            channel14_rows.append(
+                                SuccessRateChannel14Row(
+                                    tenant=spec.tenant,
+                                    country=spec.country,
+                                    channel=ch_name,
+                                    days=days,
+                                    d1_14_rate=None,
+                                    d2_14_rate=None,
+                                    status="SKIP",
+                                    reason="empty_wanted_channels",
+                                )
+                            )
 
             if wanted:
                 if not channel_present:
@@ -1256,12 +1450,14 @@ def run_success_rate_30d(*, config_csv: Path, outdir: Path, tz_name: str, patch_
 
     report_csv = outdir / "forecast_d1_readiness_success_rate_report.csv"
     channels_csv = outdir / "forecast_d1_readiness_success_rate_channels_report.csv"
+    channels14_csv = outdir / "forecast_d1_readiness_success_rate_channels14_report.csv"
     summary_json = outdir / "forecast_d1_readiness_summary.json"
 
     status = "PASS" if errors_total == 0 else "WARN"
 
     _write_success_rate_csv(report_csv, rows)
     _write_success_rate_channels_csv(channels_csv, channel_rows)
+    _write_success_rate_channels14_csv(channels14_csv, channel14_rows)
     _write_json_summary(
         summary_json,
         {
