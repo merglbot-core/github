@@ -1190,6 +1190,21 @@ def run_success_rate_30d(*, config_csv: Path, outdir: Path, tz_name: str, patch_
                                 reason="missing_channel_column",
                             )
                         )
+                elif not table_fq_14 or not where_14 or not params14:
+                    # Defensive guard: avoid constructing invalid SQL like "WHERE  AND ...".
+                    for ch_name in wanted:
+                        channel14_rows.append(
+                            SuccessRateChannel14Row(
+                                tenant=spec.tenant,
+                                country=spec.country,
+                                channel=ch_name,
+                                days=days,
+                                d1_14_rate=None,
+                                d2_14_rate=None,
+                                status="ERROR",
+                                reason="14_internal_error_empty_where",
+                            )
+                        )
                 else:
                     params_ch14 = list(params14)
                     placeholders14: list[str] = []
