@@ -539,7 +539,7 @@ if [ "$BOT_MODE" != "dependabot" ] && [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]
       }' > "$ANTHROPIC_PAYLOAD_FILE"
 
     set +e
-    ANTHROPIC_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 "$ANTHROPIC_MESSAGES_URL" \
+    ANTHROPIC_RESP=$(curl -s --connect-timeout 15 --max-time 180 "$ANTHROPIC_MESSAGES_URL" \
       -H "content-type: application/json" \
       -H "x-api-key: $ANTHROPIC_API_KEY" \
       -H "anthropic-version: $ANTHROPIC_API_VERSION" \
@@ -680,13 +680,17 @@ call_openai_responses() {
 
     set +e
     local resp
-    resp="$(curl -s --retry 2 --retry-all-errors --max-time 180 "$OPENAI_RESPONSES_URL" \
+    resp="$(curl -s --connect-timeout 15 --max-time 180 "$OPENAI_RESPONSES_URL" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $OPENAI_API_KEY" \
       -d @"$payload")"
     local exit_code=$?
     set -e
 
+    if [ "$exit_code" -eq 28 ]; then
+      echo "  ERROR: Responses API request timed out (exit=$exit_code)" >&2
+      return 1
+    fi
     if [ "$exit_code" -ne 0 ] || ! echo "$resp" | jq -e . > /dev/null 2>&1; then
       echo "  ERROR: Responses API returned non-JSON (exit=$exit_code)" >&2
       continue
@@ -808,7 +812,7 @@ else
         }' > "$OPENAI_PAYLOAD_FILE"
 
       set +e
-      OPENAI_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 "$OPENAI_CHAT_COMPLETIONS_URL" \
+      OPENAI_RESP=$(curl -s --connect-timeout 15 --max-time 180 "$OPENAI_CHAT_COMPLETIONS_URL" \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $OPENAI_API_KEY" \
         -d @"$OPENAI_PAYLOAD_FILE")

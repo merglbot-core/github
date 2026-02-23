@@ -912,7 +912,7 @@ jobs:
 
             set +e
             local resp
-            resp="$(curl -s --retry 2 --retry-all-errors --max-time 180 "$OPENAI_RESPONSES_URL" \
+            resp="$(curl -s --connect-timeout 15 --max-time 180 "$OPENAI_RESPONSES_URL" \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer $OPENAI_API_KEY" \
               -d @"$OPENAI_SYNTHESIS_PAYLOAD_FILE")"
