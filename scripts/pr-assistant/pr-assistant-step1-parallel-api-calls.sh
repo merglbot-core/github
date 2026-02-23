@@ -30,24 +30,37 @@ trim_ws() {
   printf '%s' "${1:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
-ANTHROPIC_MESSAGES_URL="$(trim_ws "$ANTHROPIC_MESSAGES_URL")"
-OPENAI_RESPONSES_URL="$(trim_ws "$OPENAI_RESPONSES_URL")"
-OPENAI_CHAT_COMPLETIONS_URL="$(trim_ws "$OPENAI_CHAT_COMPLETIONS_URL")"
+allowlist_openai_url() {
+  local url
+  url="$(trim_ws "${1:-}")"
+  case "$url" in
+    https://api.openai.com/*) printf '%s' "$url" ;;
+    *) printf '%s' "" ;;
+  esac
+}
+
+allowlist_anthropic_url() {
+  local url
+  url="$(trim_ws "${1:-}")"
+  case "$url" in
+    https://api.anthropic.com/*) printf '%s' "$url" ;;
+    *) printf '%s' "" ;;
+  esac
+}
+
+ANTHROPIC_MESSAGES_URL="$(allowlist_anthropic_url "$ANTHROPIC_MESSAGES_URL")"
+OPENAI_RESPONSES_URL="$(allowlist_openai_url "$OPENAI_RESPONSES_URL")"
+OPENAI_CHAT_COMPLETIONS_URL="$(allowlist_openai_url "$OPENAI_CHAT_COMPLETIONS_URL")"
 
 ANTHROPIC_URL_ALLOWED="false"
-case "$ANTHROPIC_MESSAGES_URL" in
-  https://api.anthropic.com/*) ANTHROPIC_URL_ALLOWED="true" ;;
-esac
+if [ -n "$ANTHROPIC_MESSAGES_URL" ]; then
+  ANTHROPIC_URL_ALLOWED="true"
+fi
 
-OPENAI_URLS_ALLOWED="true"
-case "$OPENAI_RESPONSES_URL" in
-  https://api.openai.com/*) ;;
-  *) OPENAI_URLS_ALLOWED="false" ;;
-esac
-case "$OPENAI_CHAT_COMPLETIONS_URL" in
-  https://api.openai.com/*) ;;
-  *) OPENAI_URLS_ALLOWED="false" ;;
-esac
+OPENAI_URLS_ALLOWED="false"
+if [ -n "$OPENAI_RESPONSES_URL" ] && [ -n "$OPENAI_CHAT_COMPLETIONS_URL" ]; then
+  OPENAI_URLS_ALLOWED="true"
+fi
 
 sanitize_model() {
   local raw="${1:-}"
@@ -63,6 +76,59 @@ sanitize_model() {
 
 escape_untrusted() {
   sed 's/<<<MERGLBOT_/<<<MERGLBOT_ESCAPED_/g'
+}
+
+curl_json_with_backoff() {
+  local url="$1"
+  shift
+
+  local attempt resp exit_code err_type
+  for attempt in 1 2 3; do
+    set +e
+    resp="$(curl -s --connect-timeout 15 --max-time 180 "$url" "$@")"
+    exit_code=$?
+    set -e
+
+    # Avoid long hangs: if a request already hit max-time, do not retry it here.
+    if [ "$exit_code" -eq 28 ]; then
+      printf '%s' "$resp"
+      return 28
+    fi
+
+    if [ "$exit_code" -ne 0 ]; then
+      if [ "$attempt" -lt 3 ]; then
+        sleep $((attempt * 2))
+        continue
+      fi
+      printf '%s' "$resp"
+      return "$exit_code"
+    fi
+
+    if ! echo "$resp" | jq -e . > /dev/null 2>&1; then
+      if [ "$attempt" -lt 3 ]; then
+        sleep $((attempt * 2))
+        continue
+      fi
+      printf '%s' "$resp"
+      return 1
+    fi
+
+    # Retry common transient API errors (best-effort).
+    if echo "$resp" | jq -e '.error' > /dev/null 2>&1; then
+      err_type="$(echo "$resp" | jq -r '.error.type // empty' 2>/dev/null || true)"
+      case "$err_type" in
+        rate_limit_error|server_error|api_error|overloaded_error)
+          if [ "$attempt" -lt 3 ]; then
+            sleep $((attempt * 2))
+            continue
+          fi
+          ;;
+      esac
+    fi
+
+    printf '%s' "$resp"
+    return 0
+  done
 }
 
 ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
@@ -162,13 +228,18 @@ if [ "$BOT_MODE" == "dependabot" ] && [ -n "${PR_DIFF_RAW:-}" ]; then
   DIFF_FILTER_INPUT_FILE="${TMP_DIR}/pr_diff_raw_for_filter.txt"
   printf '%s' "$PR_DIFF_RAW" > "$DIFF_FILTER_INPUT_FILE"
 
-  FILTER_JSON="$(python3 - "$DIFF_FILTER_INPUT_FILE" <<'PY'
-import json
+  DIFF_FILTERED_DIFF_FILE="${TMP_DIR}/diff_filter_filtered.diff"
+  DIFF_OMITTED_FILES_FILE="${TMP_DIR}/diff_filter_omitted_files.txt"
+
+  python3 - "$DIFF_FILTER_INPUT_FILE" "$DIFF_FILTERED_DIFF_FILE" "$DIFF_OMITTED_FILES_FILE" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 raw = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+filtered_out = Path(sys.argv[2])
+omitted_out = Path(sys.argv[3])
+
 skip_basenames = {
     "package-lock.json",
     "npm-shrinkwrap.json",
@@ -221,13 +292,13 @@ for line in raw.splitlines(True):
 flush()
 
 filtered = "".join(out_lines)
-print(json.dumps({"filtered": filtered, "omitted": omitted}))
+filtered_out.write_text(filtered, encoding="utf-8")
+omitted_out.write_text("\n".join(omitted) + ("\n" if omitted else ""), encoding="utf-8")
 PY
-)"
 
-  FILTERED_DIFF="$(printf '%s' "$FILTER_JSON" | jq -r '.filtered // ""' 2>/dev/null || true)"
-  OMITTED_COUNT="$(printf '%s' "$FILTER_JSON" | jq -r '.omitted | length' 2>/dev/null || echo "0")"
-  OMITTED_LIST="$(printf '%s' "$FILTER_JSON" | jq -r '.omitted[0:20] | join(", ")' 2>/dev/null || echo "")"
+  FILTERED_DIFF="$(cat "$DIFF_FILTERED_DIFF_FILE" 2>/dev/null || true)"
+  OMITTED_COUNT="$(wc -l < "$DIFF_OMITTED_FILES_FILE" 2>/dev/null | tr -d ' ' || echo "0")"
+  OMITTED_LIST="$(head -20 "$DIFF_OMITTED_FILES_FILE" 2>/dev/null | paste -sd ',' - | sed 's/,/, /g' || true)"
 
   PR_DIFF_RAW="$FILTERED_DIFF"
   if [ "${OMITTED_COUNT:-0}" -gt 0 ]; then
@@ -536,19 +607,23 @@ if [ "$BOT_MODE" != "dependabot" ] && [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]
         max_tokens: $max_tokens,
         temperature: 0.2,
         messages: [{role: "user", content: $prompt}]
-      }' > "$ANTHROPIC_PAYLOAD_FILE"
+    }' > "$ANTHROPIC_PAYLOAD_FILE"
 
     set +e
-    ANTHROPIC_RESP=$(curl -s --connect-timeout 15 --max-time 180 "$ANTHROPIC_MESSAGES_URL" \
+    ANTHROPIC_RESP="$(curl_json_with_backoff "$ANTHROPIC_MESSAGES_URL" \
       -H "content-type: application/json" \
       -H "x-api-key: $ANTHROPIC_API_KEY" \
       -H "anthropic-version: $ANTHROPIC_API_VERSION" \
-      -d @"$ANTHROPIC_PAYLOAD_FILE")
+      -d @"$ANTHROPIC_PAYLOAD_FILE")"
     CURL_EXIT=$?
     set -e
 
+    if [ "$CURL_EXIT" -eq 28 ]; then
+      echo "  ERROR: Anthropic request timed out (exit=$CURL_EXIT)" >&2
+      continue
+    fi
     if [ "$CURL_EXIT" -ne 0 ] || ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
-      echo "  ERROR: Anthropic request failed or returned non-JSON (curl exit=$CURL_EXIT)" >&2
+      echo "  ERROR: Anthropic request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
       continue
     fi
 
@@ -680,7 +755,7 @@ call_openai_responses() {
 
     set +e
     local resp
-    resp="$(curl -s --connect-timeout 15 --max-time 180 "$OPENAI_RESPONSES_URL" \
+    resp="$(curl_json_with_backoff "$OPENAI_RESPONSES_URL" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $OPENAI_API_KEY" \
       -d @"$payload")"
@@ -812,15 +887,19 @@ else
         }' > "$OPENAI_PAYLOAD_FILE"
 
       set +e
-      OPENAI_RESP=$(curl -s --connect-timeout 15 --max-time 180 "$OPENAI_CHAT_COMPLETIONS_URL" \
+      OPENAI_RESP="$(curl_json_with_backoff "$OPENAI_CHAT_COMPLETIONS_URL" \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $OPENAI_API_KEY" \
-        -d @"$OPENAI_PAYLOAD_FILE")
+        -d @"$OPENAI_PAYLOAD_FILE")"
       CURL_EXIT=$?
       set -e
 
+      if [ "$CURL_EXIT" -eq 28 ]; then
+        echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
+        continue
+      fi
       if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
-        echo "  ERROR: OpenAI request failed or returned non-JSON (curl exit=$CURL_EXIT)" >&2
+        echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
         continue
       fi
 
@@ -887,15 +966,19 @@ else
     fi
 
     set +e
-    OPENAI_RESP=$(curl -s --connect-timeout 15 --max-time 180 "$OPENAI_CHAT_COMPLETIONS_URL" \
+    OPENAI_RESP="$(curl_json_with_backoff "$OPENAI_CHAT_COMPLETIONS_URL" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $OPENAI_API_KEY" \
-      -d @"$OPENAI_PAYLOAD_FILE")
+      -d @"$OPENAI_PAYLOAD_FILE")"
     CURL_EXIT=$?
     set -e
 
+    if [ "$CURL_EXIT" -eq 28 ]; then
+      echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
+      continue
+    fi
     if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
-      echo "  ERROR: OpenAI request failed or returned non-JSON (curl exit=$CURL_EXIT)" >&2
+      echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
       continue
     fi
 
