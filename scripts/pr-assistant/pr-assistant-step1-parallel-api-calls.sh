@@ -71,10 +71,10 @@ if [ "$ANTHROPIC_MODEL" = "org_default" ]; then
   ANTHROPIC_MODEL=""
 fi
 if [ -z "$ANTHROPIC_MODEL" ]; then
-  ANTHROPIC_MODEL="claude-opus-4-6"
+  ANTHROPIC_MODEL="claude-sonnet-4-6"
 fi
 if [ -z "$OPENAI_MODEL" ]; then
-  OPENAI_MODEL="gpt-5.2"
+  OPENAI_MODEL="gpt-5-mini"
 fi
 
 OPENAI_SKIP_REASON=""
@@ -132,6 +132,17 @@ PR_FILES_COUNT=$(< pr_files_count.txt)
 PR_CHECKS_SUMMARY=$(python3 -c 'from pathlib import Path; import sys; p=Path("pr_checks_summary.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:8000])')
 PR_CHECKS_FAILED=$(python3 -c 'from pathlib import Path; import sys; p=Path("pr_checks_failed_count.txt"); s=p.read_text(encoding="utf-8", errors="replace").strip() if p.exists() else "0"; sys.stdout.write(s if s else "0")')
 
+BOT_MODE="default"
+OPENAI_REASONING_EFFORT="high"
+if [ "${PR_AUTHOR:-}" == "dependabot[bot]" ] && [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
+  BOT_MODE="dependabot"
+  OPENAI_REASONING_EFFORT="medium"
+  OPENAI_MODEL="gpt-5-mini"
+fi
+
+echo "BOT_MODE=$BOT_MODE" >> "$GITHUB_ENV"
+echo "OPENAI_REASONING_EFFORT_USED=$OPENAI_REASONING_EFFORT" >> "$GITHUB_ENV"
+
 DIFF_SCOPE="full"
 if [ -f pr_diff_scope.txt ]; then
   DIFF_SCOPE=$(< pr_diff_scope.txt)
@@ -146,6 +157,87 @@ PR_DIFF_RAW=""
 if [ -f pr_diff.txt ]; then
   PR_DIFF_RAW=$(< pr_diff.txt)
 fi
+
+if [ "$BOT_MODE" == "dependabot" ] && [ -n "${PR_DIFF_RAW:-}" ]; then
+  DIFF_FILTER_INPUT_FILE="${TMP_DIR}/pr_diff_raw_for_filter.txt"
+  printf '%s' "$PR_DIFF_RAW" > "$DIFF_FILTER_INPUT_FILE"
+
+  FILTER_JSON="$(python3 - "$DIFF_FILTER_INPUT_FILE" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+raw = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+skip_basenames = {
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "Pipfile.lock",
+    "Cargo.lock",
+    "go.sum",
+    "Gemfile.lock",
+    "composer.lock",
+    "Podfile.lock",
+}
+
+out_lines = []
+omitted = []
+
+current = []
+current_file = None
+
+
+def flush():
+    global current, current_file
+    if current_file is None:
+        return
+    base = current_file.split("/")[-1]
+    if base in skip_basenames:
+        omitted.append(current_file)
+    else:
+        out_lines.extend(current)
+    current = []
+    current_file = None
+
+
+for line in raw.splitlines(True):
+    if line.startswith("diff --git "):
+        flush()
+        m = re.match(r"diff --git a/(.*?) b/(.*?)\\s*$", line.rstrip("\n"))
+        if m:
+            current_file = m.group(2)
+        else:
+            current_file = "unknown"
+        current = [line]
+    else:
+        if current_file is None:
+            out_lines.append(line)
+        else:
+            current.append(line)
+
+flush()
+
+filtered = "".join(out_lines)
+print(json.dumps({"filtered": filtered, "omitted": omitted}))
+PY
+)"
+
+  FILTERED_DIFF="$(printf '%s' "$FILTER_JSON" | jq -r '.filtered // ""' 2>/dev/null || true)"
+  OMITTED_COUNT="$(printf '%s' "$FILTER_JSON" | jq -r '.omitted | length' 2>/dev/null || echo "0")"
+  OMITTED_LIST="$(printf '%s' "$FILTER_JSON" | jq -r '.omitted[0:20] | join(", ")' 2>/dev/null || echo "")"
+
+  PR_DIFF_RAW="$FILTERED_DIFF"
+  if [ "${OMITTED_COUNT:-0}" -gt 0 ]; then
+    PR_DIFF_RAW="$(printf 'NOTE: Dependabot superlight mode — omitted lockfile diffs (%s file(s)): %s\n\n%s' "${OMITTED_COUNT:-0}" "${OMITTED_LIST:-}" "${PR_DIFF_RAW:-}")"
+  fi
+  if [ -z "${PR_DIFF_RAW:-}" ]; then
+    PR_DIFF_RAW="NOTE: Dependabot superlight mode — diff omitted (lockfile-only or empty after filtering)."
+  fi
+fi
+
 PR_DIFF_SIZE=${#PR_DIFF_RAW}
 if [ "$PR_DIFF_SIZE" -gt 100000 ]; then
   PR_DIFF="$(python3 -c 'import sys; s=sys.stdin.buffer.read().decode("utf-8", "replace"); sys.stdout.write(s[:50000] + "\n\n... (snip) ...\n\n" + s[-50000:])' <<< "$PR_DIFF_RAW")"
@@ -197,11 +289,22 @@ else
   MAX_TOKENS_OPENAI=20000
 fi
 
+if [ "$BOT_MODE" == "dependabot" ]; then
+  REVIEW_DEPTH="DEPENDABOT_SUPERLIGHT"
+  OUTPUT_INSTRUCTIONS="Output a SUPER-LEAN dependency update review (max 350 words). Focus on: bump risk (major/minor), security implications, test/CI status, and any non-lockfile changes. Avoid style refactors."
+  MAX_TOKENS_ANTHROPIC=0
+  if [ "${REVIEW_MODE}" == "light" ]; then
+    MAX_TOKENS_OPENAI=1200
+  else
+    MAX_TOKENS_OPENAI=2000
+  fi
+fi
+
 echo "Review depth: $REVIEW_DEPTH"
 
 # Build prompt using printf to file (single redirect)
 {
-printf '%s\n' "# Merglbot Multi-Model Code Review v3.4"
+printf '%s\n' "# Merglbot Multi-Model Code Review v3.5"
 printf '%s\n' ""
 printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence."
 printf '%s\n' ""
@@ -410,11 +513,11 @@ echo "Prompt size: $PROMPT_SIZE chars"
 
 # ANTHROPIC CALL
 ANTHROPIC_MODEL_USED=""
-if [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then
+if [ "$BOT_MODE" != "dependabot" ] && [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then
   echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
 
   ANTHROPIC_MODELS_TRIED="|"
-  for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-6" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
+  for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-sonnet-4-6" "claude-opus-4-6" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
     if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
       continue
     fi
@@ -475,7 +578,11 @@ if [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then
     break
   done
 else
-  echo "Skipping Anthropic analysis (reason: ${ANTHROPIC_SKIP_REASON:-no_key})." >&2
+  if [ "$BOT_MODE" == "dependabot" ]; then
+    echo "Skipping Anthropic analysis (dependabot superlight mode)." >&2
+  else
+    echo "Skipping Anthropic analysis (reason: ${ANTHROPIC_SKIP_REASON:-no_key})." >&2
+  fi
 fi
 
 if [ ! -s anthropic_review.txt ]; then
@@ -494,7 +601,11 @@ EOF
 fi
 
 if [ -z "$ANTHROPIC_MODEL_USED" ]; then
-  ANTHROPIC_MODEL_USED="$ANTHROPIC_MODEL"
+  if [ "$BOT_MODE" == "dependabot" ] || [ "$ANTHROPIC_API_KEY_PRESENT" != "true" ]; then
+    ANTHROPIC_MODEL_USED="skipped"
+  else
+    ANTHROPIC_MODEL_USED="$ANTHROPIC_MODEL"
+  fi
 fi
 echo "ANTHROPIC_MODEL_USED=$ANTHROPIC_MODEL_USED" >> "$GITHUB_ENV"
 
@@ -515,7 +626,8 @@ call_openai_responses() {
   local model="$1"
   local max_tokens="$2"
   local prompt_file="$3"
-  local usage_file="${4:-}"
+  local reasoning_effort="$4"
+  local usage_file="${5:-}"
 
   local payload_a="${TMP_DIR}/openai_responses_payload_a.json"
   local payload_b="${TMP_DIR}/openai_responses_payload_b.json"
@@ -525,33 +637,36 @@ call_openai_responses() {
     --arg model "$model" \
     --rawfile prompt "$prompt_file" \
     --argjson max_output_tokens "$max_tokens" \
+    --arg effort "$reasoning_effort" \
     '{
       model: $model,
       input: $prompt,
       max_output_tokens: $max_output_tokens,
-      reasoning: { effort: "high" }
+      reasoning: { effort: $effort }
     }' > "$payload_a"
 
   jq -n \
     --arg model "$model" \
     --rawfile prompt "$prompt_file" \
     --argjson max_output_tokens "$max_tokens" \
+    --arg effort "$reasoning_effort" \
     '{
       model: $model,
       input: [{ role: "user", content: $prompt }],
       max_output_tokens: $max_output_tokens,
-      reasoning: { effort: "high" }
+      reasoning: { effort: $effort }
     }' > "$payload_b"
 
   jq -n \
     --arg model "$model" \
     --rawfile prompt "$prompt_file" \
     --argjson max_output_tokens "$max_tokens" \
+    --arg effort "$reasoning_effort" \
     '{
       model: $model,
       input: [{ role: "user", content: [{ type: "input_text", text: $prompt }] }],
       max_output_tokens: $max_output_tokens,
-      reasoning: { effort: "high" }
+      reasoning: { effort: $effort }
     }' > "$payload_c"
 
   for payload in "$payload_a" "$payload_b" "$payload_c"; do
@@ -645,7 +760,7 @@ if [ "$OPENAI_API_KEY_PRESENT" != "true" ]; then
   printf '%s' "API_ERROR" > openai_review.txt
 else
   OPENAI_MODELS_TRIED="|"
-  for MODEL_TO_TRY in "$OPENAI_MODEL" "gpt-5.2" "gpt-5.1" "gpt-5" "gpt-4-turbo"; do
+  for MODEL_TO_TRY in "$OPENAI_MODEL" "gpt-5-mini" "gpt-5.2" "gpt-5.1" "gpt-5" "gpt-4-turbo"; do
     if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
       continue
     fi
@@ -665,7 +780,7 @@ else
       echo "  → Using Responses API"
       OPENAI_RESPONSES_OUT="$(mktemp "${TMP_DIR}/openai_responses_out.XXXXXX")"
       OPENAI_USAGE_FILE="$(mktemp "${TMP_DIR}/openai_usage.XXXXXX.json")"
-      if call_openai_responses "$MODEL_TO_TRY" "$MAX_TOKENS_OPENAI" "$FULL_PROMPT_FILE" "$OPENAI_USAGE_FILE" > "$OPENAI_RESPONSES_OUT"; then
+      if call_openai_responses "$MODEL_TO_TRY" "$MAX_TOKENS_OPENAI" "$FULL_PROMPT_FILE" "$OPENAI_REASONING_EFFORT" "$OPENAI_USAGE_FILE" > "$OPENAI_RESPONSES_OUT"; then
         OPENAI_MODEL_USED="$MODEL_TO_TRY"
         echo "Success (model: $OPENAI_MODEL_USED)"
         echo "Words: $(wc -w < "$OPENAI_RESPONSES_OUT")"
@@ -684,11 +799,12 @@ else
         --arg model "$MODEL_TO_TRY" \
         --rawfile prompt "$FULL_PROMPT_FILE" \
         --argjson max_tokens "$MAX_TOKENS_OPENAI" \
+        --arg effort "$OPENAI_REASONING_EFFORT" \
         '{
           model: $model,
           messages: [{role: "user", content: $prompt}],
           max_completion_tokens: $max_tokens,
-          reasoning_effort: "high"
+          reasoning_effort: $effort
         }' > "$OPENAI_PAYLOAD_FILE"
 
       set +e
@@ -830,7 +946,11 @@ if [ ! -s openai_review.txt ]; then
 fi
 
 if [ -z "$OPENAI_MODEL_USED" ]; then
-  OPENAI_MODEL_USED="$OPENAI_MODEL"
+  if [ "$OPENAI_API_KEY_PRESENT" != "true" ]; then
+    OPENAI_MODEL_USED="skipped"
+  else
+    OPENAI_MODEL_USED="$OPENAI_MODEL"
+  fi
 fi
 echo "OPENAI_MODEL_USED=$OPENAI_MODEL_USED" >> "$GITHUB_ENV"
 
