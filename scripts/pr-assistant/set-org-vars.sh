@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Purpose: Set org-level GitHub Actions variables for PR Assistant v3 model defaults.
 # Usage:
-#   ./scripts/pr-assistant/set-org-vars.sh --dry-run
 #   ./scripts/pr-assistant/set-org-vars.sh
+#   ./scripts/pr-assistant/set-org-vars.sh --dry-run
+#   ./scripts/pr-assistant/set-org-vars.sh --apply --confirm
 #
 # Requires: gh auth with admin:org scope.
 
@@ -13,12 +14,24 @@ if [ -z "${BASH_VERSION:-}" ]; then
   exit 2
 fi
 
-DRY_RUN="false"
+APPLY="false"
+CONFIRM="false"
 for arg in "$@"; do
   case "$arg" in
-    --dry-run) DRY_RUN="true" ;;
+    --dry-run) APPLY="false"; CONFIRM="false" ;;
+    --apply) APPLY="true" ;;
+    --confirm|--yes) CONFIRM="true" ;;
   esac
 done
+
+if [ "$APPLY" = "true" ] && [ "$CONFIRM" != "true" ]; then
+  echo "ERROR: Refusing to mutate org vars without --confirm. Re-run with: --apply --confirm" >&2
+  exit 2
+fi
+
+if [ "$APPLY" != "true" ]; then
+  echo "INFO: Dry run mode (default). Use --apply --confirm to mutate org vars." >&2
+fi
 
 trim_ws() {
   printf '%s' "${1:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
@@ -61,8 +74,8 @@ if [ -z "$OPENAI_SYNTHESIS_MODEL_DEFAULT" ]; then
   OPENAI_SYNTHESIS_MODEL_DEFAULT="gpt-5.2"
 fi
 if [ -z "$OPENAI_SYNTHESIS_REASONING_EFFORT_DEFAULT" ]; then
-  echo "ERROR: Invalid MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS_DEFAULT (expected low|medium|high|xhigh)" >&2
-  exit 1
+  echo "WARN: Invalid MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS_DEFAULT; defaulting to 'medium' (expected low|medium|high|xhigh)" >&2
+  OPENAI_SYNTHESIS_REASONING_EFFORT_DEFAULT="medium"
 fi
 
 ORGS=(
@@ -84,7 +97,7 @@ set_var() {
   local name="$2"
   local value="$3"
 
-  if [ "$DRY_RUN" = "true" ]; then
+  if [ "$APPLY" != "true" ]; then
     echo "DRY: $org -> $name=$value"
     return 0
   fi
@@ -103,7 +116,7 @@ set_var() {
   fi
 }
 
-echo "Mode:      $([ "$DRY_RUN" = "true" ] && echo "DRY RUN" || echo "APPLY")"
+echo "Mode:      $([ "$APPLY" = "true" ] && echo "APPLY" || echo "DRY RUN")"
 echo "OpenAI:    $OPENAI_MODEL_DEFAULT"
 echo "Anthropic: $ANTHROPIC_MODEL_DEFAULT"
 echo "Synthesis: $OPENAI_SYNTHESIS_MODEL_DEFAULT (reasoning_effort=$OPENAI_SYNTHESIS_REASONING_EFFORT_DEFAULT)"

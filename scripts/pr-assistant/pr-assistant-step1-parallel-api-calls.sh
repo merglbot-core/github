@@ -250,24 +250,21 @@ if [ -f pr_diff_range.txt ]; then
   DIFF_RANGE=$(< pr_diff_range.txt)
 fi
 
-PR_DIFF_RAW=""
+PR_DIFF_SOURCE_FILE=""
 if [ -f pr_diff.txt ]; then
-  PR_DIFF_RAW=$(< pr_diff.txt)
+  PR_DIFF_SOURCE_FILE="pr_diff.txt"
 fi
 
-if [ "$BOT_MODE" == "dependabot" ] && [ -n "${PR_DIFF_RAW:-}" ]; then
-  DIFF_FILTER_INPUT_FILE="${TMP_DIR}/pr_diff_raw_for_filter.txt"
-  printf '%s' "$PR_DIFF_RAW" > "$DIFF_FILTER_INPUT_FILE"
-
+if [ "$BOT_MODE" = "dependabot" ] && [ -n "${PR_DIFF_SOURCE_FILE:-}" ] && [ -s "$PR_DIFF_SOURCE_FILE" ]; then
   DIFF_FILTERED_DIFF_FILE="${TMP_DIR}/diff_filter_filtered.diff"
   DIFF_OMITTED_FILES_FILE="${TMP_DIR}/diff_filter_omitted_files.txt"
 
-  python3 - "$DIFF_FILTER_INPUT_FILE" "$DIFF_FILTERED_DIFF_FILE" "$DIFF_OMITTED_FILES_FILE" <<'PY'
+  python3 - "$PR_DIFF_SOURCE_FILE" "$DIFF_FILTERED_DIFF_FILE" "$DIFF_OMITTED_FILES_FILE" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-raw = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+in_path = Path(sys.argv[1])
 filtered_out = Path(sys.argv[2])
 omitted_out = Path(sys.argv[3])
 
@@ -285,66 +282,64 @@ skip_basenames = {
     "Podfile.lock",
 }
 
-out_lines = []
 omitted = []
 
-current = []
+skipping = False
 current_file = None
 
-
-def flush():
-    global current, current_file
-    if current_file is None:
-        return
-    base = current_file.split("/")[-1]
-    if base in skip_basenames:
-        omitted.append(current_file)
-    else:
-        out_lines.extend(current)
-    current = []
-    current_file = None
-
-
-for line in raw.splitlines(True):
-    if line.startswith("diff --git "):
-        flush()
-        m = re.match(r"diff --git a/(.*?) b/(.*?)\s*$", line.rstrip("\n"))
-        if m:
-            current_file = m.group(2)
+with in_path.open("r", encoding="utf-8", errors="replace") as f_in, filtered_out.open(
+    "w", encoding="utf-8"
+) as f_out:
+    for line in f_in:
+        if line.startswith("diff --git "):
+            m = re.match(r"diff --git a/(.*?) b/(.*?)\s*$", line.rstrip("\n"))
+            current_file = m.group(2) if m else "unknown"
+            base = current_file.rsplit("/", 1)[-1]
+            skipping = base in skip_basenames
+            if skipping:
+                omitted.append(current_file)
+                continue
+            f_out.write(line)
         else:
-            current_file = "unknown"
-        current = [line]
-    else:
-        if current_file is None:
-            out_lines.append(line)
-        else:
-            current.append(line)
+            if not skipping:
+                f_out.write(line)
 
-flush()
-
-filtered = "".join(out_lines)
-filtered_out.write_text(filtered, encoding="utf-8")
-omitted_out.write_text("\n".join(omitted) + ("\n" if omitted else ""), encoding="utf-8")
+omitted_out.write_text("".join(f"{p}\n" for p in omitted), encoding="utf-8")
 PY
 
-  FILTERED_DIFF="$(cat "$DIFF_FILTERED_DIFF_FILE" 2>/dev/null || true)"
   OMITTED_COUNT="$(wc -l < "$DIFF_OMITTED_FILES_FILE" 2>/dev/null | tr -d ' ' || echo "0")"
   OMITTED_LIST="$(head -20 "$DIFF_OMITTED_FILES_FILE" 2>/dev/null | paste -sd ',' - | sed 's/,/, /g' || true)"
 
-  PR_DIFF_RAW="$FILTERED_DIFF"
-  if [ "${OMITTED_COUNT:-0}" -gt 0 ]; then
-    PR_DIFF_RAW="$(printf 'NOTE: Dependabot superlight mode — omitted lockfile diffs (%s file(s)): %s\n\n%s' "${OMITTED_COUNT:-0}" "${OMITTED_LIST:-}" "${PR_DIFF_RAW:-}")"
-  fi
-  if [ -z "${PR_DIFF_RAW:-}" ]; then
-    PR_DIFF_RAW="NOTE: Dependabot superlight mode — diff omitted (lockfile-only or empty after filtering)."
+  PR_DIFF_NOTE_ONLY_FILE="${TMP_DIR}/pr_diff_note_only.txt"
+  if [ ! -s "$DIFF_FILTERED_DIFF_FILE" ]; then
+    if [ "${OMITTED_COUNT:-0}" -gt 0 ]; then
+      printf 'NOTE: Dependabot superlight mode — diff omitted (lockfile-only or empty after filtering). Omitted lockfile diffs (%s file(s)): %s' "${OMITTED_COUNT:-0}" "${OMITTED_LIST:-}" > "$PR_DIFF_NOTE_ONLY_FILE"
+    else
+      printf '%s' "NOTE: Dependabot superlight mode — diff omitted (lockfile-only or empty after filtering)." > "$PR_DIFF_NOTE_ONLY_FILE"
+    fi
+    PR_DIFF_SOURCE_FILE="$PR_DIFF_NOTE_ONLY_FILE"
+  else
+    PR_DIFF_SOURCE_FILE="$DIFF_FILTERED_DIFF_FILE"
+    if [ "${OMITTED_COUNT:-0}" -gt 0 ]; then
+      PR_DIFF_WITH_NOTE_FILE="${TMP_DIR}/pr_diff_with_note.txt"
+      printf 'NOTE: Dependabot superlight mode — omitted lockfile diffs (%s file(s)): %s\n\n' "${OMITTED_COUNT:-0}" "${OMITTED_LIST:-}" > "$PR_DIFF_WITH_NOTE_FILE"
+      cat "$DIFF_FILTERED_DIFF_FILE" >> "$PR_DIFF_WITH_NOTE_FILE" 2>/dev/null || true
+      PR_DIFF_SOURCE_FILE="$PR_DIFF_WITH_NOTE_FILE"
+    fi
   fi
 fi
 
-PR_DIFF_SIZE=${#PR_DIFF_RAW}
-if [ "$PR_DIFF_SIZE" -gt 100000 ]; then
-  PR_DIFF="$(python3 -c 'import sys; s=sys.stdin.buffer.read().decode("utf-8", "replace"); sys.stdout.write(s[:50000] + "\n\n... (snip) ...\n\n" + s[-50000:])' <<< "$PR_DIFF_RAW")"
-else
-  PR_DIFF="$PR_DIFF_RAW"
+PR_DIFF=""
+PR_DIFF_SIZE=0
+if [ -n "${PR_DIFF_SOURCE_FILE:-}" ] && [ -f "$PR_DIFF_SOURCE_FILE" ]; then
+  PR_DIFF_SIZE="$(wc -c < "$PR_DIFF_SOURCE_FILE" 2>/dev/null | tr -d ' ' || echo 0)"
+  if [ "$PR_DIFF_SIZE" -gt 100000 ]; then
+    PR_DIFF_HEAD="$(head -c 50000 "$PR_DIFF_SOURCE_FILE" 2>/dev/null || true)"
+    PR_DIFF_TAIL="$(tail -c 50000 "$PR_DIFF_SOURCE_FILE" 2>/dev/null || true)"
+    PR_DIFF="$(printf '%s\n\n... (snip) ...\n\n%s' "$PR_DIFF_HEAD" "$PR_DIFF_TAIL")"
+  else
+    PR_DIFF="$(cat "$PR_DIFF_SOURCE_FILE" 2>/dev/null || true)"
+  fi
 fi
 
 PREV_REVIEW=""
