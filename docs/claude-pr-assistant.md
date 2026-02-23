@@ -13,7 +13,7 @@ On any PR in any Merglbot repository, comment:
 @merglbot review
 ```
 
-This triggers a multi-model review using **Claude Opus 4.6 + GPT-5.2 (HIGH reasoning)** with **final synthesis on Claude**.
+This triggers a multi-model review using **`claude-sonnet-4-6` + `gpt-5-mini` (`reasoning_effort=high`)** with **final synthesis on OpenAI `gpt-5.2` (`reasoning_effort=medium`)**.
 
 For lighter review: `@merglbot review --light`
 
@@ -22,8 +22,8 @@ For lighter review: `@merglbot review --light`
 ## Current Workflow Location
 
 - **Source**: `.github/workflows/merglbot-pr-assistant-v3-on-demand.yml`
-- **Tag**: `merglbot-core/github@v3.4.0`
-- **Coverage**: 100% (22 repos across 10 organizations; 3 orgs empty/pre-configured)
+- **Tag**: `merglbot-core/github@v3.5.0`
+- **Coverage**: 32/32 active target repos across 11 organizations (archived/read-only excluded; snapshot as of 2026-02-23). Source: SSOT `merglbot-public/docs/MERGLBOT_PR_ASSISTANT_V3.md`.
 
 ---
 

@@ -22,32 +22,69 @@ ANTHROPIC_PAYLOAD_FILE="${TMP_DIR}/anthropic_payload.json"
 OPENAI_PAYLOAD_FILE="${TMP_DIR}/openai_payload.json"
 STEP1_REASON_FILE="${STEP1_REASON_FILE:-${RUNNER_TEMP:-/tmp}/merglbot-step1-fail-reason.txt}"
 
-ANTHROPIC_MESSAGES_URL="${ANTHROPIC_MESSAGES_URL:-https://api.anthropic.com/v1/messages}"
-OPENAI_RESPONSES_URL="${OPENAI_RESPONSES_URL:-https://api.openai.com/v1/responses}"
-OPENAI_CHAT_COMPLETIONS_URL="${OPENAI_CHAT_COMPLETIONS_URL:-https://api.openai.com/v1/chat/completions}"
+DEFAULT_ANTHROPIC_MESSAGES_URL="https://api.anthropic.com/v1/messages"
+DEFAULT_OPENAI_RESPONSES_URL="https://api.openai.com/v1/responses"
+DEFAULT_OPENAI_CHAT_COMPLETIONS_URL="https://api.openai.com/v1/chat/completions"
+
+RAW_ANTHROPIC_MESSAGES_URL="${ANTHROPIC_MESSAGES_URL:-$DEFAULT_ANTHROPIC_MESSAGES_URL}"
+RAW_OPENAI_RESPONSES_URL="${OPENAI_RESPONSES_URL:-$DEFAULT_OPENAI_RESPONSES_URL}"
+RAW_OPENAI_CHAT_COMPLETIONS_URL="${OPENAI_CHAT_COMPLETIONS_URL:-$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL}"
 
 trim_ws() {
   printf '%s' "${1:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
-ANTHROPIC_MESSAGES_URL="$(trim_ws "$ANTHROPIC_MESSAGES_URL")"
-OPENAI_RESPONSES_URL="$(trim_ws "$OPENAI_RESPONSES_URL")"
-OPENAI_CHAT_COMPLETIONS_URL="$(trim_ws "$OPENAI_CHAT_COMPLETIONS_URL")"
+allowlist_openai_url() {
+  local url
+  url="$(trim_ws "${1:-}")"
+  case "$url" in
+    https://api.openai.com/*) printf '%s' "$url" ;;
+    *) printf '%s' "" ;;
+  esac
+}
+
+allowlist_anthropic_url() {
+  local url
+  url="$(trim_ws "${1:-}")"
+  case "$url" in
+    https://api.anthropic.com/*) printf '%s' "$url" ;;
+    *) printf '%s' "" ;;
+  esac
+}
+
+ANTHROPIC_MESSAGES_URL="$(allowlist_anthropic_url "$RAW_ANTHROPIC_MESSAGES_URL")"
+if [ -z "$ANTHROPIC_MESSAGES_URL" ]; then
+  if [ "$(trim_ws "$RAW_ANTHROPIC_MESSAGES_URL")" != "$DEFAULT_ANTHROPIC_MESSAGES_URL" ]; then
+    echo "WARN: Disallowed Anthropic API URL override; using default endpoint." >&2
+  fi
+  ANTHROPIC_MESSAGES_URL="$DEFAULT_ANTHROPIC_MESSAGES_URL"
+fi
+
+OPENAI_RESPONSES_URL="$(allowlist_openai_url "$RAW_OPENAI_RESPONSES_URL")"
+if [ -z "$OPENAI_RESPONSES_URL" ]; then
+  if [ "$(trim_ws "$RAW_OPENAI_RESPONSES_URL")" != "$DEFAULT_OPENAI_RESPONSES_URL" ]; then
+    echo "WARN: Disallowed OpenAI Responses URL override; using default endpoint." >&2
+  fi
+  OPENAI_RESPONSES_URL="$DEFAULT_OPENAI_RESPONSES_URL"
+fi
+
+OPENAI_CHAT_COMPLETIONS_URL="$(allowlist_openai_url "$RAW_OPENAI_CHAT_COMPLETIONS_URL")"
+if [ -z "$OPENAI_CHAT_COMPLETIONS_URL" ]; then
+  if [ "$(trim_ws "$RAW_OPENAI_CHAT_COMPLETIONS_URL")" != "$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL" ]; then
+    echo "WARN: Disallowed OpenAI Chat Completions URL override; using default endpoint." >&2
+  fi
+  OPENAI_CHAT_COMPLETIONS_URL="$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL"
+fi
 
 ANTHROPIC_URL_ALLOWED="false"
-case "$ANTHROPIC_MESSAGES_URL" in
-  https://api.anthropic.com/*) ANTHROPIC_URL_ALLOWED="true" ;;
-esac
+if [ -n "$ANTHROPIC_MESSAGES_URL" ]; then
+  ANTHROPIC_URL_ALLOWED="true"
+fi
 
-OPENAI_URLS_ALLOWED="true"
-case "$OPENAI_RESPONSES_URL" in
-  https://api.openai.com/*) ;;
-  *) OPENAI_URLS_ALLOWED="false" ;;
-esac
-case "$OPENAI_CHAT_COMPLETIONS_URL" in
-  https://api.openai.com/*) ;;
-  *) OPENAI_URLS_ALLOWED="false" ;;
-esac
+OPENAI_URLS_ALLOWED="false"
+if [ -n "$OPENAI_RESPONSES_URL" ] && [ -n "$OPENAI_CHAT_COMPLETIONS_URL" ]; then
+  OPENAI_URLS_ALLOWED="true"
+fi
 
 sanitize_model() {
   local raw="${1:-}"
@@ -65,16 +102,74 @@ escape_untrusted() {
   sed 's/<<<MERGLBOT_/<<<MERGLBOT_ESCAPED_/g'
 }
 
+curl_json_with_backoff() {
+  local url="$1"
+  shift
+
+  if [ -z "${url:-}" ]; then
+    echo "ERROR: curl_json_with_backoff called with empty URL" >&2
+    return 2
+  fi
+
+  local attempt resp exit_code err_type
+  for attempt in 1 2 3; do
+    set +e
+    resp="$(curl -s --connect-timeout 15 --max-time 180 "$url" "$@")"
+    exit_code=$?
+    set -e
+
+    # Avoid long hangs: if a request already hit max-time, do not retry it here.
+    if [ "$exit_code" -eq 28 ]; then
+      printf '%s' "$resp"
+      return 28
+    fi
+
+    if [ "$exit_code" -ne 0 ]; then
+      if [ "$attempt" -lt 3 ]; then
+        sleep $((attempt * 2))
+        continue
+      fi
+      printf '%s' "$resp"
+      return "$exit_code"
+    fi
+
+    if ! echo "$resp" | jq -e . > /dev/null 2>&1; then
+      if [ "$attempt" -lt 3 ]; then
+        sleep $((attempt * 2))
+        continue
+      fi
+      printf '%s' "$resp"
+      return 1
+    fi
+
+    # Retry common transient API errors (best-effort).
+    if echo "$resp" | jq -e '.error' > /dev/null 2>&1; then
+      err_type="$(echo "$resp" | jq -r '.error.type // empty' 2>/dev/null || true)"
+      case "$err_type" in
+        rate_limit_error|server_error|api_error|overloaded_error)
+          if [ "$attempt" -lt 3 ]; then
+            sleep $((attempt * 2))
+            continue
+          fi
+          ;;
+      esac
+    fi
+
+    printf '%s' "$resp"
+    return 0
+  done
+}
+
 ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
 OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
 if [ "$ANTHROPIC_MODEL" = "org_default" ]; then
   ANTHROPIC_MODEL=""
 fi
 if [ -z "$ANTHROPIC_MODEL" ]; then
-  ANTHROPIC_MODEL="claude-opus-4-6"
+  ANTHROPIC_MODEL="claude-sonnet-4-6"
 fi
 if [ -z "$OPENAI_MODEL" ]; then
-  OPENAI_MODEL="gpt-5.2"
+  OPENAI_MODEL="gpt-5-mini"
 fi
 
 OPENAI_SKIP_REASON=""
@@ -132,6 +227,19 @@ PR_FILES_COUNT=$(< pr_files_count.txt)
 PR_CHECKS_SUMMARY=$(python3 -c 'from pathlib import Path; import sys; p=Path("pr_checks_summary.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:8000])')
 PR_CHECKS_FAILED=$(python3 -c 'from pathlib import Path; import sys; p=Path("pr_checks_failed_count.txt"); s=p.read_text(encoding="utf-8", errors="replace").strip() if p.exists() else "0"; sys.stdout.write(s if s else "0")')
 
+BOT_MODE="default"
+OPENAI_REASONING_EFFORT="high"
+# Dependabot "superlight" mode is only enabled for the `issue_comment` trigger.
+# If a human explicitly runs `workflow_dispatch`, treat it as an override and keep default/full behavior.
+if [ "${PR_AUTHOR:-}" = "dependabot[bot]" ] && [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
+  BOT_MODE="dependabot"
+  OPENAI_REASONING_EFFORT="medium"
+  OPENAI_MODEL="gpt-5-mini"
+fi
+
+echo "BOT_MODE=$BOT_MODE" >> "$GITHUB_ENV"
+echo "OPENAI_REASONING_EFFORT_USED=$OPENAI_REASONING_EFFORT" >> "$GITHUB_ENV"
+
 DIFF_SCOPE="full"
 if [ -f pr_diff_scope.txt ]; then
   DIFF_SCOPE=$(< pr_diff_scope.txt)
@@ -142,15 +250,96 @@ if [ -f pr_diff_range.txt ]; then
   DIFF_RANGE=$(< pr_diff_range.txt)
 fi
 
-PR_DIFF_RAW=""
+PR_DIFF_SOURCE_FILE=""
 if [ -f pr_diff.txt ]; then
-  PR_DIFF_RAW=$(< pr_diff.txt)
+  PR_DIFF_SOURCE_FILE="pr_diff.txt"
 fi
-PR_DIFF_SIZE=${#PR_DIFF_RAW}
-if [ "$PR_DIFF_SIZE" -gt 100000 ]; then
-  PR_DIFF="$(python3 -c 'import sys; s=sys.stdin.buffer.read().decode("utf-8", "replace"); sys.stdout.write(s[:50000] + "\n\n... (snip) ...\n\n" + s[-50000:])' <<< "$PR_DIFF_RAW")"
-else
-  PR_DIFF="$PR_DIFF_RAW"
+
+if [ "$BOT_MODE" = "dependabot" ] && [ -n "${PR_DIFF_SOURCE_FILE:-}" ] && [ -s "$PR_DIFF_SOURCE_FILE" ]; then
+  DIFF_FILTERED_DIFF_FILE="${TMP_DIR}/diff_filter_filtered.diff"
+  DIFF_OMITTED_FILES_FILE="${TMP_DIR}/diff_filter_omitted_files.txt"
+
+  python3 - "$PR_DIFF_SOURCE_FILE" "$DIFF_FILTERED_DIFF_FILE" "$DIFF_OMITTED_FILES_FILE" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+in_path = Path(sys.argv[1])
+filtered_out = Path(sys.argv[2])
+omitted_out = Path(sys.argv[3])
+
+skip_basenames = {
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "Pipfile.lock",
+    "Cargo.lock",
+    "go.sum",
+    "Gemfile.lock",
+    "composer.lock",
+    "Podfile.lock",
+}
+
+omitted = []
+
+skipping = False
+current_file = None
+
+with in_path.open("r", encoding="utf-8", errors="replace") as f_in, filtered_out.open(
+    "w", encoding="utf-8"
+) as f_out:
+    for line in f_in:
+        if line.startswith("diff --git "):
+            m = re.match(r"diff --git a/(.*?) b/(.*?)\s*$", line.rstrip("\n"))
+            current_file = m.group(2) if m else "unknown"
+            base = current_file.rsplit("/", 1)[-1]
+            skipping = base in skip_basenames
+            if skipping:
+                omitted.append(current_file)
+                continue
+            f_out.write(line)
+        else:
+            if not skipping:
+                f_out.write(line)
+
+omitted_out.write_text("".join(f"{p}\n" for p in omitted), encoding="utf-8")
+PY
+
+  OMITTED_COUNT="$(wc -l < "$DIFF_OMITTED_FILES_FILE" 2>/dev/null | tr -d ' ' || echo "0")"
+  OMITTED_LIST="$(head -20 "$DIFF_OMITTED_FILES_FILE" 2>/dev/null | paste -sd ',' - | sed 's/,/, /g' || true)"
+
+  PR_DIFF_NOTE_ONLY_FILE="${TMP_DIR}/pr_diff_note_only.txt"
+  if [ ! -s "$DIFF_FILTERED_DIFF_FILE" ]; then
+    if [ "${OMITTED_COUNT:-0}" -gt 0 ]; then
+      printf 'NOTE: Dependabot superlight mode — diff omitted (lockfile-only or empty after filtering). Omitted lockfile diffs (%s file(s)): %s' "${OMITTED_COUNT:-0}" "${OMITTED_LIST:-}" > "$PR_DIFF_NOTE_ONLY_FILE"
+    else
+      printf '%s' "NOTE: Dependabot superlight mode — diff omitted (lockfile-only or empty after filtering)." > "$PR_DIFF_NOTE_ONLY_FILE"
+    fi
+    PR_DIFF_SOURCE_FILE="$PR_DIFF_NOTE_ONLY_FILE"
+  else
+    PR_DIFF_SOURCE_FILE="$DIFF_FILTERED_DIFF_FILE"
+    if [ "${OMITTED_COUNT:-0}" -gt 0 ]; then
+      PR_DIFF_WITH_NOTE_FILE="${TMP_DIR}/pr_diff_with_note.txt"
+      printf 'NOTE: Dependabot superlight mode — omitted lockfile diffs (%s file(s)): %s\n\n' "${OMITTED_COUNT:-0}" "${OMITTED_LIST:-}" > "$PR_DIFF_WITH_NOTE_FILE"
+      cat "$DIFF_FILTERED_DIFF_FILE" >> "$PR_DIFF_WITH_NOTE_FILE" 2>/dev/null || true
+      PR_DIFF_SOURCE_FILE="$PR_DIFF_WITH_NOTE_FILE"
+    fi
+  fi
+fi
+
+PR_DIFF=""
+PR_DIFF_SIZE=0
+if [ -n "${PR_DIFF_SOURCE_FILE:-}" ] && [ -f "$PR_DIFF_SOURCE_FILE" ]; then
+  PR_DIFF_SIZE="$(wc -c < "$PR_DIFF_SOURCE_FILE" 2>/dev/null | tr -d ' ' || echo 0)"
+  if [ "$PR_DIFF_SIZE" -gt 100000 ]; then
+    PR_DIFF_HEAD="$(head -c 50000 "$PR_DIFF_SOURCE_FILE" 2>/dev/null || true)"
+    PR_DIFF_TAIL="$(tail -c 50000 "$PR_DIFF_SOURCE_FILE" 2>/dev/null || true)"
+    PR_DIFF="$(printf '%s\n\n... (snip) ...\n\n%s' "$PR_DIFF_HEAD" "$PR_DIFF_TAIL")"
+  else
+    PR_DIFF="$(cat "$PR_DIFF_SOURCE_FILE" 2>/dev/null || true)"
+  fi
 fi
 
 PREV_REVIEW=""
@@ -197,11 +386,22 @@ else
   MAX_TOKENS_OPENAI=20000
 fi
 
+if [ "$BOT_MODE" == "dependabot" ]; then
+  REVIEW_DEPTH="DEPENDABOT_SUPERLIGHT"
+  OUTPUT_INSTRUCTIONS="Output a SUPER-LEAN dependency update review (max 350 words). Focus on: bump risk (major/minor), security implications, test/CI status, and any non-lockfile changes. Avoid style refactors."
+  MAX_TOKENS_ANTHROPIC=0
+  if [ "${REVIEW_MODE}" == "light" ]; then
+    MAX_TOKENS_OPENAI=1200
+  else
+    MAX_TOKENS_OPENAI=2000
+  fi
+fi
+
 echo "Review depth: $REVIEW_DEPTH"
 
 # Build prompt using printf to file (single redirect)
 {
-printf '%s\n' "# Merglbot Multi-Model Code Review v3.4"
+printf '%s\n' "# Merglbot Multi-Model Code Review v3.5"
 printf '%s\n' ""
 printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence."
 printf '%s\n' ""
@@ -410,11 +610,11 @@ echo "Prompt size: $PROMPT_SIZE chars"
 
 # ANTHROPIC CALL
 ANTHROPIC_MODEL_USED=""
-if [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then
+if [ "$BOT_MODE" != "dependabot" ] && [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then
   echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
 
   ANTHROPIC_MODELS_TRIED="|"
-  for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-6" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
+  for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-sonnet-4-6" "claude-opus-4-6" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
     if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
       continue
     fi
@@ -433,19 +633,23 @@ if [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then
         max_tokens: $max_tokens,
         temperature: 0.2,
         messages: [{role: "user", content: $prompt}]
-      }' > "$ANTHROPIC_PAYLOAD_FILE"
+    }' > "$ANTHROPIC_PAYLOAD_FILE"
 
     set +e
-    ANTHROPIC_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 "$ANTHROPIC_MESSAGES_URL" \
+    ANTHROPIC_RESP="$(curl_json_with_backoff "$ANTHROPIC_MESSAGES_URL" \
       -H "content-type: application/json" \
       -H "x-api-key: $ANTHROPIC_API_KEY" \
       -H "anthropic-version: $ANTHROPIC_API_VERSION" \
-      -d @"$ANTHROPIC_PAYLOAD_FILE")
+      -d @"$ANTHROPIC_PAYLOAD_FILE")"
     CURL_EXIT=$?
     set -e
 
+    if [ "$CURL_EXIT" -eq 28 ]; then
+      echo "  ERROR: Anthropic request timed out (exit=$CURL_EXIT)" >&2
+      continue
+    fi
     if [ "$CURL_EXIT" -ne 0 ] || ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
-      echo "  ERROR: Anthropic request failed or returned non-JSON (curl exit=$CURL_EXIT)" >&2
+      echo "  ERROR: Anthropic request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
       continue
     fi
 
@@ -475,7 +679,11 @@ if [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then
     break
   done
 else
-  echo "Skipping Anthropic analysis (reason: ${ANTHROPIC_SKIP_REASON:-no_key})." >&2
+  if [ "$BOT_MODE" == "dependabot" ]; then
+    echo "Skipping Anthropic analysis (dependabot superlight mode)." >&2
+  else
+    echo "Skipping Anthropic analysis (reason: ${ANTHROPIC_SKIP_REASON:-no_key})." >&2
+  fi
 fi
 
 if [ ! -s anthropic_review.txt ]; then
@@ -494,7 +702,11 @@ EOF
 fi
 
 if [ -z "$ANTHROPIC_MODEL_USED" ]; then
-  ANTHROPIC_MODEL_USED="$ANTHROPIC_MODEL"
+  if [ "$BOT_MODE" == "dependabot" ] || [ "$ANTHROPIC_API_KEY_PRESENT" != "true" ]; then
+    ANTHROPIC_MODEL_USED="skipped"
+  else
+    ANTHROPIC_MODEL_USED="$ANTHROPIC_MODEL"
+  fi
 fi
 echo "ANTHROPIC_MODEL_USED=$ANTHROPIC_MODEL_USED" >> "$GITHUB_ENV"
 
@@ -515,7 +727,8 @@ call_openai_responses() {
   local model="$1"
   local max_tokens="$2"
   local prompt_file="$3"
-  local usage_file="${4:-}"
+  local reasoning_effort="$4"
+  local usage_file="${5:-}"
 
   local payload_a="${TMP_DIR}/openai_responses_payload_a.json"
   local payload_b="${TMP_DIR}/openai_responses_payload_b.json"
@@ -525,33 +738,36 @@ call_openai_responses() {
     --arg model "$model" \
     --rawfile prompt "$prompt_file" \
     --argjson max_output_tokens "$max_tokens" \
+    --arg effort "$reasoning_effort" \
     '{
       model: $model,
       input: $prompt,
       max_output_tokens: $max_output_tokens,
-      reasoning: { effort: "high" }
+      reasoning: { effort: $effort }
     }' > "$payload_a"
 
   jq -n \
     --arg model "$model" \
     --rawfile prompt "$prompt_file" \
     --argjson max_output_tokens "$max_tokens" \
+    --arg effort "$reasoning_effort" \
     '{
       model: $model,
       input: [{ role: "user", content: $prompt }],
       max_output_tokens: $max_output_tokens,
-      reasoning: { effort: "high" }
+      reasoning: { effort: $effort }
     }' > "$payload_b"
 
   jq -n \
     --arg model "$model" \
     --rawfile prompt "$prompt_file" \
     --argjson max_output_tokens "$max_tokens" \
+    --arg effort "$reasoning_effort" \
     '{
       model: $model,
       input: [{ role: "user", content: [{ type: "input_text", text: $prompt }] }],
       max_output_tokens: $max_output_tokens,
-      reasoning: { effort: "high" }
+      reasoning: { effort: $effort }
     }' > "$payload_c"
 
   for payload in "$payload_a" "$payload_b" "$payload_c"; do
@@ -565,13 +781,17 @@ call_openai_responses() {
 
     set +e
     local resp
-    resp="$(curl -s --retry 2 --retry-all-errors --max-time 180 "$OPENAI_RESPONSES_URL" \
+    resp="$(curl_json_with_backoff "$OPENAI_RESPONSES_URL" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $OPENAI_API_KEY" \
       -d @"$payload")"
     local exit_code=$?
     set -e
 
+    if [ "$exit_code" -eq 28 ]; then
+      echo "  ERROR: Responses API request timed out (exit=$exit_code)" >&2
+      return 1
+    fi
     if [ "$exit_code" -ne 0 ] || ! echo "$resp" | jq -e . > /dev/null 2>&1; then
       echo "  ERROR: Responses API returned non-JSON (exit=$exit_code)" >&2
       continue
@@ -645,7 +865,7 @@ if [ "$OPENAI_API_KEY_PRESENT" != "true" ]; then
   printf '%s' "API_ERROR" > openai_review.txt
 else
   OPENAI_MODELS_TRIED="|"
-  for MODEL_TO_TRY in "$OPENAI_MODEL" "gpt-5.2" "gpt-5.1" "gpt-5" "gpt-4-turbo"; do
+  for MODEL_TO_TRY in "$OPENAI_MODEL" "gpt-5-mini" "gpt-5.2" "gpt-5.1" "gpt-5" "gpt-4-turbo"; do
     if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
       continue
     fi
@@ -665,7 +885,7 @@ else
       echo "  → Using Responses API"
       OPENAI_RESPONSES_OUT="$(mktemp "${TMP_DIR}/openai_responses_out.XXXXXX")"
       OPENAI_USAGE_FILE="$(mktemp "${TMP_DIR}/openai_usage.XXXXXX.json")"
-      if call_openai_responses "$MODEL_TO_TRY" "$MAX_TOKENS_OPENAI" "$FULL_PROMPT_FILE" "$OPENAI_USAGE_FILE" > "$OPENAI_RESPONSES_OUT"; then
+      if call_openai_responses "$MODEL_TO_TRY" "$MAX_TOKENS_OPENAI" "$FULL_PROMPT_FILE" "$OPENAI_REASONING_EFFORT" "$OPENAI_USAGE_FILE" > "$OPENAI_RESPONSES_OUT"; then
         OPENAI_MODEL_USED="$MODEL_TO_TRY"
         echo "Success (model: $OPENAI_MODEL_USED)"
         echo "Words: $(wc -w < "$OPENAI_RESPONSES_OUT")"
@@ -684,23 +904,28 @@ else
         --arg model "$MODEL_TO_TRY" \
         --rawfile prompt "$FULL_PROMPT_FILE" \
         --argjson max_tokens "$MAX_TOKENS_OPENAI" \
+        --arg effort "$OPENAI_REASONING_EFFORT" \
         '{
           model: $model,
           messages: [{role: "user", content: $prompt}],
           max_completion_tokens: $max_tokens,
-          reasoning_effort: "high"
+          reasoning_effort: $effort
         }' > "$OPENAI_PAYLOAD_FILE"
 
       set +e
-      OPENAI_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 "$OPENAI_CHAT_COMPLETIONS_URL" \
+      OPENAI_RESP="$(curl_json_with_backoff "$OPENAI_CHAT_COMPLETIONS_URL" \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $OPENAI_API_KEY" \
-        -d @"$OPENAI_PAYLOAD_FILE")
+        -d @"$OPENAI_PAYLOAD_FILE")"
       CURL_EXIT=$?
       set -e
 
+      if [ "$CURL_EXIT" -eq 28 ]; then
+        echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
+        continue
+      fi
       if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
-        echo "  ERROR: OpenAI request failed or returned non-JSON (curl exit=$CURL_EXIT)" >&2
+        echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
         continue
       fi
 
@@ -767,15 +992,19 @@ else
     fi
 
     set +e
-    OPENAI_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 "$OPENAI_CHAT_COMPLETIONS_URL" \
+    OPENAI_RESP="$(curl_json_with_backoff "$OPENAI_CHAT_COMPLETIONS_URL" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $OPENAI_API_KEY" \
-      -d @"$OPENAI_PAYLOAD_FILE")
+      -d @"$OPENAI_PAYLOAD_FILE")"
     CURL_EXIT=$?
     set -e
 
+    if [ "$CURL_EXIT" -eq 28 ]; then
+      echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
+      continue
+    fi
     if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
-      echo "  ERROR: OpenAI request failed or returned non-JSON (curl exit=$CURL_EXIT)" >&2
+      echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
       continue
     fi
 
@@ -830,7 +1059,11 @@ if [ ! -s openai_review.txt ]; then
 fi
 
 if [ -z "$OPENAI_MODEL_USED" ]; then
-  OPENAI_MODEL_USED="$OPENAI_MODEL"
+  if [ "$OPENAI_API_KEY_PRESENT" != "true" ]; then
+    OPENAI_MODEL_USED="skipped"
+  else
+    OPENAI_MODEL_USED="$OPENAI_MODEL"
+  fi
 fi
 echo "OPENAI_MODEL_USED=$OPENAI_MODEL_USED" >> "$GITHUB_ENV"
 
