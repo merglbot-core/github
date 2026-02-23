@@ -50,11 +50,12 @@ on:
           - claude-opus-4-1-20250805
           - claude-3-5-haiku-20241022
       openai_model:
-        description: "OpenAI model"
+        description: "OpenAI model (org_default = use org var MERGLBOT_OPENAI_MODEL)"
         required: false
         type: choice
-        default: "gpt-5-mini"
+        default: "org_default"
         options:
+          - org_default
           - gpt-5-mini
           - gpt-5.2
           - gpt-5.1
@@ -534,7 +535,7 @@ jobs:
           ANTHROPIC_API_VERSION: "2023-06-01"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-sonnet-4-6' }}
-          OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5-mini' }}
+          OPENAI_MODEL: ${{ (github.event.inputs.openai_model != 'org_default' && github.event.inputs.openai_model) || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5-mini' }}
           STEP1_REASON_FILE: ${{ runner.temp }}/merglbot-step1-fail-reason.txt
         run: |
           set -euo pipefail
@@ -619,7 +620,7 @@ jobs:
         if: success() && steps.context.outputs.skip_review != 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5-mini' }}
+          OPENAI_MODEL: ${{ (github.event.inputs.openai_model != 'org_default' && github.event.inputs.openai_model) || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5-mini' }}
           ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-sonnet-4-6' }}
           OPENAI_SYNTHESIS_MODEL: ${{ (github.event.inputs.openai_synthesis_model != 'org_default' && github.event.inputs.openai_synthesis_model) || vars.MERGLBOT_OPENAI_MODEL_SYNTHESIS || 'gpt-5.2' }}
           OPENAI_SYNTHESIS_REASONING_EFFORT: ${{ (github.event.inputs.openai_synthesis_reasoning_effort != 'org_default' && github.event.inputs.openai_synthesis_reasoning_effort) || vars.MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS || 'medium' }}
@@ -1013,7 +1014,7 @@ jobs:
             fi
           done
 
-          if [ "$OPENAI_SYNTHESIS_MODEL_USED" == "skipped" ]; then
+          if [ "$OPENAI_SYNTHESIS_MODEL_USED" = "skipped" ]; then
             echo "ERROR: OpenAI synthesis failed for all candidate models; emitting fallback review." >&2
             SYNTHESIS_USAGE_API="fallback"
             OPENAI_SYNTHESIS_MODEL_USED="fallback"
@@ -1042,7 +1043,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-sonnet-4-6' }}
-          OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5-mini' }}
+          OPENAI_MODEL: ${{ (github.event.inputs.openai_model != 'org_default' && github.event.inputs.openai_model) || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5-mini' }}
           OPENAI_SYNTHESIS_MODEL: ${{ (github.event.inputs.openai_synthesis_model != 'org_default' && github.event.inputs.openai_synthesis_model) || vars.MERGLBOT_OPENAI_MODEL_SYNTHESIS || 'gpt-5.2' }}
           OPENAI_SYNTHESIS_REASONING_EFFORT: ${{ (github.event.inputs.openai_synthesis_reasoning_effort != 'org_default' && github.event.inputs.openai_synthesis_reasoning_effort) || vars.MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS || 'medium' }}
         run: |
@@ -1318,7 +1319,7 @@ jobs:
         if: always() && steps.context.outputs.skip_review != 'true'
         env:
           ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-sonnet-4-6' }}
-          OPENAI_MODEL: ${{ github.event.inputs.openai_model || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5-mini' }}
+          OPENAI_MODEL: ${{ (github.event.inputs.openai_model != 'org_default' && github.event.inputs.openai_model) || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5-mini' }}
           REPO: ${{ github.repository }}
           TRIGGER: ${{ github.event_name }}
           RUN_ID: ${{ github.run_id }}

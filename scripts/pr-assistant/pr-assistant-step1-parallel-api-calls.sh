@@ -22,9 +22,13 @@ ANTHROPIC_PAYLOAD_FILE="${TMP_DIR}/anthropic_payload.json"
 OPENAI_PAYLOAD_FILE="${TMP_DIR}/openai_payload.json"
 STEP1_REASON_FILE="${STEP1_REASON_FILE:-${RUNNER_TEMP:-/tmp}/merglbot-step1-fail-reason.txt}"
 
-ANTHROPIC_MESSAGES_URL="${ANTHROPIC_MESSAGES_URL:-https://api.anthropic.com/v1/messages}"
-OPENAI_RESPONSES_URL="${OPENAI_RESPONSES_URL:-https://api.openai.com/v1/responses}"
-OPENAI_CHAT_COMPLETIONS_URL="${OPENAI_CHAT_COMPLETIONS_URL:-https://api.openai.com/v1/chat/completions}"
+DEFAULT_ANTHROPIC_MESSAGES_URL="https://api.anthropic.com/v1/messages"
+DEFAULT_OPENAI_RESPONSES_URL="https://api.openai.com/v1/responses"
+DEFAULT_OPENAI_CHAT_COMPLETIONS_URL="https://api.openai.com/v1/chat/completions"
+
+RAW_ANTHROPIC_MESSAGES_URL="${ANTHROPIC_MESSAGES_URL:-$DEFAULT_ANTHROPIC_MESSAGES_URL}"
+RAW_OPENAI_RESPONSES_URL="${OPENAI_RESPONSES_URL:-$DEFAULT_OPENAI_RESPONSES_URL}"
+RAW_OPENAI_CHAT_COMPLETIONS_URL="${OPENAI_CHAT_COMPLETIONS_URL:-$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL}"
 
 trim_ws() {
   printf '%s' "${1:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
@@ -48,9 +52,29 @@ allowlist_anthropic_url() {
   esac
 }
 
-ANTHROPIC_MESSAGES_URL="$(allowlist_anthropic_url "$ANTHROPIC_MESSAGES_URL")"
-OPENAI_RESPONSES_URL="$(allowlist_openai_url "$OPENAI_RESPONSES_URL")"
-OPENAI_CHAT_COMPLETIONS_URL="$(allowlist_openai_url "$OPENAI_CHAT_COMPLETIONS_URL")"
+ANTHROPIC_MESSAGES_URL="$(allowlist_anthropic_url "$RAW_ANTHROPIC_MESSAGES_URL")"
+if [ -z "$ANTHROPIC_MESSAGES_URL" ]; then
+  if [ "$(trim_ws "$RAW_ANTHROPIC_MESSAGES_URL")" != "$DEFAULT_ANTHROPIC_MESSAGES_URL" ]; then
+    echo "WARN: Disallowed Anthropic API URL override; using default endpoint." >&2
+  fi
+  ANTHROPIC_MESSAGES_URL="$DEFAULT_ANTHROPIC_MESSAGES_URL"
+fi
+
+OPENAI_RESPONSES_URL="$(allowlist_openai_url "$RAW_OPENAI_RESPONSES_URL")"
+if [ -z "$OPENAI_RESPONSES_URL" ]; then
+  if [ "$(trim_ws "$RAW_OPENAI_RESPONSES_URL")" != "$DEFAULT_OPENAI_RESPONSES_URL" ]; then
+    echo "WARN: Disallowed OpenAI Responses URL override; using default endpoint." >&2
+  fi
+  OPENAI_RESPONSES_URL="$DEFAULT_OPENAI_RESPONSES_URL"
+fi
+
+OPENAI_CHAT_COMPLETIONS_URL="$(allowlist_openai_url "$RAW_OPENAI_CHAT_COMPLETIONS_URL")"
+if [ -z "$OPENAI_CHAT_COMPLETIONS_URL" ]; then
+  if [ "$(trim_ws "$RAW_OPENAI_CHAT_COMPLETIONS_URL")" != "$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL" ]; then
+    echo "WARN: Disallowed OpenAI Chat Completions URL override; using default endpoint." >&2
+  fi
+  OPENAI_CHAT_COMPLETIONS_URL="$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL"
+fi
 
 ANTHROPIC_URL_ALLOWED="false"
 if [ -n "$ANTHROPIC_MESSAGES_URL" ]; then
@@ -81,6 +105,11 @@ escape_untrusted() {
 curl_json_with_backoff() {
   local url="$1"
   shift
+
+  if [ -z "${url:-}" ]; then
+    echo "ERROR: curl_json_with_backoff called with empty URL" >&2
+    return 2
+  fi
 
   local attempt resp exit_code err_type
   for attempt in 1 2 3; do
@@ -200,7 +229,9 @@ PR_CHECKS_FAILED=$(python3 -c 'from pathlib import Path; import sys; p=Path("pr_
 
 BOT_MODE="default"
 OPENAI_REASONING_EFFORT="high"
-if [ "${PR_AUTHOR:-}" == "dependabot[bot]" ] && [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
+# Dependabot "superlight" mode is only enabled for the `issue_comment` trigger.
+# If a human explicitly runs `workflow_dispatch`, treat it as an override and keep default/full behavior.
+if [ "${PR_AUTHOR:-}" = "dependabot[bot]" ] && [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
   BOT_MODE="dependabot"
   OPENAI_REASONING_EFFORT="medium"
   OPENAI_MODEL="gpt-5-mini"

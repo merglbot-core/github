@@ -8,6 +8,11 @@
 
 set -euo pipefail
 
+if [ -z "${BASH_VERSION:-}" ]; then
+  echo "ERROR: This script must be run with bash (do not use sh)." >&2
+  exit 2
+fi
+
 DRY_RUN="false"
 for arg in "$@"; do
   case "$arg" in
@@ -25,9 +30,9 @@ sanitize_model() {
   case "$raw" in
     *[[:space:]]*) raw="" ;;
   esac
-  if [ -n "$raw" ] && ! [[ "$raw" =~ ^[A-Za-z0-9._-]+$ ]]; then
-    raw=""
-  fi
+  case "$raw" in
+    *[!A-Za-z0-9._-]* ) raw="" ;;
+  esac
   printf '%s' "$raw"
 }
 
@@ -79,7 +84,7 @@ set_var() {
   local name="$2"
   local value="$3"
 
-  if [ "$DRY_RUN" == "true" ]; then
+  if [ "$DRY_RUN" = "true" ]; then
     echo "DRY: $org -> $name=$value"
     return 0
   fi
@@ -98,7 +103,7 @@ set_var() {
   fi
 }
 
-echo "Mode:      $([ "$DRY_RUN" == "true" ] && echo "DRY RUN" || echo "APPLY")"
+echo "Mode:      $([ "$DRY_RUN" = "true" ] && echo "DRY RUN" || echo "APPLY")"
 echo "OpenAI:    $OPENAI_MODEL_DEFAULT"
 echo "Anthropic: $ANTHROPIC_MODEL_DEFAULT"
 echo "Synthesis: $OPENAI_SYNTHESIS_MODEL_DEFAULT (reasoning_effort=$OPENAI_SYNTHESIS_REASONING_EFFORT_DEFAULT)"
