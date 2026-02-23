@@ -15,10 +15,50 @@ for arg in "$@"; do
   esac
 done
 
-OPENAI_MODEL_DEFAULT="${MERGLBOT_OPENAI_MODEL_DEFAULT:-gpt-5-mini}"
-ANTHROPIC_MODEL_DEFAULT="${MERGLBOT_ANTHROPIC_MODEL_DEFAULT:-claude-sonnet-4-6}"
-OPENAI_SYNTHESIS_MODEL_DEFAULT="${MERGLBOT_OPENAI_MODEL_SYNTHESIS_DEFAULT:-gpt-5.2}"
-OPENAI_SYNTHESIS_REASONING_EFFORT_DEFAULT="${MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS_DEFAULT:-medium}"
+trim_ws() {
+  printf '%s' "${1:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+sanitize_model() {
+  local raw
+  raw="$(trim_ws "${1:-}")"
+  case "$raw" in
+    *[[:space:]]*) raw="" ;;
+  esac
+  if [ -n "$raw" ] && ! [[ "$raw" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    raw=""
+  fi
+  printf '%s' "$raw"
+}
+
+sanitize_reasoning_effort() {
+  local raw
+  raw="$(trim_ws "${1:-}")"
+  raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+  case "$raw" in
+    low|medium|high|xhigh) printf '%s' "$raw" ;;
+    *) printf '%s' "" ;;
+  esac
+}
+
+OPENAI_MODEL_DEFAULT="$(sanitize_model "${MERGLBOT_OPENAI_MODEL_DEFAULT:-gpt-5-mini}")"
+ANTHROPIC_MODEL_DEFAULT="$(sanitize_model "${MERGLBOT_ANTHROPIC_MODEL_DEFAULT:-claude-sonnet-4-6}")"
+OPENAI_SYNTHESIS_MODEL_DEFAULT="$(sanitize_model "${MERGLBOT_OPENAI_MODEL_SYNTHESIS_DEFAULT:-gpt-5.2}")"
+OPENAI_SYNTHESIS_REASONING_EFFORT_DEFAULT="$(sanitize_reasoning_effort "${MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS_DEFAULT:-medium}")"
+
+if [ -z "$OPENAI_MODEL_DEFAULT" ]; then
+  OPENAI_MODEL_DEFAULT="gpt-5-mini"
+fi
+if [ -z "$ANTHROPIC_MODEL_DEFAULT" ]; then
+  ANTHROPIC_MODEL_DEFAULT="claude-sonnet-4-6"
+fi
+if [ -z "$OPENAI_SYNTHESIS_MODEL_DEFAULT" ]; then
+  OPENAI_SYNTHESIS_MODEL_DEFAULT="gpt-5.2"
+fi
+if [ -z "$OPENAI_SYNTHESIS_REASONING_EFFORT_DEFAULT" ]; then
+  echo "ERROR: Invalid MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS_DEFAULT (expected low|medium|high|xhigh)" >&2
+  exit 1
+fi
 
 ORGS=(
   "merglbot-core"

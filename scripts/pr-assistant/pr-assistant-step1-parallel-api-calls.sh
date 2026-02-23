@@ -206,7 +206,7 @@ def flush():
 for line in raw.splitlines(True):
     if line.startswith("diff --git "):
         flush()
-        m = re.match(r"diff --git a/(.*?) b/(.*?)\\s*$", line.rstrip("\n"))
+        m = re.match(r"diff --git a/(.*?) b/(.*?)\s*$", line.rstrip("\n"))
         if m:
             current_file = m.group(2)
         else:
@@ -887,7 +887,7 @@ else
     fi
 
     set +e
-    OPENAI_RESP=$(curl -s --retry 2 --retry-all-errors --max-time 180 "$OPENAI_CHAT_COMPLETIONS_URL" \
+    OPENAI_RESP=$(curl -s --connect-timeout 15 --max-time 180 "$OPENAI_CHAT_COMPLETIONS_URL" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $OPENAI_API_KEY" \
       -d @"$OPENAI_PAYLOAD_FILE")
