@@ -21,9 +21,9 @@ For lighter review: `@merglbot review --light`
 
 ## Current Workflow Location
 
-- **Source**: `.github/workflows/merglbot-pr-assistant-v3-on-demand.yml`
-- **Tag**: `merglbot-core/github@v3.5.0`
-- **Coverage**: 32/32 active target repos across 11 organizations (archived/read-only excluded; snapshot as of 2026-02-23). Source: SSOT `merglbot-public/docs/MERGLBOT_PR_ASSISTANT_V3.md`.
+- **Canonical source**: `merglbot-core/github/.github/workflows/merglbot-pr-assistant-v3-on-demand.yml` (v3.5.1)
+- **Deployed copy** (per target repo): `.github/workflows/merglbot-pr-v3-on-demand.yml` via `scripts/pr-assistant/deploy-v3.sh`
+- **Coverage**: defined by `merglbot-core/github/scripts/pr-assistant/target-repos.txt` (SSOT: `merglbot-public/docs/MERGLBOT_PR_ASSISTANT_V3.md`)
 
 ---
 
