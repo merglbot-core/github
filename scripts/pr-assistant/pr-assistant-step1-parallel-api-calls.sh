@@ -231,7 +231,11 @@ BOT_MODE="default"
 OPENAI_REASONING_EFFORT="high"
 # Dependabot "superlight" mode is only enabled for the `issue_comment` trigger.
 # If a human explicitly runs `workflow_dispatch`, treat it as an override and keep default/full behavior.
-if [ "${PR_AUTHOR:-}" = "dependabot[bot]" ] && [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
+IS_DEPENDABOT="false"
+case "${PR_AUTHOR:-}" in
+  dependabot[bot]|app/dependabot) IS_DEPENDABOT="true" ;;
+esac
+if [ "$IS_DEPENDABOT" = "true" ] && [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
   BOT_MODE="dependabot"
   OPENAI_REASONING_EFFORT="medium"
   OPENAI_MODEL="gpt-5-mini"
@@ -401,7 +405,7 @@ echo "Review depth: $REVIEW_DEPTH"
 
 # Build prompt using printf to file (single redirect)
 {
-printf '%s\n' "# Merglbot Multi-Model Code Review v3.5"
+printf '%s\n' "# Merglbot Multi-Model Code Review v3.5.1"
 printf '%s\n' ""
 printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence."
 printf '%s\n' ""
@@ -715,10 +719,17 @@ extract_output_text_responses() {
   local out=""
   out="$(echo "$json" | jq -r '.output_text // empty' 2>/dev/null || true)"
   if [ -z "$out" ] || [ "$out" = "null" ]; then
-    out="$(echo "$json" | jq -r '[.output[]? | select(.type=="message") | .content[]? | select(.type=="output_text") | .text] | join("\n")' 2>/dev/null || true)"
+    # More robust extraction: support multiple Responses API shapes (message content types may vary).
+    out="$(echo "$json" | jq -r '[.output[]? | select(.type=="message") | .content[]? | .text? // empty] | map(select(type=="string" and length>0)) | join("\n")' 2>/dev/null || true)"
   fi
   if [ -z "$out" ] || [ "$out" = "null" ]; then
-    out="$(echo "$json" | jq -r '.output[0].content[0].text // empty' 2>/dev/null || true)"
+    out="$(echo "$json" | jq -r '[.output[]? | .text? // empty] | map(select(type=="string" and length>0)) | join("\n")' 2>/dev/null || true)"
+  fi
+  if [ -z "$out" ] || [ "$out" = "null" ]; then
+    out="$(echo "$json" | jq -r '[.output[]? | .content? | if type=="string" then . elif type=="array" then (.[]? | .text? // empty) else empty end] | map(select(type=="string" and length>0)) | join("\n")' 2>/dev/null || true)"
+  fi
+  if [ -z "$out" ] || [ "$out" = "null" ]; then
+    out="$(echo "$json" | jq -r '[.output[]? | .content[]? | .text? // empty] | map(select(type=="string" and length>0)) | join("\n")' 2>/dev/null || true)"
   fi
   printf '%s' "$out"
 }

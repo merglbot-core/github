@@ -500,7 +500,7 @@ jobs:
           
             if [ "${SKIP_REASON:-}" == "potential_secret" ]; then
               {
-              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5"
+              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.1"
               printf '%s\n' ""
               printf '%s\n' "⛔️ Skipped: potential secret-like material detected in the PR context."
               printf '%s\n' ""
@@ -517,7 +517,7 @@ jobs:
                 exit 0
               fi
               {
-              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5"
+              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.1"
               printf '%s\n' ""
               printf '%s\n' "⏭️ No new commits since last Merglbot review (\`${PREV_SHA:0:12}\`).  "
               printf '%s\n' "Current head: \`${HEAD_SHA:0:12}\`."
@@ -582,7 +582,7 @@ jobs:
           fi
 
           {
-            printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5"
+            printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.1"
             printf '%s\n' ""
             printf '%s\n' "⛔️ Review failed during Step 1 (model API calls)."
             printf '%s\n' ""
@@ -884,10 +884,17 @@ jobs:
             local out=""
             out="$(echo "$json" | jq -r '.output_text // empty' 2>/dev/null || true)"
             if [ -z "$out" ] || [ "$out" = "null" ]; then
-              out="$(echo "$json" | jq -r '[.output[]? | select(.type=="message") | .content[]? | select(.type=="output_text") | .text] | join("\n")' 2>/dev/null || true)"
+              # More robust extraction: support multiple Responses API shapes (message content types may vary).
+              out="$(echo "$json" | jq -r '[.output[]? | select(.type=="message") | .content[]? | .text? // empty] | map(select(type=="string" and length>0)) | join("\n")' 2>/dev/null || true)"
             fi
             if [ -z "$out" ] || [ "$out" = "null" ]; then
-              out="$(echo "$json" | jq -r '.output[0].content[0].text // empty' 2>/dev/null || true)"
+              out="$(echo "$json" | jq -r '[.output[]? | .text? // empty] | map(select(type=="string" and length>0)) | join("\n")' 2>/dev/null || true)"
+            fi
+            if [ -z "$out" ] || [ "$out" = "null" ]; then
+              out="$(echo "$json" | jq -r '[.output[]? | .content? | if type=="string" then . elif type=="array" then (.[]? | .text? // empty) else empty end] | map(select(type=="string" and length>0)) | join("\n")' 2>/dev/null || true)"
+            fi
+            if [ -z "$out" ] || [ "$out" = "null" ]; then
+              out="$(echo "$json" | jq -r '[.output[]? | .content[]? | .text? // empty] | map(select(type=="string" and length>0)) | join("\n")' 2>/dev/null || true)"
             fi
             printf '%s' "$out"
           }
@@ -1159,13 +1166,13 @@ jobs:
           
           if [ ! -s final_review.txt ] || grep -q "^API_ERROR$" final_review.txt; then
             {
-              echo "## 🤖 Merglbot PR Assistant v3.5"
+              echo "## 🤖 Merglbot PR Assistant v3.5.1"
               echo ""
               echo "❌ Review generation failed. Please check workflow logs."
             } > comment.md
           else
             {
-              echo "## 🤖 Merglbot PR Assistant v3.5"
+              echo "## 🤖 Merglbot PR Assistant v3.5.1"
               echo ""
               cat final_review.txt
               echo ""
@@ -1263,7 +1270,7 @@ jobs:
           SKIP_REASON="${{ steps.context.outputs.skip_reason }}"
           if [ "$SKIPPED" == "true" ]; then
             {
-              echo "## 🤖 Merglbot PR Assistant v3.5 - Summary"
+              echo "## 🤖 Merglbot PR Assistant v3.5.1 - Summary"
               echo ""
               echo "- **PR**: #${{ env.PR_NUMBER }}"
               if [ "$SKIP_REASON" == "potential_secret" ]; then
@@ -1291,7 +1298,7 @@ jobs:
           fi
           
           {
-            echo "## 🤖 Merglbot PR Assistant v3.5 - Summary"
+            echo "## 🤖 Merglbot PR Assistant v3.5.1 - Summary"
             echo ""
             echo "| Field | Value |"
             echo "|-------|-------|"
