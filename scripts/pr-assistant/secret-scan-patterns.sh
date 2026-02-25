@@ -27,7 +27,7 @@ _GITHUB_TOKEN_GENERIC="(^|[^[:alnum:]_])${_GH_TOKEN_PREFIX}[A-Za-z0-9]{30,}($|[^
 _GENERIC_KEY="(^|[^[:alnum:]_])key_[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
 _AWS_ACCESS_KEY="(^|[^[:alnum:]_])AKIA[0-9A-Z]{16}($|[^[:alnum:]_])"
 _GOOGLE_API_KEY="(^|[^[:alnum:]_])AIza[0-9A-Za-z_-]{30,}($|[^[:alnum:]_])"
-_GOOGLE_OAUTH_REFRESH="(^|[^[:alnum:]_])ya29\\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
+_GOOGLE_OAUTH_REFRESH="(^|[^[:alnum:]_])ya29\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
 _OPENAI_PROJECT_KEY="(^|[^[:alnum:]_])${_SK_PREFIX}(proj|ant)-[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
 _OPENAI_KEY="(^|[^[:alnum:]_])${_SK_PREFIX}[A-Za-z0-9_-]{30,}($|[^[:alnum:]_])"
 
@@ -39,4 +39,4 @@ SECRET_PATTERN_STRICT="${_BEGIN_PRIVATE_KEY}|${_BEGIN_PGP_PRIVATE_KEY}|${_SLACK_
 # AI review unnecessarily.
 SECRET_PATTERN_STRICT_NO_KEY="${_BEGIN_PRIVATE_KEY}|${_BEGIN_PGP_PRIVATE_KEY}|${_SLACK_TOKEN}|${_GITHUB_TOKEN_CLASSIC}|${_GITHUB_TOKEN_FINE_GRAINED}|${_GITHUB_TOKEN_GENERIC}|${_AWS_ACCESS_KEY}|${_GOOGLE_API_KEY}|${_GOOGLE_OAUTH_REFRESH}|${_OPENAI_PROJECT_KEY}|${_OPENAI_KEY}"
 
-JWT_PATTERN_STRICT='(^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])'
+JWT_PATTERN_STRICT='(^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])'

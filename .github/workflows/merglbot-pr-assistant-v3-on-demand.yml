@@ -311,9 +311,10 @@ jobs:
             CHECKS_PENDING=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "pending" or . == "in_progress" or . == "queued") ] | length' pr_metadata.json 2>/dev/null || echo "0")
 
             CHECKS_DATA_AVAILABLE="true"
-            else
-              if [ -n "${PR_HEAD_SHA:-}" ]; then
-                if gh api "repos/${{ github.repository }}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" > check_runs.json 2>/dev/null; then
+          else
+            if [ -n "${PR_HEAD_SHA:-}" ]; then
+              if gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" \
+                | jq -s '{check_runs: (map(.check_runs // []) | add)}' > check_runs.json 2>/dev/null; then
                   # Exclude check-runs for THIS workflow run so we don't count ourselves as "pending" while gathering context.
                   jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
                     def is_current_run:
@@ -347,8 +348,8 @@ jobs:
                   if [ -s pr_checks_summary.txt ]; then
                     CHECKS_DATA_AVAILABLE="true"
                   fi
-                fi
               fi
+            fi
           fi
           if [ ! -s pr_checks_summary.txt ]; then
             echo "No CI/checks data available." > pr_checks_summary.txt
@@ -618,7 +619,7 @@ jobs:
           
             if [ "${SKIP_REASON:-}" == "potential_secret" ]; then
               {
-              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.3"
+              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.4"
               printf '%s\n' ""
               printf '%s\n' "⛔️ Skipped: potential secret-like material detected in the PR context."
               printf '%s\n' ""
@@ -635,7 +636,7 @@ jobs:
                 exit 0
               fi
               {
-              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.3"
+              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.4"
               printf '%s\n' ""
               printf '%s\n' "⏭️ No new commits since last Merglbot review (\`${PREV_SHA:0:12}\`).  "
               printf '%s\n' "Current head: \`${HEAD_SHA:0:12}\`."
@@ -729,7 +730,7 @@ jobs:
           fi
 
           {
-            printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.3"
+            printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.4"
             printf '%s\n' ""
             printf '%s\n' "⛔️ Review failed during Step 1 (model API calls)."
             printf '%s\n' ""
@@ -1347,13 +1348,13 @@ jobs:
           
           if [ ! -s final_review.txt ] || grep -q "^API_ERROR$" final_review.txt; then
             {
-              echo "## 🤖 Merglbot PR Assistant v3.5.3"
+              echo "## 🤖 Merglbot PR Assistant v3.5.4"
               echo ""
               echo "❌ Review generation failed. Please check workflow logs."
             } > comment.md
           else
             {
-              echo "## 🤖 Merglbot PR Assistant v3.5.3"
+              echo "## 🤖 Merglbot PR Assistant v3.5.4"
               echo ""
               cat final_review.txt
               echo ""
@@ -1451,7 +1452,7 @@ jobs:
           SKIP_REASON="${{ steps.context.outputs.skip_reason }}"
           if [ "$SKIPPED" == "true" ]; then
             {
-              echo "## 🤖 Merglbot PR Assistant v3.5.3 - Summary"
+              echo "## 🤖 Merglbot PR Assistant v3.5.4 - Summary"
               echo ""
               echo "- **PR**: #${{ env.PR_NUMBER }}"
               if [ "$SKIP_REASON" == "potential_secret" ]; then
@@ -1479,7 +1480,7 @@ jobs:
           fi
           
           {
-            echo "## 🤖 Merglbot PR Assistant v3.5.3 - Summary"
+            echo "## 🤖 Merglbot PR Assistant v3.5.4 - Summary"
             echo ""
             echo "| Field | Value |"
             echo "|-------|-------|"
