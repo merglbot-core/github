@@ -955,14 +955,14 @@ jobs:
 
           def _make_scope(
               *,
-              key: str,
+              scope: str,
               label: str,
               minute: int,
               local_hour: int,
               items: list[dict],
           ) -> dict[str, str]:
-              outdir = base / key / "out"
-              outdir_d2 = base / key / "out-d2"
+              outdir = base / scope / "out"
+              outdir_d2 = base / scope / "out-d2"
               outdir.mkdir(parents=True, exist_ok=True)
               outdir_d2.mkdir(parents=True, exist_ok=True)
 
@@ -1123,18 +1123,18 @@ jobs:
               _write_csv(outdir_d2 / "forecast_d1_readiness_channels14_report.csv", CHANNEL14_FIELDS, ch14_rows_d2)
 
               return {
-                  f"{key}_status": "PASS",
-                  f"{key}_outdir": str(outdir),
-                  f"{key}_outdir_d2": str(outdir_d2),
-                  f"{key}_scope_label": f"TEST {label}",
+                  f"{scope}_status": "PASS",
+                  f"{scope}_outdir": str(outdir),
+                  f"{scope}_outdir_d2": str(outdir_d2),
+                  f"{scope}_scope_label": f"TEST {label}",
               }
 
           base.mkdir(parents=True, exist_ok=True)
           outputs: dict[str, str] = {}
 
-          outputs.update(
-              _make_scope(
-                  key="denatura",
+              outputs.update(
+                  _make_scope(
+                  scope="denatura",
                   label="denatura",
                   minute=15,
                   local_hour=8,
@@ -1144,9 +1144,9 @@ jobs:
                   ],
               )
           )
-          outputs.update(
-              _make_scope(
-                  key="cerano_livero",
+              outputs.update(
+                  _make_scope(
+                  scope="cerano_livero",
                   label="cerano+livero",
                   minute=0,
                   local_hour=9,
@@ -1156,9 +1156,9 @@ jobs:
                   ],
               )
           )
-          outputs.update(
-              _make_scope(
-                  key="proteinaco",
+              outputs.update(
+                  _make_scope(
+                  scope="proteinaco",
                   label="proteinaco",
                   minute=20,
                   local_hour=9,
@@ -1167,9 +1167,9 @@ jobs:
                   ],
               )
           )
-          outputs.update(
-              _make_scope(
-                  key="ruzovyslon",
+              outputs.update(
+                  _make_scope(
+                  scope="ruzovyslon",
                   label="ruzovyslon",
                   minute=15,
                   local_hour=9,
@@ -1178,9 +1178,9 @@ jobs:
                   ],
               )
           )
-          outputs.update(
-              _make_scope(
-                  key="autodoplnky",
+              outputs.update(
+                  _make_scope(
+                  scope="autodoplnky",
                   label="autodoplnky",
                   minute=5,
                   local_hour=9,
