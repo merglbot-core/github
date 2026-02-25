@@ -85,6 +85,7 @@ on:
 
 permissions:
   contents: read
+  # Default to least privilege; jobs that need to comment on PRs request write permissions explicitly.
   pull-requests: read
   issues: read
   checks: read
@@ -294,18 +295,68 @@ jobs:
           printf '%s\n' "$PR_HEAD_SHA" > pr_head_sha.txt
 
           # CI / checks summary (best-effort)
-          jq -r '
-            (.statusCheckRollup.contexts // .statusCheckRollup // [])
-            | map(select(.name != null))
-            | map("- " + .name + ": " + ((.conclusion // .state // "UNKNOWN") | tostring | ascii_upcase))
-            | .[]
-          ' pr_metadata.json > pr_checks_summary.txt 2>/dev/null || true
+          CHECKS_DATA_AVAILABLE="false"
+          CHECKS_FAILED="0"
+          CHECKS_PENDING="0"
+
+          if jq -e '.statusCheckRollup != null' pr_metadata.json > /dev/null 2>&1; then
+            jq -r '
+              (.statusCheckRollup.contexts // .statusCheckRollup // [])
+              | map(select(.name != null))
+              | map("- " + .name + ": " + ((.conclusion // .state // "UNKNOWN") | tostring | ascii_upcase))
+              | .[]
+            ' pr_metadata.json > pr_checks_summary.txt 2>/dev/null || true
+
+            CHECKS_FAILED=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "failure" or . == "cancelled" or . == "timed_out" or . == "error") ] | length' pr_metadata.json 2>/dev/null || echo "0")
+            CHECKS_PENDING=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "pending" or . == "in_progress" or . == "queued") ] | length' pr_metadata.json 2>/dev/null || echo "0")
+
+            CHECKS_DATA_AVAILABLE="true"
+            else
+              if [ -n "${PR_HEAD_SHA:-}" ]; then
+                if gh api "repos/${{ github.repository }}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" > check_runs.json 2>/dev/null; then
+                  # Exclude check-runs for THIS workflow run so we don't count ourselves as "pending" while gathering context.
+                  jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
+                    def is_current_run:
+                      ($current_run_id != "" and ((.details_url? // "") | tostring | contains("/actions/runs/" + $current_run_id)));
+                    (.check_runs // [])
+                    | map(select(is_current_run | not))
+                    | map(select(.name != null))
+                    | map("- " + .name + ": " + ((.conclusion // .status // "UNKNOWN") | tostring | ascii_upcase))
+                    | .[]
+                  ' check_runs.json > pr_checks_summary.txt 2>/dev/null || true
+  
+                  CHECKS_FAILED=$(jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
+                    def is_current_run:
+                      ($current_run_id != "" and ((.details_url? // "") | tostring | contains("/actions/runs/" + $current_run_id)));
+                    [ (.check_runs // [])[]?
+                      | select(is_current_run | not)
+                      | ((.conclusion // .status // "") | ascii_downcase)
+                      | select(. == "failure" or . == "cancelled" or . == "timed_out" or . == "error")
+                    ] | length
+                  ' check_runs.json 2>/dev/null || echo "0")
+                  CHECKS_PENDING=$(jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
+                    def is_current_run:
+                      ($current_run_id != "" and ((.details_url? // "") | tostring | contains("/actions/runs/" + $current_run_id)));
+                    [ (.check_runs // [])[]?
+                      | select(is_current_run | not)
+                      | ((.conclusion // .status // "") | ascii_downcase)
+                      | select(. == "pending" or . == "in_progress" or . == "queued")
+                    ] | length
+                  ' check_runs.json 2>/dev/null || echo "0")
+  
+                  if [ -s pr_checks_summary.txt ]; then
+                    CHECKS_DATA_AVAILABLE="true"
+                  fi
+                fi
+              fi
+          fi
           if [ ! -s pr_checks_summary.txt ]; then
             echo "No CI/checks data available." > pr_checks_summary.txt
           fi
 
-          CHECKS_FAILED=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "failure" or . == "cancelled" or . == "timed_out" or . == "error") ] | length' pr_metadata.json 2>/dev/null || echo "0")
           printf '%s\n' "$CHECKS_FAILED" > pr_checks_failed_count.txt
+          printf '%s\n' "$CHECKS_PENDING" > pr_checks_pending_count.txt
+          printf '%s\n' "$CHECKS_DATA_AVAILABLE" > pr_checks_data_available.txt
           
           echo "PR_BASE_SHA=$PR_BASE_SHA" >> "$GITHUB_ENV"
           echo "PR_HEAD_SHA=$PR_HEAD_SHA" >> "$GITHUB_ENV"
@@ -334,8 +385,7 @@ jobs:
           DIFF_SCOPE_MODE="${DIFF_SCOPE_MODE:-auto}"
           if [ "$DIFF_SCOPE_MODE" == "full" ]; then
             PREV_REVIEW_HEAD_SHA=""
-            LAST_REVIEW_CREATED_AT=""
-            echo "" > prev_merglbot_review_created_at.txt
+            # Keep LAST_REVIEW_CREATED_AT intact so bugbot/comment ingestion stays bounded to new signals.
           fi
           
           echo "$PREV_REVIEW_HEAD_SHA" > prev_review_head_sha.txt
@@ -398,6 +448,53 @@ jobs:
             echo "DIFF_RANGE=$DIFF_RANGE" >> "$GITHUB_ENV"
           fi
           
+          # Keep a full diff for security pre-scan (fail-closed) and produce a trimmed diff for LLM context.
+          # Rationale: large lockfile diffs can cause the LLM prompt to truncate away critical security files
+          # (e.g. entrypoints and env-sanitization logic), leading to incomplete reviews.
+          cp pr_diff.txt pr_diff_full.txt
+          if [ -s pr_diff_full.txt ]; then
+            awk '
+              /^diff --git / {
+                skip = 0;
+                file = "";
+
+                if ($0 ~ /^diff --git "a\//) {
+                  file = $0;
+                  sub(/^diff --git "a\//, "", file);
+                  sub(/" "b\/.*$/, "", file);
+                } else if ($0 ~ /^diff --git a\//) {
+                  file = $0;
+                  sub(/^diff --git a\//, "", file);
+                  sub(/ b\/.*$/, "", file);
+                }
+
+                if (file != "") {
+                  skip = (file ~ /package-lock\.json$/);
+                }
+              }
+              !skip { print }
+            ' pr_diff_full.txt > pr_diff.txt
+          fi
+          
+          # Provide a minimal lockfile change summary to the LLM without including the full lockfile diff.
+          # This keeps prompts small while still surfacing dependency-relevant changes for review.
+          DIFF_RANGE_FOR_LOCKFILE="${DIFF_RANGE:-}"
+          if [ -z "$DIFF_RANGE_FOR_LOCKFILE" ] && [ -f pr_diff_range.txt ]; then
+            DIFF_RANGE_FOR_LOCKFILE="$(cat pr_diff_range.txt)"
+          fi
+
+          if [ -n "$DIFF_RANGE_FOR_LOCKFILE" ] && git diff --stat "$DIFF_RANGE_FOR_LOCKFILE" -- ':(glob)**/package-lock.json' > lockfile_stat.txt 2>/dev/null; then
+            if [ -s lockfile_stat.txt ]; then
+              {
+                echo ""
+                echo "=== LOCKFILE CHANGE SUMMARY (package-lock.json) ==="
+                cat lockfile_stat.txt
+                echo "=== END LOCKFILE CHANGE SUMMARY ==="
+                echo ""
+              } >> pr_diff.txt
+            fi
+          fi
+
           DIFF_LINES=$(wc -l < pr_diff.txt 2>/dev/null || echo "0")
           echo "Diff: $DIFF_LINES lines"
 
@@ -471,15 +568,36 @@ jobs:
           # Security pre-scan: if PR context contains secret-like patterns, skip AI review to avoid exfiltration to LLM APIs.
           # IMPORTANT: never print the matching line(s) to logs.
           if [ "$SKIP_REVIEW" != "true" ]; then
-            SECRET_PATTERN='-----BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY-----|-----BEGIN PRIVATE KEY-----|xox[baprs]-|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|gh[oprsu]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}'
-            for SECRET_SCAN_FILE in pr_diff.txt pr_title.txt pr_body.txt bugbot_findings.txt changed_files.txt pr_checks_summary.txt; do
-              if [ -s "$SECRET_SCAN_FILE" ] && grep -Eqi "$SECRET_PATTERN" "$SECRET_SCAN_FILE"; then
-                echo "⛔️ Potential secret-like material detected in PR context; skipping AI review."
+            # NOTE: keep these patterns aligned with tools/cursor-orchestrator-mcp/src/lib/redact.ts.
+            # - Shell uses POSIX word-ish boundaries: (^|[^[:alnum:]_]) ... ($|[^[:alnum:]_])
+            # - TypeScript mirrors this via lookarounds: (?<![A-Za-z0-9_]) ... (?![A-Za-z0-9_])
+            # NOTE: JWT-like patterns can produce false positives (e.g. documentation/test fixtures). If this
+            # becomes noisy, tighten the JWT prefix further rather than disabling the guardrail.
+            # To reduce false positives from lockfile/full-diff integrity strings, keep the JWT scan out of
+            # pr_diff_full.txt (which intentionally includes full package-lock.json diffs).
+            # Loaded from a shared script to avoid false positives from policy checks on workflow `run:` blocks.
+            source scripts/pr-assistant/secret-scan-patterns.sh
+            # Loose JWT pattern (for alignment with redaction; intentionally NOT used for SKIP_REVIEW gating):
+            #   (^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}($|[^[:alnum:]_])
+            # NOTE: keep the gate on JWT_PATTERN_STRICT only; the loose heuristic is noisy (docs/test fixtures).
+            JWT_PATTERN="${JWT_PATTERN_STRICT}"
+            for SECRET_SCAN_FILE in pr_diff_full.txt pr_diff.txt pr_title.txt pr_body.txt bugbot_findings.txt changed_files.txt pr_checks_summary.txt; do
+              # pr_diff_full.txt: NO_KEY variant (lockfile false positives); pr_diff.txt still scans key_ + JWT.
+              PATTERN="$SECRET_PATTERN_STRICT_NO_KEY"
+              if [ "$SECRET_SCAN_FILE" != "pr_diff_full.txt" ]; then
+                PATTERN="${SECRET_PATTERN_STRICT}|${JWT_PATTERN}"
+              fi
+
+              if [ -s "$SECRET_SCAN_FILE" ] && grep -Eqi "$PATTERN" "$SECRET_SCAN_FILE"; then
+                echo "⛔️ Potential secret-like material detected in PR context file: $SECRET_SCAN_FILE; skipping AI review."
                 SKIP_REVIEW="true"
                 SKIP_REASON="potential_secret"
                 break
               fi
             done
+
+            # Defense-in-depth: ensure the full diff never proceeds beyond pre-scan (LLM inputs use pr_diff.txt).
+            rm -f pr_diff_full.txt || true
           fi
           
           echo "========================================="
@@ -500,7 +618,7 @@ jobs:
           
             if [ "${SKIP_REASON:-}" == "potential_secret" ]; then
               {
-              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.2"
+              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.3"
               printf '%s\n' ""
               printf '%s\n' "⛔️ Skipped: potential secret-like material detected in the PR context."
               printf '%s\n' ""
@@ -517,7 +635,7 @@ jobs:
                 exit 0
               fi
               {
-              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.2"
+              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.3"
               printf '%s\n' ""
               printf '%s\n' "⏭️ No new commits since last Merglbot review (\`${PREV_SHA:0:12}\`).  "
               printf '%s\n' "Current head: \`${HEAD_SHA:0:12}\`."
@@ -525,6 +643,35 @@ jobs:
           fi
           
           gh pr comment "$PR_NUM" --body-file comment.md
+
+      - name: Validate org_default model vars
+        if: success() && steps.context.outputs.skip_review != 'true'
+        env:
+          ANTHROPIC_MODEL_INPUT: ${{ github.event.inputs.anthropic_model || '' }}
+          ANTHROPIC_MODEL_ORG_VAR: ${{ vars.MERGLBOT_ANTHROPIC_MODEL }}
+          OPENAI_MODEL_INPUT: ${{ github.event.inputs.openai_model || '' }}
+          OPENAI_MODEL_ORG_VAR: ${{ vars.MERGLBOT_OPENAI_MODEL }}
+          OPENAI_SYNTHESIS_MODEL_INPUT: ${{ github.event.inputs.openai_synthesis_model || '' }}
+          OPENAI_SYNTHESIS_MODEL_ORG_VAR: ${{ vars.MERGLBOT_OPENAI_MODEL_SYNTHESIS }}
+          OPENAI_SYNTHESIS_REASONING_EFFORT_INPUT: ${{ github.event.inputs.openai_synthesis_reasoning_effort || '' }}
+          OPENAI_SYNTHESIS_REASONING_EFFORT_ORG_VAR: ${{ vars.MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS }}
+        run: |
+          set -euo pipefail
+
+          if [ "${ANTHROPIC_MODEL_INPUT:-}" = "org_default" ] && [ -z "${ANTHROPIC_MODEL_ORG_VAR:-}" ]; then
+            echo "::warning:: anthropic_model=org_default but vars.MERGLBOT_ANTHROPIC_MODEL is not set. Falling back to workflow default."
+          fi
+
+          if [ "${OPENAI_MODEL_INPUT:-}" = "org_default" ] && [ -z "${OPENAI_MODEL_ORG_VAR:-}" ]; then
+            echo "::warning:: openai_model=org_default but vars.MERGLBOT_OPENAI_MODEL is not set. Falling back to workflow default."
+          fi
+
+          if [ "${OPENAI_SYNTHESIS_MODEL_INPUT:-}" = "org_default" ] && [ -z "${OPENAI_SYNTHESIS_MODEL_ORG_VAR:-}" ]; then
+            echo "::warning:: openai_synthesis_model=org_default but vars.MERGLBOT_OPENAI_MODEL_SYNTHESIS is not set. Falling back to workflow default."
+          fi
+          if [ "${OPENAI_SYNTHESIS_REASONING_EFFORT_INPUT:-}" = "org_default" ] && [ -z "${OPENAI_SYNTHESIS_REASONING_EFFORT_ORG_VAR:-}" ]; then
+            echo "::warning:: openai_synthesis_reasoning_effort=org_default but vars.MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS is not set. Falling back to workflow default."
+          fi
 
       - name: Step 1 - Parallel API Calls
         id: step1
@@ -582,7 +729,7 @@ jobs:
           fi
 
           {
-            printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.2"
+            printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.3"
             printf '%s\n' ""
             printf '%s\n' "⛔️ Review failed during Step 1 (model API calls)."
             printf '%s\n' ""
@@ -645,26 +792,7 @@ jobs:
             sed 's/<<<MERGLBOT_/<<<MERGLBOT_ESCAPED_/g'
           }
 
-          sanitize_model() {
-            local raw="${1:-}"
-            raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-            case "$raw" in
-              *[[:space:]]*) raw="" ;;
-            esac
-            if [ -n "$raw" ] && ! [[ "$raw" =~ ^[A-Za-z0-9._-]+$ ]]; then
-              raw=""
-            fi
-            printf '%s' "$raw"
-          }
-
-          sanitize_reasoning_effort() {
-            local raw="${1:-}"
-            raw="$(printf '%s' "$raw" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-            case "$raw" in
-              low|medium|high|xhigh) printf '%s' "$raw" ;;
-              *) printf '%s' "" ;;
-            esac
-          }
+          source scripts/pr-assistant/workflow-sanitize.sh
 
           ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
@@ -732,8 +860,81 @@ jobs:
           SYNTH_INPUT_COUNT="${#AVAILABLE_REVIEW_FILES[@]}"
 
           if [ "$SYNTH_INPUT_COUNT" -eq 0 ]; then
-            echo "ERROR: All reviews failed; cannot synthesize" >&2
-            printf '%s' "API_ERROR" > final_review.txt
+            echo "ERROR: All reviews failed; generating CI-only fallback review" >&2
+
+            CHECKS_DATA_AVAILABLE="false"
+            if [ -f pr_checks_data_available.txt ] && grep -qx "true" pr_checks_data_available.txt 2>/dev/null; then
+              CHECKS_DATA_AVAILABLE="true"
+            fi
+
+            CHECKS_FAILED_RAW=""
+            CHECKS_FAILED=1
+            CHECKS_FAILED_KNOWN="false"
+            if [ "$CHECKS_DATA_AVAILABLE" = "true" ] && [ -f pr_checks_failed_count.txt ]; then
+              CHECKS_FAILED_RAW="$(cat pr_checks_failed_count.txt | tr -d '\r' | tr -d ' ' 2>/dev/null || true)"
+              if echo "$CHECKS_FAILED_RAW" | grep -Eq '^[0-9]+$'; then
+                CHECKS_FAILED="$CHECKS_FAILED_RAW"
+                CHECKS_FAILED_KNOWN="true"
+              fi
+            fi
+
+            CHECKS_PENDING_RAW=""
+            CHECKS_PENDING=1
+            CHECKS_PENDING_KNOWN="false"
+            if [ "$CHECKS_DATA_AVAILABLE" = "true" ] && [ -f pr_checks_pending_count.txt ]; then
+              CHECKS_PENDING_RAW="$(cat pr_checks_pending_count.txt | tr -d '\r' | tr -d ' ' 2>/dev/null || true)"
+              if echo "$CHECKS_PENDING_RAW" | grep -Eq '^[0-9]+$'; then
+                CHECKS_PENDING="$CHECKS_PENDING_RAW"
+                CHECKS_PENDING_KNOWN="true"
+              fi
+            fi
+
+            VERDICT="CHANGES NEEDED"
+            if [ "$CHECKS_FAILED_KNOWN" = "true" ] && [ "$CHECKS_PENDING_KNOWN" = "true" ] && [ "$CHECKS_FAILED" -eq 0 ] && [ "$CHECKS_PENDING" -eq 0 ]; then
+              VERDICT="APPROVE"
+            fi
+
+            {
+              echo "# Code Review Summary"
+              echo "AI review generation failed (both Anthropic and OpenAI). This is a CI-only fallback report."
+              echo ""
+              echo "## CI / Checks Summary"
+              if [ -f pr_checks_summary.txt ]; then
+                cat pr_checks_summary.txt
+              else
+                echo "- No CI/checks data available."
+              fi
+              echo ""
+              echo "## Findings"
+              echo "### Critical (Must Fix)"
+              echo "- [ ] Unable to run AI review (providers returned API_ERROR). Re-run after fixing quota/keys."
+              if [ "$CHECKS_FAILED_KNOWN" = "true" ] && [ "$CHECKS_FAILED" -gt 0 ]; then
+                echo "- [ ] One or more CI checks are failing/cancelled/timed out (see CI summary above)."
+              elif [ "$CHECKS_FAILED_KNOWN" != "true" ]; then
+                echo "- [ ] CI status could not be determined (missing/invalid pr_checks_failed_count.txt); verify required checks in GitHub."
+              fi
+              if [ "$CHECKS_PENDING_KNOWN" = "true" ] && [ "$CHECKS_PENDING" -gt 0 ]; then
+                echo "- [ ] One or more CI checks are pending/in progress (see CI summary above)."
+              elif [ "$CHECKS_PENDING_KNOWN" != "true" ]; then
+                echo "- [ ] CI pending status could not be determined (missing/invalid pr_checks_pending_count.txt); verify required checks in GitHub."
+              fi
+              echo "### High Priority"
+              echo "- None."
+              echo "### Medium Priority"
+              echo "- None."
+              echo "### Low Priority"
+              echo "- None."
+              echo ""
+              echo "## Whats Good"
+              echo "- CI / checks summary was captured successfully."
+              echo ""
+              echo "## SSOT Sync (Docs)"
+              echo "None"
+              echo ""
+              echo "Verdict: $VERDICT"
+            } > final_review.txt
+
+            SYNTHESIS_USAGE_API="ci_only_fallback"
             printf '%s\n' "{\"api\":\"${SYNTHESIS_USAGE_API}\",\"input_tokens\":${SYNTHESIS_USAGE_INPUT_TOKENS},\"output_tokens\":${SYNTHESIS_USAGE_OUTPUT_TOKENS},\"reasoning_tokens\":${SYNTHESIS_USAGE_REASONING_TOKENS},\"total_tokens\":${SYNTHESIS_USAGE_TOTAL_TOKENS}}" > synthesis_usage.json
             echo "OPENAI_SYNTHESIS_MODEL_USED=${OPENAI_SYNTHESIS_MODEL_USED}" >> "$GITHUB_ENV"
             echo "OPENAI_SYNTHESIS_REASONING_EFFORT_USED=${OPENAI_SYNTHESIS_REASONING_EFFORT_USED}" >> "$GITHUB_ENV"
@@ -785,7 +986,7 @@ jobs:
           printf '%s\n' ""
           printf '%s\n' "## Output Format"
           printf '%s\n' ""
-          printf '%s\n' "# Code Review Sumar"
+          printf '%s\n' "# Code Review Summary"
           printf '%s\n' "[3-5 sentences]"
           printf '%s\n' ""
           printf '%s\n' "## Findings"
@@ -839,14 +1040,14 @@ jobs:
             printf '%s\n' "<<<MERGLBOT_END_UNTRUSTED_ANTHROPIC_REVIEW>>>"
             printf '%s\n' ""
           fi
-          if [ "$OPENAI_OK" == "true" ]; then
-            printf '%s\n' "## OpenAI Review ($OPENAI_MODEL_FINAL) (untrusted)"
-            printf '%s\n' ""
-            printf '%s\n' "<<<MERGLBOT_BEGIN_UNTRUSTED_OPENAI_REVIEW>>>"
-          printf '%s\n' "$OPENAI_REVIEW" | escape_untrusted
-          printf '%s\n' "<<<MERGLBOT_END_UNTRUSTED_OPENAI_REVIEW>>>"
-          printf '%s\n' ""
-          fi
+            if [ "$OPENAI_OK" == "true" ]; then
+              printf '%s\n' "## OpenAI Review ($OPENAI_MODEL_FINAL) (untrusted)"
+              printf '%s\n' ""
+              printf '%s\n' "<<<MERGLBOT_BEGIN_UNTRUSTED_OPENAI_REVIEW>>>"
+              printf '%s\n' "$OPENAI_REVIEW" | escape_untrusted
+              printf '%s\n' "<<<MERGLBOT_END_UNTRUSTED_OPENAI_REVIEW>>>"
+              printf '%s\n' ""
+            fi
           printf '%s\n' "Now synthesize into FINAL review."
           
           } > "$SYNTHESIS_PROMPT_FILE"
@@ -983,15 +1184,14 @@ jobs:
             input_tokens="$(echo "$resp" | jq -r '.usage.input_tokens // .usage.prompt_tokens // 0' 2>/dev/null || echo 0)"
             output_total="$(echo "$resp" | jq -r '.usage.output_tokens // .usage.completion_tokens // 0' 2>/dev/null || echo 0)"
             reasoning_tokens="$(echo "$resp" | jq -r '.usage.output_tokens_details.reasoning_tokens // .usage.completion_tokens_details.reasoning_tokens // 0' 2>/dev/null || echo 0)"
-            cat > "$usage_file" << EOF
-          {
-            "api": "responses",
-            "input_tokens": ${input_tokens},
-            "output_tokens": ${output_total},
-            "reasoning_tokens": ${reasoning_tokens},
-            "total_tokens": ${total_tokens}
-          }
-          EOF
+            jq -n \
+              --arg api "responses" \
+              --argjson input_tokens "${input_tokens:-0}" \
+              --argjson output_tokens "${output_total:-0}" \
+              --argjson reasoning_tokens "${reasoning_tokens:-0}" \
+              --argjson total_tokens "${total_tokens:-0}" \
+              '{api:$api,input_tokens:$input_tokens,output_tokens:$output_tokens,reasoning_tokens:$reasoning_tokens,total_tokens:$total_tokens}' \
+              > "$usage_file"
 
             printf '%s' "$out"
             return 0
@@ -1056,26 +1256,7 @@ jobs:
         run: |
           set -euo pipefail
           
-          sanitize_model() {
-            local raw="${1:-}"
-            raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-            case "$raw" in
-              *[[:space:]]*) raw="" ;;
-            esac
-            if [ -n "$raw" ] && ! [[ "$raw" =~ ^[A-Za-z0-9._-]+$ ]]; then
-              raw=""
-            fi
-            printf '%s' "$raw"
-          }
-
-          sanitize_reasoning_effort() {
-            local raw="${1:-}"
-            raw="$(printf '%s' "$raw" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-            case "$raw" in
-              low|medium|high|xhigh) printf '%s' "$raw" ;;
-              *) printf '%s' "" ;;
-            esac
-          }
+          source scripts/pr-assistant/workflow-sanitize.sh
 
           ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
@@ -1166,13 +1347,13 @@ jobs:
           
           if [ ! -s final_review.txt ] || grep -q "^API_ERROR$" final_review.txt; then
             {
-              echo "## 🤖 Merglbot PR Assistant v3.5.2"
+              echo "## 🤖 Merglbot PR Assistant v3.5.3"
               echo ""
               echo "❌ Review generation failed. Please check workflow logs."
             } > comment.md
           else
             {
-              echo "## 🤖 Merglbot PR Assistant v3.5.2"
+              echo "## 🤖 Merglbot PR Assistant v3.5.3"
               echo ""
               cat final_review.txt
               echo ""
@@ -1270,7 +1451,7 @@ jobs:
           SKIP_REASON="${{ steps.context.outputs.skip_reason }}"
           if [ "$SKIPPED" == "true" ]; then
             {
-              echo "## 🤖 Merglbot PR Assistant v3.5.2 - Summary"
+              echo "## 🤖 Merglbot PR Assistant v3.5.3 - Summary"
               echo ""
               echo "- **PR**: #${{ env.PR_NUMBER }}"
               if [ "$SKIP_REASON" == "potential_secret" ]; then
@@ -1298,7 +1479,7 @@ jobs:
           fi
           
           {
-            echo "## 🤖 Merglbot PR Assistant v3.5.2 - Summary"
+            echo "## 🤖 Merglbot PR Assistant v3.5.3 - Summary"
             echo ""
             echo "| Field | Value |"
             echo "|-------|-------|"
@@ -1337,17 +1518,7 @@ jobs:
           JOB_STATUS: ${{ job.status }}
         run: |
           # Create metrics JSON for feedback loop analysis
-          sanitize_model() {
-            local raw="${1:-}"
-            raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-            case "$raw" in
-              *[[:space:]]*) raw="" ;;
-            esac
-            if [ -n "$raw" ] && ! [[ "$raw" =~ ^[A-Za-z0-9._-]+$ ]]; then
-              raw=""
-            fi
-            printf '%s' "$raw"
-          }
+          source scripts/pr-assistant/workflow-sanitize.sh
 
           ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
@@ -1385,7 +1556,7 @@ jobs:
             OPENAI_SYNTHESIS_MODEL_FINAL="unknown"
           fi
           case "$OPENAI_SYNTHESIS_REASONING_EFFORT_FINAL" in
-            low|medium|high|xhigh) ;;
+            low|medium|high|none|n/a) ;;
             *) OPENAI_SYNTHESIS_REASONING_EFFORT_FINAL="unknown" ;;
           esac
           

@@ -14,12 +14,28 @@ echo "========================================="
 echo "STEP 1: PARALLEL AI ANALYSIS"
 echo "========================================="
 
+PARENT_BASHPID="${BASHPID}"
 TMP_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/merglbot-pr-assistant.XXXXXX")"
-trap 'rm -rf -- "$TMP_DIR"' EXIT
+cleanup() {
+  if [ "${BASHPID}" != "${PARENT_BASHPID}" ]; then
+    return 0
+  fi
+  set +e
+  if [ -n "${ANTHROPIC_PID:-}" ] && kill -0 "$ANTHROPIC_PID" 2>/dev/null; then
+    kill "$ANTHROPIC_PID" 2>/dev/null || true
+    wait "$ANTHROPIC_PID" 2>/dev/null || true
+  fi
+  rm -rf -- "$TMP_DIR"
+}
+trap cleanup EXIT
 
 FULL_PROMPT_FILE="${TMP_DIR}/full_prompt.txt"
 ANTHROPIC_PAYLOAD_FILE="${TMP_DIR}/anthropic_payload.json"
 OPENAI_PAYLOAD_FILE="${TMP_DIR}/openai_payload.json"
+ANTHROPIC_GITHUB_ENV_FILE="${TMP_DIR}/anthropic_github_env.txt"
+ANTHROPIC_REVIEW_FILE="${TMP_DIR}/anthropic_review.txt"
+ANTHROPIC_USAGE_FILE="${TMP_DIR}/anthropic_usage.json"
+ANTHROPIC_PID=""
 STEP1_REASON_FILE="${STEP1_REASON_FILE:-${RUNNER_TEMP:-/tmp}/merglbot-step1-fail-reason.txt}"
 
 DEFAULT_ANTHROPIC_MESSAGES_URL="https://api.anthropic.com/v1/messages"
@@ -74,16 +90,6 @@ if [ -z "$OPENAI_CHAT_COMPLETIONS_URL" ]; then
     echo "WARN: Disallowed OpenAI Chat Completions URL override; using default endpoint." >&2
   fi
   OPENAI_CHAT_COMPLETIONS_URL="$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL"
-fi
-
-ANTHROPIC_URL_ALLOWED="false"
-if [ -n "$ANTHROPIC_MESSAGES_URL" ]; then
-  ANTHROPIC_URL_ALLOWED="true"
-fi
-
-OPENAI_URLS_ALLOWED="false"
-if [ -n "$OPENAI_RESPONSES_URL" ] && [ -n "$OPENAI_CHAT_COMPLETIONS_URL" ]; then
-  OPENAI_URLS_ALLOWED="true"
 fi
 
 sanitize_model() {
@@ -165,6 +171,9 @@ OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
 if [ "$ANTHROPIC_MODEL" = "org_default" ]; then
   ANTHROPIC_MODEL=""
 fi
+if [ "$OPENAI_MODEL" = "org_default" ]; then
+  OPENAI_MODEL=""
+fi
 if [ -z "$ANTHROPIC_MODEL" ]; then
   ANTHROPIC_MODEL="claude-sonnet-4-6"
 fi
@@ -174,11 +183,7 @@ fi
 
 OPENAI_SKIP_REASON=""
 OPENAI_API_KEY_PRESENT="true"
-if [ "$OPENAI_URLS_ALLOWED" != "true" ]; then
-  OPENAI_API_KEY_PRESENT="false"
-  OPENAI_SKIP_REASON="invalid_url"
-  echo "ERROR: Disallowed OpenAI API URL override; skipping OpenAI analysis." >&2
-elif [ -z "${OPENAI_API_KEY:-}" ]; then
+if [ -z "${OPENAI_API_KEY:-}" ]; then
   OPENAI_API_KEY_PRESENT="false"
   OPENAI_SKIP_REASON="no_key"
   echo "WARN: OPENAI_API_KEY is missing; skipping OpenAI analysis." >&2
@@ -186,11 +191,7 @@ fi
 
 ANTHROPIC_SKIP_REASON=""
 ANTHROPIC_API_KEY_PRESENT="true"
-if [ "$ANTHROPIC_URL_ALLOWED" != "true" ]; then
-  ANTHROPIC_API_KEY_PRESENT="false"
-  ANTHROPIC_SKIP_REASON="invalid_url"
-  echo "ERROR: Disallowed Anthropic API URL override; skipping Anthropic analysis." >&2
-elif [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   ANTHROPIC_API_KEY_PRESENT="false"
   ANTHROPIC_SKIP_REASON="no_key"
   echo "WARN: ANTHROPIC_API_KEY is missing; skipping Anthropic analysis." >&2
@@ -360,7 +361,11 @@ CHANGED_FILES="$(head -100 changed_files.txt 2>/dev/null | tr '\n' ', ' || true)
 
 BUGBOT_FINDINGS=""
 if [ -f bugbot_findings.txt ]; then
-  BUGBOT_FINDINGS=$(< bugbot_findings.txt)
+  BUGBOT_FINDINGS=$(python3 -c 'from pathlib import Path; import sys; p=Path("bugbot_findings.txt"); sys.stdout.write(p.read_text(encoding="utf-8", errors="replace")[:20000])' 2>/dev/null || true)
+  BUGBOT_FINDINGS_RAW_SIZE="$(wc -c < bugbot_findings.txt 2>/dev/null || echo 0)"
+  if [ "${BUGBOT_FINDINGS_RAW_SIZE:-0}" -gt 20000 ]; then
+    echo "WARN: bugbot_findings.txt is large; truncated to 20k chars for prompt safety" >&2
+  fi
 fi
 
 BUGBOT_COUNT="0"
@@ -480,7 +485,7 @@ printf '%s\n' "$OUTPUT_INSTRUCTIONS"
 printf '%s\n' ""
 printf '%s\n' "### Output Structure"
 printf '%s\n' ""
-printf '%s\n' "# Code Review Sumar"
+printf '%s\n' "# Code Review Summary"
 printf '%s\n' "[3-5 sentences about PR, quality, concerns]"
 printf '%s\n' ""
 printf '%s\n' "## Findings"
@@ -612,90 +617,91 @@ printf '%s\n' "Now provide your review following the structure above."
 PROMPT_SIZE=$(wc -c < "$FULL_PROMPT_FILE" 2>/dev/null | tr -d ' ' || echo 0)
 echo "Prompt size: $PROMPT_SIZE chars"
 
-# ANTHROPIC CALL
-ANTHROPIC_MODEL_USED=""
-if [ "$BOT_MODE" != "dependabot" ] && [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then
-  echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
+# ANTHROPIC CALL (backgrounded so OpenAI can start immediately)
+(
+  ANTHROPIC_MODEL_USED=""
+  if [ "$BOT_MODE" != "dependabot" ] && [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then
+    echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
 
-  ANTHROPIC_MODELS_TRIED="|"
-  for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-sonnet-4-6" "claude-opus-4-6" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
-    if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
-      continue
-    fi
-    case "$ANTHROPIC_MODELS_TRIED" in
-      *"|$MODEL_TO_TRY|"*) continue ;;
-    esac
-    ANTHROPIC_MODELS_TRIED="${ANTHROPIC_MODELS_TRIED}${MODEL_TO_TRY}|"
-    echo "  → Trying Anthropic model: $MODEL_TO_TRY"
+    ANTHROPIC_MODELS_TRIED="|"
+    for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-sonnet-4-6" "claude-opus-4-6" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
+      if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
+        continue
+      fi
+      case "$ANTHROPIC_MODELS_TRIED" in
+        *"|$MODEL_TO_TRY|"*) continue ;;
+      esac
+      ANTHROPIC_MODELS_TRIED="${ANTHROPIC_MODELS_TRIED}${MODEL_TO_TRY}|"
+      echo "  → Trying Anthropic model: $MODEL_TO_TRY"
 
-    jq -n \
-      --arg model "$MODEL_TO_TRY" \
-      --rawfile prompt "$FULL_PROMPT_FILE" \
-      --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
-      '{
-        model: $model,
-        max_tokens: $max_tokens,
-        temperature: 0.2,
-        messages: [{role: "user", content: $prompt}]
-    }' > "$ANTHROPIC_PAYLOAD_FILE"
+      jq -n \
+        --arg model "$MODEL_TO_TRY" \
+        --rawfile prompt "$FULL_PROMPT_FILE" \
+        --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
+        '{
+          model: $model,
+          max_tokens: $max_tokens,
+          temperature: 0.2,
+          messages: [{role: "user", content: $prompt}]
+      }' > "$ANTHROPIC_PAYLOAD_FILE"
 
-    set +e
-    ANTHROPIC_RESP="$(curl_json_with_backoff "$ANTHROPIC_MESSAGES_URL" \
-      -H "content-type: application/json" \
-      -H "x-api-key: $ANTHROPIC_API_KEY" \
-      -H "anthropic-version: $ANTHROPIC_API_VERSION" \
-      -d @"$ANTHROPIC_PAYLOAD_FILE")"
-    CURL_EXIT=$?
-    set -e
+      set +e
+      ANTHROPIC_RESP="$(curl_json_with_backoff "$ANTHROPIC_MESSAGES_URL" \
+        -H "content-type: application/json" \
+        -H "x-api-key: $ANTHROPIC_API_KEY" \
+        -H "anthropic-version: $ANTHROPIC_API_VERSION" \
+        -d @"$ANTHROPIC_PAYLOAD_FILE")"
+      CURL_EXIT=$?
+      set -e
 
-    if [ "$CURL_EXIT" -eq 28 ]; then
-      echo "  ERROR: Anthropic request timed out (exit=$CURL_EXIT)" >&2
-      continue
-    fi
-    if [ "$CURL_EXIT" -ne 0 ] || ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
-      echo "  ERROR: Anthropic request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
-      continue
-    fi
+      if [ "$CURL_EXIT" -eq 28 ]; then
+        echo "  ERROR: Anthropic request timed out (exit=$CURL_EXIT)" >&2
+        continue
+      fi
+      if [ "$CURL_EXIT" -ne 0 ] || ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
+        echo "  ERROR: Anthropic request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
+        continue
+      fi
 
-    if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
-      err_msg="$(echo "$ANTHROPIC_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
-      echo "  ERROR: $err_msg" >&2
-      continue
-    fi
+      if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
+        err_msg="$(echo "$ANTHROPIC_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
+        echo "  ERROR: $err_msg" >&2
+        continue
+      fi
 
-    ANTHROPIC_CONTENT="$(echo "$ANTHROPIC_RESP" | jq -r '[.content[]? | select(.type=="text") | .text] | join("\n")')"
-    if [ -z "$ANTHROPIC_CONTENT" ] || [ "$ANTHROPIC_CONTENT" = "null" ]; then
-      echo "  ERROR: Anthropic response contained no content" >&2
-      continue
-    fi
+      ANTHROPIC_CONTENT="$(echo "$ANTHROPIC_RESP" | jq -r '[.content[]? | select(.type=="text") | .text] | join("\n")')"
+      if [ -z "$ANTHROPIC_CONTENT" ] || [ "$ANTHROPIC_CONTENT" = "null" ]; then
+        echo "  ERROR: Anthropic response contained no content" >&2
+        continue
+      fi
 
-    ANTHROPIC_MODEL_USED="$MODEL_TO_TRY"
-    echo "Success (model: $ANTHROPIC_MODEL_USED)"
-    echo "Words: $(echo "$ANTHROPIC_CONTENT" | wc -w)"
+      ANTHROPIC_MODEL_USED="$MODEL_TO_TRY"
+      echo "Success (model: $ANTHROPIC_MODEL_USED)"
+      echo "Words: $(echo "$ANTHROPIC_CONTENT" | wc -w)"
 
-    # Save numeric-only token usage for downstream telemetry (no prompts, no secrets).
-    # This file is consumed by review-metrics.json generation.
-    if echo "$ANTHROPIC_RESP" | jq -e '.usage' > /dev/null 2>&1; then
-      echo "$ANTHROPIC_RESP" | jq -c '.usage | with_entries(select(.value | type == "number"))' > anthropic_usage.json 2>/dev/null || true
-    fi
+      # Save numeric-only token usage for downstream telemetry (no prompts, no secrets).
+      # This file is consumed by review-metrics.json generation.
+      if echo "$ANTHROPIC_RESP" | jq -e '.usage' > /dev/null 2>&1; then
+        echo "$ANTHROPIC_RESP" | jq -c '.usage | with_entries(select(.value | type == "number"))' > "$ANTHROPIC_USAGE_FILE" 2>/dev/null || true
+      fi
 
-    printf '%s' "$ANTHROPIC_CONTENT" > anthropic_review.txt
-    break
-  done
-else
-  if [ "$BOT_MODE" == "dependabot" ]; then
-    echo "Skipping Anthropic analysis (dependabot superlight mode)." >&2
+      printf '%s' "$ANTHROPIC_CONTENT" > "$ANTHROPIC_REVIEW_FILE"
+      break
+    done
   else
-    echo "Skipping Anthropic analysis (reason: ${ANTHROPIC_SKIP_REASON:-no_key})." >&2
+    if [ "$BOT_MODE" == "dependabot" ]; then
+      echo "Skipping Anthropic analysis (dependabot superlight mode)." >&2
+    else
+      echo "Skipping Anthropic analysis (reason: ${ANTHROPIC_SKIP_REASON:-no_key})." >&2
+    fi
   fi
-fi
 
-if [ ! -s anthropic_review.txt ]; then
-  printf '%s' "API_ERROR" > anthropic_review.txt
-fi
+  if [ ! -s "$ANTHROPIC_REVIEW_FILE" ]; then
+    printf '%s' "API_ERROR" > "$ANTHROPIC_REVIEW_FILE"
+  fi
 
-if [ ! -f anthropic_usage.json ] || ! jq -e . anthropic_usage.json > /dev/null 2>&1; then
-  cat > anthropic_usage.json << EOF
+  if [ ! -f "$ANTHROPIC_USAGE_FILE" ] || ! jq -e . "$ANTHROPIC_USAGE_FILE" > /dev/null 2>&1; then
+    cat > "$ANTHROPIC_USAGE_FILE" << EOF
 {
   "input_tokens": 0,
   "output_tokens": 0,
@@ -703,16 +709,18 @@ if [ ! -f anthropic_usage.json ] || ! jq -e . anthropic_usage.json > /dev/null 2
   "cache_read_input_tokens": 0
 }
 EOF
-fi
-
-if [ -z "$ANTHROPIC_MODEL_USED" ]; then
-  if [ "$BOT_MODE" == "dependabot" ] || [ "$ANTHROPIC_API_KEY_PRESENT" != "true" ]; then
-    ANTHROPIC_MODEL_USED="skipped"
-  else
-    ANTHROPIC_MODEL_USED="$ANTHROPIC_MODEL"
   fi
-fi
-echo "ANTHROPIC_MODEL_USED=$ANTHROPIC_MODEL_USED" >> "$GITHUB_ENV"
+
+  if [ -z "$ANTHROPIC_MODEL_USED" ]; then
+    if [ "$BOT_MODE" == "dependabot" ] || [ "$ANTHROPIC_API_KEY_PRESENT" != "true" ]; then
+      ANTHROPIC_MODEL_USED="skipped"
+    else
+      ANTHROPIC_MODEL_USED="$ANTHROPIC_MODEL"
+    fi
+  fi
+  echo "ANTHROPIC_MODEL_USED=$ANTHROPIC_MODEL_USED" > "$ANTHROPIC_GITHUB_ENV_FILE"
+) &
+ANTHROPIC_PID=$!
 
 extract_output_text_responses() {
   local json="$1"
@@ -837,6 +845,14 @@ call_openai_responses() {
       echo "    Total: $total_tokens" >&2
     fi
 
+    # Populate global usage vars so the fallback openai_usage.json path is accurate even if file persistence fails.
+    OPENAI_USAGE_API="responses"
+    OPENAI_USAGE_INPUT_TOKENS="$input_tokens"
+    OPENAI_USAGE_OUTPUT_TOKENS="$output_total"
+    OPENAI_USAGE_REASONING_TOKENS="$reasoning_tokens"
+    OPENAI_USAGE_NON_REASONING_OUTPUT_TOKENS="$non_reasoning_output_tokens"
+    OPENAI_USAGE_TOTAL_TOKENS="$total_tokens"
+
     if [ -n "$usage_file" ]; then
       cat > "$usage_file" << EOF
 {
@@ -863,6 +879,7 @@ EOF
 OPENAI_USAGE_API="unknown"
 OPENAI_USAGE_INPUT_TOKENS=0
 OPENAI_USAGE_OUTPUT_TOKENS=0
+OPENAI_USAGE_COMPLETION_TOKENS=0
 OPENAI_USAGE_REASONING_TOKENS=0
 OPENAI_USAGE_NON_REASONING_OUTPUT_TOKENS=0
 OPENAI_USAGE_TOTAL_TOKENS=0
@@ -943,7 +960,44 @@ else
       if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
         err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
         echo "  ERROR: $err_msg" >&2
-        continue
+        if echo "$err_msg" | grep -Eqi 'reasoning[_ ]effort'; then
+          echo "  WARN: Chat Completions rejected reasoning_effort; retrying without it." >&2
+
+          jq -n \
+            --arg model "$MODEL_TO_TRY" \
+            --rawfile prompt "$FULL_PROMPT_FILE" \
+            --argjson max_tokens "$MAX_TOKENS_OPENAI" \
+            '{
+              model: $model,
+              messages: [{role: "user", content: $prompt}],
+              max_completion_tokens: $max_tokens
+            }' > "$OPENAI_PAYLOAD_FILE"
+
+          set +e
+          OPENAI_RESP="$(curl_json_with_backoff "$OPENAI_CHAT_COMPLETIONS_URL" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -d @"$OPENAI_PAYLOAD_FILE")"
+          CURL_EXIT=$?
+          set -e
+
+          if [ "$CURL_EXIT" -eq 28 ]; then
+            echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
+            continue
+          fi
+          if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+            echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
+            continue
+          fi
+
+          if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
+            err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
+            echo "  ERROR: $err_msg" >&2
+            continue
+          fi
+        else
+          continue
+        fi
       fi
 
       CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
@@ -1099,6 +1153,58 @@ if [ ! -f openai_usage.json ] || ! jq -e . openai_usage.json > /dev/null 2>&1; t
   "total_tokens": ${OPENAI_USAGE_TOTAL_TOKENS}
 }
 EOF
+fi
+
+ANTHROPIC_WAIT_EXIT=0
+if [ -n "${ANTHROPIC_PID:-}" ]; then
+  wait "$ANTHROPIC_PID" || ANTHROPIC_WAIT_EXIT=$?
+  if [ "$ANTHROPIC_WAIT_EXIT" -ne 0 ]; then
+    echo "WARN: Anthropic analysis subprocess failed (exit=$ANTHROPIC_WAIT_EXIT)" >&2
+  fi
+fi
+
+if [ -f "$ANTHROPIC_REVIEW_FILE" ]; then
+  mv -f "$ANTHROPIC_REVIEW_FILE" anthropic_review.txt
+fi
+if [ -f "$ANTHROPIC_USAGE_FILE" ]; then
+  mv -f "$ANTHROPIC_USAGE_FILE" anthropic_usage.json
+fi
+
+# Anthropic runs in a subprocess; if it fails early it might not emit files.
+# Ensure downstream steps always see the expected artifacts.
+if [ ! -s anthropic_review.txt ]; then
+  printf '%s' "API_ERROR" > anthropic_review.txt
+fi
+if [ ! -f anthropic_usage.json ] || ! jq -e . anthropic_usage.json > /dev/null 2>&1; then
+  cat > anthropic_usage.json << EOF
+{
+  "input_tokens": 0,
+  "output_tokens": 0,
+  "cache_creation_input_tokens": 0,
+  "cache_read_input_tokens": 0
+}
+EOF
+fi
+
+if [ -s "$ANTHROPIC_GITHUB_ENV_FILE" ]; then
+  cat "$ANTHROPIC_GITHUB_ENV_FILE" >> "$GITHUB_ENV"
+else
+  echo "WARN: Anthropic env file missing/empty; marking ANTHROPIC_MODEL_USED=skipped" >&2
+  echo "ANTHROPIC_MODEL_USED=skipped" >> "$GITHUB_ENV"
+fi
+
+OPENAI_OK="false"
+if [ -s openai_review.txt ] && ! grep -qx "API_ERROR" openai_review.txt 2>/dev/null; then
+  OPENAI_OK="true"
+fi
+
+ANTHROPIC_OK="false"
+if [ -s anthropic_review.txt ] && ! grep -qx "API_ERROR" anthropic_review.txt 2>/dev/null; then
+  ANTHROPIC_OK="true"
+fi
+
+if [ "$OPENAI_OK" != "true" ] && [ "$ANTHROPIC_OK" != "true" ]; then
+  echo "WARN: Step 1 produced no usable output from OpenAI or Anthropic; proceeding with CI-only fallback in Step 3." >&2
 fi
 
 echo "========================================="
