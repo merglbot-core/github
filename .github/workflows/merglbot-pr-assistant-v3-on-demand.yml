@@ -243,6 +243,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # Ensure the full diff never persists beyond this step, even on failure.
+          # pr_diff_full.txt may contain sensitive material (e.g., secrets in diff).
+          trap 'rm -f "${GITHUB_WORKSPACE:-$PWD}/pr_diff_full.txt"' EXIT
           
           echo "========================================="
           echo "GATHERING PR CONTEXT"

@@ -134,7 +134,7 @@ curl_json_with_backoff() {
     return 2
   fi
 
-  local attempt resp exit_code err_type
+  local attempt resp exit_code err_type err_msg
   for attempt in 1 2 3; do
     set +e
     resp="$(curl -s --connect-timeout 15 --max-time 180 "$url" "$@")"
@@ -143,7 +143,6 @@ curl_json_with_backoff() {
 
     # Avoid long hangs: if a request already hit max-time, do not retry it here.
     if [ "$exit_code" -eq 28 ]; then
-      printf '%s' "$resp"
       return 28
     fi
 
@@ -152,7 +151,6 @@ curl_json_with_backoff() {
         sleep $((attempt * 2))
         continue
       fi
-      printf '%s' "$resp"
       return "$exit_code"
     fi
 
@@ -161,27 +159,37 @@ curl_json_with_backoff() {
         sleep $((attempt * 2))
         continue
       fi
-      printf '%s' "$resp"
       return 1
     fi
 
-    # Retry common transient API errors (best-effort).
+    # Retry common transient API errors (best-effort). Do not emit raw bodies on error.
     if echo "$resp" | jq -e '.error' > /dev/null 2>&1; then
       err_type="$(echo "$resp" | jq -r '.error.type // empty' 2>/dev/null || true)"
+      if [ -z "$err_type" ]; then
+        err_type="unknown_error"
+      fi
       case "$err_type" in
         rate_limit_error|server_error|api_error|overloaded_error)
           if [ "$attempt" -lt 3 ]; then
             sleep $((attempt * 2))
             continue
           fi
-          printf '%s' "$resp"
-          return 1
-          ;;
-        *)
-          printf '%s' "$resp"
-          return 1
-          ;;
       esac
+
+      err_msg="$(echo "$resp" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
+      err_msg="$(printf '%s' "$err_msg" | tr -d '\r\n')"
+      # Char-safe truncation (avoid cutting mid-UTF-8, which can break downstream `jq` usage).
+      if command -v python3 >/dev/null 2>&1; then
+        err_msg="$(python3 -c 'import sys; s=sys.stdin.read(); sys.stdout.write(s[:500])' <<<"$err_msg")"
+      elif command -v perl >/dev/null 2>&1; then
+        err_msg="$(perl -CS -pe '$_=substr($_,0,500) if length($_)>500' <<<"$err_msg")"
+      else
+        err_msg="$(printf '%s' "$err_msg" | head -c 500)"
+      fi
+      # Best-effort token redaction (defense-in-depth). Keep it narrow to preserve diagnostics.
+      err_msg="$(printf '%s' "$err_msg" | sed -E 's#(sk-[A-Za-z0-9_-]{20,}|[A-Za-z0-9+/]{40,}={0,2})#<REDACTED>#g')"
+      jq -n --arg type "$err_type" --arg message "$err_msg" '{error:{type:$type,message:$message}}'
+      return 1
     fi
 
     printf '%s' "$resp"
@@ -447,7 +455,7 @@ echo "Review depth: $REVIEW_DEPTH"
 
 # Build prompt using printf to file (single redirect)
 {
-printf '%s\n' "# Merglbot Multi-Model Code Review v3.5.4"
+printf '%s\n' "# Merglbot Multi-Model Code Review v3.5.5"
 printf '%s\n' ""
 printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence."
 printf '%s\n' ""
@@ -715,7 +723,7 @@ echo "Prompt size: $PROMPT_SIZE chars"
         echo "  ERROR: Anthropic request timed out (exit=$CURL_EXIT)" >&2
         continue
       fi
-      if [ "$CURL_EXIT" -ne 0 ] || ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
+      if ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
         echo "  ERROR: Anthropic request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
         continue
       fi
@@ -723,6 +731,10 @@ echo "Prompt size: $PROMPT_SIZE chars"
       if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
         err_msg="$(echo "$ANTHROPIC_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
         echo "  ERROR: $err_msg" >&2
+        continue
+      fi
+      if [ "$CURL_EXIT" -ne 0 ]; then
+        echo "  ERROR: Anthropic request failed (exit=$CURL_EXIT)" >&2
         continue
       fi
 
@@ -868,13 +880,17 @@ call_openai_responses() {
       echo "  ERROR: Responses API request timed out (exit=$exit_code)" >&2
       return 1
     fi
-    if [ "$exit_code" -ne 0 ] || ! echo "$resp" | jq -e . > /dev/null 2>&1; then
+    if ! echo "$resp" | jq -e . > /dev/null 2>&1; then
       echo "  ERROR: Responses API returned non-JSON (exit=$exit_code)" >&2
       continue
     fi
     if echo "$resp" | jq -e ".error" > /dev/null 2>&1; then
       err_msg="$(echo "$resp" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
       echo "  ERROR: $err_msg" >&2
+      continue
+    fi
+    if [ "$exit_code" -ne 0 ]; then
+      echo "  ERROR: Responses API request failed (exit=$exit_code)" >&2
       continue
     fi
 
@@ -1031,10 +1047,6 @@ else
           fi
           break
         fi
-        if [ "$CURL_EXIT" -ne 0 ]; then
-          echo "  ERROR: OpenAI request failed (exit=$CURL_EXIT)" >&2
-          break
-        fi
         if ! printf '%s' "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
           echo "  ERROR: OpenAI request returned non-JSON (exit=$CURL_EXIT)" >&2
           if [ "$OPENAI_CHAT_ATTEMPT" -eq 1 ]; then
@@ -1054,6 +1066,10 @@ else
             continue
           fi
 
+          break
+        fi
+        if [ "$CURL_EXIT" -ne 0 ]; then
+          echo "  ERROR: OpenAI request failed (exit=$CURL_EXIT)" >&2
           break
         fi
 
@@ -1132,7 +1148,7 @@ else
       echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
       continue
     fi
-    if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+    if ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
       echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
       continue
     fi
@@ -1140,6 +1156,10 @@ else
     if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
       err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
       echo "  ERROR: $err_msg" >&2
+      continue
+    fi
+    if [ "$CURL_EXIT" -ne 0 ]; then
+      echo "  ERROR: OpenAI request failed (exit=$CURL_EXIT)" >&2
       continue
     fi
 
