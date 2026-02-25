@@ -210,6 +210,9 @@ if [ "$OPENAI_ANY_URL_OVERRIDE_INVALID" = "true" ]; then
   OPENAI_API_KEY_PRESENT="false"
   OPENAI_SKIP_REASON="invalid_url"
   echo "ERROR: Disallowed OpenAI API URL override; skipping OpenAI analysis." >&2
+  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    echo "::error::Disallowed OpenAI API URL override; skipping OpenAI analysis."
+  fi
 elif [ -z "${OPENAI_API_KEY:-}" ]; then
   OPENAI_API_KEY_PRESENT="false"
   OPENAI_SKIP_REASON="no_key"
@@ -222,6 +225,9 @@ if [ "$ANTHROPIC_URL_OVERRIDE_INVALID" = "true" ]; then
   ANTHROPIC_API_KEY_PRESENT="false"
   ANTHROPIC_SKIP_REASON="invalid_url"
   echo "ERROR: Disallowed Anthropic API URL override; skipping Anthropic analysis." >&2
+  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    echo "::error::Disallowed Anthropic API URL override; skipping Anthropic analysis."
+  fi
 elif [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   ANTHROPIC_API_KEY_PRESENT="false"
   ANTHROPIC_SKIP_REASON="no_key"
@@ -441,7 +447,7 @@ echo "Review depth: $REVIEW_DEPTH"
 
 # Build prompt using printf to file (single redirect)
 {
-printf '%s\n' "# Merglbot Multi-Model Code Review v3.5.3"
+printf '%s\n' "# Merglbot Multi-Model Code Review v3.5.4"
 printf '%s\n' ""
 printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence."
 printf '%s\n' ""
@@ -965,41 +971,26 @@ else
       rm -f "$OPENAI_RESPONSES_OUT" "$OPENAI_USAGE_FILE"
       echo "  WARN: Responses API failed; falling back to Chat Completions" >&2
 
-      jq -n \
-        --arg model "$MODEL_TO_TRY" \
-        --rawfile prompt "$FULL_PROMPT_FILE" \
-        --argjson max_tokens "$MAX_TOKENS_OPENAI" \
-        --arg effort "$OPENAI_REASONING_EFFORT" \
-        '{
-          model: $model,
-          messages: [{role: "user", content: $prompt}],
-          max_completion_tokens: $max_tokens,
-          reasoning_effort: $effort
-        }' > "$OPENAI_PAYLOAD_FILE"
-
-      set +e
-      OPENAI_RESP="$(curl_json_with_backoff "$OPENAI_CHAT_COMPLETIONS_URL" \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $OPENAI_API_KEY" \
-        -d @"$OPENAI_PAYLOAD_FILE")"
-      CURL_EXIT=$?
-      set -e
-
-      if [ "$CURL_EXIT" -eq 28 ]; then
-        echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
-        continue
-      fi
-      if ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
-        echo "  ERROR: OpenAI request returned non-JSON (exit=$CURL_EXIT)" >&2
-        continue
+      if ! printf '%s' "$MAX_TOKENS_OPENAI" | grep -Eq '^[0-9]+$'; then
+        echo "WARN: MAX_TOKENS_OPENAI invalid; defaulting to 1024" >&2
+        MAX_TOKENS_OPENAI=1024
       fi
 
-      if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
-        err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
-        echo "  ERROR: $err_msg" >&2
-        if echo "$err_msg" | grep -Eqi 'reasoning[_ ]effort'; then
-          echo "  WARN: Chat Completions rejected reasoning_effort; retrying without it." >&2
-
+      OPENAI_CHAT_OK="false"
+      for OPENAI_CHAT_ATTEMPT in 1 2; do
+        if [ "$OPENAI_CHAT_ATTEMPT" -eq 1 ]; then
+          jq -n \
+            --arg model "$MODEL_TO_TRY" \
+            --rawfile prompt "$FULL_PROMPT_FILE" \
+            --argjson max_tokens "$MAX_TOKENS_OPENAI" \
+            --arg effort "$OPENAI_REASONING_EFFORT" \
+            '{
+              model: $model,
+              messages: [{role: "user", content: $prompt}],
+              max_completion_tokens: $max_tokens,
+              reasoning_effort: $effort
+            }' > "$OPENAI_PAYLOAD_FILE"
+        else
           jq -n \
             --arg model "$MODEL_TO_TRY" \
             --rawfile prompt "$FULL_PROMPT_FILE" \
@@ -1009,44 +1000,59 @@ else
               messages: [{role: "user", content: $prompt}],
               max_completion_tokens: $max_tokens
             }' > "$OPENAI_PAYLOAD_FILE"
-
-          set +e
-          OPENAI_RESP="$(curl_json_with_backoff "$OPENAI_CHAT_COMPLETIONS_URL" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $OPENAI_API_KEY" \
-            -d @"$OPENAI_PAYLOAD_FILE")"
-          CURL_EXIT=$?
-          set -e
-
-          if [ "$CURL_EXIT" -eq 28 ]; then
-            echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
-            continue
-          fi
-          if ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
-            echo "  ERROR: OpenAI request returned non-JSON (exit=$CURL_EXIT)" >&2
-            continue
-          fi
-
-          if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
-            err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
-            echo "  ERROR: $err_msg" >&2
-            continue
-          fi
-          if [ "$CURL_EXIT" -ne 0 ]; then
-            echo "  ERROR: OpenAI request failed (exit=$CURL_EXIT)" >&2
-            continue
-          fi
-        else
-          continue
         fi
-      fi
-      if [ "$CURL_EXIT" -ne 0 ]; then
-        echo "  ERROR: OpenAI request failed (exit=$CURL_EXIT)" >&2
+
+        set +e
+        OPENAI_RESP="$(curl_json_with_backoff "$OPENAI_CHAT_COMPLETIONS_URL" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer $OPENAI_API_KEY" \
+          -d @"$OPENAI_PAYLOAD_FILE")"
+        CURL_EXIT=$?
+        set -e
+
+        if [ "$CURL_EXIT" -eq 28 ]; then
+          echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
+          if [ "$OPENAI_CHAT_ATTEMPT" -eq 1 ]; then
+            continue
+          fi
+          break
+        fi
+        if ! printf '%s' "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+          echo "  ERROR: OpenAI request returned non-JSON (exit=$CURL_EXIT)" >&2
+          if [ "$OPENAI_CHAT_ATTEMPT" -eq 1 ]; then
+            continue
+          fi
+          break
+        fi
+
+        if printf '%s' "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
+          err_msg="$(printf '%s' "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
+          err_msg_slim="$(printf '%s' "$err_msg" | tr -d '\r\n' | head -c 500)"
+          err_msg_redacted="$(printf '%s' "$err_msg_slim" | sed -E 's/[A-Za-z0-9_\\/+=-]{20,}/<REDACTED>/g')"
+          echo "  ERROR: $err_msg_redacted" >&2
+
+          if [ "$OPENAI_CHAT_ATTEMPT" -eq 1 ] && printf '%s' "$err_msg_slim" | grep -Eqi 'reasoning[_ ]effort'; then
+            echo "  WARN: Chat Completions rejected reasoning_effort; retrying without it." >&2
+            continue
+          fi
+
+          break
+        fi
+
+        if [ "$CURL_EXIT" -ne 0 ]; then
+          echo "  ERROR: OpenAI request failed (exit=$CURL_EXIT)" >&2
+          break
+        fi
+
+        OPENAI_CHAT_OK="true"
+        break
+      done
+      if [ "$OPENAI_CHAT_OK" != "true" ]; then
         continue
       fi
 
-      CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
-      REFUSAL=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.refusal // empty')
+      CONTENT=$(printf '%s' "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
+      REFUSAL=$(printf '%s' "$OPENAI_RESP" | jq -r '.choices[0].message.refusal // empty')
       if [ -n "$REFUSAL" ] && [ "$REFUSAL" != "null" ]; then
         echo "  ERROR: OpenAI response refusal" >&2
         continue
