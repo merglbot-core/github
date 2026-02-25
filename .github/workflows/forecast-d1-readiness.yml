@@ -1,4 +1,4 @@
-name: Forecast D-1 Readiness Guardrail (hourly 08:20–15:20 Europe/Prague)
+name: Forecast D-1 Readiness Guardrail (per-tenant slots, Europe/Prague)
 
 on:
   schedule:
@@ -20,6 +20,61 @@ on:
     - cron: "20 13 * * *"
     - cron: "20 14 * * *"
 
+    # Denatura (CZ+SK) dedicated runs at 08:15 and 10:15 Europe/Prague.
+    # GitHub cron is UTC, so we schedule a UTC superset and gate inside the script (DST-safe).
+    #
+    # 08:15 Europe/Prague:
+    # - CET  (UTC+1): 08:15 local -> 07:15 UTC
+    # - CEST (UTC+2): 08:15 local -> 06:15 UTC
+    #
+    # 10:15 Europe/Prague:
+    # - CET  (UTC+1): 10:15 local -> 09:15 UTC
+    # - CEST (UTC+2): 10:15 local -> 08:15 UTC
+    - cron: "15 6 * * *"
+    - cron: "15 7 * * *"
+    - cron: "15 8 * * *"
+    - cron: "15 9 * * *"
+
+    # Ruzovyslon dedicated runs at 09:15 and 11:15 Europe/Prague.
+    # GitHub cron is UTC; we reuse the 15 7/8/9 entries above and add 15 10 for CET 11:15.
+    #
+    # 09:15 Europe/Prague:
+    # - CET  (UTC+1): 09:15 local -> 08:15 UTC (already scheduled above)
+    # - CEST (UTC+2): 09:15 local -> 07:15 UTC (already scheduled above)
+    #
+    # 11:15 Europe/Prague:
+    # - CET  (UTC+1): 11:15 local -> 10:15 UTC
+    # - CEST (UTC+2): 11:15 local -> 09:15 UTC (already scheduled above)
+    - cron: "15 10 * * *"
+
+    # Autodoplnky dedicated runs at 09:05 and 12:05 Europe/Prague.
+    # GitHub cron is UTC, so we schedule a UTC superset and gate inside the script (DST-safe).
+    #
+    # 09:05 Europe/Prague:
+    # - CET  (UTC+1): 09:05 local -> 08:05 UTC
+    # - CEST (UTC+2): 09:05 local -> 07:05 UTC
+    #
+    # 12:05 Europe/Prague:
+    # - CET  (UTC+1): 12:05 local -> 11:05 UTC
+    # - CEST (UTC+2): 12:05 local -> 10:05 UTC
+    - cron: "5 7 * * *"
+    - cron: "5 8 * * *"
+    - cron: "5 10 * * *"
+    - cron: "5 11 * * *"
+
+    # Cerano + Livero dedicated runs at 09:00 and 11:00 Europe/Prague.
+    # GitHub cron is UTC, so we schedule a UTC superset and gate inside the script (DST-safe).
+    #
+    # 09:00 Europe/Prague:
+    # - CET  (UTC+1): 09:00 local -> 08:00 UTC (already scheduled below)
+    # - CEST (UTC+2): 09:00 local -> 07:00 UTC
+    #
+    # 11:00 Europe/Prague:
+    # - CET  (UTC+1): 11:00 local -> 10:00 UTC
+    # - CEST (UTC+2): 11:00 local -> 09:00 UTC (already scheduled below)
+    - cron: "0 7 * * *"
+    - cron: "0 10 * * *"
+
     # Daily success-rate report at 10:00 Europe/Prague (DST-safe via UTC superset + script NOOP gating).
     # - CEST (UTC+2): 10:00 local -> 08:00 UTC
     # - CET  (UTC+1): 10:00 local -> 09:00 UTC
@@ -37,6 +92,11 @@ on:
         required: false
         type: boolean
         default: true
+      send_test_slack_messages:
+        description: "Send synthetic test Slack messages for all isolated scopes (no BigQuery). Requires dry_run=false."
+        required: false
+        type: boolean
+        default: false
       send_success_rate:
         description: "Also send daily 30d success-rate message (10:00-style)"
         required: false
@@ -57,7 +117,7 @@ jobs:
     if: >-
       ${{
         github.event_name == 'workflow_dispatch' ||
-        (github.event_name == 'schedule' && startsWith(github.event.schedule, '20 '))
+        (github.event_name == 'schedule' && (startsWith(github.event.schedule, '20 ') || startsWith(github.event.schedule, '15 ') || startsWith(github.event.schedule, '5 ') || startsWith(github.event.schedule, '0 ')))
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -73,7 +133,13 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Validate send_test_slack_messages requires dry_run=false
+        if: github.event_name == 'workflow_dispatch' && inputs.send_test_slack_messages == true && inputs.dry_run == true
+        run: |
+          echo "::warning::send_test_slack_messages=true requires dry_run=false to actually send Slack messages."
+
       - name: Authenticate to GCP via WIF (and install gcloud/bq/gsutil)
+        if: inputs.send_test_slack_messages != true
         uses: ./.github/actions/setup-gcp-auth
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
@@ -81,6 +147,16 @@ jobs:
 
       - name: Run forecast D-1 readiness
         id: guardrail
+        # NOTE: We intentionally do NOT run the "core" (non-isolated) scope on `5 *` schedules.
+        # Minute 5 is reserved for the isolated `autodoplnky` slot (see dedicated steps below).
+        if: >-
+          ${{
+            inputs.send_test_slack_messages != true &&
+            (
+              github.event_name == 'workflow_dispatch' ||
+              (github.event_name == 'schedule' && (startsWith(github.event.schedule, '20 ') || startsWith(github.event.schedule, '15 ') || startsWith(github.event.schedule, '0 ')))
+            )
+          }}
         continue-on-error: true
         env:
           PATCH_DATE_LOCAL: ${{ inputs.patch_date_local }}
@@ -100,6 +176,33 @@ jobs:
             CMD+=( --patch-date-local "$PATCH_DATE_LOCAL" )
           fi
 
+          EXTRA_ARGS=()
+          if [[ "${MODE}" == "auto" ]]; then
+            case "${GITHUB_EVENT_SCHEDULE:-}" in
+              15\ *)
+                EXTRA_ARGS+=( --include-tenant "denatura" --auto-utc-minute "15" --auto-local-hour "8" --auto-local-hour "10" )
+                ;;
+              20\ *)
+                EXTRA_ARGS+=( --exclude-tenant "denatura" --exclude-tenant "cerano" --exclude-tenant "livero" --exclude-tenant "proteinaco" --exclude-tenant "ruzovyslon" --exclude-tenant "autodoplnky" --allow-empty-specs )
+                ;;
+              0\ *)
+                EXTRA_ARGS+=( --include-tenant "cerano" --include-tenant "livero" --auto-utc-minute "0" --auto-local-hour "9" --auto-local-hour "11" )
+                ;;
+            esac
+          fi
+          if [[ "${#EXTRA_ARGS[@]}" -gt 0 ]]; then
+            CMD+=( "${EXTRA_ARGS[@]}" )
+          fi
+
+          SCOPE_LABEL="all"
+          if [[ "${MODE}" == "auto" ]]; then
+            case "${GITHUB_EVENT_SCHEDULE:-}" in
+              15\ *) SCOPE_LABEL="denatura" ;;
+              0\ *) SCOPE_LABEL="cerano+livero" ;;
+              20\ *) SCOPE_LABEL="core" ;;
+            esac
+          fi
+
           printf 'Running:'
           printf ' %q' "${CMD[@]}"
           printf '\n'
@@ -108,6 +211,7 @@ jobs:
 
           echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
           echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+          echo "scope_label=${SCOPE_LABEL}" >> "$GITHUB_OUTPUT"
 
           SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
           if [ -f "$SUMMARY_JSON" ]; then
@@ -145,6 +249,15 @@ jobs:
 
       - name: Run forecast D-2 readiness (info only)
         id: guardrail_d2
+        # NOTE: Same as D-1: core D-2 is intentionally skipped on `5 *` (autodoplnky-only schedules).
+        if: >-
+          ${{
+            inputs.send_test_slack_messages != true &&
+            (
+              github.event_name == 'workflow_dispatch' ||
+              (github.event_name == 'schedule' && (startsWith(github.event.schedule, '20 ') || startsWith(github.event.schedule, '15 ') || startsWith(github.event.schedule, '0 ')))
+            )
+          }}
         continue-on-error: true
         env:
           PATCH_DATE_LOCAL_D1: ${{ steps.guardrail.outputs.patch_date_local }}
@@ -186,6 +299,24 @@ jobs:
             --patch-date-local "$PATCH_DATE_LOCAL_D2"
           )
 
+          EXTRA_ARGS=()
+          if [[ "${MODE}" == "auto" ]]; then
+            case "${GITHUB_EVENT_SCHEDULE:-}" in
+              15\ *)
+                EXTRA_ARGS+=( --include-tenant "denatura" --auto-utc-minute "15" --auto-local-hour "8" --auto-local-hour "10" )
+                ;;
+              20\ *)
+                EXTRA_ARGS+=( --exclude-tenant "denatura" --exclude-tenant "cerano" --exclude-tenant "livero" --exclude-tenant "proteinaco" --exclude-tenant "ruzovyslon" --exclude-tenant "autodoplnky" --allow-empty-specs )
+                ;;
+              0\ *)
+                EXTRA_ARGS+=( --include-tenant "cerano" --include-tenant "livero" --auto-utc-minute "0" --auto-local-hour "9" --auto-local-hour "11" )
+                ;;
+            esac
+          fi
+          if [[ "${#EXTRA_ARGS[@]}" -gt 0 ]]; then
+            CMD+=( "${EXTRA_ARGS[@]}" )
+          fi
+
           printf 'Running:'
           printf ' %q' "${CMD[@]}"
           printf '\n'
@@ -221,8 +352,443 @@ jobs:
             echo "required_policy=" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Run forecast D-1 readiness (Proteinaco)
+        id: guardrail_proteinaco
+        if: inputs.send_test_slack_messages != true && github.event_name == 'schedule' && startsWith(github.event.schedule, '20 ')
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL: ${{ inputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-out-proteinaco"
+
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+            --include-tenant "proteinaco"
+            --auto-utc-minute "20"
+            --auto-local-hour "9"
+            --auto-local-hour "11"
+          )
+          if [[ -n "${PATCH_DATE_LOCAL:-}" ]]; then
+            CMD+=( --patch-date-local "$PATCH_DATE_LOCAL" )
+          fi
+
+          printf 'Running (proteinaco):'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          EXIT=0
+          "${CMD[@]}" || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+          echo "scope_label=proteinaco" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"slot={_v('slot')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"required_policy={_v('required_policy')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run forecast D-2 readiness (Proteinaco, info only)
+        id: guardrail_d2_proteinaco
+        if: inputs.send_test_slack_messages != true && github.event_name == 'schedule' && startsWith(github.event.schedule, '20 ')
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL_D1: ${{ steps.guardrail_proteinaco.outputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-out-d2-proteinaco"
+          mkdir -p "$OUTDIR"
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+
+          PATCH_DATE_LOCAL_D1="${PATCH_DATE_LOCAL_D1:-}"
+          if [ -z "${PATCH_DATE_LOCAL_D1}" ]; then
+            echo "ℹ️ Missing Proteinaco D-1 patch_date_local; skipping D-2 run."
+            echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+            echo "status=NOOP" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PATCH_DATE_LOCAL_D2="$(
+            PATCH_DATE_LOCAL_D1="$PATCH_DATE_LOCAL_D1" python - <<'PY'
+          from datetime import date, timedelta
+          import os
+
+          d = date.fromisoformat(os.environ["PATCH_DATE_LOCAL_D1"])
+          print((d - timedelta(days=1)).isoformat())
+          PY
+          )"
+
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+            --patch-date-local "$PATCH_DATE_LOCAL_D2"
+            --include-tenant "proteinaco"
+            --auto-utc-minute "20"
+            --auto-local-hour "9"
+            --auto-local-hour "11"
+          )
+
+          printf 'Running (proteinaco D-2):'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          EXIT=0
+          "${CMD[@]}" || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"slot={_v('slot')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"required_policy={_v('required_policy')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run forecast D-1 readiness (Ruzovyslon)
+        id: guardrail_ruzovyslon
+        if: inputs.send_test_slack_messages != true && github.event_name == 'schedule' && startsWith(github.event.schedule, '15 ')
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL: ${{ inputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-out-ruzovyslon"
+
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+            --include-tenant "ruzovyslon"
+            --auto-utc-minute "15"
+            --auto-local-hour "9"
+            --auto-local-hour "11"
+          )
+          if [[ -n "${PATCH_DATE_LOCAL:-}" ]]; then
+            CMD+=( --patch-date-local "$PATCH_DATE_LOCAL" )
+          fi
+
+          printf 'Running (ruzovyslon):'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          EXIT=0
+          "${CMD[@]}" || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+          echo "scope_label=ruzovyslon" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"slot={_v('slot')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"required_policy={_v('required_policy')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run forecast D-2 readiness (Ruzovyslon, info only)
+        id: guardrail_d2_ruzovyslon
+        if: inputs.send_test_slack_messages != true && github.event_name == 'schedule' && startsWith(github.event.schedule, '15 ')
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL_D1: ${{ steps.guardrail_ruzovyslon.outputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-out-d2-ruzovyslon"
+          mkdir -p "$OUTDIR"
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+
+          PATCH_DATE_LOCAL_D1="${PATCH_DATE_LOCAL_D1:-}"
+          if [ -z "${PATCH_DATE_LOCAL_D1}" ]; then
+            echo "ℹ️ Missing Ruzovyslon D-1 patch_date_local; skipping D-2 run."
+            echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+            echo "status=NOOP" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PATCH_DATE_LOCAL_D2="$(
+            PATCH_DATE_LOCAL_D1="$PATCH_DATE_LOCAL_D1" python - <<'PY'
+          from datetime import date, timedelta
+          import os
+
+          d = date.fromisoformat(os.environ["PATCH_DATE_LOCAL_D1"])
+          print((d - timedelta(days=1)).isoformat())
+          PY
+          )"
+
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+            --patch-date-local "$PATCH_DATE_LOCAL_D2"
+            --include-tenant "ruzovyslon"
+            --auto-utc-minute "15"
+            --auto-local-hour "9"
+            --auto-local-hour "11"
+          )
+
+          printf 'Running (ruzovyslon D-2):'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          EXIT=0
+          "${CMD[@]}" || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"slot={_v('slot')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"required_policy={_v('required_policy')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run forecast D-1 readiness (Autodoplnky)
+        id: guardrail_autodoplnky
+        if: inputs.send_test_slack_messages != true && github.event_name == 'schedule' && startsWith(github.event.schedule, '5 ')
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL: ${{ inputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-out-autodoplnky"
+
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+            --include-tenant "autodoplnky"
+            --auto-utc-minute "5"
+            --auto-local-hour "9"
+            --auto-local-hour "12"
+          )
+          if [[ -n "${PATCH_DATE_LOCAL:-}" ]]; then
+            CMD+=( --patch-date-local "$PATCH_DATE_LOCAL" )
+          fi
+
+          printf 'Running (autodoplnky):'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          EXIT=0
+          "${CMD[@]}" || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+          echo "scope_label=autodoplnky" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"slot={_v('slot')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"required_policy={_v('required_policy')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run forecast D-2 readiness (Autodoplnky, info only)
+        id: guardrail_d2_autodoplnky
+        if: inputs.send_test_slack_messages != true && github.event_name == 'schedule' && startsWith(github.event.schedule, '5 ')
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL_D1: ${{ steps.guardrail_autodoplnky.outputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-out-d2-autodoplnky"
+          mkdir -p "$OUTDIR"
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+
+          PATCH_DATE_LOCAL_D1="${PATCH_DATE_LOCAL_D1:-}"
+          if [ -z "${PATCH_DATE_LOCAL_D1}" ]; then
+            echo "ℹ️ Missing Autodoplnky D-1 patch_date_local; skipping D-2 run."
+            echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+            echo "status=NOOP" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PATCH_DATE_LOCAL_D2="$(
+            PATCH_DATE_LOCAL_D1="$PATCH_DATE_LOCAL_D1" python - <<'PY'
+          from datetime import date, timedelta
+          import os
+
+          d = date.fromisoformat(os.environ["PATCH_DATE_LOCAL_D1"])
+          print((d - timedelta(days=1)).isoformat())
+          PY
+          )"
+
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+            --patch-date-local "$PATCH_DATE_LOCAL_D2"
+            --include-tenant "autodoplnky"
+            --auto-utc-minute "5"
+            --auto-local-hour "9"
+            --auto-local-hour "12"
+          )
+
+          printf 'Running (autodoplnky D-2):'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          EXIT=0
+          "${CMD[@]}" || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"slot={_v('slot')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"required_policy={_v('required_policy')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Add report to step summary
-        if: always() && steps.guardrail.outputs.outdir != ''
+        if: always() && steps.guardrail.outputs.outdir != '' && steps.guardrail.outputs.status != 'NOOP'
         run: |
           MD_FILE="${{ steps.guardrail.outputs.outdir }}/forecast_d1_readiness_report.md"
           echo "## ✅ Forecast D-1 readiness" >> "$GITHUB_STEP_SUMMARY"
@@ -249,7 +815,7 @@ jobs:
           echo "- Optional failed: ${{ steps.guardrail.outputs.optional_failed }}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload guardrail artifacts
-        if: always() && steps.guardrail.outputs.outdir != ''
+        if: always() && steps.guardrail.outputs.outdir != '' && steps.guardrail.outputs.status != 'NOOP'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: forecast-d1-readiness-${{ github.run_id }}
@@ -258,13 +824,426 @@ jobs:
             ${{ steps.guardrail_d2.outputs.outdir }}/
           retention-days: 90
 
+      - name: Upload Proteinaco guardrail artifacts
+        if: always() && steps.guardrail_proteinaco.outputs.outdir != '' && steps.guardrail_proteinaco.outputs.status != 'NOOP'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: forecast-d1-readiness-proteinaco-${{ github.run_id }}
+          path: |
+            ${{ steps.guardrail_proteinaco.outputs.outdir }}/
+            ${{ steps.guardrail_d2_proteinaco.outputs.outdir }}/
+          retention-days: 90
+
+      - name: Upload Ruzovyslon guardrail artifacts
+        if: always() && steps.guardrail_ruzovyslon.outputs.outdir != '' && steps.guardrail_ruzovyslon.outputs.status != 'NOOP'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: forecast-d1-readiness-ruzovyslon-${{ github.run_id }}
+          path: |
+            ${{ steps.guardrail_ruzovyslon.outputs.outdir }}/
+            ${{ steps.guardrail_d2_ruzovyslon.outputs.outdir }}/
+          retention-days: 90
+
+      - name: Upload Autodoplnky guardrail artifacts
+        if: always() && steps.guardrail_autodoplnky.outputs.outdir != '' && steps.guardrail_autodoplnky.outputs.status != 'NOOP'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: forecast-d1-readiness-autodoplnky-${{ github.run_id }}
+          path: |
+            ${{ steps.guardrail_autodoplnky.outputs.outdir }}/
+            ${{ steps.guardrail_d2_autodoplnky.outputs.outdir }}/
+          retention-days: 90
+
+      - name: Generate test Slack artifacts (all scopes)
+        id: test_slack_artifacts
+        if: github.event_name == 'workflow_dispatch' && inputs.send_test_slack_messages == true
+        run: |
+          set -euo pipefail
+
+          BASE="forecast-d1-readiness-slack-test"
+          rm -rf "$BASE"
+
+          BASE="$BASE" python - <<'PY'
+          import csv
+          from datetime import datetime, timedelta, timezone
+          import json
+          import os
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+
+          base = Path(os.environ.get("BASE", "forecast-d1-readiness-slack-test"))
+          tz = ZoneInfo("Europe/Prague")
+          now = datetime.now(tz=tz).replace(second=0, microsecond=0)
+          offset = now.utcoffset() or timedelta(0)
+          offset_hours = int(offset.total_seconds() // 3600)
+
+          patch_d1 = (now.date() - timedelta(days=1)).isoformat()
+          patch_d2 = (now.date() - timedelta(days=2)).isoformat()
+
+          REPORT_FIELDS = [
+              "project_id",
+              "tenant",
+              "country",
+              "slot",
+              "required_policy",
+              "patch_date_local",
+              "is_required",
+              "table_fq",
+              "status",
+              "reason",
+              "row_count",
+              "sessions_sum",
+              "revenue_db_sum",
+              "transactions_db_sum",
+              "actuals_sum",
+              "cost_sum",
+              "cost_present",
+              "error_snippet",
+              "status_13",
+              "reason_13",
+              "table_fq_14",
+              "domain",
+              "status_14",
+              "reason_14",
+              "row_count_14",
+              "sessions_sum_14",
+              "revenue_db_sum_14",
+              "transactions_db_sum_14",
+              "actuals_sum_14",
+              "cost_sum_14",
+              "cost_present_14",
+              "error_snippet_14",
+          ]
+          CHANNEL_FIELDS = [
+              "tenant",
+              "country",
+              "channel",
+              "row_count",
+              "revenue_db_sum",
+              "cost_sum",
+              "cost_present",
+              "status",
+              "reason",
+          ]
+          CHANNEL14_FIELDS = [
+              "tenant",
+              "country",
+              "channel",
+              "row_count",
+              "sessions_sum",
+              "revenue_db_sum",
+              "transactions_db_sum",
+              "actuals_sum",
+              "cost_sum",
+              "cost_present",
+              "status",
+              "reason",
+          ]
+
+          def _utc_hour(local_hour: int) -> int:
+              return (local_hour - offset_hours) % 24
+
+          def _schedule(minute: int, local_hour: int) -> str:
+              return f"{minute} {_utc_hour(local_hour)} * * *"
+
+          def _now_local_iso(local_hour: int, minute: int) -> str:
+              return now.replace(hour=local_hour, minute=minute).isoformat()
+
+          def _write_json(path: Path, payload: dict) -> None:
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+          def _write_csv(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
+              path.parent.mkdir(parents=True, exist_ok=True)
+              with path.open("w", encoding="utf-8", newline="") as f:
+                  w = csv.DictWriter(f, fieldnames=fieldnames)
+                  w.writeheader()
+                  for r in rows:
+                      w.writerow({k: ("" if r.get(k) is None else r.get(k)) for k in fieldnames})
+
+          def _make_scope(
+              *,
+              scope: str,
+              label: str,
+              minute: int,
+              local_hour: int,
+              items: list[dict],
+          ) -> dict[str, str]:
+              outdir = base / scope / "out"
+              outdir_d2 = base / scope / "out-d2"
+              outdir.mkdir(parents=True, exist_ok=True)
+              outdir_d2.mkdir(parents=True, exist_ok=True)
+
+              sched = _schedule(minute, local_hour)
+              now_local = _now_local_iso(local_hour, minute)
+              slot = f"{local_hour:02d}"
+
+              def _summary(patch_date: str) -> dict:
+                  return {
+                      "status": "PASS",
+                      "slot": slot,
+                      "required_policy": "all",
+                      "timezone": "Europe/Prague",
+                      "patch_date_local": patch_date,
+                      "github_event_schedule": sched,
+                      "now_local": now_local,
+                      "checked_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                      "pipelines_total": len(items),
+                      "required_total": len(items),
+                      "required_failed": 0,
+                      "optional_total": 0,
+                      "optional_failed": 0,
+                      "mode": "auto",
+                      "kind": "readiness",
+                      "spec_filters": {
+                          "include_tenant": [],
+                          "exclude_tenant": [],
+                          "include_country": [],
+                          "exclude_country": [],
+                      },
+                  }
+
+              _write_json(outdir / "forecast_d1_readiness_summary.json", _summary(patch_d1))
+              _write_json(outdir_d2 / "forecast_d1_readiness_summary.json", _summary(patch_d2))
+
+              report_rows_d1: list[dict] = []
+              report_rows_d2: list[dict] = []
+              ch_rows_d1: list[dict] = []
+              ch_rows_d2: list[dict] = []
+              ch14_rows_d1: list[dict] = []
+              ch14_rows_d2: list[dict] = []
+
+              for it in items:
+                  tenant = it["tenant"]
+                  country = it["country"]
+                  domain = it.get("domain", "")
+                  channels = it.get("channels", [])
+                  channels14 = it.get("channels14", channels)
+
+                  def _report_row(*, patch_date: str, sessions: float, rev: float, tx: float, cost: float) -> dict:
+                      actuals = abs(sessions) + abs(rev) + abs(tx)
+                      return {
+                          "project_id": "slack-test",
+                          "tenant": tenant,
+                          "country": country,
+                          "slot": slot,
+                          "required_policy": "all",
+                          "patch_date_local": patch_date,
+                          "is_required": "yes",
+                          "table_fq": f"slack_test.visualisation_final.{tenant}_{country}_table",
+                          "status": "PASS",
+                          "reason": "",
+                          "row_count": "123",
+                          "sessions_sum": f"{sessions:.6f}",
+                          "revenue_db_sum": f"{rev:.6f}",
+                          "transactions_db_sum": f"{tx:.6f}",
+                          "actuals_sum": f"{actuals:.6f}",
+                          "cost_sum": f"{cost:.6f}",
+                          "cost_present": "yes",
+                          "error_snippet": "",
+                          "status_13": "PASS",
+                          "reason_13": "",
+                          "table_fq_14": f"slack_test.visualisation_final.14_{tenant}_{country}_union",
+                          "domain": domain,
+                          "status_14": "PASS",
+                          "reason_14": "",
+                          "row_count_14": "10",
+                          "sessions_sum_14": f"{sessions:.6f}",
+                          "revenue_db_sum_14": f"{rev:.6f}",
+                          "transactions_db_sum_14": f"{tx:.6f}",
+                          "actuals_sum_14": f"{actuals:.6f}",
+                          "cost_sum_14": f"{cost:.6f}",
+                          "cost_present_14": "yes",
+                          "error_snippet_14": "",
+                      }
+
+                  report_rows_d1.append(_report_row(patch_date=patch_d1, sessions=100.0, rev=1000.0, tx=1.0, cost=200.0))
+                  report_rows_d2.append(_report_row(patch_date=patch_d2, sessions=80.0, rev=800.0, tx=1.0, cost=160.0))
+
+                  for ch in channels:
+                      ch_rows_d1.append(
+                          {
+                              "tenant": tenant,
+                              "country": country,
+                              "channel": ch,
+                              "row_count": "50",
+                              "revenue_db_sum": "1000.000000",
+                              "cost_sum": "200.000000",
+                              "cost_present": "yes",
+                              "status": "OK",
+                              "reason": "",
+                          }
+                      )
+                      ch_rows_d2.append(
+                          {
+                              "tenant": tenant,
+                              "country": country,
+                              "channel": ch,
+                              "row_count": "40",
+                              "revenue_db_sum": "800.000000",
+                              "cost_sum": "160.000000",
+                              "cost_present": "yes",
+                              "status": "OK",
+                              "reason": "",
+                          }
+                      )
+
+                  for ch in channels14:
+                      ch14_rows_d1.append(
+                          {
+                              "tenant": tenant,
+                              "country": country,
+                              "channel": ch,
+                              "row_count": "10",
+                              "sessions_sum": "100.000000",
+                              "revenue_db_sum": "1000.000000",
+                              "transactions_db_sum": "1.000000",
+                              "actuals_sum": "1101.000000",
+                              "cost_sum": "200.000000",
+                              "cost_present": "yes",
+                              "status": "OK",
+                              "reason": "",
+                          }
+                      )
+                      ch14_rows_d2.append(
+                          {
+                              "tenant": tenant,
+                              "country": country,
+                              "channel": ch,
+                              "row_count": "10",
+                              "sessions_sum": "80.000000",
+                              "revenue_db_sum": "800.000000",
+                              "transactions_db_sum": "1.000000",
+                              "actuals_sum": "881.000000",
+                              "cost_sum": "160.000000",
+                              "cost_present": "yes",
+                              "status": "OK",
+                              "reason": "",
+                          }
+                      )
+
+              _write_csv(outdir / "forecast_d1_readiness_report.csv", REPORT_FIELDS, report_rows_d1)
+              _write_csv(outdir / "forecast_d1_readiness_channels_report.csv", CHANNEL_FIELDS, ch_rows_d1)
+              _write_csv(outdir / "forecast_d1_readiness_channels14_report.csv", CHANNEL14_FIELDS, ch14_rows_d1)
+
+              _write_csv(outdir_d2 / "forecast_d1_readiness_report.csv", REPORT_FIELDS, report_rows_d2)
+              _write_csv(outdir_d2 / "forecast_d1_readiness_channels_report.csv", CHANNEL_FIELDS, ch_rows_d2)
+              _write_csv(outdir_d2 / "forecast_d1_readiness_channels14_report.csv", CHANNEL14_FIELDS, ch14_rows_d2)
+
+              return {
+                  f"{scope}_status": "PASS",
+                  f"{scope}_outdir": str(outdir),
+                  f"{scope}_outdir_d2": str(outdir_d2),
+                  f"{scope}_scope_label": f"TEST {label}",
+              }
+
+          base.mkdir(parents=True, exist_ok=True)
+          outputs: dict[str, str] = {}
+
+          outputs.update(
+              _make_scope(
+                  scope="denatura",
+                  label="denatura",
+                  minute=15,
+                  local_hour=8,
+                  items=[
+                      {"tenant": "denatura", "country": "cz", "domain": "denatura.cz", "channels": ["Google ads pmax", "Facebook"]},
+                      {"tenant": "denatura", "country": "sk", "domain": "denatura.sk", "channels": ["Google ads pmax", "Facebook"]},
+                  ],
+              )
+          )
+          outputs.update(
+              _make_scope(
+                  scope="cerano_livero",
+                  label="cerano+livero",
+                  minute=0,
+                  local_hour=9,
+                  items=[
+                      {"tenant": "cerano", "country": "cz", "domain": "cerano.cz", "channels": ["Google Ads", "Facebook"]},
+                      {"tenant": "livero", "country": "cz", "domain": "livero.cz", "channels": ["Google Ads", "Facebook"]},
+                  ],
+              )
+          )
+          outputs.update(
+              _make_scope(
+                  scope="proteinaco",
+                  label="proteinaco",
+                  minute=20,
+                  local_hour=9,
+                  items=[
+                      {"tenant": "proteinaco", "country": "cz", "domain": "proteinaco.cz", "channels": ["Google Ads", "Facebook"]},
+                  ],
+              )
+          )
+          outputs.update(
+              _make_scope(
+                  scope="ruzovyslon",
+                  label="ruzovyslon",
+                  minute=15,
+                  local_hour=9,
+                  items=[
+                      {"tenant": "ruzovyslon", "country": "cz", "domain": "ruzovyslon.cz", "channels": ["Google ads pmax"]},
+                  ],
+              )
+          )
+          outputs.update(
+              _make_scope(
+                  scope="autodoplnky",
+                  label="autodoplnky",
+                  minute=5,
+                  local_hour=9,
+                  items=[
+                      {"tenant": "autodoplnky", "country": "cz", "domain": "autodoplnky.cz", "channels": ["Google Ads", "Facebook"]},
+                  ],
+              )
+          )
+
+          out_path = Path(os.environ["GITHUB_OUTPUT"])  # provided by Actions
+          with out_path.open("a", encoding="utf-8") as f:
+              for k, v in outputs.items():
+                  f.write(f"{k}={v}\n")
+          PY
+
       - name: Slack alert (PASS/FAIL)
-        if: always() && steps.guardrail.outputs.status != 'NOOP' && inputs.dry_run != true
+        if: >-
+          ${{
+            always() &&
+            inputs.dry_run != true &&
+            (
+              inputs.send_test_slack_messages == true ||
+              (steps.guardrail.outputs.exit_code != '' && steps.guardrail.outputs.status != 'NOOP') ||
+              (steps.guardrail_proteinaco.outputs.exit_code != '' && steps.guardrail_proteinaco.outputs.status != 'NOOP') ||
+              (steps.guardrail_ruzovyslon.outputs.exit_code != '' && steps.guardrail_ruzovyslon.outputs.status != 'NOOP') ||
+              (steps.guardrail_autodoplnky.outputs.exit_code != '' && steps.guardrail_autodoplnky.outputs.status != 'NOOP')
+            )
+          }}
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL_FINAL_DATA_ALERTS || secrets.SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MAIN_STATUS: ${{ steps.guardrail.outputs.status }}
           OUTDIR: ${{ steps.guardrail.outputs.outdir }}
           OUTDIR_D2: ${{ steps.guardrail_d2.outputs.outdir }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SCOPE_LABEL: ${{ steps.guardrail.outputs.scope_label }}
+          DENATURA_STATUS: ${{ steps.test_slack_artifacts.outputs.denatura_status }}
+          DENATURA_OUTDIR: ${{ steps.test_slack_artifacts.outputs.denatura_outdir }}
+          DENATURA_OUTDIR_D2: ${{ steps.test_slack_artifacts.outputs.denatura_outdir_d2 }}
+          DENATURA_SCOPE_LABEL: ${{ steps.test_slack_artifacts.outputs.denatura_scope_label }}
+          CERANO_LIVERO_STATUS: ${{ steps.test_slack_artifacts.outputs.cerano_livero_status }}
+          CERANO_LIVERO_OUTDIR: ${{ steps.test_slack_artifacts.outputs.cerano_livero_outdir }}
+          CERANO_LIVERO_OUTDIR_D2: ${{ steps.test_slack_artifacts.outputs.cerano_livero_outdir_d2 }}
+          CERANO_LIVERO_SCOPE_LABEL: ${{ steps.test_slack_artifacts.outputs.cerano_livero_scope_label }}
+          PROTEINACO_STATUS: ${{ steps.guardrail_proteinaco.outputs.status || steps.test_slack_artifacts.outputs.proteinaco_status }}
+          PROTEINACO_OUTDIR: ${{ steps.guardrail_proteinaco.outputs.outdir || steps.test_slack_artifacts.outputs.proteinaco_outdir }}
+          PROTEINACO_OUTDIR_D2: ${{ steps.guardrail_d2_proteinaco.outputs.outdir || steps.test_slack_artifacts.outputs.proteinaco_outdir_d2 }}
+          PROTEINACO_SCOPE_LABEL: ${{ steps.guardrail_proteinaco.outputs.scope_label || steps.test_slack_artifacts.outputs.proteinaco_scope_label }}
+          RUZOVYSLON_STATUS: ${{ steps.guardrail_ruzovyslon.outputs.status || steps.test_slack_artifacts.outputs.ruzovyslon_status }}
+          RUZOVYSLON_OUTDIR: ${{ steps.guardrail_ruzovyslon.outputs.outdir || steps.test_slack_artifacts.outputs.ruzovyslon_outdir }}
+          RUZOVYSLON_OUTDIR_D2: ${{ steps.guardrail_d2_ruzovyslon.outputs.outdir || steps.test_slack_artifacts.outputs.ruzovyslon_outdir_d2 }}
+          RUZOVYSLON_SCOPE_LABEL: ${{ steps.guardrail_ruzovyslon.outputs.scope_label || steps.test_slack_artifacts.outputs.ruzovyslon_scope_label }}
+          AUTODOPLNKY_STATUS: ${{ steps.guardrail_autodoplnky.outputs.status || steps.test_slack_artifacts.outputs.autodoplnky_status }}
+          AUTODOPLNKY_OUTDIR: ${{ steps.guardrail_autodoplnky.outputs.outdir || steps.test_slack_artifacts.outputs.autodoplnky_outdir }}
+          AUTODOPLNKY_OUTDIR_D2: ${{ steps.guardrail_d2_autodoplnky.outputs.outdir || steps.test_slack_artifacts.outputs.autodoplnky_outdir_d2 }}
+          AUTODOPLNKY_SCOPE_LABEL: ${{ steps.guardrail_autodoplnky.outputs.scope_label || steps.test_slack_artifacts.outputs.autodoplnky_scope_label }}
         run: |
           set -euo pipefail
 
@@ -273,28 +1252,8 @@ jobs:
             exit 0
           fi
 
-          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
-          REPORT_CSV="${OUTDIR}/forecast_d1_readiness_report.csv"
-          CHANNELS_CSV="${OUTDIR}/forecast_d1_readiness_channels_report.csv"
-          CHANNELS14_CSV="${OUTDIR}/forecast_d1_readiness_channels14_report.csv"
-
-          SUMMARY_JSON_D2="${OUTDIR_D2}/forecast_d1_readiness_summary.json"
-          REPORT_CSV_D2="${OUTDIR_D2}/forecast_d1_readiness_report.csv"
-          CHANNELS_CSV_D2="${OUTDIR_D2}/forecast_d1_readiness_channels_report.csv"
-          CHANNELS14_CSV_D2="${OUTDIR_D2}/forecast_d1_readiness_channels14_report.csv"
-
-          PAYLOAD="$(
-            SUMMARY_JSON="$SUMMARY_JSON" \
-            REPORT_CSV="$REPORT_CSV" \
-            CHANNELS_CSV="$CHANNELS_CSV" \
-            CHANNELS14_CSV="$CHANNELS14_CSV" \
-            SUMMARY_JSON_D2="$SUMMARY_JSON_D2" \
-            REPORT_CSV_D2="$REPORT_CSV_D2" \
-            CHANNELS_CSV_D2="$CHANNELS_CSV_D2" \
-            CHANNELS14_CSV_D2="$CHANNELS14_CSV_D2" \
-            RUN_URL="$RUN_URL" \
-            GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
-              python - <<'PY'
+          build_payload() {
+          python - <<'PY'
           import csv
           from collections import defaultdict
           from datetime import datetime, timedelta
@@ -311,6 +1270,7 @@ jobs:
           channels14_csv_d2 = os.environ.get("CHANNELS14_CSV_D2", "")
           run_url = os.environ.get("RUN_URL", "")
           repo = os.environ.get("GITHUB_REPOSITORY", "")
+          scope_label = (os.environ.get("SCOPE_LABEL", "") or "").strip()
 
           from scripts.guardrails.slack_formatter import (
               _to_float,
@@ -409,6 +1369,8 @@ jobs:
               title_text = f"Forecast D-1 Readiness: UNKNOWN (status={status_norm or '?'})"
 
           header_info_parts: list[str] = []
+          if scope_label:
+              header_info_parts.append(f"Scope: {scope_label}")
           header_info_parts.append(f"📅 D-1 {patch_date or '?'} | D-2 {patch_date_d2 or '?'}")
           time_part = slot_disp or (slot if slot else "?")
           header_info_parts.append(f"🕐 {time_part} {tz_abbrev}")
@@ -418,6 +1380,8 @@ jobs:
           header_text_plain = f"{icon} {title_text}" + (f" — {header_info_plain}" if header_info_plain else "")
 
           info_mrkdwn_parts: list[str] = []
+          if scope_label:
+              info_mrkdwn_parts.append(f"Scope: `{slack_escape(scope_label)}`")
           info_mrkdwn_parts.append(
               f"📅 D-1 `{slack_escape(patch_date or '?')}` | D-2 `{slack_escape(patch_date_d2 or '?')}`"
           )
@@ -995,21 +1959,85 @@ jobs:
           payload = {"text": slack_escape(header_text_plain), "blocks": blocks}
           print(json.dumps(payload))
           PY
-          )"
+          }
 
-          curl -sS -X POST "$SLACK_WEBHOOK_URL" \
-            -H 'Content-Type: application/json' \
-            --data "$PAYLOAD"
+          post_scope() {
+            local outdir="$1"
+            local outdir_d2="$2"
+            local scope_label="${3:-}"
+
+            local summary_json="${outdir}/forecast_d1_readiness_summary.json"
+            local report_csv="${outdir}/forecast_d1_readiness_report.csv"
+            local channels_csv="${outdir}/forecast_d1_readiness_channels_report.csv"
+            local channels14_csv="${outdir}/forecast_d1_readiness_channels14_report.csv"
+
+            local summary_json_d2="${outdir_d2}/forecast_d1_readiness_summary.json"
+            local report_csv_d2="${outdir_d2}/forecast_d1_readiness_report.csv"
+            local channels_csv_d2="${outdir_d2}/forecast_d1_readiness_channels_report.csv"
+            local channels14_csv_d2="${outdir_d2}/forecast_d1_readiness_channels14_report.csv"
+
+            local payload="$(
+              SUMMARY_JSON="$summary_json" \
+              REPORT_CSV="$report_csv" \
+              CHANNELS_CSV="$channels_csv" \
+              CHANNELS14_CSV="$channels14_csv" \
+              SUMMARY_JSON_D2="$summary_json_d2" \
+              REPORT_CSV_D2="$report_csv_d2" \
+              CHANNELS_CSV_D2="$channels_csv_d2" \
+              CHANNELS14_CSV_D2="$channels14_csv_d2" \
+              RUN_URL="$RUN_URL" \
+              GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+              SCOPE_LABEL="$scope_label" \
+                build_payload
+            )"
+
+            curl -sS -X POST "$SLACK_WEBHOOK_URL" \
+              -H 'Content-Type: application/json' \
+              --data "$payload"
+          }
+
+          if [[ -n "${MAIN_STATUS:-}" && "${MAIN_STATUS}" != "NOOP" && -n "${OUTDIR:-}" ]]; then
+            post_scope "$OUTDIR" "$OUTDIR_D2" "${SCOPE_LABEL:-main}"
+          fi
+
+          if [[ -n "${PROTEINACO_STATUS:-}" && "${PROTEINACO_STATUS}" != "NOOP" && -n "${PROTEINACO_OUTDIR:-}" ]]; then
+            post_scope "$PROTEINACO_OUTDIR" "$PROTEINACO_OUTDIR_D2" "${PROTEINACO_SCOPE_LABEL:-proteinaco}"
+          fi
+
+          if [[ -n "${RUZOVYSLON_STATUS:-}" && "${RUZOVYSLON_STATUS}" != "NOOP" && -n "${RUZOVYSLON_OUTDIR:-}" ]]; then
+            post_scope "$RUZOVYSLON_OUTDIR" "$RUZOVYSLON_OUTDIR_D2" "${RUZOVYSLON_SCOPE_LABEL:-ruzovyslon}"
+          fi
+
+          if [[ -n "${AUTODOPLNKY_STATUS:-}" && "${AUTODOPLNKY_STATUS}" != "NOOP" && -n "${AUTODOPLNKY_OUTDIR:-}" ]]; then
+            post_scope "$AUTODOPLNKY_OUTDIR" "$AUTODOPLNKY_OUTDIR_D2" "${AUTODOPLNKY_SCOPE_LABEL:-autodoplnky}"
+          fi
+
+          if [[ -n "${DENATURA_STATUS:-}" && "${DENATURA_STATUS}" != "NOOP" && -n "${DENATURA_OUTDIR:-}" ]]; then
+            post_scope "$DENATURA_OUTDIR" "$DENATURA_OUTDIR_D2" "${DENATURA_SCOPE_LABEL:-denatura}"
+          fi
+
+          if [[ -n "${CERANO_LIVERO_STATUS:-}" && "${CERANO_LIVERO_STATUS}" != "NOOP" && -n "${CERANO_LIVERO_OUTDIR:-}" ]]; then
+            post_scope "$CERANO_LIVERO_OUTDIR" "$CERANO_LIVERO_OUTDIR_D2" "${CERANO_LIVERO_SCOPE_LABEL:-cerano+livero}"
+          fi
 
       - name: Fail workflow if guardrail failed
-        if: steps.guardrail.outputs.exit_code != '0'
+        if: >-
+          ${{
+            inputs.send_test_slack_messages != true &&
+            (
+              (steps.guardrail.outputs.exit_code != '' && steps.guardrail.outputs.exit_code != '0') ||
+              (steps.guardrail_proteinaco.outputs.exit_code != '' && steps.guardrail_proteinaco.outputs.exit_code != '0') ||
+              (steps.guardrail_ruzovyslon.outputs.exit_code != '' && steps.guardrail_ruzovyslon.outputs.exit_code != '0') ||
+              (steps.guardrail_autodoplnky.outputs.exit_code != '' && steps.guardrail_autodoplnky.outputs.exit_code != '0')
+            )
+          }}
         run: exit 1
 
   stats_30d:
     name: Forecast D-1 success rate (30d)
     if: >-
       ${{
-        (github.event_name == 'schedule' && startsWith(github.event.schedule, '0 ')) ||
+        (github.event_name == 'schedule' && (github.event.schedule == '0 8 * * *' || github.event.schedule == '0 9 * * *')) ||
         (github.event_name == 'workflow_dispatch' && inputs.send_success_rate == true)
       }}
     runs-on: ubuntu-latest

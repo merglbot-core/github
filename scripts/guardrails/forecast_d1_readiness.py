@@ -7,7 +7,7 @@ Purpose:
 - Designed to run from GitHub Actions with WIF/OIDC and Cloud SDK (bq) available.
 
 Business policy (Europe/Prague):
-- Readiness: scheduled hourly at 08:20–15:20 (required scope = all for every scheduled run).
+- Readiness: scheduled by the workflow (typically hourly business-hours checks; can also be scoped per tenant/country).
 - Success rate (30d): scheduled daily at 10:00 (informational).
 
 DST-safe scheduling:
@@ -373,7 +373,17 @@ def _fmt6(value: object) -> str:
         return "—"
 
 
-def _infer_slot_auto(now_local: datetime, *, gh_schedule: str = "") -> str:
+def _norm_key(value: str) -> str:
+    return (value or "").strip().casefold()
+
+
+def _infer_slot_auto(
+    now_local: datetime,
+    *,
+    gh_schedule: str = "",
+    expected_utc_minute: int = 20,
+    auto_local_hours: Optional[set[int]] = None,
+) -> str:
     """
     Infer slot for scheduled runs.
 
@@ -392,17 +402,25 @@ def _infer_slot_auto(now_local: datetime, *, gh_schedule: str = "") -> str:
         except ValueError:
             return "noop"
 
-        if utc_minute != 20:
+        if utc_minute != expected_utc_minute:
             return "noop"
 
         offset = now_local.utcoffset() or timedelta(0)
         offset_hours = int(offset.total_seconds() // 3600)
-        local_hour = utc_hour + offset_hours
+        local_hour = (utc_hour + offset_hours) % 24
+
+        if auto_local_hours is not None:
+            if local_hour in auto_local_hours:
+                return f"{local_hour:02d}"
+            return "noop"
+
         if 8 <= local_hour <= 15:
             return f"{local_hour:02d}"
         return "noop"
 
     # Fallback: allow any time within the local hour (handles common delays).
+    if auto_local_hours is not None:
+        return f"{now_local.hour:02d}" if now_local.hour in auto_local_hours else "noop"
     if 8 <= now_local.hour <= 15:
         return f"{now_local.hour:02d}"
     return "noop"
@@ -473,6 +491,48 @@ def _load_specs(csv_path: Path) -> list[PipelineSpec]:
     if not specs:
         raise ValueError(f"No specs found in {csv_path}")
     return specs
+
+
+def _filter_specs(
+    specs: list[PipelineSpec],
+    *,
+    include_tenants: list[str],
+    exclude_tenants: list[str],
+    include_countries: list[str],
+    exclude_countries: list[str],
+    allow_empty: bool = False,
+) -> list[PipelineSpec]:
+    inc_t = {_norm_key(v) for v in (include_tenants or []) if (v or "").strip()}
+    exc_t = {_norm_key(v) for v in (exclude_tenants or []) if (v or "").strip()}
+    inc_c = {_norm_key(v) for v in (include_countries or []) if (v or "").strip()}
+    exc_c = {_norm_key(v) for v in (exclude_countries or []) if (v or "").strip()}
+
+    out: list[PipelineSpec] = []
+    for spec in specs:
+        t = _norm_key(spec.tenant)
+        c = _norm_key(spec.country)
+
+        if inc_t and t not in inc_t:
+            continue
+        if inc_c and c not in inc_c:
+            continue
+
+        if exc_t and t in exc_t:
+            continue
+        if exc_c and c in exc_c:
+            continue
+
+        out.append(spec)
+
+    if not out:
+        if allow_empty:
+            return []
+        raise ValueError(
+            "No specs after filtering"
+            f" (include_tenant={sorted(inc_t)}, exclude_tenant={sorted(exc_t)},"
+            f" include_country={sorted(inc_c)}, exclude_country={sorted(exc_c)})"
+        )
+    return out
 
 
 def _write_csv(path: Path, rows: list[ResultRow]) -> None:
@@ -912,9 +972,28 @@ def _write_json_summary(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def run_success_rate_30d(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: str, mode: str) -> int:
+def run_success_rate_30d(
+    *,
+    config_csv: Path,
+    outdir: Path,
+    tz_name: str,
+    patch_date_local_str: str,
+    mode: str,
+    include_tenants: list[str],
+    exclude_tenants: list[str],
+    include_countries: list[str],
+    exclude_countries: list[str],
+    allow_empty_specs: bool,
+) -> int:
     tz = ZoneInfo(tz_name)
     now_local = datetime.now(tz=tz)
+
+    spec_filters = {
+        "include_tenant": [(v or "").strip() for v in (include_tenants or []) if (v or "").strip()],
+        "exclude_tenant": [(v or "").strip() for v in (exclude_tenants or []) if (v or "").strip()],
+        "include_country": [(v or "").strip() for v in (include_countries or []) if (v or "").strip()],
+        "exclude_country": [(v or "").strip() for v in (exclude_countries or []) if (v or "").strip()],
+    }
 
     gh_schedule = (os.environ.get("GITHUB_EVENT_SCHEDULE", "") or "").strip()
     if mode == "auto":
@@ -931,6 +1010,7 @@ def run_success_rate_30d(*, config_csv: Path, outdir: Path, tz_name: str, patch_
                     "now_local": now_local.isoformat(),
                     "mode": mode,
                     "kind": "success_rate_30d",
+                    "spec_filters": spec_filters,
                 },
             )
             return 0
@@ -963,6 +1043,30 @@ def run_success_rate_30d(*, config_csv: Path, outdir: Path, tz_name: str, patch_
     outdir.mkdir(parents=True, exist_ok=True)
     checked_at_utc = datetime.now(tz=UTC)
     specs = _load_specs(config_csv)
+    specs = _filter_specs(
+        specs,
+        include_tenants=include_tenants,
+        exclude_tenants=exclude_tenants,
+        include_countries=include_countries,
+        exclude_countries=exclude_countries,
+        allow_empty=allow_empty_specs,
+    )
+    if not specs:
+        _write_json_summary(
+            outdir / "forecast_d1_readiness_summary.json",
+            {
+                "status": "NOOP",
+                "reason": "No specs after filtering",
+                "timezone": tz_name,
+                "patch_date_local": "",
+                "github_event_schedule": gh_schedule,
+                "now_local": now_local.isoformat(),
+                "mode": mode,
+                "kind": "success_rate_30d",
+                "spec_filters": spec_filters,
+            },
+        )
+        return 0
 
     rows: list[SuccessRateRow] = []
     channel_rows: list[SuccessRateChannelRow] = []
@@ -1491,13 +1595,29 @@ def run_success_rate_30d(*, config_csv: Path, outdir: Path, tz_name: str, patch_
             "errors_total": errors_total,
             "mode": mode,
             "kind": "success_rate_30d",
+            "spec_filters": spec_filters,
         },
     )
 
     return 0
 
 
-def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: str, mode: str, kind: str) -> int:
+def run(
+    *,
+    config_csv: Path,
+    outdir: Path,
+    tz_name: str,
+    patch_date_local_str: str,
+    mode: str,
+    kind: str,
+    include_tenants: list[str],
+    exclude_tenants: list[str],
+    include_countries: list[str],
+    exclude_countries: list[str],
+    auto_utc_minute: int,
+    auto_local_hours: list[int],
+    allow_empty_specs: bool,
+) -> int:
     kind = (kind or "").strip()
     if kind == "success_rate_30d":
         return run_success_rate_30d(
@@ -1506,6 +1626,11 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
             tz_name=tz_name,
             patch_date_local_str=patch_date_local_str,
             mode=mode,
+            include_tenants=include_tenants,
+            exclude_tenants=exclude_tenants,
+            include_countries=include_countries,
+            exclude_countries=exclude_countries,
+            allow_empty_specs=allow_empty_specs,
         )
     if kind != "readiness":
         raise ValueError(f"Invalid kind: {kind}")
@@ -1513,12 +1638,25 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
     tz = ZoneInfo(tz_name)
     now_local = datetime.now(tz=tz)
 
+    spec_filters = {
+        "include_tenant": [(v or "").strip() for v in (include_tenants or []) if (v or "").strip()],
+        "exclude_tenant": [(v or "").strip() for v in (exclude_tenants or []) if (v or "").strip()],
+        "include_country": [(v or "").strip() for v in (include_countries or []) if (v or "").strip()],
+        "exclude_country": [(v or "").strip() for v in (exclude_countries or []) if (v or "").strip()],
+    }
+
     gh_schedule = (os.environ.get("GITHUB_EVENT_SCHEDULE", "") or "").strip()
     if mode == "manual":
         slot = "15"
         required_policy = "all"
     elif mode == "auto":
-        slot = _infer_slot_auto(now_local, gh_schedule=gh_schedule)
+        local_hours = set(auto_local_hours) if (auto_local_hours or []) else None
+        slot = _infer_slot_auto(
+            now_local,
+            gh_schedule=gh_schedule,
+            expected_utc_minute=auto_utc_minute,
+            auto_local_hours=local_hours,
+        )
         if slot == "noop":
             outdir.mkdir(parents=True, exist_ok=True)
             _write_json_summary(
@@ -1533,6 +1671,7 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
                     "timezone": tz_name,
                     "mode": mode,
                     "kind": "readiness",
+                    "spec_filters": spec_filters,
                 },
             )
             return 0
@@ -1552,6 +1691,38 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
     checked_at_utc = datetime.now(tz=UTC)
 
     specs = _load_specs(config_csv)
+    specs = _filter_specs(
+        specs,
+        include_tenants=include_tenants,
+        exclude_tenants=exclude_tenants,
+        include_countries=include_countries,
+        exclude_countries=exclude_countries,
+        allow_empty=allow_empty_specs,
+    )
+    if not specs:
+        _write_json_summary(
+            outdir / "forecast_d1_readiness_summary.json",
+            {
+                "status": "NOOP",
+                "slot": slot,
+                "required_policy": required_policy,
+                "reason": "No specs after filtering",
+                "github_event_schedule": gh_schedule,
+                "now_local": now_local.isoformat(),
+                "timezone": tz_name,
+                "patch_date_local": patch_date,
+                "checked_at_utc": checked_at_utc.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                "pipelines_total": 0,
+                "required_total": 0,
+                "required_failed": 0,
+                "optional_total": 0,
+                "optional_failed": 0,
+                "mode": mode,
+                "kind": "readiness",
+                "spec_filters": spec_filters,
+            },
+        )
+        return 0
 
     def is_required(country: str) -> bool:
         if required_policy == "all":
@@ -2184,6 +2355,7 @@ def run(*, config_csv: Path, outdir: Path, tz_name: str, patch_date_local_str: s
             "optional_failed": optional_failed,
             "mode": mode,
             "kind": "readiness",
+            "spec_filters": spec_filters,
         },
     )
 
@@ -2206,6 +2378,28 @@ def main() -> int:
     ap.add_argument("--mode", default="auto", choices=["auto", "manual"])
     ap.add_argument("--kind", default="readiness", choices=["readiness", "success_rate_30d"])
     ap.add_argument("--outdir", default="forecast-d1-readiness-out")
+    ap.add_argument("--include-tenant", action="append", default=[], help="Tenant scope filter (repeatable).")
+    ap.add_argument("--exclude-tenant", action="append", default=[], help="Tenant scope filter (repeatable).")
+    ap.add_argument("--include-country", action="append", default=[], help="Country scope filter (repeatable).")
+    ap.add_argument("--exclude-country", action="append", default=[], help="Country scope filter (repeatable).")
+    ap.add_argument(
+        "--auto-utc-minute",
+        type=int,
+        default=20,
+        help="Auto mode gating: expected UTC minute (default: 20, preserves hourly workflow).",
+    )
+    ap.add_argument(
+        "--auto-local-hour",
+        action="append",
+        type=int,
+        default=[],
+        help="Auto mode gating: allow only these local hours (repeatable). Default: 08–15 local window.",
+    )
+    ap.add_argument(
+        "--allow-empty-specs",
+        action="store_true",
+        help="Treat empty spec set as NOOP (exit 0) instead of failing.",
+    )
     args = ap.parse_args()
 
     try:
@@ -2216,11 +2410,24 @@ def main() -> int:
             patch_date_local_str=args.patch_date_local.strip(),
             mode=args.mode.strip(),
             kind=args.kind.strip(),
+            include_tenants=list(args.include_tenant or []),
+            exclude_tenants=list(args.exclude_tenant or []),
+            include_countries=list(args.include_country or []),
+            exclude_countries=list(args.exclude_country or []),
+            auto_utc_minute=int(args.auto_utc_minute),
+            auto_local_hours=list(args.auto_local_hour or []),
+            allow_empty_specs=bool(args.allow_empty_specs),
         )
     except Exception as exc:  # noqa: BLE001
         # Best-effort summary so CI can Slack even on unexpected errors.
         outdir = Path(args.outdir)
         outdir.mkdir(parents=True, exist_ok=True)
+        spec_filters = {
+            "include_tenant": [(v or "").strip() for v in (getattr(args, "include_tenant", []) or []) if (v or "").strip()],
+            "exclude_tenant": [(v or "").strip() for v in (getattr(args, "exclude_tenant", []) or []) if (v or "").strip()],
+            "include_country": [(v or "").strip() for v in (getattr(args, "include_country", []) or []) if (v or "").strip()],
+            "exclude_country": [(v or "").strip() for v in (getattr(args, "exclude_country", []) or []) if (v or "").strip()],
+        }
         _write_json_summary(
             outdir / "forecast_d1_readiness_summary.json",
             {
@@ -2233,6 +2440,7 @@ def main() -> int:
                 "error": str(exc)[:800],
                 "mode": args.mode,
                 "kind": args.kind,
+                "spec_filters": spec_filters,
             },
         )
         print(f"[error] Unexpected failure: {exc}", file=sys.stderr)
