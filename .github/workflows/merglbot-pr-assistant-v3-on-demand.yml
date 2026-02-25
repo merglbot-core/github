@@ -300,20 +300,26 @@ jobs:
             CHECKS_PENDING="0"
 
             if jq -e '.statusCheckRollup != null' pr_metadata.json > /dev/null 2>&1; then
-              jq -r '
+              if jq -r '
                 (.statusCheckRollup.contexts // .statusCheckRollup // [])
                 | map(select(.name != null))
                 | map("- " + .name + ": " + ((.conclusion // .state // "UNKNOWN") | tostring | ascii_upcase))
                 | .[]
-              ' pr_metadata.json > pr_checks_summary.txt 2>/dev/null || true
+              ' pr_metadata.json > pr_checks_summary.txt 2>/dev/null; then
+                if [ -s pr_checks_summary.txt ]; then
+                  CHECKS_FAILED=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "failure" or . == "cancelled" or . == "timed_out" or . == "error") ] | length' pr_metadata.json 2>/dev/null || echo "0")
+                  CHECKS_PENDING=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "pending" or . == "in_progress" or . == "queued") ] | length' pr_metadata.json 2>/dev/null || echo "0")
+                  CHECKS_DATA_AVAILABLE="true"
+                fi
+              fi
+            fi
 
-              CHECKS_FAILED=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "failure" or . == "cancelled" or . == "timed_out" or . == "error") ] | length' pr_metadata.json 2>/dev/null || echo "0")
-              CHECKS_PENDING=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "pending" or . == "in_progress" or . == "queued") ] | length' pr_metadata.json 2>/dev/null || echo "0")
-
-              CHECKS_DATA_AVAILABLE="true"
-            elif [ -n "${PR_HEAD_SHA:-}" ]; then
-              if gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" \
-                | jq -s '{check_runs: (map(.check_runs // []) | add // [])}' > check_runs.json 2>/dev/null; then
+            if [ "$CHECKS_DATA_AVAILABLE" != "true" ] && [ -n "${PR_HEAD_SHA:-}" ]; then
+              if (
+                set -o pipefail
+                gh api --silent --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null \
+                  | jq -s '{check_runs: (map(.check_runs // []) | add // [])}' > check_runs.json 2>/dev/null
+              ); then
                 if jq -e '.check_runs | type == "array"' check_runs.json > /dev/null 2>&1; then
                   # Exclude check-runs for THIS workflow run so we don't count ourselves as "pending" while gathering context.
                   jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
@@ -349,7 +355,8 @@ jobs:
                     CHECKS_DATA_AVAILABLE="true"
                   fi
                 else
-                  echo "WARN: check_runs.json invalid; skipping check-runs fallback" >&2
+                  CHECK_RUNS_JSON_SIZE="$(wc -c < check_runs.json 2>/dev/null || echo "0")"
+                  echo "WARN: check_runs.json invalid (size=${CHECK_RUNS_JSON_SIZE}B); skipping check-runs fallback" >&2
                 fi
               fi
             fi
