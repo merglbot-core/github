@@ -656,7 +656,21 @@ echo "Prompt size: $PROMPT_SIZE chars"
 
 # ANTHROPIC CALL (backgrounded so OpenAI can start immediately)
 (
-  set -euo pipefail
+  set -Eeuo pipefail
+
+  # shellcheck disable=SC2329 # called via trap
+  anthropic_err_trap() {
+    local exit_code="${1:-}"
+    local line="${2:-}"
+    printf '%s\n' "ERROR: Anthropic analysis subprocess failed (exit=$exit_code line=$line)" >&2
+  }
+  trap 'anthropic_err_trap "$?" "${BASH_LINENO[0]:-$LINENO}"' ERR
+
+  BOT_MODE="${BOT_MODE:-default}"
+  ANTHROPIC_API_KEY_PRESENT="${ANTHROPIC_API_KEY_PRESENT:-false}"
+  ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+  ANTHROPIC_SKIP_REASON="${ANTHROPIC_SKIP_REASON:-}"
+  ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-}"
 
   ANTHROPIC_MODEL_USED=""
   if [ "$BOT_MODE" != "dependabot" ] && [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
@@ -1017,6 +1031,10 @@ else
           fi
           break
         fi
+        if [ "$CURL_EXIT" -ne 0 ]; then
+          echo "  ERROR: OpenAI request failed (exit=$CURL_EXIT)" >&2
+          break
+        fi
         if ! printf '%s' "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
           echo "  ERROR: OpenAI request returned non-JSON (exit=$CURL_EXIT)" >&2
           if [ "$OPENAI_CHAT_ATTEMPT" -eq 1 ]; then
@@ -1036,11 +1054,6 @@ else
             continue
           fi
 
-          break
-        fi
-
-        if [ "$CURL_EXIT" -ne 0 ]; then
-          echo "  ERROR: OpenAI request failed (exit=$CURL_EXIT)" >&2
           break
         fi
 
@@ -1240,7 +1253,7 @@ fi
 if [ -s "$ANTHROPIC_GITHUB_ENV_FILE" ]; then
   ANTHROPIC_MODEL_USED_LINE="$(grep -m1 '^ANTHROPIC_MODEL_USED=' "$ANTHROPIC_GITHUB_ENV_FILE" 2>/dev/null | tr -d '\r' || true)"
   ANTHROPIC_MODEL_USED_VALUE="${ANTHROPIC_MODEL_USED_LINE#ANTHROPIC_MODEL_USED=}"
-  if [ -n "$ANTHROPIC_MODEL_USED_VALUE" ] && echo "$ANTHROPIC_MODEL_USED_VALUE" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+  if [ -n "$ANTHROPIC_MODEL_USED_VALUE" ] && printf '%s' "$ANTHROPIC_MODEL_USED_VALUE" | grep -Eq '^[A-Za-z0-9._-]+$'; then
     echo "ANTHROPIC_MODEL_USED=$ANTHROPIC_MODEL_USED_VALUE" >> "$GITHUB_ENV"
   else
     echo "WARN: Invalid ANTHROPIC_MODEL_USED value; marking ANTHROPIC_MODEL_USED=skipped" >&2

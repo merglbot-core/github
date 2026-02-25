@@ -15,6 +15,7 @@
 # NOTE (reference-only): workflows inline these patterns to avoid `source`-ing scripts
 # from the repo checkout (RCE/exfil risk on PR branches). Keep this file aligned with:
 # - .github/workflows/merglbot-pr-v3-on-demand.yml
+# - merglbot-core/github/.github/workflows/merglbot-pr-assistant-v3-on-demand.yml (canonical implementation)
 
 _GH="gh"
 _GHP="${_GH}""p_"
