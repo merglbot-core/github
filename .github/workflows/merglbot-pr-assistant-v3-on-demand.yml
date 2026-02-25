@@ -311,18 +311,18 @@ jobs:
             CHECKS_PENDING=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "pending" or . == "in_progress" or . == "queued") ] | length' pr_metadata.json 2>/dev/null || echo "0")
 
             CHECKS_DATA_AVAILABLE="true"
-          else
-            if [ -n "${PR_HEAD_SHA:-}" ]; then
-              if gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" \
-                | jq -s '{check_runs: (map(.check_runs // []) | add)}' > check_runs.json 2>/dev/null; then
-                  # Exclude check-runs for THIS workflow run so we don't count ourselves as "pending" while gathering context.
-                  jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
-                    def is_current_run:
-                      ($current_run_id != "" and ((.details_url? // "") | tostring | contains("/actions/runs/" + $current_run_id)));
-                    (.check_runs // [])
-                    | map(select(is_current_run | not))
-                    | map(select(.name != null))
-                    | map("- " + .name + ": " + ((.conclusion // .status // "UNKNOWN") | tostring | ascii_upcase))
+            else
+              if [ -n "${PR_HEAD_SHA:-}" ]; then
+                if gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" \
+                  | jq -s '{check_runs: (map(.check_runs // []) | add // [])}' > check_runs.json 2>/dev/null; then
+                    # Exclude check-runs for THIS workflow run so we don't count ourselves as "pending" while gathering context.
+                    jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
+                      def is_current_run:
+                        ($current_run_id != "" and ((.details_url? // "") | tostring | contains("/actions/runs/" + $current_run_id)));
+                      (.check_runs // [])
+                      | map(select(is_current_run | not))
+                      | map(select(.name != null))
+                      | map("- " + .name + ": " + ((.conclusion // .status // "UNKNOWN") | tostring | ascii_upcase))
                     | .[]
                   ' check_runs.json > pr_checks_summary.txt 2>/dev/null || true
   
