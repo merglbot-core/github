@@ -21,9 +21,10 @@ cleanup() {
     return 0
   fi
   set +e
-  if [ -n "${ANTHROPIC_PID:-}" ] && kill -0 "$ANTHROPIC_PID" 2>/dev/null; then
-    kill "$ANTHROPIC_PID" 2>/dev/null || true
-    wait "$ANTHROPIC_PID" 2>/dev/null || true
+  local pid="${ANTHROPIC_PID:-}"
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
   fi
   rm -rf -- "$TMP_DIR"
 }
@@ -50,6 +51,10 @@ trim_ws() {
   printf '%s' "${1:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
+RAW_ANTHROPIC_MESSAGES_URL_TRIM="$(trim_ws "$RAW_ANTHROPIC_MESSAGES_URL")"
+RAW_OPENAI_RESPONSES_URL_TRIM="$(trim_ws "$RAW_OPENAI_RESPONSES_URL")"
+RAW_OPENAI_CHAT_COMPLETIONS_URL_TRIM="$(trim_ws "$RAW_OPENAI_CHAT_COMPLETIONS_URL")"
+
 allowlist_openai_url() {
   local url
   url="$(trim_ws "${1:-}")"
@@ -68,26 +73,38 @@ allowlist_anthropic_url() {
   esac
 }
 
-ANTHROPIC_MESSAGES_URL="$(allowlist_anthropic_url "$RAW_ANTHROPIC_MESSAGES_URL")"
+# URL allowlisting / override validation.
+# - Empty/default URLs mean "no override": use the default official endpoints and proceed.
+# - A non-empty override that is not allowlisted is treated as a hard misconfiguration:
+#   mark `*_URL_OVERRIDE_INVALID` and skip that provider (fail-closed).
+# - OpenAI has two endpoints (Responses + Chat Completions). Any disallowed override disables OpenAI entirely
+#   (fail-closed), even if only one endpoint override was invalid.
+# Provider flags are independent:
+# - `ANTHROPIC_URL_OVERRIDE_INVALID` is only set by Anthropic URL validation.
+# - `OPENAI_ANY_URL_OVERRIDE_INVALID` is only set by OpenAI URL validation.
+ANTHROPIC_URL_OVERRIDE_INVALID="false"
+ANTHROPIC_MESSAGES_URL="$(allowlist_anthropic_url "$RAW_ANTHROPIC_MESSAGES_URL_TRIM")"
 if [ -z "$ANTHROPIC_MESSAGES_URL" ]; then
-  if [ "$(trim_ws "$RAW_ANTHROPIC_MESSAGES_URL")" != "$DEFAULT_ANTHROPIC_MESSAGES_URL" ]; then
-    echo "WARN: Disallowed Anthropic API URL override; using default endpoint." >&2
+  if [ -n "$RAW_ANTHROPIC_MESSAGES_URL_TRIM" ] && [ "$RAW_ANTHROPIC_MESSAGES_URL_TRIM" != "$DEFAULT_ANTHROPIC_MESSAGES_URL" ]; then
+    ANTHROPIC_URL_OVERRIDE_INVALID="true"
   fi
   ANTHROPIC_MESSAGES_URL="$DEFAULT_ANTHROPIC_MESSAGES_URL"
 fi
 
-OPENAI_RESPONSES_URL="$(allowlist_openai_url "$RAW_OPENAI_RESPONSES_URL")"
+OPENAI_ANY_URL_OVERRIDE_INVALID="false"
+
+OPENAI_RESPONSES_URL="$(allowlist_openai_url "$RAW_OPENAI_RESPONSES_URL_TRIM")"
 if [ -z "$OPENAI_RESPONSES_URL" ]; then
-  if [ "$(trim_ws "$RAW_OPENAI_RESPONSES_URL")" != "$DEFAULT_OPENAI_RESPONSES_URL" ]; then
-    echo "WARN: Disallowed OpenAI Responses URL override; using default endpoint." >&2
+  if [ -n "$RAW_OPENAI_RESPONSES_URL_TRIM" ] && [ "$RAW_OPENAI_RESPONSES_URL_TRIM" != "$DEFAULT_OPENAI_RESPONSES_URL" ]; then
+    OPENAI_ANY_URL_OVERRIDE_INVALID="true"
   fi
   OPENAI_RESPONSES_URL="$DEFAULT_OPENAI_RESPONSES_URL"
 fi
 
-OPENAI_CHAT_COMPLETIONS_URL="$(allowlist_openai_url "$RAW_OPENAI_CHAT_COMPLETIONS_URL")"
+OPENAI_CHAT_COMPLETIONS_URL="$(allowlist_openai_url "$RAW_OPENAI_CHAT_COMPLETIONS_URL_TRIM")"
 if [ -z "$OPENAI_CHAT_COMPLETIONS_URL" ]; then
-  if [ "$(trim_ws "$RAW_OPENAI_CHAT_COMPLETIONS_URL")" != "$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL" ]; then
-    echo "WARN: Disallowed OpenAI Chat Completions URL override; using default endpoint." >&2
+  if [ -n "$RAW_OPENAI_CHAT_COMPLETIONS_URL_TRIM" ] && [ "$RAW_OPENAI_CHAT_COMPLETIONS_URL_TRIM" != "$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL" ]; then
+    OPENAI_ANY_URL_OVERRIDE_INVALID="true"
   fi
   OPENAI_CHAT_COMPLETIONS_URL="$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL"
 fi
@@ -157,6 +174,12 @@ curl_json_with_backoff() {
             sleep $((attempt * 2))
             continue
           fi
+          printf '%s' "$resp"
+          return 1
+          ;;
+        *)
+          printf '%s' "$resp"
+          return 1
           ;;
       esac
     fi
@@ -183,7 +206,11 @@ fi
 
 OPENAI_SKIP_REASON=""
 OPENAI_API_KEY_PRESENT="true"
-if [ -z "${OPENAI_API_KEY:-}" ]; then
+if [ "$OPENAI_ANY_URL_OVERRIDE_INVALID" = "true" ]; then
+  OPENAI_API_KEY_PRESENT="false"
+  OPENAI_SKIP_REASON="invalid_url"
+  echo "ERROR: Disallowed OpenAI API URL override; skipping OpenAI analysis." >&2
+elif [ -z "${OPENAI_API_KEY:-}" ]; then
   OPENAI_API_KEY_PRESENT="false"
   OPENAI_SKIP_REASON="no_key"
   echo "WARN: OPENAI_API_KEY is missing; skipping OpenAI analysis." >&2
@@ -191,7 +218,11 @@ fi
 
 ANTHROPIC_SKIP_REASON=""
 ANTHROPIC_API_KEY_PRESENT="true"
-if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+if [ "$ANTHROPIC_URL_OVERRIDE_INVALID" = "true" ]; then
+  ANTHROPIC_API_KEY_PRESENT="false"
+  ANTHROPIC_SKIP_REASON="invalid_url"
+  echo "ERROR: Disallowed Anthropic API URL override; skipping Anthropic analysis." >&2
+elif [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   ANTHROPIC_API_KEY_PRESENT="false"
   ANTHROPIC_SKIP_REASON="no_key"
   echo "WARN: ANTHROPIC_API_KEY is missing; skipping Anthropic analysis." >&2
@@ -410,7 +441,7 @@ echo "Review depth: $REVIEW_DEPTH"
 
 # Build prompt using printf to file (single redirect)
 {
-printf '%s\n' "# Merglbot Multi-Model Code Review v3.5.2"
+printf '%s\n' "# Merglbot Multi-Model Code Review v3.5.3"
 printf '%s\n' ""
 printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence."
 printf '%s\n' ""
@@ -619,7 +650,13 @@ echo "Prompt size: $PROMPT_SIZE chars"
 
 # ANTHROPIC CALL (backgrounded so OpenAI can start immediately)
 (
+  set -euo pipefail
+
   ANTHROPIC_MODEL_USED=""
+  if [ "$BOT_MODE" != "dependabot" ] && [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+    ANTHROPIC_API_KEY_PRESENT="false"
+    ANTHROPIC_SKIP_REASON="no_key"
+  fi
   if [ "$BOT_MODE" != "dependabot" ] && [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then
     echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
 
@@ -952,8 +989,8 @@ else
         echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
         continue
       fi
-      if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
-        echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
+      if ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+        echo "  ERROR: OpenAI request returned non-JSON (exit=$CURL_EXIT)" >&2
         continue
       fi
 
@@ -985,8 +1022,8 @@ else
             echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
             continue
           fi
-          if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
-            echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
+          if ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+            echo "  ERROR: OpenAI request returned non-JSON (exit=$CURL_EXIT)" >&2
             continue
           fi
 
@@ -995,9 +1032,17 @@ else
             echo "  ERROR: $err_msg" >&2
             continue
           fi
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            echo "  ERROR: OpenAI request failed (exit=$CURL_EXIT)" >&2
+            continue
+          fi
         else
           continue
         fi
+      fi
+      if [ "$CURL_EXIT" -ne 0 ]; then
+        echo "  ERROR: OpenAI request failed (exit=$CURL_EXIT)" >&2
+        continue
       fi
 
       CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
@@ -1187,7 +1232,14 @@ EOF
 fi
 
 if [ -s "$ANTHROPIC_GITHUB_ENV_FILE" ]; then
-  cat "$ANTHROPIC_GITHUB_ENV_FILE" >> "$GITHUB_ENV"
+  ANTHROPIC_MODEL_USED_LINE="$(grep -m1 '^ANTHROPIC_MODEL_USED=' "$ANTHROPIC_GITHUB_ENV_FILE" 2>/dev/null | tr -d '\r' || true)"
+  ANTHROPIC_MODEL_USED_VALUE="${ANTHROPIC_MODEL_USED_LINE#ANTHROPIC_MODEL_USED=}"
+  if [ -n "$ANTHROPIC_MODEL_USED_VALUE" ] && echo "$ANTHROPIC_MODEL_USED_VALUE" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+    echo "ANTHROPIC_MODEL_USED=$ANTHROPIC_MODEL_USED_VALUE" >> "$GITHUB_ENV"
+  else
+    echo "WARN: Invalid ANTHROPIC_MODEL_USED value; marking ANTHROPIC_MODEL_USED=skipped" >&2
+    echo "ANTHROPIC_MODEL_USED=skipped" >> "$GITHUB_ENV"
+  fi
 else
   echo "WARN: Anthropic env file missing/empty; marking ANTHROPIC_MODEL_USED=skipped" >&2
   echo "ANTHROPIC_MODEL_USED=skipped" >> "$GITHUB_ENV"

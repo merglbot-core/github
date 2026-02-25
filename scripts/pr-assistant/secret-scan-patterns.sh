@@ -11,6 +11,10 @@
 #
 # These strings are intentionally assembled from parts to reduce false-positive
 # "hardcoded secret" policy checks on workflow `run:` blocks.
+#
+# NOTE (reference-only): workflows inline these patterns to avoid `source`-ing scripts
+# from the repo checkout (RCE/exfil risk on PR branches). Keep this file aligned with:
+# - .github/workflows/merglbot-pr-v3-on-demand.yml
 
 _GH="gh"
 _GHP="${_GH}""p_"
@@ -39,7 +43,4 @@ SECRET_PATTERN_STRICT="${_BEGIN_PRIVATE_KEY}|${_BEGIN_PGP_PRIVATE_KEY}|${_SLACK_
 # AI review unnecessarily.
 SECRET_PATTERN_STRICT_NO_KEY="${_BEGIN_PRIVATE_KEY}|${_BEGIN_PGP_PRIVATE_KEY}|${_SLACK_TOKEN}|${_GITHUB_TOKEN_CLASSIC}|${_GITHUB_TOKEN_FINE_GRAINED}|${_GITHUB_TOKEN_GENERIC}|${_AWS_ACCESS_KEY}|${_GOOGLE_API_KEY}|${_GOOGLE_OAUTH_REFRESH}|${_OPENAI_PROJECT_KEY}|${_OPENAI_KEY}"
 
-# JWT detection is intentionally "strict-ish": it's used only as a *pre-scan*
-# guardrail before sending PR context to external LLM APIs. It's OK to prefer a
-# few false-positives over a false-negative that could exfiltrate secrets.
 JWT_PATTERN_STRICT='(^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])'

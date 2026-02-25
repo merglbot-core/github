@@ -584,8 +584,9 @@ jobs:
             # - TypeScript mirrors this via lookarounds: (?<![A-Za-z0-9_]) ... (?![A-Za-z0-9_])
             # NOTE: JWT-like patterns can produce false positives (e.g. documentation/test fixtures). If this
             # becomes noisy, tighten the JWT prefix further rather than disabling the guardrail.
-            # To reduce false positives from lockfile/full-diff integrity strings, keep the JWT scan out of
-            # pr_diff_full.txt (which intentionally includes full package-lock.json diffs).
+            # To reduce false positives from lockfile/full-diff integrity strings, keep the broad `key_...`
+            # heuristic out of pr_diff_full.txt (which intentionally includes full package-lock.json diffs),
+            # while still scanning for strict JWT-like patterns.
             # Loaded from a shared script to avoid false positives from policy checks on workflow `run:` blocks.
             source scripts/pr-assistant/secret-scan-patterns.sh
             # Loose JWT pattern (for alignment with redaction; intentionally NOT used for SKIP_REVIEW gating):
@@ -593,8 +594,9 @@ jobs:
             # NOTE: keep the gate on JWT_PATTERN_STRICT only; the loose heuristic is noisy (docs/test fixtures).
             JWT_PATTERN="${JWT_PATTERN_STRICT}"
             for SECRET_SCAN_FILE in pr_diff_full.txt pr_diff.txt pr_title.txt pr_body.txt bugbot_findings.txt changed_files.txt pr_checks_summary.txt; do
-              # pr_diff_full.txt: NO_KEY variant (lockfile false positives); pr_diff.txt still scans key_ + JWT.
-              PATTERN="$SECRET_PATTERN_STRICT_NO_KEY"
+              # pr_diff_full.txt: NO_KEY variant (lockfile false positives) + strict JWT;
+              # other files: strict (including key_) + strict JWT.
+              PATTERN="${SECRET_PATTERN_STRICT_NO_KEY}|${JWT_PATTERN}"
               if [ "$SECRET_SCAN_FILE" != "pr_diff_full.txt" ]; then
                 PATTERN="${SECRET_PATTERN_STRICT}|${JWT_PATTERN}"
               fi

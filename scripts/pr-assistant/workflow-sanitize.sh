@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# NOTE (reference-only): workflows inline these functions to avoid `source`-ing scripts
+# from the repo checkout (RCE/exfil risk on PR branches). Keep this file aligned with:
+# - .github/workflows/merglbot-pr-v3-on-demand.yml
+
 sanitize_model() {
   local raw="${1:-}"
   raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
@@ -21,4 +25,3 @@ sanitize_reasoning_effort() {
     *) printf '%s' "" ;;
   esac
 }
-
