@@ -284,36 +284,43 @@ jobs:
           echo "Base SHA: ${PR_BASE_SHA:0:12}"
           echo "Head SHA: ${PR_HEAD_SHA:0:12}"
           
-          # Use printf to avoid echo interpreting user-controlled content as flags (-n/-e)
-          printf '%s\n' "$PR_TITLE" > pr_title.txt
-          printf '%s\n' "$PR_BODY" > pr_body.txt
-          printf '%s\n' "$PR_AUTHOR" > pr_author.txt
-          printf '%s\n' "$PR_ADDITIONS" > pr_additions.txt
-          printf '%s\n' "$PR_DELETIONS" > pr_deletions.txt
-          printf '%s\n' "$PR_FILES" > pr_files_count.txt
-          printf '%s\n' "$PR_BASE_SHA" > pr_base_sha.txt
-          printf '%s\n' "$PR_HEAD_SHA" > pr_head_sha.txt
+            # Use printf to avoid echo interpreting user-controlled content as flags (-n/-e)
+            printf '%s\n' "$PR_TITLE" > pr_title.txt
+            printf '%s\n' "$PR_BODY" > pr_body.txt
+            printf '%s\n' "$PR_AUTHOR" > pr_author.txt
+            printf '%s\n' "$PR_ADDITIONS" > pr_additions.txt
+            printf '%s\n' "$PR_DELETIONS" > pr_deletions.txt
+            printf '%s\n' "$PR_FILES" > pr_files_count.txt
+            printf '%s\n' "$PR_BASE_SHA" > pr_base_sha.txt
+            printf '%s\n' "$PR_HEAD_SHA" > pr_head_sha.txt
 
-          # CI / checks summary (best-effort)
-          CHECKS_DATA_AVAILABLE="false"
-          CHECKS_FAILED="0"
-          CHECKS_PENDING="0"
+            # CI / checks summary (best-effort)
+            CHECKS_DATA_AVAILABLE="false"
+            CHECKS_FAILED="0"
+            CHECKS_PENDING="0"
 
-          if jq -e '.statusCheckRollup != null' pr_metadata.json > /dev/null 2>&1; then
-            jq -r '
-              (.statusCheckRollup.contexts // .statusCheckRollup // [])
-              | map(select(.name != null))
-              | map("- " + .name + ": " + ((.conclusion // .state // "UNKNOWN") | tostring | ascii_upcase))
-              | .[]
-            ' pr_metadata.json > pr_checks_summary.txt 2>/dev/null || true
+            if jq -e '.statusCheckRollup != null' pr_metadata.json > /dev/null 2>&1; then
+              if jq -r '
+                (.statusCheckRollup.contexts // .statusCheckRollup // [])
+                | map(select(.name != null))
+                | map("- " + .name + ": " + ((.conclusion // .state // "UNKNOWN") | tostring | ascii_upcase))
+                | .[]
+              ' pr_metadata.json > pr_checks_summary.txt 2>/dev/null; then
+                if [ -s pr_checks_summary.txt ]; then
+                  CHECKS_FAILED=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "failure" or . == "cancelled" or . == "timed_out" or . == "error") ] | length' pr_metadata.json 2>/dev/null || echo "0")
+                  CHECKS_PENDING=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "pending" or . == "in_progress" or . == "queued") ] | length' pr_metadata.json 2>/dev/null || echo "0")
+                  CHECKS_DATA_AVAILABLE="true"
+                fi
+              fi
+            fi
 
-            CHECKS_FAILED=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "failure" or . == "cancelled" or . == "timed_out" or . == "error") ] | length' pr_metadata.json 2>/dev/null || echo "0")
-            CHECKS_PENDING=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "pending" or . == "in_progress" or . == "queued") ] | length' pr_metadata.json 2>/dev/null || echo "0")
-
-            CHECKS_DATA_AVAILABLE="true"
-            else
-              if [ -n "${PR_HEAD_SHA:-}" ]; then
-                if gh api "repos/${{ github.repository }}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" > check_runs.json 2>/dev/null; then
+            if [ "$CHECKS_DATA_AVAILABLE" != "true" ] && [ -n "${PR_HEAD_SHA:-}" ]; then
+              if (
+                set -o pipefail
+                gh api --silent --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null \
+                  | jq -s '{check_runs: (map(.check_runs // []) | add // [])}' > check_runs.json 2>/dev/null
+              ); then
+                if jq -e '.check_runs | type == "array"' check_runs.json > /dev/null 2>&1; then
                   # Exclude check-runs for THIS workflow run so we don't count ourselves as "pending" while gathering context.
                   jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
                     def is_current_run:
@@ -324,7 +331,7 @@ jobs:
                     | map("- " + .name + ": " + ((.conclusion // .status // "UNKNOWN") | tostring | ascii_upcase))
                     | .[]
                   ' check_runs.json > pr_checks_summary.txt 2>/dev/null || true
-  
+
                   CHECKS_FAILED=$(jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
                     def is_current_run:
                       ($current_run_id != "" and ((.details_url? // "") | tostring | contains("/actions/runs/" + $current_run_id)));
@@ -343,20 +350,24 @@ jobs:
                       | select(. == "pending" or . == "in_progress" or . == "queued")
                     ] | length
                   ' check_runs.json 2>/dev/null || echo "0")
-  
+
                   if [ -s pr_checks_summary.txt ]; then
                     CHECKS_DATA_AVAILABLE="true"
                   fi
+                else
+                  CHECK_RUNS_JSON_SIZE="$(wc -c < check_runs.json 2>/dev/null || echo "0")"
+                  echo "WARN: check_runs.json invalid (size=${CHECK_RUNS_JSON_SIZE}B); skipping check-runs fallback" >&2
                 fi
               fi
-          fi
-          if [ ! -s pr_checks_summary.txt ]; then
-            echo "No CI/checks data available." > pr_checks_summary.txt
-          fi
+            fi
 
-          printf '%s\n' "$CHECKS_FAILED" > pr_checks_failed_count.txt
-          printf '%s\n' "$CHECKS_PENDING" > pr_checks_pending_count.txt
-          printf '%s\n' "$CHECKS_DATA_AVAILABLE" > pr_checks_data_available.txt
+            if [ ! -s pr_checks_summary.txt ]; then
+              echo "No CI/checks data available." > pr_checks_summary.txt
+            fi
+
+            printf '%s\n' "$CHECKS_FAILED" > pr_checks_failed_count.txt
+            printf '%s\n' "$CHECKS_PENDING" > pr_checks_pending_count.txt
+            printf '%s\n' "$CHECKS_DATA_AVAILABLE" > pr_checks_data_available.txt
           
           echo "PR_BASE_SHA=$PR_BASE_SHA" >> "$GITHUB_ENV"
           echo "PR_HEAD_SHA=$PR_HEAD_SHA" >> "$GITHUB_ENV"
@@ -618,7 +629,7 @@ jobs:
           
             if [ "${SKIP_REASON:-}" == "potential_secret" ]; then
               {
-              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.3"
+              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.4"
               printf '%s\n' ""
               printf '%s\n' "⛔️ Skipped: potential secret-like material detected in the PR context."
               printf '%s\n' ""
@@ -635,7 +646,7 @@ jobs:
                 exit 0
               fi
               {
-              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.3"
+              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.4"
               printf '%s\n' ""
               printf '%s\n' "⏭️ No new commits since last Merglbot review (\`${PREV_SHA:0:12}\`).  "
               printf '%s\n' "Current head: \`${HEAD_SHA:0:12}\`."
@@ -729,7 +740,7 @@ jobs:
           fi
 
           {
-            printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.3"
+            printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.4"
             printf '%s\n' ""
             printf '%s\n' "⛔️ Review failed during Step 1 (model API calls)."
             printf '%s\n' ""
@@ -1347,13 +1358,13 @@ jobs:
           
           if [ ! -s final_review.txt ] || grep -q "^API_ERROR$" final_review.txt; then
             {
-              echo "## 🤖 Merglbot PR Assistant v3.5.3"
+              echo "## 🤖 Merglbot PR Assistant v3.5.4"
               echo ""
               echo "❌ Review generation failed. Please check workflow logs."
             } > comment.md
           else
             {
-              echo "## 🤖 Merglbot PR Assistant v3.5.3"
+              echo "## 🤖 Merglbot PR Assistant v3.5.4"
               echo ""
               cat final_review.txt
               echo ""
@@ -1451,7 +1462,7 @@ jobs:
           SKIP_REASON="${{ steps.context.outputs.skip_reason }}"
           if [ "$SKIPPED" == "true" ]; then
             {
-              echo "## 🤖 Merglbot PR Assistant v3.5.3 - Summary"
+              echo "## 🤖 Merglbot PR Assistant v3.5.4 - Summary"
               echo ""
               echo "- **PR**: #${{ env.PR_NUMBER }}"
               if [ "$SKIP_REASON" == "potential_secret" ]; then
@@ -1479,7 +1490,7 @@ jobs:
           fi
           
           {
-            echo "## 🤖 Merglbot PR Assistant v3.5.3 - Summary"
+            echo "## 🤖 Merglbot PR Assistant v3.5.4 - Summary"
             echo ""
             echo "| Field | Value |"
             echo "|-------|-------|"
