@@ -84,16 +84,27 @@ jobs:
           docker push $IMAGE
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
-      # Container Security: Trivy scan with SARIF upload
-      - name: Run Trivy vulnerability scanner
+      # Container Security: Trivy gating (CRITICAL blocks deploy)
+      - name: Run Trivy (gate CRITICAL)
         uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8  # v0.33.1
-        continue-on-error: true  # Allow deploy while we tune blocking thresholds
+        with:
+          image-ref: ${{ env.IMAGE }}
+          format: 'table'
+          severity: 'CRITICAL'  # Block on CRITICAL immediately
+          exit-code: '1'
+          ignore-unfixed: true
+
+      # Container Security: Trivy SARIF upload (best-effort, includes HIGH)
+      - name: Run Trivy (SARIF)
+        if: always()
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8  # v0.33.1
+        continue-on-error: true
         with:
           image-ref: ${{ env.IMAGE }}
           format: 'sarif'
           output: 'trivy-results.sarif'
-          severity: 'CRITICAL'
-          exit-code: '0'         # Do not fail deploy on scan; surfaced via SARIF
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
           ignore-unfixed: true
 
       - name: Upload Trivy results
