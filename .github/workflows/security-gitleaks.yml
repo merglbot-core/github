@@ -114,30 +114,25 @@ jobs:
             exit 0
           fi
 
-          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-import json
-from pathlib import Path
+          echo "## Gitleaks results (redacted)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
 
-data = json.loads(Path("gitleaks-report.sarif").read_text(encoding="utf-8"))
-runs = data.get("runs") or []
-results = ((runs[0].get("results") or []) if runs else []) or []
+          findings_count="$(jq -r '(.runs[0].results // []) | length' gitleaks-report.sarif 2>/dev/null || echo 0)"
+          echo "- Findings: **${findings_count}**" >> "$GITHUB_STEP_SUMMARY"
 
-print("## Gitleaks results (redacted)")
-print("")
-print(f"- Findings: **{len(results)}**")
+          jq -r '
+            (.runs[0].results // [])[0:20][] |
+            "- `\(.ruleId // "unknown")` — `\((.locations[0].physicalLocation.artifactLocation.uri // "unknown"))`\(
+              if ((.locations[0].physicalLocation.region.startLine // null) | type) == "number"
+              then ":" + (.locations[0].physicalLocation.region.startLine | tostring)
+              else ""
+              end
+            )
+          ' gitleaks-report.sarif >> "$GITHUB_STEP_SUMMARY" || true
 
-for r in results[:20]:
-    rule = r.get("ruleId") or "unknown"
-    loc = (((r.get("locations") or [{}])[0]).get("physicalLocation") or {})
-    artifact = (loc.get("artifactLocation") or {}).get("uri") or "unknown"
-    region = loc.get("region") or {}
-    start_line = region.get("startLine")
-    suffix = f":{start_line}" if isinstance(start_line, int) else ""
-    print(f"- `{rule}` — `{artifact}`{suffix}")
-
-if len(results) > 20:
-    print(f"- … plus {len(results) - 20} more")
-          PY
+          if [ "${findings_count}" -gt 20 ]; then
+            echo "- … plus $((findings_count - 20)) more" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload gitleaks report (SARIF, redacted)
         if: always()
