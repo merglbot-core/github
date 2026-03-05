@@ -99,6 +99,54 @@ jobs:
           else
             gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --redact --no-git || true
           fi
+
+      - name: Summarize findings (redacted)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f gitleaks-report.sarif ]; then
+            echo "## Gitleaks results (redacted)" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "- No SARIF report found." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("gitleaks-report.sarif").read_text(encoding="utf-8"))
+          runs = data.get("runs") or []
+          results = ((runs[0].get("results") or []) if runs else []) or []
+
+          print("## Gitleaks results (redacted)")
+          print("")
+          print(f"- Findings: **{len(results)}**")
+
+          for r in results[:20]:
+            rule = r.get("ruleId") or "unknown"
+            loc = (((r.get("locations") or [{}])[0]).get("physicalLocation") or {})
+            artifact = (loc.get("artifactLocation") or {}).get("uri") or "unknown"
+            region = loc.get("region") or {}
+            start_line = region.get("startLine")
+            suffix = f\":{start_line}\" if isinstance(start_line, int) else \"\"
+            print(f\"- `{rule}` — `{artifact}`{suffix}\")
+
+          if len(results) > 20:
+            print(f\"- … plus {len(results) - 20} more\")
+          PY
+
+      - name: Upload gitleaks report (SARIF, redacted)
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: gitleaks-report-sarif
+          path: gitleaks-report.sarif
+          if-no-files-found: ignore
+          retention-days: 7
       
       - name: Upload SARIF report
         if: always()
