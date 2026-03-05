@@ -159,10 +159,12 @@ jobs:
         uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518  # v0.34.1
         continue-on-error: true
         with:
+          version: 'v0.69.3'
           image-ref: ${{ steps.build.outputs.full_image }}
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'HIGH,CRITICAL'
+          limit-severities-for-sarif: true
           exit-code: '0'
           ignore-unfixed: true
       
@@ -177,6 +179,7 @@ jobs:
         if: ${{ always() && steps.build.outcome == 'success' }}
         uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518  # v0.34.1
         with:
+          version: 'v0.69.3'
           image-ref: ${{ steps.build.outputs.full_image }}
           format: 'table'
           severity: 'CRITICAL'
