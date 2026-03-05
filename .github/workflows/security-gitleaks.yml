@@ -78,9 +78,11 @@ jobs:
       - name: Install Gitleaks CLI
         run: |
           set -euo pipefail
-          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
-          tar -xzf gitleaks_8.18.4_linux_x64.tar.gz
-          sudo mv gitleaks /usr/local/bin/
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          wget -q -O "$tmp_dir/gitleaks.tgz" https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+          tar -xzf "$tmp_dir/gitleaks.tgz" -C "$tmp_dir" gitleaks
+          sudo mv "$tmp_dir/gitleaks" /usr/local/bin/
           gitleaks version
       
       - name: Run Gitleaks
@@ -93,9 +95,9 @@ jobs:
           
           # Run gitleaks and generate SARIF report
           if [ "${{ inputs.fail-on-detection }}" = "true" ]; then
-            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --verbose --no-git
+            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --redact --no-git
           else
-            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --verbose --no-git || true
+            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --redact --no-git || true
           fi
       
       - name: Upload SARIF report
