@@ -78,6 +78,7 @@ jobs:
           gcloud auth configure-docker ${{ inputs.region }}-docker.pkg.dev --quiet
 
       - name: Build Container Image
+        id: build
         run: |
           IMAGE="${{ inputs.region }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/containers/${{ inputs.image_name }}:${{ github.sha }}"
           docker build -t $IMAGE -f ${{ inputs.dockerfile }} .
@@ -106,7 +107,7 @@ jobs:
           sarif_file: 'trivy-results.sarif'
 
       - name: Run Trivy vulnerability scanner (gate)
-        if: ${{ always() && env.IMAGE != '' }}
+        if: ${{ always() && steps.build.outcome == 'success' }}
         uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518  # v0.34.1
         with:
           image-ref: ${{ env.IMAGE }}
