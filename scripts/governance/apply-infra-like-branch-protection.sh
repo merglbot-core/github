@@ -34,6 +34,7 @@ DEFAULT_ORGS=(
   merglbot-proteinaco
   merglbot-extractors
   merglbot-ruzovyslon
+  merglbot-milan-private
   merglbot-autodoplnky
   merglbot-hodinarstvibechyne
   merglbot-kiteboarding

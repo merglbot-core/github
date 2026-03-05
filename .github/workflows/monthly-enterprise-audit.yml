@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ORGS: "merglbot-core merglbot-public merglbot-denatura merglbot-extractors merglbot-proteinaco merglbot-ruzovyslon merglbot-milan-private merglbot-autodoplnky merglbot-hodinarstvibechyne merglbot-kiteboarding"
+  ORGS: "merglbot-core merglbot-public merglbot-cerano merglbot-denatura merglbot-extractors merglbot-proteinaco merglbot-ruzovyslon merglbot-milan-private merglbot-autodoplnky merglbot-hodinarstvibechyne merglbot-kiteboarding"
 
 jobs:
   audit-settings:
@@ -41,10 +41,11 @@ jobs:
           AUDIT_ID="enterprise-audit-$(date +%Y%m%d-%H%M%S)"
           echo "audit_id=$AUDIT_ID" >> "$GITHUB_OUTPUT"
           mkdir -p reports
+          ORG_COUNT="$(echo "$ORGS" | wc -w | tr -d " ")"
           echo "## 🏢 Monthly Enterprise Audit" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Audit ID**: $AUDIT_ID" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Date**: $(date -u +%Y-%m-%d)" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Organizations**: 10" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Organizations**: $ORG_COUNT" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Audit organization settings

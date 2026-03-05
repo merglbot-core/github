@@ -153,18 +153,18 @@ jobs:
           echo "✅ Image pushed: ${FULL_IMAGE_WITH_DIGEST}"
       
       # Container Security: Trivy Scanning
-      # CRITICAL vulnerabilities block deploy, HIGH are reported to Code Scanning
-      # Per MERGLBOT_AI_AGENT_APPENDIX Rule 12: Security gating must not be weakened
-      - name: Run Trivy vulnerability scanner
+      # - SARIF is non-blocking (Code Scanning visibility)
+      # - Separate gate blocks deploy on CRITICAL (no gating softening)
+      - name: Run Trivy vulnerability scanner (SARIF)
         uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518  # v0.34.1
-        continue-on-error: true  # Temporarily allow deploy while investigating SARIF exit-code issue
+        continue-on-error: true
         with:
           image-ref: ${{ steps.build.outputs.full_image }}
           format: 'sarif'
           output: 'trivy-results.sarif'
-          severity: 'CRITICAL'  # Block on CRITICAL only
-          exit-code: '0'        # Temporarily set to 0 - SARIF has false positive exit codes
-          ignore-unfixed: true  # Don't fail on unfixable vulns
+          severity: 'CRITICAL'
+          exit-code: '0'
+          ignore-unfixed: true
       
       - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@89a39a4e59826350b863aa6b6252a07ad50cf83e  # v4
@@ -172,6 +172,16 @@ jobs:
         continue-on-error: true  # Don't fail if SARIF upload has permission issues
         with:
           sarif_file: 'trivy-results.sarif'
+
+      - name: Run Trivy vulnerability scanner (gate)
+        if: always()
+        uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518  # v0.34.1
+        with:
+          image-ref: ${{ steps.build.outputs.full_image }}
+          format: 'table'
+          severity: 'CRITICAL'
+          exit-code: '1'
+          ignore-unfixed: true
       
       # Container Security: SBOM Generation
       - name: Generate SBOM
