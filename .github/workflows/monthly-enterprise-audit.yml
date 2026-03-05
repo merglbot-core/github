@@ -41,7 +41,7 @@ jobs:
           AUDIT_ID="enterprise-audit-$(date +%Y%m%d-%H%M%S)"
           echo "audit_id=$AUDIT_ID" >> "$GITHUB_OUTPUT"
           mkdir -p reports
-          ORG_COUNT="$(echo "$ORGS" | wc -w | tr -d " ")"
+          ORG_COUNT="$(printf '%s' "$ORGS" | xargs -n1 | wc -l | tr -d ' ')"
           echo "## 🏢 Monthly Enterprise Audit" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Audit ID**: $AUDIT_ID" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Date**: $(date -u +%Y-%m-%d)" >> "$GITHUB_STEP_SUMMARY"

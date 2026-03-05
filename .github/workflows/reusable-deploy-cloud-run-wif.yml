@@ -94,7 +94,7 @@ jobs:
           image-ref: ${{ env.IMAGE }}
           format: 'sarif'
           output: 'trivy-results.sarif'
-          severity: 'CRITICAL'
+          severity: 'HIGH,CRITICAL'
           exit-code: '0'
           ignore-unfixed: true
 
@@ -106,7 +106,7 @@ jobs:
           sarif_file: 'trivy-results.sarif'
 
       - name: Run Trivy vulnerability scanner (gate)
-        if: always()
+        if: ${{ always() && env.IMAGE != '' }}
         uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518  # v0.34.1
         with:
           image-ref: ${{ env.IMAGE }}
