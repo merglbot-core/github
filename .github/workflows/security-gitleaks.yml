@@ -102,6 +102,7 @@ jobs:
 
       - name: Summarize findings (redacted)
         if: always()
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -114,28 +115,28 @@ jobs:
           fi
 
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-          from pathlib import Path
+import json
+from pathlib import Path
 
-          data = json.loads(Path("gitleaks-report.sarif").read_text(encoding="utf-8"))
-          runs = data.get("runs") or []
-          results = ((runs[0].get("results") or []) if runs else []) or []
+data = json.loads(Path("gitleaks-report.sarif").read_text(encoding="utf-8"))
+runs = data.get("runs") or []
+results = ((runs[0].get("results") or []) if runs else []) or []
 
-          print("## Gitleaks results (redacted)")
-          print("")
-          print(f"- Findings: **{len(results)}**")
+print("## Gitleaks results (redacted)")
+print("")
+print(f"- Findings: **{len(results)}**")
 
-          for r in results[:20]:
-            rule = r.get("ruleId") or "unknown"
-            loc = (((r.get("locations") or [{}])[0]).get("physicalLocation") or {})
-            artifact = (loc.get("artifactLocation") or {}).get("uri") or "unknown"
-            region = loc.get("region") or {}
-            start_line = region.get("startLine")
-            suffix = f\":{start_line}\" if isinstance(start_line, int) else \"\"
-            print(f\"- `{rule}` — `{artifact}`{suffix}\")
+for r in results[:20]:
+    rule = r.get("ruleId") or "unknown"
+    loc = (((r.get("locations") or [{}])[0]).get("physicalLocation") or {})
+    artifact = (loc.get("artifactLocation") or {}).get("uri") or "unknown"
+    region = loc.get("region") or {}
+    start_line = region.get("startLine")
+    suffix = f":{start_line}" if isinstance(start_line, int) else ""
+    print(f"- `{rule}` — `{artifact}`{suffix}")
 
-          if len(results) > 20:
-            print(f\"- … plus {len(results) - 20} more\")
+if len(results) > 20:
+    print(f"- … plus {len(results) - 20} more")
           PY
 
       - name: Upload gitleaks report (SARIF, redacted)
