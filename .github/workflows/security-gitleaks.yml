@@ -74,6 +74,24 @@ jobs:
         with:
           fetch-depth: 0  # Full history for comprehensive scanning
           persist-credentials: false
+
+      - name: Scrub checkout auth metadata (avoid false positives)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # actions/checkout may add temporary auth headers / includeIf credentials.
+          # Secret scanners must not treat these as repo leaks.
+          if [ -d .git ]; then
+            git config --local --unset-all http.https://github.com/.extraheader || true
+
+            # Remove includeIf entries pointing to temporary credential configs.
+            # (actions/checkout normally removes these in its post-step, but scanners run before that.)
+            while IFS= read -r key; do
+              [ -z "$key" ] && continue
+              git config --local --unset-all "$key" || true
+            done < <(git config --local --name-only --get-regexp '^includeif\.gitdir:' || true)
+          fi
       
       - name: Install Gitleaks CLI
         run: |
