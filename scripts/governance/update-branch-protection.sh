@@ -50,6 +50,7 @@ EOF
 }
 
 log() { printf '%s %s\n' "[$(date +'%Y-%m-%d %H:%M:%S')]" "$*"; }
+warn() { printf '%s %s\n' "[WARN]" "$*" >&2; }
 err() { printf '%s %s\n' "[ERROR]" "$*" >&2; }
 
 need_cmd() {
@@ -79,7 +80,14 @@ sanitize_path_component() {
 
 list_repos_for_org() {
   local org="$1"
-  gh repo list "$org" --limit 1000 --json name,isArchived,isFork --jq '.[] | select(.isArchived == false) | select(.isFork == false) | .name'
+  local repo_json
+  repo_json="$(gh repo list "$org" --limit 1000 --json name,isArchived,isFork)"
+
+  if [ "$(printf '%s' "$repo_json" | jq 'length')" -ge 1000 ]; then
+    warn "${org}: gh repo list reached limit 1000; verify no repos were truncated"
+  fi
+
+  printf '%s' "$repo_json" | jq -r '.[] | select(.isArchived == false) | select(.isFork == false) | .name'
 }
 
 get_default_branch() {
@@ -181,6 +189,11 @@ build_pr_reviews_payload() {
   local dismissal_json="$2"
   local bypass_json="$3"
 
+  if jq -e '.required_pull_request_reviews == null' "$before_file" >/dev/null; then
+    jq -n 'null'
+    return 0
+  fi
+
   jq -n \
     --argjson required_approving_review_count "$(jq '.required_pull_request_reviews.required_approving_review_count // 0' "$before_file")" \
     --argjson dismiss_stale_reviews "$(jq '.required_pull_request_reviews.dismiss_stale_reviews // false' "$before_file")" \
@@ -198,6 +211,21 @@ build_pr_reviews_payload() {
       + (if $dismissal != null then {dismissal_restrictions: $dismissal} else {} end)
       + (if $clear_bypass == "true" or $bypass != null then {bypass_pull_request_allowances: ($bypass // {users: [], teams: [], apps: []})} else {} end)
     '
+}
+
+ensure_tmp_gitignored() {
+  if ! command -v git >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if ! git -C "$REPO_ROOT" check-ignore -q tmp/agent/; then
+    err "tmp/agent/ is not gitignored in ${REPO_ROOT}; refusing to continue"
+    exit 2
+  fi
 }
 
 normalize_protection_for_diff() {
@@ -454,6 +482,7 @@ if [ "$APPLY" = true ] && [ "$DRY_RUN" = true ]; then
 fi
 
 mkdir -p "$LOG_ROOT"
+ensure_tmp_gitignored
 
 declare -a resolved_repos=()
 if [ "${#TARGET_REPOS[@]}" -gt 0 ]; then
@@ -480,8 +509,8 @@ if [ "$APPLY" != true ]; then
   DRY_RUN=true
 fi
 
-if [ "$APPLY" = true ] && { [ "${#resolved_repos[@]}" -gt 1 ] || [ "$CLEAR_BYPASS_ALLOWANCES" = true ]; } && [ "$ASSUME_YES" != true ]; then
-  err "--apply on multiple repos or with --clear-bypass-allowances requires --yes"
+if [ "$APPLY" = true ] && [ "$ASSUME_YES" != true ]; then
+  err "--apply requires --yes"
   exit 2
 fi
 
@@ -503,7 +532,11 @@ for full_name in "${resolved_repos[@]}"; do
   fi
 
   log "TARGET ${full_name}:${branch}"
-  if ! apply_to_target "$full_name" "$branch"; then
+  set +e
+  apply_to_target "$full_name" "$branch"
+  apply_rc=$?
+  set -e
+  if [ "$apply_rc" -ne 0 ]; then
     failures=$((failures + 1))
   fi
 done
