@@ -7,6 +7,8 @@
 set -euo pipefail
 
 DRY_RUN=false
+APPLY=false
+ASSUME_YES=false
 CLEAR_BYPASS_ALLOWANCES=false
 
 TARGET_ORGS=()
@@ -22,10 +24,11 @@ LOG_ROOT="${REPO_ROOT}/tmp/agent/branch-protection/${RUN_DATE}/${RUN_TS}"
 
 usage() {
   cat <<'EOF'
-Deterministically update GitHub branch protection settings, enforcing a baseline configuration.
+Deterministically update GitHub branch protection required checks and bypass allowances while preserving other settings by default.
 
 Usage:
   update-branch-protection.sh [--repo ORG/REPO]... [--org ORG]... [--branch BRANCH] [--check CONTEXT]... [--clear-bypass-allowances] [--dry-run]
+  update-branch-protection.sh [--repo ORG/REPO]... [--org ORG]... [--branch BRANCH] [--check CONTEXT]... [--clear-bypass-allowances] --apply --yes
 
 Options:
   --repo ORG/REPO             Target a specific repository (repeatable).
@@ -34,15 +37,15 @@ Options:
   --check CONTEXT             Required status check context to enforce (repeatable).
   --clear-bypass-allowances   Remove all PR review bypass allowances.
   --dry-run                   Write before/after/diff artifacts without applying the change.
+  --apply                     Apply the change. Default mode is dry-run.
+  --yes                       Required with --apply for multi-repo or bypass-clearing changes.
   -h, --help                  Show help.
 
 Notes:
-  - The script enforces: approvals=0, require_code_owner_reviews=false, require_last_push_approval=false,
-    required_linear_history=true, enforce_admins=true, required_conversation_resolution=false.
-  - Existing restrictions, dismissal restrictions, and allow_force_pushes/allow_deletions settings are preserved.
+  - The script preserves existing branch protection settings by default and only updates required checks plus optional bypass clearing.
   - The script requires existing branch protection on the target branch.
   - The script refuses to create empty required status checks.
-  - Artifacts are written to tmp/agent/branch-protection/<date>/<timestamp>/.
+  - Artifacts are written to tmp/agent/branch-protection/<date>/<timestamp>/ and may contain GitHub metadata (users/teams/apps).
 EOF
 }
 
@@ -62,7 +65,7 @@ gh_api() {
   local method="$1"
   local endpoint="$2"
   shift 2 || true
-  gh api -X "$method" "$endpoint" "$@"
+  gh api -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" -X "$method" "$endpoint" "$@"
 }
 
 validate_repo_full_name() {
@@ -97,7 +100,10 @@ normalize_required_status_checks() {
   local provided_checks_json="$2"
 
   if [ "$provided_checks_json" != "[]" ]; then
-    jq -n --argjson contexts "$provided_checks_json" '{strict: true, contexts: $contexts}'
+    jq -n \
+      --argjson strict "$(jq '.required_status_checks.strict // true' "$before_file")" \
+      --argjson contexts "$provided_checks_json" \
+      '{strict: $strict, contexts: $contexts}'
     return 0
   fi
 
@@ -171,18 +177,23 @@ normalize_bypass_allowances() {
 }
 
 build_pr_reviews_payload() {
-  local dismissal_json="$1"
-  local bypass_json="$2"
+  local before_file="$1"
+  local dismissal_json="$2"
+  local bypass_json="$3"
 
   jq -n \
+    --argjson required_approving_review_count "$(jq '.required_pull_request_reviews.required_approving_review_count // 0' "$before_file")" \
+    --argjson dismiss_stale_reviews "$(jq '.required_pull_request_reviews.dismiss_stale_reviews // false' "$before_file")" \
+    --argjson require_code_owner_reviews "$(jq '.required_pull_request_reviews.require_code_owner_reviews // false' "$before_file")" \
+    --argjson require_last_push_approval "$(jq '.required_pull_request_reviews.require_last_push_approval // false' "$before_file")" \
     --argjson dismissal "$dismissal_json" \
     --argjson bypass "$bypass_json" \
     --arg clear_bypass "$CLEAR_BYPASS_ALLOWANCES" '
       {
-        required_approving_review_count: 0,
-        dismiss_stale_reviews: false,
-        require_code_owner_reviews: false,
-        require_last_push_approval: false
+        required_approving_review_count: $required_approving_review_count,
+        dismiss_stale_reviews: $dismiss_stale_reviews,
+        require_code_owner_reviews: $require_code_owner_reviews,
+        require_last_push_approval: $require_last_push_approval
       }
       + (if $dismissal != null then {dismissal_restrictions: $dismissal} else {} end)
       + (if $clear_bypass == "true" or $bypass != null then {bypass_pull_request_allowances: ($bypass // {users: [], teams: [], apps: []})} else {} end)
@@ -301,13 +312,14 @@ apply_to_target() {
   local prefix="${LOG_ROOT}/${repo_token}__${branch_token}"
   local before_file="${prefix}.before.json"
   local after_file="${prefix}.after.json"
-  local diff_file="${prefix}.diff.json"
+  local diff_file="${prefix}.diff.txt"
   local payload_file="${prefix}.payload.json"
+  local before_err_file="${prefix}.before.err.txt"
 
   mkdir -p "$LOG_ROOT"
 
-  if ! get_existing_protection "$full_name" "$branch" > "$before_file" 2>/dev/null; then
-    err "${full_name}:${branch}: existing branch protection is required"
+  if ! get_existing_protection "$full_name" "$branch" > "$before_file" 2> "$before_err_file"; then
+    err "${full_name}:${branch}: existing branch protection is required (see ${before_err_file})"
     return 1
   fi
 
@@ -332,27 +344,30 @@ apply_to_target() {
   local bypass_json
   bypass_json="$(normalize_bypass_allowances "$before_file")"
   local pr_reviews_json
-  pr_reviews_json="$(build_pr_reviews_payload "$dismissal_json" "$bypass_json")"
+  pr_reviews_json="$(build_pr_reviews_payload "$before_file" "$dismissal_json" "$bypass_json")"
 
   jq -n \
     --argjson required_status_checks "$required_status_checks_json" \
     --argjson restrictions "$restrictions_json" \
     --argjson pr_reviews "$pr_reviews_json" \
+    --argjson enforce_admins "$(jq '.enforce_admins.enabled // false' "$before_file")" \
+    --argjson required_linear_history "$(jq '.required_linear_history.enabled // false' "$before_file")" \
     --argjson allow_force_pushes "$(jq '.allow_force_pushes.enabled // false' "$before_file")" \
     --argjson allow_deletions "$(jq '.allow_deletions.enabled // false' "$before_file")" \
     --argjson block_creations "$(jq '.block_creations.enabled // false' "$before_file")" \
     --argjson lock_branch "$(jq '.lock_branch.enabled // false' "$before_file")" \
+    --argjson required_conversation_resolution "$(jq '.required_conversation_resolution.enabled // false' "$before_file")" \
     '{
       required_status_checks: $required_status_checks,
-      enforce_admins: true,
+      enforce_admins: $enforce_admins,
       required_pull_request_reviews: $pr_reviews,
-      required_linear_history: true,
+      required_linear_history: $required_linear_history,
       restrictions: $restrictions,
       allow_force_pushes: $allow_force_pushes,
       allow_deletions: $allow_deletions,
       block_creations: $block_creations,
       lock_branch: $lock_branch,
-      required_conversation_resolution: false
+      required_conversation_resolution: $required_conversation_resolution
     }' > "$payload_file"
 
   if [ "$DRY_RUN" = true ]; then
@@ -390,12 +405,20 @@ while [[ $# -gt 0 ]]; do
       CHECKS+=("$2")
       shift 2
       ;;
+    --apply)
+      APPLY=true
+      shift
+      ;;
     --clear-bypass-allowances)
       CLEAR_BYPASS_ALLOWANCES=true
       shift
       ;;
     --dry-run)
       DRY_RUN=true
+      shift
+      ;;
+    --yes)
+      ASSUME_YES=true
       shift
       ;;
     -h|--help)
@@ -421,6 +444,11 @@ if [ "${#TARGET_REPOS[@]}" -eq 0 ] && [ "${#TARGET_ORGS[@]}" -eq 0 ]; then
   exit 2
 fi
 
+if [ "$APPLY" = true ] && [ "$DRY_RUN" = true ]; then
+  err "Use either --dry-run or --apply, not both"
+  exit 2
+fi
+
 mkdir -p "$LOG_ROOT"
 
 declare -a resolved_repos=()
@@ -443,6 +471,15 @@ while IFS= read -r repo_name; do
   deduped_repos+=("$repo_name")
 done < <(printf '%s\n' "${resolved_repos[@]}" | awk 'NF' | sort -u)
 resolved_repos=("${deduped_repos[@]}")
+
+if [ "$APPLY" != true ]; then
+  DRY_RUN=true
+fi
+
+if [ "$APPLY" = true ] && { [ "${#resolved_repos[@]}" -gt 1 ] || [ "$CLEAR_BYPASS_ALLOWANCES" = true ]; } && [ "$ASSUME_YES" != true ]; then
+  err "--apply on multiple repos or with --clear-bypass-allowances requires --yes"
+  exit 2
+fi
 
 failures=0
 for full_name in "${resolved_repos[@]}"; do
