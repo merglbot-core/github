@@ -87,7 +87,7 @@ list_repos_for_org() {
 
   if [ "$repo_count" -ge 1000 ]; then
     if [ "$APPLY" = true ]; then
-      err "${org}: gh repo list reached limit 1000; refusing to --apply because results may be truncated"
+      err "${org}: gh repo list reached limit 1000; refusing to --apply because results may be truncated; narrow scope with --repo or smaller org subsets"
       return 2
     fi
     warn "${org}: gh repo list reached limit 1000; verify no repos were truncated"
@@ -496,8 +496,9 @@ fi
 if [ "${#TARGET_ORGS[@]}" -gt 0 ]; then
   for org in "${TARGET_ORGS[@]}"; do
     if ! org_repos="$(list_repos_for_org "$org")"; then
-      err "${org}: unable to resolve deterministic repo list"
-      exit 1
+      rc=$?
+      err "${org}: unable to resolve deterministic repo list (rc=${rc})"
+      exit "$rc"
     fi
     while IFS= read -r repo_name; do
       [ -z "$repo_name" ] && continue
