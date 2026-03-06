@@ -65,6 +65,11 @@ gh_api() {
   gh api -X "$method" "$endpoint" "$@"
 }
 
+validate_repo_full_name() {
+  local full_name="$1"
+  [[ "$full_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+}
+
 sanitize_path_component() {
   printf '%s' "$1" | sed 's#[/: ]#_#g'
 }
@@ -441,6 +446,12 @@ resolved_repos=("${deduped_repos[@]}")
 
 failures=0
 for full_name in "${resolved_repos[@]}"; do
+  if ! validate_repo_full_name "$full_name"; then
+    err "${full_name}: invalid repo name; expected ORG/REPO"
+    failures=$((failures + 1))
+    continue
+  fi
+
   branch="$SPECIFIC_BRANCH"
   if [ -z "$branch" ]; then
     if ! branch="$(get_default_branch "$full_name")"; then
