@@ -50,8 +50,8 @@ EOF
 }
 
 log() { printf '%s %s\n' "[$(date +'%Y-%m-%d %H:%M:%S')]" "$*"; }
-warn() { printf '%s %s\n' "[WARN]" "$*" >&2; }
-err() { printf '%s %s\n' "[ERROR]" "$*" >&2; }
+warn() { printf '%s %s\n' "[$(date +'%Y-%m-%d %H:%M:%S')] [WARN]" "$*" >&2; }
+err() { printf '%s %s\n' "[$(date +'%Y-%m-%d %H:%M:%S')] [ERROR]" "$*" >&2; }
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || { err "Missing dependency: $1"; exit 1; }
@@ -81,9 +81,15 @@ sanitize_path_component() {
 list_repos_for_org() {
   local org="$1"
   local repo_json
+  local repo_count
   repo_json="$(gh repo list "$org" --limit 1000 --json name,isArchived,isFork)"
+  repo_count="$(printf '%s' "$repo_json" | jq 'length')"
 
-  if [ "$(printf '%s' "$repo_json" | jq 'length')" -ge 1000 ]; then
+  if [ "$repo_count" -ge 1000 ]; then
+    if [ "$APPLY" = true ]; then
+      err "${org}: gh repo list reached limit 1000; refusing to --apply because results may be truncated"
+      return 2
+    fi
     warn "${org}: gh repo list reached limit 1000; verify no repos were truncated"
   fi
 
@@ -344,8 +350,6 @@ apply_to_target() {
   local payload_file="${prefix}.payload.json"
   local before_err_file="${prefix}.before.err.txt"
 
-  mkdir -p "$LOG_ROOT"
-
   if ! get_existing_protection "$full_name" "$branch" > "$before_file" 2> "$before_err_file"; then
     err "${full_name}:${branch}: existing branch protection is required (see ${before_err_file})"
     return 1
@@ -481,8 +485,8 @@ if [ "$APPLY" = true ] && [ "$DRY_RUN" = true ]; then
   exit 2
 fi
 
-mkdir -p "$LOG_ROOT"
 ensure_tmp_gitignored
+mkdir -p "$LOG_ROOT"
 
 declare -a resolved_repos=()
 if [ "${#TARGET_REPOS[@]}" -gt 0 ]; then
@@ -491,10 +495,14 @@ fi
 
 if [ "${#TARGET_ORGS[@]}" -gt 0 ]; then
   for org in "${TARGET_ORGS[@]}"; do
+    if ! org_repos="$(list_repos_for_org "$org")"; then
+      err "${org}: unable to resolve deterministic repo list"
+      exit 1
+    fi
     while IFS= read -r repo_name; do
       [ -z "$repo_name" ] && continue
       resolved_repos+=("${org}/${repo_name}")
-    done < <(list_repos_for_org "$org")
+    done <<< "$org_repos"
   done
 fi
 
@@ -532,11 +540,10 @@ for full_name in "${resolved_repos[@]}"; do
   fi
 
   log "TARGET ${full_name}:${branch}"
-  set +e
-  apply_to_target "$full_name" "$branch"
-  apply_rc=$?
-  set -e
-  if [ "$apply_rc" -ne 0 ]; then
+  if ! (
+    set -euo pipefail
+    apply_to_target "$full_name" "$branch"
+  ); then
     failures=$((failures + 1))
   fi
 done
