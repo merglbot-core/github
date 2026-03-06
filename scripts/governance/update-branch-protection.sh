@@ -324,7 +324,11 @@ apply_to_target() {
   fi
 
   local checks_json
-  checks_json="$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "${CHECKS[@]}")"
+  if [ "${#CHECKS[@]}" -gt 0 ]; then
+    checks_json="$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "${CHECKS[@]}")"
+  else
+    checks_json='[]'
+  fi
 
   local required_status_checks_json
   required_status_checks_json="$(normalize_required_status_checks "$before_file" "$checks_json")"
@@ -377,9 +381,9 @@ apply_to_target() {
     return 0
   fi
 
-  gh_api PUT "repos/${full_name}/branches/${encoded_branch}/protection" --input "$payload_file" >/dev/null
-  get_existing_protection "$full_name" "$branch" > "$after_file"
-  write_diff_artifact "$before_file" "$after_file" "$diff_file"
+  gh_api PUT "repos/${full_name}/branches/${encoded_branch}/protection" --input "$payload_file" >/dev/null || return 1
+  get_existing_protection "$full_name" "$branch" > "$after_file" || return 1
+  write_diff_artifact "$before_file" "$after_file" "$diff_file" || return 1
   log "UPDATED ${full_name}:${branch} -> ${diff_file}"
 }
 
