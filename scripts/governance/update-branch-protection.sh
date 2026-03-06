@@ -495,7 +495,9 @@ fi
 
 if [ "${#TARGET_ORGS[@]}" -gt 0 ]; then
   for org in "${TARGET_ORGS[@]}"; do
-    if ! org_repos="$(list_repos_for_org "$org")"; then
+    if org_repos="$(list_repos_for_org "$org")"; then
+      :
+    else
       rc=$?
       err "${org}: unable to resolve deterministic repo list (rc=${rc})"
       exit "$rc"
