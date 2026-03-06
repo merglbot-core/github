@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Purpose: Deterministically update required status checks and PR review bypass allowances.
+# Purpose: Deterministically update GitHub branch protection, including required status checks and selected baseline settings.
 # Usage examples:
 #   ./scripts/governance/update-branch-protection.sh --repo merglbot-extractors/facebook-extractor --branch main --check ci --check "gitleaks / Secret Scanning" --check "dependency-review / Dependency Review" --clear-bypass-allowances --dry-run
 #   ./scripts/governance/update-branch-protection.sh --org merglbot-extractors --branch main --check ci --check "gitleaks / Secret Scanning" --check "dependency-review / Dependency Review" --clear-bypass-allowances
@@ -22,7 +22,7 @@ LOG_ROOT="${REPO_ROOT}/tmp/agent/branch-protection/${RUN_DATE}/${RUN_TS}"
 
 usage() {
   cat <<'EOF'
-Deterministically update GitHub branch protection required checks and bypass allowances.
+Deterministically update GitHub branch protection settings, enforcing a baseline configuration.
 
 Usage:
   update-branch-protection.sh [--repo ORG/REPO]... [--org ORG]... [--branch BRANCH] [--check CONTEXT]... [--clear-bypass-allowances] [--dry-run]
@@ -37,6 +37,9 @@ Options:
   -h, --help                  Show help.
 
 Notes:
+  - The script enforces: approvals=0, require_code_owner_reviews=false, require_last_push_approval=false,
+    required_linear_history=true, enforce_admins=true, required_conversation_resolution=false.
+  - Existing restrictions, dismissal restrictions, and allow_force_pushes/allow_deletions settings are preserved.
   - The script requires existing branch protection on the target branch.
   - The script refuses to create empty required status checks.
   - Artifacts are written to tmp/agent/branch-protection/<date>/<timestamp>/.
@@ -44,7 +47,6 @@ EOF
 }
 
 log() { printf '%s %s\n' "[$(date +'%Y-%m-%d %H:%M:%S')]" "$*"; }
-warn() { printf '%s %s\n' "[WARN]" "$*" >&2; }
 err() { printf '%s %s\n' "[ERROR]" "$*" >&2; }
 
 need_cmd() {
@@ -182,12 +184,96 @@ build_pr_reviews_payload() {
     '
 }
 
+normalize_protection_for_diff() {
+  local source_file="$1"
+
+  jq '
+    def normalize_subjects(items; object_key):
+      if items == null then
+        []
+      else
+        [
+          items[]?
+          | if type == "object" then
+              .[object_key] // .name // empty
+            else
+              .
+            end
+        ] | sort
+      end;
+
+    def normalize_actor_block(block):
+      if block == null then
+        null
+      else
+        {
+          users: normalize_subjects(block.users; "login"),
+          teams: normalize_subjects(block.teams; "slug"),
+          apps: normalize_subjects(block.apps; "slug")
+        }
+      end;
+
+    def normalize_required_status_checks:
+      if .required_status_checks == null then
+        null
+      else
+        {
+          strict: (.required_status_checks.strict // true),
+          contexts: (
+            if (.required_status_checks.contexts? | type) == "array" then
+              .required_status_checks.contexts
+            else
+              [ .required_status_checks.checks[]?.context // empty ]
+            end | sort
+          )
+        }
+      end;
+
+    def normalize_bool(field):
+      if .[field] == null then
+        false
+      elif (.[field] | type) == "object" then
+        (.[field].enabled // false)
+      else
+        .[field]
+      end;
+
+    def normalize_pr_reviews:
+      if .required_pull_request_reviews == null then
+        null
+      else
+        .required_pull_request_reviews as $reviews
+        | {
+            required_approving_review_count: ($reviews.required_approving_review_count // 0),
+            dismiss_stale_reviews: ($reviews.dismiss_stale_reviews // false),
+            require_code_owner_reviews: ($reviews.require_code_owner_reviews // false),
+            require_last_push_approval: ($reviews.require_last_push_approval // false)
+          }
+          + (if ($reviews.dismissal_restrictions? == null) then {} else {dismissal_restrictions: normalize_actor_block($reviews.dismissal_restrictions)} end)
+          + (if ($reviews.bypass_pull_request_allowances? == null) then {} else {bypass_pull_request_allowances: normalize_actor_block($reviews.bypass_pull_request_allowances)} end)
+      end;
+
+    {
+      required_status_checks: normalize_required_status_checks,
+      enforce_admins: normalize_bool("enforce_admins"),
+      required_pull_request_reviews: normalize_pr_reviews,
+      required_linear_history: normalize_bool("required_linear_history"),
+      restrictions: normalize_actor_block(.restrictions),
+      allow_force_pushes: normalize_bool("allow_force_pushes"),
+      allow_deletions: normalize_bool("allow_deletions"),
+      block_creations: normalize_bool("block_creations"),
+      lock_branch: normalize_bool("lock_branch"),
+      required_conversation_resolution: normalize_bool("required_conversation_resolution")
+    }
+  ' "$source_file"
+}
+
 write_diff_artifact() {
   local before_file="$1"
   local after_file="$2"
   local diff_file="$3"
 
-  if diff -u <(jq -S . "$before_file") <(jq -S . "$after_file") > "$diff_file"; then
+  if diff -u <(normalize_protection_for_diff "$before_file" | jq -S .) <(normalize_protection_for_diff "$after_file" | jq -S .) > "$diff_file"; then
     :
   else
     local diff_rc=$?
@@ -357,7 +443,11 @@ failures=0
 for full_name in "${resolved_repos[@]}"; do
   branch="$SPECIFIC_BRANCH"
   if [ -z "$branch" ]; then
-    branch="$(get_default_branch "$full_name")"
+    if ! branch="$(get_default_branch "$full_name")"; then
+      err "${full_name}: unable to resolve default branch"
+      failures=$((failures + 1))
+      continue
+    fi
   fi
 
   log "TARGET ${full_name}:${branch}"
