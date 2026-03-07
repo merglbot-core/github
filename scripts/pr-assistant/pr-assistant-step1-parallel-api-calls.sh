@@ -170,7 +170,7 @@ curl_json_with_backoff() {
     return 2
   fi
 
-  local attempt resp exit_code err_type
+  local attempt resp exit_code err_type api_error_exit=75
   for attempt in 1 2 3; do
     set +e
     resp="$(curl -s --connect-timeout 15 --max-time 180 "$url" "$@")"
@@ -202,8 +202,9 @@ curl_json_with_backoff() {
     fi
 
     # Retry common transient API errors (best-effort).
-    # Return the final JSON body with exit 0 so caller-specific fallback paths
-    # can inspect provider errors deterministically.
+    # Return a dedicated sentinel exit code so callers can still inspect the
+    # provider JSON error body without treating the request as a generic
+    # transport success.
     if echo "$resp" | jq -e '.error' > /dev/null 2>&1; then
       err_type="$(echo "$resp" | jq -r '.error.type // empty' 2>/dev/null || true)"
       case "$err_type" in
@@ -215,7 +216,7 @@ curl_json_with_backoff() {
           ;;
       esac
       printf '%s' "$resp"
-      return 0
+      return "$api_error_exit"
     fi
 
     printf '%s' "$resp"
@@ -721,7 +722,7 @@ echo "Prompt size: $PROMPT_SIZE chars"
         echo "  ERROR: Anthropic request timed out (exit=$CURL_EXIT)" >&2
         continue
       fi
-      if [ "$CURL_EXIT" -ne 0 ] || ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
+      if { [ "$CURL_EXIT" -ne 0 ] && [ "$CURL_EXIT" -ne 75 ]; } || ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
         echo "  ERROR: Anthropic request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
         continue
       fi
@@ -889,7 +890,7 @@ call_openai_responses() {
       echo "  ERROR: Responses API request timed out (exit=$exit_code)" >&2
       return 1
     fi
-    if [ "$exit_code" -ne 0 ] || ! echo "$resp" | jq -e . > /dev/null 2>&1; then
+    if { [ "$exit_code" -ne 0 ] && [ "$exit_code" -ne 75 ]; } || ! echo "$resp" | jq -e . > /dev/null 2>&1; then
       echo "  ERROR: Responses API returned non-JSON (exit=$exit_code)" >&2
       continue
     fi
@@ -1030,7 +1031,7 @@ else
         echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
         continue
       fi
-      if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+      if { [ "$CURL_EXIT" -ne 0 ] && [ "$CURL_EXIT" -ne 75 ]; } || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
         echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
         continue
       fi
@@ -1063,7 +1064,7 @@ else
             echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
             continue
           fi
-          if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+          if { [ "$CURL_EXIT" -ne 0 ] && [ "$CURL_EXIT" -ne 75 ]; } || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
             echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
             continue
           fi
@@ -1146,7 +1147,7 @@ else
       echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
       continue
     fi
-    if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+    if { [ "$CURL_EXIT" -ne 0 ] && [ "$CURL_EXIT" -ne 75 ]; } || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
       echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
       continue
     fi

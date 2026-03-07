@@ -316,7 +316,7 @@ jobs:
             if [ "$CHECKS_DATA_AVAILABLE" != "true" ] && [ -n "${PR_HEAD_SHA:-}" ]; then
               if (
                 set -o pipefail
-                gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null \
+                gh api --silent --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null \
                   | jq -s '{check_runs: (map(.check_runs // []) | add // [])}' > check_runs.json 2>/dev/null
               ); then
                 if jq -e '.check_runs | type == "array"' check_runs.json > /dev/null 2>&1; then
