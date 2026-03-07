@@ -45,8 +45,6 @@ done
 WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 SOURCE_WORKFLOW="${WORKSPACE_ROOT}/merglbot-core/github/.github/workflows/merglbot-pr-assistant-v3-on-demand.yml"
 SOURCE_STEP1="${WORKSPACE_ROOT}/merglbot-core/github/scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh"
-SOURCE_SECRET_SCAN_PATTERNS="${WORKSPACE_ROOT}/merglbot-core/github/scripts/pr-assistant/secret-scan-patterns.sh"
-SOURCE_WORKFLOW_SANITIZE="${WORKSPACE_ROOT}/merglbot-core/github/scripts/pr-assistant/workflow-sanitize.sh"
 TARGET_REPOS_FILE="${WORKSPACE_ROOT}/merglbot-core/github/scripts/pr-assistant/target-repos.txt"
 
 if [ ! -f "$SOURCE_WORKFLOW" ]; then
@@ -56,16 +54,6 @@ fi
 
 if [ ! -f "$SOURCE_STEP1" ]; then
   echo "ERROR: Source Step1 script not found: $SOURCE_STEP1" >&2
-  exit 1
-fi
-
-if [ ! -f "$SOURCE_SECRET_SCAN_PATTERNS" ]; then
-  echo "ERROR: Source secret scan patterns script not found: $SOURCE_SECRET_SCAN_PATTERNS" >&2
-  exit 1
-fi
-
-if [ ! -f "$SOURCE_WORKFLOW_SANITIZE" ]; then
-  echo "ERROR: Source workflow sanitize script not found: $SOURCE_WORKFLOW_SANITIZE" >&2
   exit 1
 fi
 
@@ -119,8 +107,6 @@ is_git_clean() {
 echo "Workspace: $WORKSPACE_ROOT"
 echo "Source:    $SOURCE_WORKFLOW"
 echo "Step1:     $SOURCE_STEP1"
-echo "Patterns:  $SOURCE_SECRET_SCAN_PATTERNS"
-echo "Sanitize:  $SOURCE_WORKFLOW_SANITIZE"
 echo "Mode:      $([ "$DRY_RUN" == "true" ] && echo "DRY RUN" || echo "APPLY")"
 echo "Force:     $FORCE"
 if [ -n "$ONLY_REPOS_RAW" ]; then
@@ -132,8 +118,6 @@ for repo in "${TARGET_REPOS[@]}"; do
   repo_dir="${WORKSPACE_ROOT}/${repo}"
   dest_workflow="${repo_dir}/.github/workflows/merglbot-pr-v3-on-demand.yml"
   dest_step1="${repo_dir}/scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh"
-  dest_secret_scan_patterns="${repo_dir}/scripts/pr-assistant/secret-scan-patterns.sh"
-  dest_workflow_sanitize="${repo_dir}/scripts/pr-assistant/workflow-sanitize.sh"
 
   if [ ! -d "$repo_dir" ]; then
     echo "⏭️  SKIP (missing dir): $repo"
@@ -154,8 +138,6 @@ for repo in "${TARGET_REPOS[@]}"; do
   if [ "$DRY_RUN" == "true" ]; then
     echo "DRY:  $repo -> $dest_workflow"
     echo "DRY:  $repo -> $dest_step1"
-    echo "DRY:  $repo -> $dest_secret_scan_patterns"
-    echo "DRY:  $repo -> $dest_workflow_sanitize"
     continue
   fi
 
@@ -163,9 +145,7 @@ for repo in "${TARGET_REPOS[@]}"; do
   mkdir -p "$(dirname "$dest_step1")"
   cp "$SOURCE_WORKFLOW" "$dest_workflow"
   cp "$SOURCE_STEP1" "$dest_step1"
-  cp "$SOURCE_SECRET_SCAN_PATTERNS" "$dest_secret_scan_patterns"
-  cp "$SOURCE_WORKFLOW_SANITIZE" "$dest_workflow_sanitize"
-  if ! chmod +x "$dest_step1" "$dest_workflow_sanitize"; then
+  if ! chmod +x "$dest_step1"; then
     echo "ERROR: Failed to chmod +x: $dest_step1" >&2
     exit 1
   fi

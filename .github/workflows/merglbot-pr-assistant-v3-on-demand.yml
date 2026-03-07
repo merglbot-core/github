@@ -243,6 +243,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          trap 'rm -f pr_diff_full.txt || true' EXIT
           
           echo "========================================="
           echo "GATHERING PR CONTEXT"
@@ -586,8 +587,28 @@ jobs:
             # becomes noisy, tighten the JWT prefix further rather than disabling the guardrail.
             # To reduce false positives from lockfile/full-diff integrity strings, keep the JWT scan out of
             # pr_diff_full.txt (which intentionally includes full package-lock.json diffs).
-            # Loaded from a shared script to avoid false positives from policy checks on workflow `run:` blocks.
-            source scripts/pr-assistant/secret-scan-patterns.sh
+            # Intentionally inlined here so the workflow never sources shell from the PR checkout.
+            # Keep in sync with scripts/pr-assistant/secret-scan-patterns.sh.
+            _GH="gh"
+            _GHP="${_GH}""p_"
+            _GH_CLASS_PREFIX="${_GH}""[oprsut]_"
+            _GH_PAT_PREFIX="github""_pat_"
+            _SK_PREFIX="s""k-"
+            _BEGIN_PRIVATE_BLOCK='-----BEGIN [A-Z ]*PRIVATE KEY-----'
+            _BEGIN_PGP_BLOCK='-----BEGIN PGP[ ]PRIVATE[ ]KEY[ ]BLOCK-----'
+            _SLACK_RX='(^|[^[:alnum:]_])xox[baprs]-[A-Za-z0-9-]{10,}($|[^[:alnum:]_])'
+            _GH_CLASSIC_RX="(^|[^[:alnum:]_])${_GHP}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
+            _GH_FINE_RX="(^|[^[:alnum:]_])${_GH_PAT_PREFIX}[A-Za-z0-9_]{20,}($|[^[:alnum:]_])"
+            _GH_GENERIC_RX="(^|[^[:alnum:]_])${_GH_CLASS_PREFIX}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
+            _GENERIC_RX="(^|[^[:alnum:]_])key_[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
+            _AWS_RX="(^|[^[:alnum:]_])AKIA[0-9A-Z]{16}($|[^[:alnum:]_])"
+            _GOOGLE_RX="(^|[^[:alnum:]_])AIza[0-9A-Za-z_-]{30,}($|[^[:alnum:]_])"
+            _GOOGLE_REFRESH_RX="(^|[^[:alnum:]_])ya29\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
+            _OPENAI_PROJECT_RX="(^|[^[:alnum:]_])${_SK_PREFIX}(proj|ant)-[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
+            _OPENAI_RX="(^|[^[:alnum:]_])${_SK_PREFIX}[A-Za-z0-9_-]{30,}($|[^[:alnum:]_])"
+            SECRET_PATTERN_STRICT="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
+            SECRET_PATTERN_STRICT_NO_KEY="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
+            JWT_PATTERN_STRICT='(^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])'
             # Loose JWT pattern (for alignment with redaction; intentionally NOT used for SKIP_REVIEW gating):
             #   (^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}($|[^[:alnum:]_])
             # NOTE: keep the gate on JWT_PATTERN_STRICT only; the loose heuristic is noisy (docs/test fixtures).
@@ -606,10 +627,10 @@ jobs:
                 break
               fi
             done
-
-            # Defense-in-depth: ensure the full diff never proceeds beyond pre-scan (LLM inputs use pr_diff.txt).
-            rm -f pr_diff_full.txt || true
           fi
+
+          # Defense-in-depth: ensure the full diff never proceeds beyond pre-scan (LLM inputs use pr_diff.txt).
+          rm -f pr_diff_full.txt || true
           
           echo "========================================="
           echo "CONTEXT GATHERING COMPLETE"
@@ -803,7 +824,29 @@ jobs:
             sed 's/<<<MERGLBOT_/<<<MERGLBOT_ESCAPED_/g'
           }
 
-          source scripts/pr-assistant/workflow-sanitize.sh
+          # Intentionally inlined here so the workflow never sources shell from the PR checkout.
+          # Keep in sync with scripts/pr-assistant/workflow-sanitize.sh.
+          sanitize_model() {
+            local raw="${1:-}"
+            raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            case "$raw" in
+              *[[:space:]]*) raw="" ;;
+            esac
+            if [ -n "$raw" ] && ! [[ "$raw" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              raw=""
+            fi
+            printf '%s' "$raw"
+          }
+
+          sanitize_reasoning_effort() {
+            local raw="${1:-}"
+            raw="$(printf '%s' "$raw" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            case "$raw" in
+              low|medium|high|none) printf '%s' "$raw" ;;
+              xhigh) printf '%s' "high" ;;
+              *) printf '%s' "" ;;
+            esac
+          }
 
           ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
@@ -1126,9 +1169,14 @@ jobs:
               '{
                 model: $model,
                 input: $prompt,
-                max_output_tokens: $max_output_tokens,
-                reasoning: { effort: $effort }
-              }' > "$OPENAI_SYNTHESIS_PAYLOAD_FILE"
+                max_output_tokens: $max_output_tokens
+              } + (
+                if ($effort | length) > 0 and ($effort != "none") then
+                  {reasoning: {effort: $effort}}
+                else
+                  {}
+                end
+              )' > "$OPENAI_SYNTHESIS_PAYLOAD_FILE"
 
             local resp exit_code attempt
             resp=""
@@ -1267,7 +1315,27 @@ jobs:
         run: |
           set -euo pipefail
           
-          source scripts/pr-assistant/workflow-sanitize.sh
+          sanitize_model() {
+            local raw="${1:-}"
+            raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            case "$raw" in
+              *[[:space:]]*) raw="" ;;
+            esac
+            if [ -n "$raw" ] && ! [[ "$raw" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              raw=""
+            fi
+            printf '%s' "$raw"
+          }
+
+          sanitize_reasoning_effort() {
+            local raw="${1:-}"
+            raw="$(printf '%s' "$raw" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            case "$raw" in
+              low|medium|high|none) printf '%s' "$raw" ;;
+              xhigh) printf '%s' "high" ;;
+              *) printf '%s' "" ;;
+            esac
+          }
 
           ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
@@ -1529,7 +1597,17 @@ jobs:
           JOB_STATUS: ${{ job.status }}
         run: |
           # Create metrics JSON for feedback loop analysis
-          source scripts/pr-assistant/workflow-sanitize.sh
+          sanitize_model() {
+            local raw="${1:-}"
+            raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            case "$raw" in
+              *[[:space:]]*) raw="" ;;
+            esac
+            if [ -n "$raw" ] && ! [[ "$raw" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              raw=""
+            fi
+            printf '%s' "$raw"
+          }
 
           ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
