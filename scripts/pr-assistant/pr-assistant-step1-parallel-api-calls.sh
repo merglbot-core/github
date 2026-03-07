@@ -763,8 +763,13 @@ call_openai_responses() {
     '{
       model: $model,
       input: $prompt,
-      max_output_tokens: $max_output_tokens,
-      reasoning: { effort: $effort }
+      max_output_tokens: $max_output_tokens
+    } + (
+      if ($effort | length) > 0 and ($effort != "none") then
+        {reasoning: {effort: $effort}}
+      else
+        {}
+      end
     }' > "$payload_a"
 
   jq -n \
@@ -775,8 +780,13 @@ call_openai_responses() {
     '{
       model: $model,
       input: [{ role: "user", content: $prompt }],
-      max_output_tokens: $max_output_tokens,
-      reasoning: { effort: $effort }
+      max_output_tokens: $max_output_tokens
+    } + (
+      if ($effort | length) > 0 and ($effort != "none") then
+        {reasoning: {effort: $effort}}
+      else
+        {}
+      end
     }' > "$payload_b"
 
   jq -n \
@@ -787,8 +797,13 @@ call_openai_responses() {
     '{
       model: $model,
       input: [{ role: "user", content: [{ type: "input_text", text: $prompt }] }],
-      max_output_tokens: $max_output_tokens,
-      reasoning: { effort: $effort }
+      max_output_tokens: $max_output_tokens
+    } + (
+      if ($effort | length) > 0 and ($effort != "none") then
+        {reasoning: {effort: $effort}}
+      else
+        {}
+      end
     }' > "$payload_c"
 
   for payload in "$payload_a" "$payload_b" "$payload_c"; do
