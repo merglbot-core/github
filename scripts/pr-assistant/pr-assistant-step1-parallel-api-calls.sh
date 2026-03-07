@@ -50,6 +50,38 @@ trim_ws() {
   printf '%s' "${1:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
+resolve_step1_reason_file() {
+  python3 - "${1:-}" "${RUNNER_TEMP:-/tmp}" <<'PY'
+from pathlib import Path
+import sys
+
+candidate = Path(sys.argv[1]).expanduser()
+root = Path(sys.argv[2]).expanduser().resolve()
+parent = candidate.parent.resolve()
+if root != parent and root not in parent.parents:
+    raise SystemExit(1)
+print(parent / candidate.name)
+PY
+}
+
+write_step1_reason() {
+  local tmp_file
+  tmp_file="${STEP1_REASON_FILE}.tmp.$$"
+  if [ -L "$STEP1_REASON_FILE" ] || [ -L "$tmp_file" ]; then
+    echo "ERROR: STEP1_REASON_FILE must not be a symlink" >&2
+    return 1
+  fi
+  umask 077
+  mkdir -p "$(dirname "$STEP1_REASON_FILE")"
+  printf '%s\n' "$@" > "$tmp_file"
+  mv -f "$tmp_file" "$STEP1_REASON_FILE"
+}
+
+STEP1_REASON_FILE="$(resolve_step1_reason_file "$STEP1_REASON_FILE")" || {
+  echo "ERROR: STEP1_REASON_FILE must stay under RUNNER_TEMP" >&2
+  exit 1
+}
+
 allowlist_openai_url() {
   local url
   url="$(trim_ws "${1:-}")"
@@ -69,17 +101,19 @@ allowlist_anthropic_url() {
 }
 
 ANTHROPIC_MESSAGES_URL="$(allowlist_anthropic_url "$RAW_ANTHROPIC_MESSAGES_URL")"
+ANTHROPIC_URL_ALLOWED="true"
 if [ -z "$ANTHROPIC_MESSAGES_URL" ]; then
   if [ "$(trim_ws "$RAW_ANTHROPIC_MESSAGES_URL")" != "$DEFAULT_ANTHROPIC_MESSAGES_URL" ]; then
-    echo "WARN: Disallowed Anthropic API URL override; using default endpoint." >&2
+    ANTHROPIC_URL_ALLOWED="false"
   fi
   ANTHROPIC_MESSAGES_URL="$DEFAULT_ANTHROPIC_MESSAGES_URL"
 fi
 
 OPENAI_RESPONSES_URL="$(allowlist_openai_url "$RAW_OPENAI_RESPONSES_URL")"
+OPENAI_URLS_ALLOWED="true"
 if [ -z "$OPENAI_RESPONSES_URL" ]; then
   if [ "$(trim_ws "$RAW_OPENAI_RESPONSES_URL")" != "$DEFAULT_OPENAI_RESPONSES_URL" ]; then
-    echo "WARN: Disallowed OpenAI Responses URL override; using default endpoint." >&2
+    OPENAI_URLS_ALLOWED="false"
   fi
   OPENAI_RESPONSES_URL="$DEFAULT_OPENAI_RESPONSES_URL"
 fi
@@ -87,14 +121,14 @@ fi
 OPENAI_CHAT_COMPLETIONS_URL="$(allowlist_openai_url "$RAW_OPENAI_CHAT_COMPLETIONS_URL")"
 if [ -z "$OPENAI_CHAT_COMPLETIONS_URL" ]; then
   if [ "$(trim_ws "$RAW_OPENAI_CHAT_COMPLETIONS_URL")" != "$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL" ]; then
-    echo "WARN: Disallowed OpenAI Chat Completions URL override; using default endpoint." >&2
+    OPENAI_URLS_ALLOWED="false"
   fi
   OPENAI_CHAT_COMPLETIONS_URL="$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL"
 fi
 
 sanitize_model() {
   local raw="${1:-}"
-  raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  raw="$(printf '%s' "$raw" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
   case "$raw" in
     *[[:space:]]*) raw="" ;;
   esac
@@ -102,6 +136,25 @@ sanitize_model() {
     raw=""
   fi
   printf '%s' "$raw"
+}
+
+append_github_env_pair() {
+  local env_key="$1"
+  local env_value="${2:-}"
+  case "$env_key" in
+    ANTHROPIC_MODEL_USED)
+      ;;
+    *)
+      echo "ERROR: Unsupported GITHUB_ENV key: $env_key" >&2
+      return 1
+      ;;
+  esac
+  env_value="$(printf '%s' "$env_value" | tr -d '\r\n')"
+  if [ -n "$env_value" ] && ! printf '%s' "$env_value" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+    echo "ERROR: Invalid value for $env_key" >&2
+    return 1
+  fi
+  printf '%s=%s\n' "$env_key" "${env_value:-skipped}" >> "$GITHUB_ENV"
 }
 
 escape_untrusted() {
@@ -185,7 +238,11 @@ fi
 
 OPENAI_SKIP_REASON=""
 OPENAI_API_KEY_PRESENT="true"
-if [ -z "${OPENAI_API_KEY:-}" ]; then
+if [ "$OPENAI_URLS_ALLOWED" != "true" ]; then
+  OPENAI_API_KEY_PRESENT="false"
+  OPENAI_SKIP_REASON="invalid_url"
+  echo "ERROR: Disallowed OpenAI API URL override; skipping OpenAI analysis." >&2
+elif [ -z "${OPENAI_API_KEY:-}" ]; then
   OPENAI_API_KEY_PRESENT="false"
   OPENAI_SKIP_REASON="no_key"
   echo "WARN: OPENAI_API_KEY is missing; skipping OpenAI analysis." >&2
@@ -193,7 +250,11 @@ fi
 
 ANTHROPIC_SKIP_REASON=""
 ANTHROPIC_API_KEY_PRESENT="true"
-if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+if [ "$ANTHROPIC_URL_ALLOWED" != "true" ]; then
+  ANTHROPIC_API_KEY_PRESENT="false"
+  ANTHROPIC_SKIP_REASON="invalid_url"
+  echo "ERROR: Disallowed Anthropic API URL override; skipping Anthropic analysis." >&2
+elif [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   ANTHROPIC_API_KEY_PRESENT="false"
   ANTHROPIC_SKIP_REASON="no_key"
   echo "WARN: ANTHROPIC_API_KEY is missing; skipping Anthropic analysis." >&2
@@ -208,12 +269,10 @@ if [ "$ANTHROPIC_API_KEY_PRESENT" != "true" ] && [ "$OPENAI_API_KEY_PRESENT" != 
     printf '%s' "${1:-}" | tr -d '\r\n' | grep -Eo '^[A-Za-z0-9._-]+' || true
   }
 
-  mkdir -p "$(dirname "$STEP1_REASON_FILE")"
-  printf '%s\n' \
+  write_step1_reason \
     "reason=missing_api_keys" \
     "anthropic_skip_reason=$(safe_reason "${ANTHROPIC_SKIP_REASON:-}")" \
-    "openai_skip_reason=$(safe_reason "${OPENAI_SKIP_REASON:-}")" \
-    > "${STEP1_REASON_FILE}"
+    "openai_skip_reason=$(safe_reason "${OPENAI_SKIP_REASON:-}")"
   exit 1
 fi
 
@@ -720,7 +779,7 @@ EOF
       ANTHROPIC_MODEL_USED="$ANTHROPIC_MODEL"
     fi
   fi
-  echo "ANTHROPIC_MODEL_USED=$ANTHROPIC_MODEL_USED" > "$ANTHROPIC_GITHUB_ENV_FILE"
+  printf 'ANTHROPIC_MODEL_USED=%s\n' "$(sanitize_model "$ANTHROPIC_MODEL_USED")" > "$ANTHROPIC_GITHUB_ENV_FILE"
 ) &
 ANTHROPIC_PID=$!
 
@@ -1204,10 +1263,16 @@ EOF
 fi
 
 if [ -s "$ANTHROPIC_GITHUB_ENV_FILE" ]; then
-  cat "$ANTHROPIC_GITHUB_ENV_FILE" >> "$GITHUB_ENV"
+  ANTHROPIC_MODEL_USED_LINE="$(grep -m1 '^ANTHROPIC_MODEL_USED=' "$ANTHROPIC_GITHUB_ENV_FILE" || true)"
+  if [ -n "$ANTHROPIC_MODEL_USED_LINE" ]; then
+    append_github_env_pair "ANTHROPIC_MODEL_USED" "${ANTHROPIC_MODEL_USED_LINE#ANTHROPIC_MODEL_USED=}"
+  else
+    echo "WARN: Anthropic env file missing ANTHROPIC_MODEL_USED; marking skipped" >&2
+    append_github_env_pair "ANTHROPIC_MODEL_USED" "skipped"
+  fi
 else
   echo "WARN: Anthropic env file missing/empty; marking ANTHROPIC_MODEL_USED=skipped" >&2
-  echo "ANTHROPIC_MODEL_USED=skipped" >> "$GITHUB_ENV"
+  append_github_env_pair "ANTHROPIC_MODEL_USED" "skipped"
 fi
 
 OPENAI_OK="false"
