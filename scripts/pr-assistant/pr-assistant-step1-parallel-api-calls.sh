@@ -159,6 +159,8 @@ curl_json_with_backoff() {
           fi
           ;;
       esac
+      printf '%s' "$resp"
+      return 1
     fi
 
     printf '%s' "$resp"

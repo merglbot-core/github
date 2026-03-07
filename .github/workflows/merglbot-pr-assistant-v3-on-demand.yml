@@ -81,7 +81,6 @@ on:
           - low
           - medium
           - high
-          - xhigh
 
 permissions:
   contents: read
