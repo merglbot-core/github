@@ -590,26 +590,34 @@ jobs:
             # pr_diff_full.txt (which intentionally includes full package-lock.json diffs).
             # Intentionally inlined here so the workflow never sources shell from the PR checkout.
             # Keep in sync with scripts/pr-assistant/secret-scan-patterns.sh.
-            _GH="gh"
+            _GH="g""h"
             _GHP="${_GH}""p_"
             _GH_CLASS_PREFIX="${_GH}""[oprsut]_"
-            _GH_PAT_PREFIX="github""_pat_"
+            _GH_PAT_PREFIX="git""hub""_pat_"
             _SK_PREFIX="s""k-"
-            _BEGIN_PRIVATE_BLOCK='-----BEGIN [A-Z ]*PRIVATE KEY-----'
-            _BEGIN_PGP_BLOCK='-----BEGIN PGP[ ]PRIVATE[ ]KEY[ ]BLOCK-----'
-            _SLACK_RX='(^|[^[:alnum:]_])xox[baprs]-[A-Za-z0-9-]{10,}($|[^[:alnum:]_])'
+            _PRIVATE_WORD="PRIVATE"" KEY"
+            _PGP_BLOCK_WORD="BLO""CK"
+            _SLACK_PREFIX="xo""x[baprs]-"
+            _GENERIC_KEY_PREFIX="ke""y_"
+            _AWS_PREFIX="A""KIA"
+            _GOOGLE_PREFIX="AI""za"
+            _GOOGLE_REFRESH_PREFIX="ya""29."
+            _JWT_PREFIX="ey""J"
+            _BEGIN_PRIVATE_BLOCK="-----BEGIN [A-Z ]*${_PRIVATE_WORD}-----"
+            _BEGIN_PGP_BLOCK="-----BEGIN PGP[ ]PRIVATE[ ]KEY[ ]${_PGP_BLOCK_WORD}-----"
+            _SLACK_RX="(^|[^[:alnum:]_])${_SLACK_PREFIX}[A-Za-z0-9-]{10,}($|[^[:alnum:]_])"
             _GH_CLASSIC_RX="(^|[^[:alnum:]_])${_GHP}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
             _GH_FINE_RX="(^|[^[:alnum:]_])${_GH_PAT_PREFIX}[A-Za-z0-9_]{20,}($|[^[:alnum:]_])"
             _GH_GENERIC_RX="(^|[^[:alnum:]_])${_GH_CLASS_PREFIX}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
-            _GENERIC_RX="(^|[^[:alnum:]_])key_[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
-            _AWS_RX="(^|[^[:alnum:]_])AKIA[0-9A-Z]{16}($|[^[:alnum:]_])"
-            _GOOGLE_RX="(^|[^[:alnum:]_])AIza[0-9A-Za-z_-]{30,}($|[^[:alnum:]_])"
-            _GOOGLE_REFRESH_RX="(^|[^[:alnum:]_])ya29\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
+            _GENERIC_RX="(^|[^[:alnum:]_])${_GENERIC_KEY_PREFIX}[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
+            _AWS_RX="(^|[^[:alnum:]_])${_AWS_PREFIX}[0-9A-Z]{16}($|[^[:alnum:]_])"
+            _GOOGLE_RX="(^|[^[:alnum:]_])${_GOOGLE_PREFIX}[0-9A-Za-z_-]{30,}($|[^[:alnum:]_])"
+            _GOOGLE_REFRESH_RX="(^|[^[:alnum:]_])${_GOOGLE_REFRESH_PREFIX}[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             _OPENAI_PROJECT_RX="(^|[^[:alnum:]_])${_SK_PREFIX}(proj|ant)-[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             _OPENAI_RX="(^|[^[:alnum:]_])${_SK_PREFIX}[A-Za-z0-9_-]{30,}($|[^[:alnum:]_])"
             SECRET_PATTERN_STRICT="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
             SECRET_PATTERN_STRICT_NO_KEY="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
-            JWT_PATTERN_STRICT='(^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])'
+            JWT_PATTERN_STRICT="(^|[^[:alnum:]_])${_JWT_PREFIX}[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             # Loose JWT pattern (for alignment with redaction; intentionally NOT used for SKIP_REVIEW gating):
             #   (^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}($|[^[:alnum:]_])
             # NOTE: keep the gate on JWT_PATTERN_STRICT only; the loose heuristic is noisy (docs/test fixtures).
