@@ -128,7 +128,7 @@ fi
 
 sanitize_model() {
   local raw="${1:-}"
-  raw="$(printf '%s' "$raw" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
   case "$raw" in
     *[[:space:]]*) raw="" ;;
   esac
@@ -473,7 +473,7 @@ echo "Review depth: $REVIEW_DEPTH"
 
 # Build prompt using printf to file (single redirect)
 {
-printf '%s\n' "# Merglbot Multi-Model Code Review v3.5.2"
+printf '%s\n' "# Merglbot Multi-Model Code Review v3.5.4"
 printf '%s\n' ""
 printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence."
 printf '%s\n' ""

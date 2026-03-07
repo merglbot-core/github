@@ -659,7 +659,7 @@ jobs:
           
             if [ "${SKIP_REASON:-}" == "potential_secret" ]; then
               {
-              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.2"
+              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.4"
               printf '%s\n' ""
               printf '%s\n' "⛔️ Skipped: potential secret-like material detected in the PR context."
               printf '%s\n' ""
@@ -676,7 +676,7 @@ jobs:
                 exit 0
               fi
               {
-              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.2"
+              printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.4"
               printf '%s\n' ""
               printf '%s\n' "⏭️ No new commits since last Merglbot review (\`${PREV_SHA:0:12}\`).  "
               printf '%s\n' "Current head: \`${HEAD_SHA:0:12}\`."
@@ -770,7 +770,7 @@ jobs:
           fi
 
           {
-            printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.2"
+            printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.4"
             printf '%s\n' ""
             printf '%s\n' "⛔️ Review failed during Step 1 (model API calls)."
             printf '%s\n' ""
@@ -837,7 +837,7 @@ jobs:
           # Keep in sync with scripts/pr-assistant/workflow-sanitize.sh.
           sanitize_model() {
             local raw="${1:-}"
-            raw="$(printf '%s' "$raw" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
             case "$raw" in
               *[[:space:]]*) raw="" ;;
             esac
@@ -1327,7 +1327,7 @@ jobs:
           
           sanitize_model() {
             local raw="${1:-}"
-            raw="$(printf '%s' "$raw" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
             case "$raw" in
               *[[:space:]]*) raw="" ;;
             esac
@@ -1436,13 +1436,13 @@ jobs:
           
           if [ ! -s final_review.txt ] || grep -q "^API_ERROR$" final_review.txt; then
             {
-              echo "## 🤖 Merglbot PR Assistant v3.5.2"
+              echo "## 🤖 Merglbot PR Assistant v3.5.4"
               echo ""
               echo "❌ Review generation failed. Please check workflow logs."
             } > comment.md
           else
             {
-              echo "## 🤖 Merglbot PR Assistant v3.5.2"
+              echo "## 🤖 Merglbot PR Assistant v3.5.4"
               echo ""
               cat final_review.txt
               echo ""
@@ -1540,7 +1540,7 @@ jobs:
           SKIP_REASON="${{ steps.context.outputs.skip_reason }}"
           if [ "$SKIPPED" == "true" ]; then
             {
-              echo "## 🤖 Merglbot PR Assistant v3.5.2 - Summary"
+              echo "## 🤖 Merglbot PR Assistant v3.5.4 - Summary"
               echo ""
               echo "- **PR**: #${{ env.PR_NUMBER }}"
               if [ "$SKIP_REASON" == "potential_secret" ]; then
@@ -1568,7 +1568,7 @@ jobs:
           fi
           
           {
-            echo "## 🤖 Merglbot PR Assistant v3.5.2 - Summary"
+            echo "## 🤖 Merglbot PR Assistant v3.5.4 - Summary"
             echo ""
             echo "| Field | Value |"
             echo "|-------|-------|"
@@ -1609,7 +1609,7 @@ jobs:
           # Create metrics JSON for feedback loop analysis
           sanitize_model() {
             local raw="${1:-}"
-            raw="$(printf '%s' "$raw" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
             case "$raw" in
               *[[:space:]]*) raw="" ;;
             esac
