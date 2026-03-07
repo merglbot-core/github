@@ -829,7 +829,7 @@ call_openai_responses() {
       else
         {}
       end
-    }' > "$payload_a"
+    )' > "$payload_a"
 
   jq -n \
     --arg model "$model" \
@@ -846,7 +846,7 @@ call_openai_responses() {
       else
         {}
       end
-    }' > "$payload_b"
+    )' > "$payload_b"
 
   jq -n \
     --arg model "$model" \
@@ -863,7 +863,7 @@ call_openai_responses() {
       else
         {}
       end
-    }' > "$payload_c"
+    )' > "$payload_c"
 
   for payload in "$payload_a" "$payload_b" "$payload_c"; do
     local variant="A"

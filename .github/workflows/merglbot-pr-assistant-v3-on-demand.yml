@@ -601,7 +601,7 @@ jobs:
             _GENERIC_LABEL_PREFIX="ke""y_"
             _AWS_PREFIX="A""KIA"
             _GOOGLE_PREFIX="AI""za"
-            _GOOGLE_REFRESH_PREFIX="ya""29."
+            _GOOGLE_REFRESH_PREFIX="ya""29\\."
             _JWT_PREFIX="ey""J"
             _BEGIN_PRIVATE_BLOCK="-----BEGIN [A-Z ]*${_PRIVATE_WORD}-----"
             _BEGIN_PGP_BLOCK="-----BEGIN PGP[ ]PRIVATE[ ]KEY[ ]${_PGP_BLOCK_WORD}-----"
@@ -852,6 +852,7 @@ jobs:
             raw="$(printf '%s' "$raw" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
             case "$raw" in
               low|medium|high|none) printf '%s' "$raw" ;;
+              xhigh) printf '%s' "high" ;;
               *) printf '%s' "" ;;
             esac
           }
@@ -1341,6 +1342,7 @@ jobs:
             raw="$(printf '%s' "$raw" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
             case "$raw" in
               low|medium|high|none) printf '%s' "$raw" ;;
+              xhigh) printf '%s' "high" ;;
               *) printf '%s' "" ;;
             esac
           }
