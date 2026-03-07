@@ -142,7 +142,7 @@ append_github_env_pair() {
   local env_key="$1"
   local env_value="${2:-}"
   case "$env_key" in
-    ANTHROPIC_MODEL_USED)
+    ANTHROPIC_MODEL_USED|OPENAI_MODEL_USED)
       ;;
     *)
       echo "ERROR: Unsupported GITHUB_ENV key: $env_key" >&2
@@ -1209,7 +1209,7 @@ if [ -z "$OPENAI_MODEL_USED" ]; then
     OPENAI_MODEL_USED="$OPENAI_MODEL"
   fi
 fi
-echo "OPENAI_MODEL_USED=$OPENAI_MODEL_USED" >> "$GITHUB_ENV"
+append_github_env_pair "OPENAI_MODEL_USED" "$OPENAI_MODEL_USED"
 
 : "${OPENAI_USAGE_OUTPUT_TOKENS:=0}"
 : "${OPENAI_USAGE_REASONING_TOKENS:=0}"
