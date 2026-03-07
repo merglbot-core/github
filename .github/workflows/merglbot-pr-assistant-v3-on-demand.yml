@@ -318,7 +318,7 @@ jobs:
             if [ "$CHECKS_DATA_AVAILABLE" != "true" ] && [ -n "${PR_HEAD_SHA:-}" ]; then
               if (
                 set -o pipefail
-                gh api --silent --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null \
+                gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null \
                   | jq -s '{check_runs: (map(.check_runs // []) | add // [])}' > check_runs.json 2>/dev/null
               ); then
                 if jq -e '.check_runs | type == "array"' check_runs.json > /dev/null 2>&1; then
@@ -463,29 +463,31 @@ jobs:
           # Keep a full diff for security pre-scan (fail-closed) and produce a trimmed diff for LLM context.
           # Rationale: large lockfile diffs can cause the LLM prompt to truncate away critical security files
           # (e.g. entrypoints and env-sanitization logic), leading to incomplete reviews.
-          cp pr_diff.txt pr_diff_full.txt
-          if [ -s pr_diff_full.txt ]; then
-            awk '
-              /^diff --git / {
-                skip = 0;
-                file = "";
+          if [ -f pr_diff.txt ]; then
+            cp pr_diff.txt pr_diff_full.txt
+            if [ -s pr_diff_full.txt ]; then
+              awk '
+                /^diff --git / {
+                  skip = 0;
+                  file = "";
 
-                if ($0 ~ /^diff --git "a\//) {
-                  file = $0;
-                  sub(/^diff --git "a\//, "", file);
-                  sub(/" "b\/.*$/, "", file);
-                } else if ($0 ~ /^diff --git a\//) {
-                  file = $0;
-                  sub(/^diff --git a\//, "", file);
-                  sub(/ b\/.*$/, "", file);
-                }
+                  if ($0 ~ /^diff --git "a\//) {
+                    file = $0;
+                    sub(/^diff --git "a\//, "", file);
+                    sub(/" "b\/.*$/, "", file);
+                  } else if ($0 ~ /^diff --git a\//) {
+                    file = $0;
+                    sub(/^diff --git a\//, "", file);
+                    sub(/ b\/.*$/, "", file);
+                  }
 
-                if (file != "") {
-                  skip = (file ~ /package-lock\.json$/);
+                  if (file != "") {
+                    skip = (file ~ /package-lock\.json$/);
+                  }
                 }
-              }
-              !skip { print }
-            ' pr_diff_full.txt > pr_diff.txt
+                !skip { print }
+              ' pr_diff_full.txt > pr_diff.txt
+            fi
           fi
           
           # Provide a minimal lockfile change summary to the LLM without including the full lockfile diff.
@@ -944,9 +946,6 @@ jobs:
             fi
 
             VERDICT="CHANGES NEEDED"
-            if [ "$CHECKS_FAILED_KNOWN" = "true" ] && [ "$CHECKS_PENDING_KNOWN" = "true" ] && [ "$CHECKS_FAILED" -eq 0 ] && [ "$CHECKS_PENDING" -eq 0 ]; then
-              VERDICT="APPROVE"
-            fi
 
             {
               echo "# Code Review Summary"
@@ -980,7 +979,11 @@ jobs:
               echo "- None."
               echo ""
               echo "## Whats Good"
-              echo "- CI / checks summary was captured successfully."
+              if [ "$CHECKS_DATA_AVAILABLE" = "true" ]; then
+                echo "- CI / checks summary was captured successfully."
+              else
+                echo "- Workflow stayed fail-closed and did not approve without reliable CI/checks context."
+              fi
               echo ""
               echo "## SSOT Sync (Docs)"
               echo "None"
@@ -1646,6 +1649,7 @@ jobs:
           fi
           case "$OPENAI_SYNTHESIS_REASONING_EFFORT_FINAL" in
             low|medium|high|none|n/a) ;;
+            xhigh) OPENAI_SYNTHESIS_REASONING_EFFORT_FINAL="high" ;;
             *) OPENAI_SYNTHESIS_REASONING_EFFORT_FINAL="unknown" ;;
           esac
           
