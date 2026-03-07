@@ -202,6 +202,8 @@ curl_json_with_backoff() {
     fi
 
     # Retry common transient API errors (best-effort).
+    # Return the final JSON body with exit 0 so caller-specific fallback paths
+    # can inspect provider errors deterministically.
     if echo "$resp" | jq -e '.error' > /dev/null 2>&1; then
       err_type="$(echo "$resp" | jq -r '.error.type // empty' 2>/dev/null || true)"
       case "$err_type" in
@@ -213,7 +215,7 @@ curl_json_with_backoff() {
           ;;
       esac
       printf '%s' "$resp"
-      return 1
+      return 0
     fi
 
     printf '%s' "$resp"

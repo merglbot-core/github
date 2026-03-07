@@ -1609,7 +1609,7 @@ jobs:
           # Create metrics JSON for feedback loop analysis
           sanitize_model() {
             local raw="${1:-}"
-            raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            raw="$(printf '%s' "$raw" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
             case "$raw" in
               *[[:space:]]*) raw="" ;;
             esac
