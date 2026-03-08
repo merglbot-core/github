@@ -236,6 +236,14 @@ jobs:
         # Verify pin: git ls-remote --tags https://github.com/actions/checkout | grep -E 'refs/tags/v6\\.0\\.2$'
         with:
           fetch-depth: 0
+
+      - name: Preflight runner dependencies
+        run: |
+          set -euo pipefail
+          if ! command -v python3 > /dev/null 2>&1; then
+            echo "ERROR: python3 is required for scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh" >&2
+            exit 1
+          fi
       
       - name: Gather Full PR Context
         id: context
@@ -590,7 +598,7 @@ jobs:
             # To reduce false positives from lockfile/full-diff integrity strings, keep the JWT scan out of
             # pr_diff_full.txt (which intentionally includes full package-lock.json diffs).
             # Intentionally inlined here so the workflow never sources shell from the PR checkout.
-            # Keep in sync with scripts/pr-assistant/secret-scan-patterns.sh.
+            # This workflow is the authoritative copy of the secret pre-scan patterns.
             _GH="g""h"
             _GHP="${_GH}""p_"
             _GH_CLASS_PREFIX="${_GH}""[oprsut]_"
