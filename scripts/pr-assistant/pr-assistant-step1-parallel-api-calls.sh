@@ -52,28 +52,47 @@ trim_ws() {
 }
 
 resolve_step1_reason_file() {
+  if ! command -v python3 > /dev/null 2>&1; then
+    echo "ERROR: python3 is required to resolve STEP1_REASON_FILE" >&2
+    return 1
+  fi
   python3 - "${1:-}" "${RUNNER_TEMP:-/tmp}" <<'PY'
 from pathlib import Path
 import sys
 
-candidate = Path(sys.argv[1]).expanduser()
+raw = (sys.argv[1] or "").strip()
+if not raw:
+    raise SystemExit(1)
+
+candidate = Path(raw).expanduser()
 root = Path(sys.argv[2]).expanduser().resolve()
 parent = candidate.parent.resolve()
+name = candidate.name
+if not name:
+    raise SystemExit(1)
 if root != parent and root not in parent.parents:
     raise SystemExit(1)
-print(parent / candidate.name)
+resolved = parent / name
+if resolved.exists() and resolved.is_dir():
+    raise SystemExit(1)
+print(resolved)
 PY
 }
 
 write_step1_reason() {
   local tmp_file
-  tmp_file="${STEP1_REASON_FILE}.tmp.$$"
-  if [ -L "$STEP1_REASON_FILE" ] || [ -L "$tmp_file" ]; then
+  umask 077
+  mkdir -p "$(dirname "$STEP1_REASON_FILE")"
+  if [ -L "$STEP1_REASON_FILE" ]; then
     echo "ERROR: STEP1_REASON_FILE must not be a symlink" >&2
     return 1
   fi
-  umask 077
-  mkdir -p "$(dirname "$STEP1_REASON_FILE")"
+  tmp_file="$(mktemp "${STEP1_REASON_FILE}.tmp.XXXXXX")"
+  if [ -L "$tmp_file" ]; then
+    rm -f "$tmp_file"
+    echo "ERROR: STEP1_REASON_FILE temp file must not be a symlink" >&2
+    return 1
+  fi
   printf '%s\n' "$@" > "$tmp_file"
   mv -f "$tmp_file" "$STEP1_REASON_FILE"
 }
@@ -164,6 +183,10 @@ escape_untrusted() {
   sed 's/<<<MERGLBOT_/<<<MERGLBOT_ESCAPED_/g'
 }
 
+json_has_error_object() {
+  echo "${1:-}" | jq -e '.error' > /dev/null 2>&1
+}
+
 curl_json_with_backoff() {
   local url="$1"
   shift
@@ -208,7 +231,7 @@ curl_json_with_backoff() {
     # Return a dedicated sentinel exit code so callers can still inspect the
     # provider JSON error body without treating the request as a generic
     # transport success.
-    if echo "$resp" | jq -e '.error' > /dev/null 2>&1; then
+    if json_has_error_object "$resp"; then
       err_type="$(echo "$resp" | jq -r '.error.type // empty' 2>/dev/null || true)"
       case "$err_type" in
         rate_limit_error|server_error|api_error|overloaded_error)
@@ -725,12 +748,20 @@ echo "Prompt size: $PROMPT_SIZE chars"
         echo "  ERROR: Anthropic request timed out (exit=$CURL_EXIT)" >&2
         continue
       fi
-      if { [ "$CURL_EXIT" -ne 0 ] && [ "$CURL_EXIT" -ne 75 ]; } || ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
+      if [ "$CURL_EXIT" -ne 0 ] && [ "$CURL_EXIT" -ne "$API_ERROR_EXIT" ]; then
         echo "  ERROR: Anthropic request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
         continue
       fi
+      if ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
+        echo "  ERROR: Anthropic request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
+        continue
+      fi
+      if [ "$CURL_EXIT" -eq "$API_ERROR_EXIT" ] && ! json_has_error_object "$ANTHROPIC_RESP"; then
+        echo "  ERROR: Anthropic sentinel exit without error payload" >&2
+        continue
+      fi
 
-      if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
+      if json_has_error_object "$ANTHROPIC_RESP"; then
         err_msg="$(echo "$ANTHROPIC_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
         echo "  ERROR: $err_msg" >&2
         continue
@@ -893,11 +924,19 @@ call_openai_responses() {
       echo "  ERROR: Responses API request timed out (exit=$exit_code)" >&2
       return 1
     fi
-    if { [ "$exit_code" -ne 0 ] && [ "$exit_code" -ne 75 ]; } || ! echo "$resp" | jq -e . > /dev/null 2>&1; then
+    if [ "$exit_code" -ne 0 ] && [ "$exit_code" -ne "$API_ERROR_EXIT" ]; then
       echo "  ERROR: Responses API returned non-JSON (exit=$exit_code)" >&2
       continue
     fi
-    if echo "$resp" | jq -e ".error" > /dev/null 2>&1; then
+    if ! echo "$resp" | jq -e . > /dev/null 2>&1; then
+      echo "  ERROR: Responses API returned non-JSON (exit=$exit_code)" >&2
+      continue
+    fi
+    if [ "$exit_code" -eq "$API_ERROR_EXIT" ] && ! json_has_error_object "$resp"; then
+      echo "  ERROR: Responses API sentinel exit without error payload" >&2
+      continue
+    fi
+    if json_has_error_object "$resp"; then
       err_msg="$(echo "$resp" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
       echo "  ERROR: $err_msg" >&2
       continue
@@ -1034,12 +1073,20 @@ else
         echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
         continue
       fi
-      if { [ "$CURL_EXIT" -ne 0 ] && [ "$CURL_EXIT" -ne 75 ]; } || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+      if [ "$CURL_EXIT" -ne 0 ] && [ "$CURL_EXIT" -ne "$API_ERROR_EXIT" ]; then
         echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
         continue
       fi
+      if ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+        echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
+        continue
+      fi
+      if [ "$CURL_EXIT" -eq "$API_ERROR_EXIT" ] && ! json_has_error_object "$OPENAI_RESP"; then
+        echo "  ERROR: OpenAI sentinel exit without error payload" >&2
+        continue
+      fi
 
-      if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
+      if json_has_error_object "$OPENAI_RESP"; then
         err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
         echo "  ERROR: $err_msg" >&2
         if echo "$err_msg" | grep -Eqi 'reasoning[_ ]effort'; then
@@ -1067,12 +1114,20 @@ else
             echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
             continue
           fi
-          if { [ "$CURL_EXIT" -ne 0 ] && [ "$CURL_EXIT" -ne 75 ]; } || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+          if [ "$CURL_EXIT" -ne 0 ] && [ "$CURL_EXIT" -ne "$API_ERROR_EXIT" ]; then
             echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
             continue
           fi
+          if ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+            echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
+            continue
+          fi
+          if [ "$CURL_EXIT" -eq "$API_ERROR_EXIT" ] && ! json_has_error_object "$OPENAI_RESP"; then
+            echo "  ERROR: OpenAI sentinel exit without error payload" >&2
+            continue
+          fi
 
-          if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
+          if json_has_error_object "$OPENAI_RESP"; then
             err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
             echo "  ERROR: $err_msg" >&2
             continue
@@ -1150,12 +1205,20 @@ else
       echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
       continue
     fi
-    if { [ "$CURL_EXIT" -ne 0 ] && [ "$CURL_EXIT" -ne 75 ]; } || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+    if [ "$CURL_EXIT" -ne 0 ] && [ "$CURL_EXIT" -ne "$API_ERROR_EXIT" ]; then
       echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
       continue
     fi
+    if ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+      echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
+      continue
+    fi
+    if [ "$CURL_EXIT" -eq "$API_ERROR_EXIT" ] && ! json_has_error_object "$OPENAI_RESP"; then
+      echo "  ERROR: OpenAI sentinel exit without error payload" >&2
+      continue
+    fi
 
-    if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
+    if json_has_error_object "$OPENAI_RESP"; then
       err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
       echo "  ERROR: $err_msg" >&2
       continue
