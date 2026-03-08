@@ -21,9 +21,10 @@ cleanup() {
     return 0
   fi
   set +e
-  if [ -n "${ANTHROPIC_PID:-}" ] && kill -0 "$ANTHROPIC_PID" 2>/dev/null; then
-    kill "$ANTHROPIC_PID" 2>/dev/null || true
-    wait "$ANTHROPIC_PID" 2>/dev/null || true
+  local pid="${ANTHROPIC_PID:-}"
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
   fi
   rm -rf -- "$TMP_DIR"
 }
@@ -50,6 +51,10 @@ trim_ws() {
   printf '%s' "${1:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
+RAW_ANTHROPIC_MESSAGES_URL_TRIM="$(trim_ws "$RAW_ANTHROPIC_MESSAGES_URL")"
+RAW_OPENAI_RESPONSES_URL_TRIM="$(trim_ws "$RAW_OPENAI_RESPONSES_URL")"
+RAW_OPENAI_CHAT_COMPLETIONS_URL_TRIM="$(trim_ws "$RAW_OPENAI_CHAT_COMPLETIONS_URL")"
+
 allowlist_openai_url() {
   local url
   url="$(trim_ws "${1:-}")"
@@ -68,26 +73,38 @@ allowlist_anthropic_url() {
   esac
 }
 
-ANTHROPIC_MESSAGES_URL="$(allowlist_anthropic_url "$RAW_ANTHROPIC_MESSAGES_URL")"
+# URL allowlisting / override validation.
+# - Empty/default URLs mean "no override": use the default official endpoints and proceed.
+# - A non-empty override that is not allowlisted is treated as a hard misconfiguration:
+#   mark `*_URL_OVERRIDE_INVALID` and skip that provider (fail-closed).
+# - OpenAI has two endpoints (Responses + Chat Completions). Any disallowed override disables OpenAI entirely
+#   (fail-closed), even if only one endpoint override was invalid.
+# Provider flags are independent:
+# - `ANTHROPIC_URL_OVERRIDE_INVALID` is only set by Anthropic URL validation.
+# - `OPENAI_ANY_URL_OVERRIDE_INVALID` is only set by OpenAI URL validation.
+ANTHROPIC_URL_OVERRIDE_INVALID="false"
+ANTHROPIC_MESSAGES_URL="$(allowlist_anthropic_url "$RAW_ANTHROPIC_MESSAGES_URL_TRIM")"
 if [ -z "$ANTHROPIC_MESSAGES_URL" ]; then
-  if [ "$(trim_ws "$RAW_ANTHROPIC_MESSAGES_URL")" != "$DEFAULT_ANTHROPIC_MESSAGES_URL" ]; then
-    echo "WARN: Disallowed Anthropic API URL override; using default endpoint." >&2
+  if [ -n "$RAW_ANTHROPIC_MESSAGES_URL_TRIM" ] && [ "$RAW_ANTHROPIC_MESSAGES_URL_TRIM" != "$DEFAULT_ANTHROPIC_MESSAGES_URL" ]; then
+    ANTHROPIC_URL_OVERRIDE_INVALID="true"
   fi
   ANTHROPIC_MESSAGES_URL="$DEFAULT_ANTHROPIC_MESSAGES_URL"
 fi
 
-OPENAI_RESPONSES_URL="$(allowlist_openai_url "$RAW_OPENAI_RESPONSES_URL")"
+OPENAI_ANY_URL_OVERRIDE_INVALID="false"
+
+OPENAI_RESPONSES_URL="$(allowlist_openai_url "$RAW_OPENAI_RESPONSES_URL_TRIM")"
 if [ -z "$OPENAI_RESPONSES_URL" ]; then
-  if [ "$(trim_ws "$RAW_OPENAI_RESPONSES_URL")" != "$DEFAULT_OPENAI_RESPONSES_URL" ]; then
-    echo "WARN: Disallowed OpenAI Responses URL override; using default endpoint." >&2
+  if [ -n "$RAW_OPENAI_RESPONSES_URL_TRIM" ] && [ "$RAW_OPENAI_RESPONSES_URL_TRIM" != "$DEFAULT_OPENAI_RESPONSES_URL" ]; then
+    OPENAI_ANY_URL_OVERRIDE_INVALID="true"
   fi
   OPENAI_RESPONSES_URL="$DEFAULT_OPENAI_RESPONSES_URL"
 fi
 
-OPENAI_CHAT_COMPLETIONS_URL="$(allowlist_openai_url "$RAW_OPENAI_CHAT_COMPLETIONS_URL")"
+OPENAI_CHAT_COMPLETIONS_URL="$(allowlist_openai_url "$RAW_OPENAI_CHAT_COMPLETIONS_URL_TRIM")"
 if [ -z "$OPENAI_CHAT_COMPLETIONS_URL" ]; then
-  if [ "$(trim_ws "$RAW_OPENAI_CHAT_COMPLETIONS_URL")" != "$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL" ]; then
-    echo "WARN: Disallowed OpenAI Chat Completions URL override; using default endpoint." >&2
+  if [ -n "$RAW_OPENAI_CHAT_COMPLETIONS_URL_TRIM" ] && [ "$RAW_OPENAI_CHAT_COMPLETIONS_URL_TRIM" != "$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL" ]; then
+    OPENAI_ANY_URL_OVERRIDE_INVALID="true"
   fi
   OPENAI_CHAT_COMPLETIONS_URL="$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL"
 fi
@@ -117,7 +134,7 @@ curl_json_with_backoff() {
     return 2
   fi
 
-  local attempt resp exit_code err_type
+  local attempt resp exit_code err_type err_msg
   for attempt in 1 2 3; do
     set +e
     resp="$(curl -s --connect-timeout 15 --max-time 180 "$url" "$@")"
@@ -126,7 +143,6 @@ curl_json_with_backoff() {
 
     # Avoid long hangs: if a request already hit max-time, do not retry it here.
     if [ "$exit_code" -eq 28 ]; then
-      printf '%s' "$resp"
       return 28
     fi
 
@@ -135,7 +151,6 @@ curl_json_with_backoff() {
         sleep $((attempt * 2))
         continue
       fi
-      printf '%s' "$resp"
       return "$exit_code"
     fi
 
@@ -144,21 +159,37 @@ curl_json_with_backoff() {
         sleep $((attempt * 2))
         continue
       fi
-      printf '%s' "$resp"
       return 1
     fi
 
-    # Retry common transient API errors (best-effort).
+    # Retry common transient API errors (best-effort). Do not emit raw bodies on error.
     if echo "$resp" | jq -e '.error' > /dev/null 2>&1; then
       err_type="$(echo "$resp" | jq -r '.error.type // empty' 2>/dev/null || true)"
+      if [ -z "$err_type" ]; then
+        err_type="unknown_error"
+      fi
       case "$err_type" in
         rate_limit_error|server_error|api_error|overloaded_error)
           if [ "$attempt" -lt 3 ]; then
             sleep $((attempt * 2))
             continue
           fi
-          ;;
       esac
+
+      err_msg="$(echo "$resp" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
+      err_msg="$(printf '%s' "$err_msg" | tr -d '\r\n')"
+      # Char-safe truncation (avoid cutting mid-UTF-8, which can break downstream `jq` usage).
+      if command -v python3 >/dev/null 2>&1; then
+        err_msg="$(python3 -c 'import sys; s=sys.stdin.read(); sys.stdout.write(s[:500])' <<<"$err_msg")"
+      elif command -v perl >/dev/null 2>&1; then
+        err_msg="$(perl -CS -pe '$_=substr($_,0,500) if length($_)>500' <<<"$err_msg")"
+      else
+        err_msg="$(printf '%s' "$err_msg" | head -c 500)"
+      fi
+      # Best-effort token redaction (defense-in-depth). Keep it narrow to preserve diagnostics.
+      err_msg="$(printf '%s' "$err_msg" | sed -E 's#(sk-[A-Za-z0-9_-]{20,}|[A-Za-z0-9+/]{40,}={0,2})#<REDACTED>#g')"
+      jq -n --arg type "$err_type" --arg message "$err_msg" '{error:{type:$type,message:$message}}'
+      return 1
     fi
 
     printf '%s' "$resp"
@@ -183,7 +214,14 @@ fi
 
 OPENAI_SKIP_REASON=""
 OPENAI_API_KEY_PRESENT="true"
-if [ -z "${OPENAI_API_KEY:-}" ]; then
+if [ "$OPENAI_ANY_URL_OVERRIDE_INVALID" = "true" ]; then
+  OPENAI_API_KEY_PRESENT="false"
+  OPENAI_SKIP_REASON="invalid_url"
+  echo "ERROR: Disallowed OpenAI API URL override; skipping OpenAI analysis." >&2
+  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    echo "::error::Disallowed OpenAI API URL override; skipping OpenAI analysis."
+  fi
+elif [ -z "${OPENAI_API_KEY:-}" ]; then
   OPENAI_API_KEY_PRESENT="false"
   OPENAI_SKIP_REASON="no_key"
   echo "WARN: OPENAI_API_KEY is missing; skipping OpenAI analysis." >&2
@@ -191,7 +229,14 @@ fi
 
 ANTHROPIC_SKIP_REASON=""
 ANTHROPIC_API_KEY_PRESENT="true"
-if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+if [ "$ANTHROPIC_URL_OVERRIDE_INVALID" = "true" ]; then
+  ANTHROPIC_API_KEY_PRESENT="false"
+  ANTHROPIC_SKIP_REASON="invalid_url"
+  echo "ERROR: Disallowed Anthropic API URL override; skipping Anthropic analysis." >&2
+  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    echo "::error::Disallowed Anthropic API URL override; skipping Anthropic analysis."
+  fi
+elif [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   ANTHROPIC_API_KEY_PRESENT="false"
   ANTHROPIC_SKIP_REASON="no_key"
   echo "WARN: ANTHROPIC_API_KEY is missing; skipping Anthropic analysis." >&2
@@ -410,7 +455,7 @@ echo "Review depth: $REVIEW_DEPTH"
 
 # Build prompt using printf to file (single redirect)
 {
-printf '%s\n' "# Merglbot Multi-Model Code Review v3.5.2"
+printf '%s\n' "# Merglbot Multi-Model Code Review v3.5.5"
 printf '%s\n' ""
 printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence."
 printf '%s\n' ""
@@ -619,7 +664,27 @@ echo "Prompt size: $PROMPT_SIZE chars"
 
 # ANTHROPIC CALL (backgrounded so OpenAI can start immediately)
 (
+  set -Eeuo pipefail
+
+  # shellcheck disable=SC2329 # called via trap
+  anthropic_err_trap() {
+    local exit_code="${1:-}"
+    local line="${2:-}"
+    printf '%s\n' "ERROR: Anthropic analysis subprocess failed (exit=$exit_code line=$line)" >&2
+  }
+  trap 'anthropic_err_trap "$?" "${BASH_LINENO[0]:-$LINENO}"' ERR
+
+  BOT_MODE="${BOT_MODE:-default}"
+  ANTHROPIC_API_KEY_PRESENT="${ANTHROPIC_API_KEY_PRESENT:-false}"
+  ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+  ANTHROPIC_SKIP_REASON="${ANTHROPIC_SKIP_REASON:-}"
+  ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-}"
+
   ANTHROPIC_MODEL_USED=""
+  if [ "$BOT_MODE" != "dependabot" ] && [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+    ANTHROPIC_API_KEY_PRESENT="false"
+    ANTHROPIC_SKIP_REASON="no_key"
+  fi
   if [ "$BOT_MODE" != "dependabot" ] && [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then
     echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
 
@@ -658,7 +723,7 @@ echo "Prompt size: $PROMPT_SIZE chars"
         echo "  ERROR: Anthropic request timed out (exit=$CURL_EXIT)" >&2
         continue
       fi
-      if [ "$CURL_EXIT" -ne 0 ] || ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
+      if ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
         echo "  ERROR: Anthropic request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
         continue
       fi
@@ -666,6 +731,10 @@ echo "Prompt size: $PROMPT_SIZE chars"
       if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
         err_msg="$(echo "$ANTHROPIC_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
         echo "  ERROR: $err_msg" >&2
+        continue
+      fi
+      if [ "$CURL_EXIT" -ne 0 ]; then
+        echo "  ERROR: Anthropic request failed (exit=$CURL_EXIT)" >&2
         continue
       fi
 
@@ -811,13 +880,17 @@ call_openai_responses() {
       echo "  ERROR: Responses API request timed out (exit=$exit_code)" >&2
       return 1
     fi
-    if [ "$exit_code" -ne 0 ] || ! echo "$resp" | jq -e . > /dev/null 2>&1; then
+    if ! echo "$resp" | jq -e . > /dev/null 2>&1; then
       echo "  ERROR: Responses API returned non-JSON (exit=$exit_code)" >&2
       continue
     fi
     if echo "$resp" | jq -e ".error" > /dev/null 2>&1; then
       err_msg="$(echo "$resp" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
       echo "  ERROR: $err_msg" >&2
+      continue
+    fi
+    if [ "$exit_code" -ne 0 ]; then
+      echo "  ERROR: Responses API request failed (exit=$exit_code)" >&2
       continue
     fi
 
@@ -928,41 +1001,26 @@ else
       rm -f "$OPENAI_RESPONSES_OUT" "$OPENAI_USAGE_FILE"
       echo "  WARN: Responses API failed; falling back to Chat Completions" >&2
 
-      jq -n \
-        --arg model "$MODEL_TO_TRY" \
-        --rawfile prompt "$FULL_PROMPT_FILE" \
-        --argjson max_tokens "$MAX_TOKENS_OPENAI" \
-        --arg effort "$OPENAI_REASONING_EFFORT" \
-        '{
-          model: $model,
-          messages: [{role: "user", content: $prompt}],
-          max_completion_tokens: $max_tokens,
-          reasoning_effort: $effort
-        }' > "$OPENAI_PAYLOAD_FILE"
-
-      set +e
-      OPENAI_RESP="$(curl_json_with_backoff "$OPENAI_CHAT_COMPLETIONS_URL" \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $OPENAI_API_KEY" \
-        -d @"$OPENAI_PAYLOAD_FILE")"
-      CURL_EXIT=$?
-      set -e
-
-      if [ "$CURL_EXIT" -eq 28 ]; then
-        echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
-        continue
-      fi
-      if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
-        echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
-        continue
+      if ! printf '%s' "$MAX_TOKENS_OPENAI" | grep -Eq '^[0-9]+$'; then
+        echo "WARN: MAX_TOKENS_OPENAI invalid; defaulting to 1024" >&2
+        MAX_TOKENS_OPENAI=1024
       fi
 
-      if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
-        err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
-        echo "  ERROR: $err_msg" >&2
-        if echo "$err_msg" | grep -Eqi 'reasoning[_ ]effort'; then
-          echo "  WARN: Chat Completions rejected reasoning_effort; retrying without it." >&2
-
+      OPENAI_CHAT_OK="false"
+      for OPENAI_CHAT_ATTEMPT in 1 2; do
+        if [ "$OPENAI_CHAT_ATTEMPT" -eq 1 ]; then
+          jq -n \
+            --arg model "$MODEL_TO_TRY" \
+            --rawfile prompt "$FULL_PROMPT_FILE" \
+            --argjson max_tokens "$MAX_TOKENS_OPENAI" \
+            --arg effort "$OPENAI_REASONING_EFFORT" \
+            '{
+              model: $model,
+              messages: [{role: "user", content: $prompt}],
+              max_completion_tokens: $max_tokens,
+              reasoning_effort: $effort
+            }' > "$OPENAI_PAYLOAD_FILE"
+        else
           jq -n \
             --arg model "$MODEL_TO_TRY" \
             --rawfile prompt "$FULL_PROMPT_FILE" \
@@ -972,36 +1030,58 @@ else
               messages: [{role: "user", content: $prompt}],
               max_completion_tokens: $max_tokens
             }' > "$OPENAI_PAYLOAD_FILE"
-
-          set +e
-          OPENAI_RESP="$(curl_json_with_backoff "$OPENAI_CHAT_COMPLETIONS_URL" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $OPENAI_API_KEY" \
-            -d @"$OPENAI_PAYLOAD_FILE")"
-          CURL_EXIT=$?
-          set -e
-
-          if [ "$CURL_EXIT" -eq 28 ]; then
-            echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
-            continue
-          fi
-          if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
-            echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
-            continue
-          fi
-
-          if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
-            err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
-            echo "  ERROR: $err_msg" >&2
-            continue
-          fi
-        else
-          continue
         fi
+
+        set +e
+        OPENAI_RESP="$(curl_json_with_backoff "$OPENAI_CHAT_COMPLETIONS_URL" \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer $OPENAI_API_KEY" \
+          -d @"$OPENAI_PAYLOAD_FILE")"
+        CURL_EXIT=$?
+        set -e
+
+        if [ "$CURL_EXIT" -eq 28 ]; then
+          echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
+          if [ "$OPENAI_CHAT_ATTEMPT" -eq 1 ]; then
+            continue
+          fi
+          break
+        fi
+        if ! printf '%s' "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+          echo "  ERROR: OpenAI request returned non-JSON (exit=$CURL_EXIT)" >&2
+          if [ "$OPENAI_CHAT_ATTEMPT" -eq 1 ]; then
+            continue
+          fi
+          break
+        fi
+
+        if printf '%s' "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
+          err_msg="$(printf '%s' "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
+          err_msg_slim="$(printf '%s' "$err_msg" | tr -d '\r\n' | head -c 500)"
+          err_msg_redacted="$(printf '%s' "$err_msg_slim" | sed -E 's/[A-Za-z0-9_\\/+=-]{20,}/<REDACTED>/g')"
+          echo "  ERROR: $err_msg_redacted" >&2
+
+          if [ "$OPENAI_CHAT_ATTEMPT" -eq 1 ] && printf '%s' "$err_msg_slim" | grep -Eqi 'reasoning[_ ]effort'; then
+            echo "  WARN: Chat Completions rejected reasoning_effort; retrying without it." >&2
+            continue
+          fi
+
+          break
+        fi
+        if [ "$CURL_EXIT" -ne 0 ]; then
+          echo "  ERROR: OpenAI request failed (exit=$CURL_EXIT)" >&2
+          break
+        fi
+
+        OPENAI_CHAT_OK="true"
+        break
+      done
+      if [ "$OPENAI_CHAT_OK" != "true" ]; then
+        continue
       fi
 
-      CONTENT=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
-      REFUSAL=$(echo "$OPENAI_RESP" | jq -r '.choices[0].message.refusal // empty')
+      CONTENT=$(printf '%s' "$OPENAI_RESP" | jq -r '.choices[0].message.content // empty')
+      REFUSAL=$(printf '%s' "$OPENAI_RESP" | jq -r '.choices[0].message.refusal // empty')
       if [ -n "$REFUSAL" ] && [ "$REFUSAL" != "null" ]; then
         echo "  ERROR: OpenAI response refusal" >&2
         continue
@@ -1068,7 +1148,7 @@ else
       echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
       continue
     fi
-    if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+    if ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
       echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
       continue
     fi
@@ -1076,6 +1156,10 @@ else
     if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
       err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
       echo "  ERROR: $err_msg" >&2
+      continue
+    fi
+    if [ "$CURL_EXIT" -ne 0 ]; then
+      echo "  ERROR: OpenAI request failed (exit=$CURL_EXIT)" >&2
       continue
     fi
 
@@ -1187,7 +1271,14 @@ EOF
 fi
 
 if [ -s "$ANTHROPIC_GITHUB_ENV_FILE" ]; then
-  cat "$ANTHROPIC_GITHUB_ENV_FILE" >> "$GITHUB_ENV"
+  ANTHROPIC_MODEL_USED_LINE="$(grep -m1 '^ANTHROPIC_MODEL_USED=' "$ANTHROPIC_GITHUB_ENV_FILE" 2>/dev/null | tr -d '\r' || true)"
+  ANTHROPIC_MODEL_USED_VALUE="${ANTHROPIC_MODEL_USED_LINE#ANTHROPIC_MODEL_USED=}"
+  if [ -n "$ANTHROPIC_MODEL_USED_VALUE" ] && printf '%s' "$ANTHROPIC_MODEL_USED_VALUE" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+    echo "ANTHROPIC_MODEL_USED=$ANTHROPIC_MODEL_USED_VALUE" >> "$GITHUB_ENV"
+  else
+    echo "WARN: Invalid ANTHROPIC_MODEL_USED value; marking ANTHROPIC_MODEL_USED=skipped" >&2
+    echo "ANTHROPIC_MODEL_USED=skipped" >> "$GITHUB_ENV"
+  fi
 else
   echo "WARN: Anthropic env file missing/empty; marking ANTHROPIC_MODEL_USED=skipped" >&2
   echo "ANTHROPIC_MODEL_USED=skipped" >> "$GITHUB_ENV"
