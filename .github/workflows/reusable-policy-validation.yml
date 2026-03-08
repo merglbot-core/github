@@ -1,0 +1,92 @@
+name: Reusable - Policy Validation (Workflows)
+
+on:
+  workflow_call:
+    inputs:
+      workflows_glob:
+        description: "Glob for workflow files to validate (caller repo workspace)"
+        required: false
+        type: string
+        default: ".github/workflows/*.yml .github/workflows/*.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: policy-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate Workflows (OPA/Conftest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+
+      - name: Checkout policy repo (pinned to workflow SHA)
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        with:
+          repository: merglbot-core/github
+          ref: ${{ github.workflow_sha }}
+          path: .merglbot-policy
+
+      - name: Install Conftest
+        run: |
+          set -euo pipefail
+
+          CONFTEST_VERSION="0.49.1"
+          wget -q "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+          tar -xzf "conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+          sudo mv conftest /usr/local/bin/
+          conftest --version
+
+      - name: Validate workflows against policy
+        env:
+          WORKFLOWS_GLOB: ${{ inputs.workflows_glob }}
+        run: |
+          set -euo pipefail
+
+          POLICY_DIR=".merglbot-policy/.github/policies"
+          if [ ! -d "$POLICY_DIR" ]; then
+            echo "::error::Policy directory not found at $POLICY_DIR"
+            exit 1
+          fi
+
+          echo "## 🔍 Policy Validation (Conftest)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Policy repo ref: \`${{ github.workflow_sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Policy dir: \`$POLICY_DIR\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          FAILED=0
+          PASSED=0
+
+          shopt -s nullglob
+          # Expand the glob string into paths (word-splitting is intentional here).
+          for workflow in $WORKFLOWS_GLOB; do
+            [ -f "$workflow" ] || continue
+            echo "Checking: $workflow"
+            if conftest test "$workflow" --policy "$POLICY_DIR" --output table --no-color; then
+              PASSED=$((PASSED + 1))
+            else
+              FAILED=$((FAILED + 1))
+            fi
+            echo ""
+          done
+
+          echo "### Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ✅ Passed: $PASSED" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ❌ Failed: $FAILED" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::Policy validation failed for $FAILED workflow(s)."
+            exit 1
+          fi
+
+          if [ "$PASSED" -eq 0 ]; then
+            echo "::warning::No workflows matched inputs.workflows_glob ($WORKFLOWS_GLOB)."
+          fi
