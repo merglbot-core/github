@@ -37,7 +37,8 @@ ANTHROPIC_GITHUB_ENV_FILE="${TMP_DIR}/anthropic_github_env.txt"
 ANTHROPIC_REVIEW_FILE="${TMP_DIR}/anthropic_review.txt"
 ANTHROPIC_USAGE_FILE="${TMP_DIR}/anthropic_usage.json"
 ANTHROPIC_PID=""
-STEP1_REASON_FILE="${STEP1_REASON_FILE:-${RUNNER_TEMP:-/tmp}/merglbot-step1-fail-reason.txt}"
+STEP1_REASON_FILE_DEFAULT="${RUNNER_TEMP:-/tmp}/merglbot-step1-fail-reason.txt"
+STEP1_REASON_FILE="${STEP1_REASON_FILE:-$STEP1_REASON_FILE_DEFAULT}"
 
 DEFAULT_ANTHROPIC_MESSAGES_URL="https://api.anthropic.com/v1/messages"
 DEFAULT_OPENAI_RESPONSES_URL="https://api.openai.com/v1/responses"
@@ -56,25 +57,25 @@ resolve_step1_reason_file() {
     echo "ERROR: python3 is required to resolve STEP1_REASON_FILE" >&2
     return 1
   fi
-  python3 - "${1:-}" "${RUNNER_TEMP:-/tmp}" <<'PY'
+  python3 - "${1:-}" "${RUNNER_TEMP:-/tmp}" "${STEP1_REASON_FILE_DEFAULT}" <<'PY'
 from pathlib import Path
 import sys
 
 raw = (sys.argv[1] or "").strip()
-if not raw:
-    raise SystemExit(1)
-
-candidate = Path(raw).expanduser()
 root = Path(sys.argv[2]).expanduser().resolve()
-parent = candidate.parent.resolve()
-name = candidate.name
-if not name:
-    raise SystemExit(1)
+fallback = Path(sys.argv[3]).expanduser()
+fallback_name = fallback.name or "merglbot-step1-fail-reason.txt"
+candidate = Path(raw).expanduser() if raw else fallback
+if not candidate.is_absolute():
+    candidate = root / candidate
+resolved = candidate.resolve()
+if not resolved.name:
+    resolved = root / fallback_name
+parent = resolved.parent
 if root != parent and root not in parent.parents:
-    raise SystemExit(1)
-resolved = parent / name
+    resolved = root / fallback_name
 if resolved.exists() and resolved.is_dir():
-    raise SystemExit(1)
+    resolved = root / fallback_name
 print(resolved)
 PY
 }
@@ -98,7 +99,7 @@ write_step1_reason() {
 }
 
 STEP1_REASON_FILE="$(resolve_step1_reason_file "$STEP1_REASON_FILE")" || {
-  echo "ERROR: STEP1_REASON_FILE must stay under RUNNER_TEMP" >&2
+  echo "ERROR: STEP1_REASON_FILE could not be resolved under RUNNER_TEMP" >&2
   exit 1
 }
 
