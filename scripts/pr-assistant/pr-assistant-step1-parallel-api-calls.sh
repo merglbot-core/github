@@ -16,6 +16,7 @@ echo "========================================="
 
 PARENT_BASHPID="${BASHPID}"
 TMP_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/merglbot-pr-assistant.XXXXXX")"
+readonly API_ERROR_EXIT=75
 cleanup() {
   if [ "${BASHPID}" != "${PARENT_BASHPID}" ]; then
     return 0
@@ -50,6 +51,57 @@ trim_ws() {
   printf '%s' "${1:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 
+resolve_step1_reason_file() {
+  if ! command -v python3 > /dev/null 2>&1; then
+    echo "ERROR: python3 is required to resolve STEP1_REASON_FILE" >&2
+    return 1
+  fi
+  python3 - "${1:-}" "${RUNNER_TEMP:-/tmp}" <<'PY'
+from pathlib import Path
+import sys
+
+raw = (sys.argv[1] or "").strip()
+if not raw:
+    raise SystemExit(1)
+
+candidate = Path(raw).expanduser()
+root = Path(sys.argv[2]).expanduser().resolve()
+parent = candidate.parent.resolve()
+name = candidate.name
+if not name:
+    raise SystemExit(1)
+if root != parent and root not in parent.parents:
+    raise SystemExit(1)
+resolved = parent / name
+if resolved.exists() and resolved.is_dir():
+    raise SystemExit(1)
+print(resolved)
+PY
+}
+
+write_step1_reason() {
+  local tmp_file
+  umask 077
+  mkdir -p "$(dirname "$STEP1_REASON_FILE")"
+  if [ -L "$STEP1_REASON_FILE" ]; then
+    echo "ERROR: STEP1_REASON_FILE must not be a symlink" >&2
+    return 1
+  fi
+  tmp_file="$(mktemp "${STEP1_REASON_FILE}.tmp.XXXXXX")"
+  if [ -L "$tmp_file" ]; then
+    rm -f "$tmp_file"
+    echo "ERROR: STEP1_REASON_FILE temp file must not be a symlink" >&2
+    return 1
+  fi
+  printf '%s\n' "$@" > "$tmp_file"
+  mv -f "$tmp_file" "$STEP1_REASON_FILE"
+}
+
+STEP1_REASON_FILE="$(resolve_step1_reason_file "$STEP1_REASON_FILE")" || {
+  echo "ERROR: STEP1_REASON_FILE must stay under RUNNER_TEMP" >&2
+  exit 1
+}
+
 allowlist_openai_url() {
   local url
   url="$(trim_ws "${1:-}")"
@@ -69,17 +121,19 @@ allowlist_anthropic_url() {
 }
 
 ANTHROPIC_MESSAGES_URL="$(allowlist_anthropic_url "$RAW_ANTHROPIC_MESSAGES_URL")"
+ANTHROPIC_URL_ALLOWED="true"
 if [ -z "$ANTHROPIC_MESSAGES_URL" ]; then
   if [ "$(trim_ws "$RAW_ANTHROPIC_MESSAGES_URL")" != "$DEFAULT_ANTHROPIC_MESSAGES_URL" ]; then
-    echo "WARN: Disallowed Anthropic API URL override; using default endpoint." >&2
+    ANTHROPIC_URL_ALLOWED="false"
   fi
   ANTHROPIC_MESSAGES_URL="$DEFAULT_ANTHROPIC_MESSAGES_URL"
 fi
 
 OPENAI_RESPONSES_URL="$(allowlist_openai_url "$RAW_OPENAI_RESPONSES_URL")"
+OPENAI_URLS_ALLOWED="true"
 if [ -z "$OPENAI_RESPONSES_URL" ]; then
   if [ "$(trim_ws "$RAW_OPENAI_RESPONSES_URL")" != "$DEFAULT_OPENAI_RESPONSES_URL" ]; then
-    echo "WARN: Disallowed OpenAI Responses URL override; using default endpoint." >&2
+    OPENAI_URLS_ALLOWED="false"
   fi
   OPENAI_RESPONSES_URL="$DEFAULT_OPENAI_RESPONSES_URL"
 fi
@@ -87,7 +141,7 @@ fi
 OPENAI_CHAT_COMPLETIONS_URL="$(allowlist_openai_url "$RAW_OPENAI_CHAT_COMPLETIONS_URL")"
 if [ -z "$OPENAI_CHAT_COMPLETIONS_URL" ]; then
   if [ "$(trim_ws "$RAW_OPENAI_CHAT_COMPLETIONS_URL")" != "$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL" ]; then
-    echo "WARN: Disallowed OpenAI Chat Completions URL override; using default endpoint." >&2
+    OPENAI_URLS_ALLOWED="false"
   fi
   OPENAI_CHAT_COMPLETIONS_URL="$DEFAULT_OPENAI_CHAT_COMPLETIONS_URL"
 fi
@@ -104,8 +158,33 @@ sanitize_model() {
   printf '%s' "$raw"
 }
 
+append_github_env_pair() {
+  local env_key="$1"
+  local env_value="${2:-}"
+  # Model identifiers are persisted to GITHUB_ENV for downstream telemetry; keep
+  # the accepted charset intentionally narrow and key-specific.
+  case "$env_key" in
+    ANTHROPIC_MODEL_USED|OPENAI_MODEL_USED)
+      ;;
+    *)
+      echo "ERROR: Unsupported GITHUB_ENV key: $env_key" >&2
+      return 1
+      ;;
+  esac
+  env_value="$(printf '%s' "$env_value" | tr -d '\r\n')"
+  if [ -n "$env_value" ] && ! printf '%s' "$env_value" | grep -Eq '^[A-Za-z0-9._-]+$'; then
+    echo "ERROR: Invalid value for $env_key" >&2
+    return 1
+  fi
+  printf '%s=%s\n' "$env_key" "${env_value:-skipped}" >> "$GITHUB_ENV"
+}
+
 escape_untrusted() {
   sed 's/<<<MERGLBOT_/<<<MERGLBOT_ESCAPED_/g'
+}
+
+json_has_error_object() {
+  echo "${1:-}" | jq -e '.error' > /dev/null 2>&1
 }
 
 curl_json_with_backoff() {
@@ -149,7 +228,10 @@ curl_json_with_backoff() {
     fi
 
     # Retry common transient API errors (best-effort).
-    if echo "$resp" | jq -e '.error' > /dev/null 2>&1; then
+    # Return a dedicated sentinel exit code so callers can still inspect the
+    # provider JSON error body without treating the request as a generic
+    # transport success.
+    if json_has_error_object "$resp"; then
       err_type="$(echo "$resp" | jq -r '.error.type // empty' 2>/dev/null || true)"
       case "$err_type" in
         rate_limit_error|server_error|api_error|overloaded_error)
@@ -159,6 +241,8 @@ curl_json_with_backoff() {
           fi
           ;;
       esac
+      printf '%s' "$resp"
+      return "$API_ERROR_EXIT"
     fi
 
     printf '%s' "$resp"
@@ -183,7 +267,11 @@ fi
 
 OPENAI_SKIP_REASON=""
 OPENAI_API_KEY_PRESENT="true"
-if [ -z "${OPENAI_API_KEY:-}" ]; then
+if [ "$OPENAI_URLS_ALLOWED" != "true" ]; then
+  OPENAI_API_KEY_PRESENT="false"
+  OPENAI_SKIP_REASON="invalid_url"
+  echo "ERROR: Disallowed OpenAI API URL override; skipping OpenAI analysis." >&2
+elif [ -z "${OPENAI_API_KEY:-}" ]; then
   OPENAI_API_KEY_PRESENT="false"
   OPENAI_SKIP_REASON="no_key"
   echo "WARN: OPENAI_API_KEY is missing; skipping OpenAI analysis." >&2
@@ -191,7 +279,11 @@ fi
 
 ANTHROPIC_SKIP_REASON=""
 ANTHROPIC_API_KEY_PRESENT="true"
-if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+if [ "$ANTHROPIC_URL_ALLOWED" != "true" ]; then
+  ANTHROPIC_API_KEY_PRESENT="false"
+  ANTHROPIC_SKIP_REASON="invalid_url"
+  echo "ERROR: Disallowed Anthropic API URL override; skipping Anthropic analysis." >&2
+elif [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   ANTHROPIC_API_KEY_PRESENT="false"
   ANTHROPIC_SKIP_REASON="no_key"
   echo "WARN: ANTHROPIC_API_KEY is missing; skipping Anthropic analysis." >&2
@@ -206,12 +298,10 @@ if [ "$ANTHROPIC_API_KEY_PRESENT" != "true" ] && [ "$OPENAI_API_KEY_PRESENT" != 
     printf '%s' "${1:-}" | tr -d '\r\n' | grep -Eo '^[A-Za-z0-9._-]+' || true
   }
 
-  mkdir -p "$(dirname "$STEP1_REASON_FILE")"
-  printf '%s\n' \
+  write_step1_reason \
     "reason=missing_api_keys" \
     "anthropic_skip_reason=$(safe_reason "${ANTHROPIC_SKIP_REASON:-}")" \
-    "openai_skip_reason=$(safe_reason "${OPENAI_SKIP_REASON:-}")" \
-    > "${STEP1_REASON_FILE}"
+    "openai_skip_reason=$(safe_reason "${OPENAI_SKIP_REASON:-}")"
   exit 1
 fi
 
@@ -410,7 +500,7 @@ echo "Review depth: $REVIEW_DEPTH"
 
 # Build prompt using printf to file (single redirect)
 {
-printf '%s\n' "# Merglbot Multi-Model Code Review v3.5.2"
+printf '%s\n' "# Merglbot Multi-Model Code Review v3.5.4"
 printf '%s\n' ""
 printf '%s\n' "You are a senior code reviewer for Merglbot - a platform for AI-powered code intelligence."
 printf '%s\n' ""
@@ -658,12 +748,20 @@ echo "Prompt size: $PROMPT_SIZE chars"
         echo "  ERROR: Anthropic request timed out (exit=$CURL_EXIT)" >&2
         continue
       fi
-      if [ "$CURL_EXIT" -ne 0 ] || ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
+      if [ "$CURL_EXIT" -ne 0 ] && [ "$CURL_EXIT" -ne "$API_ERROR_EXIT" ]; then
         echo "  ERROR: Anthropic request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
         continue
       fi
+      if ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
+        echo "  ERROR: Anthropic request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
+        continue
+      fi
+      if [ "$CURL_EXIT" -eq "$API_ERROR_EXIT" ] && ! json_has_error_object "$ANTHROPIC_RESP"; then
+        echo "  ERROR: Anthropic sentinel exit without error payload" >&2
+        continue
+      fi
 
-      if echo "$ANTHROPIC_RESP" | jq -e ".error" > /dev/null 2>&1; then
+      if json_has_error_object "$ANTHROPIC_RESP"; then
         err_msg="$(echo "$ANTHROPIC_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
         echo "  ERROR: $err_msg" >&2
         continue
@@ -718,7 +816,7 @@ EOF
       ANTHROPIC_MODEL_USED="$ANTHROPIC_MODEL"
     fi
   fi
-  echo "ANTHROPIC_MODEL_USED=$ANTHROPIC_MODEL_USED" > "$ANTHROPIC_GITHUB_ENV_FILE"
+  printf 'ANTHROPIC_MODEL_USED=%s\n' "$(sanitize_model "$ANTHROPIC_MODEL_USED")" > "$ANTHROPIC_GITHUB_ENV_FILE"
 ) &
 ANTHROPIC_PID=$!
 
@@ -761,9 +859,14 @@ call_openai_responses() {
     '{
       model: $model,
       input: $prompt,
-      max_output_tokens: $max_output_tokens,
-      reasoning: { effort: $effort }
-    }' > "$payload_a"
+      max_output_tokens: $max_output_tokens
+    } + (
+      if ($effort | length) > 0 and ($effort != "none") then
+        {reasoning: {effort: $effort}}
+      else
+        {}
+      end
+    )' > "$payload_a"
 
   jq -n \
     --arg model "$model" \
@@ -773,9 +876,14 @@ call_openai_responses() {
     '{
       model: $model,
       input: [{ role: "user", content: $prompt }],
-      max_output_tokens: $max_output_tokens,
-      reasoning: { effort: $effort }
-    }' > "$payload_b"
+      max_output_tokens: $max_output_tokens
+    } + (
+      if ($effort | length) > 0 and ($effort != "none") then
+        {reasoning: {effort: $effort}}
+      else
+        {}
+      end
+    )' > "$payload_b"
 
   jq -n \
     --arg model "$model" \
@@ -785,9 +893,14 @@ call_openai_responses() {
     '{
       model: $model,
       input: [{ role: "user", content: [{ type: "input_text", text: $prompt }] }],
-      max_output_tokens: $max_output_tokens,
-      reasoning: { effort: $effort }
-    }' > "$payload_c"
+      max_output_tokens: $max_output_tokens
+    } + (
+      if ($effort | length) > 0 and ($effort != "none") then
+        {reasoning: {effort: $effort}}
+      else
+        {}
+      end
+    )' > "$payload_c"
 
   for payload in "$payload_a" "$payload_b" "$payload_c"; do
     local variant="A"
@@ -811,11 +924,19 @@ call_openai_responses() {
       echo "  ERROR: Responses API request timed out (exit=$exit_code)" >&2
       return 1
     fi
-    if [ "$exit_code" -ne 0 ] || ! echo "$resp" | jq -e . > /dev/null 2>&1; then
+    if [ "$exit_code" -ne 0 ] && [ "$exit_code" -ne "$API_ERROR_EXIT" ]; then
       echo "  ERROR: Responses API returned non-JSON (exit=$exit_code)" >&2
       continue
     fi
-    if echo "$resp" | jq -e ".error" > /dev/null 2>&1; then
+    if ! echo "$resp" | jq -e . > /dev/null 2>&1; then
+      echo "  ERROR: Responses API returned non-JSON (exit=$exit_code)" >&2
+      continue
+    fi
+    if [ "$exit_code" -eq "$API_ERROR_EXIT" ] && ! json_has_error_object "$resp"; then
+      echo "  ERROR: Responses API sentinel exit without error payload" >&2
+      continue
+    fi
+    if json_has_error_object "$resp"; then
       err_msg="$(echo "$resp" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
       echo "  ERROR: $err_msg" >&2
       continue
@@ -952,12 +1073,20 @@ else
         echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
         continue
       fi
-      if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+      if [ "$CURL_EXIT" -ne 0 ] && [ "$CURL_EXIT" -ne "$API_ERROR_EXIT" ]; then
         echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
         continue
       fi
+      if ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+        echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
+        continue
+      fi
+      if [ "$CURL_EXIT" -eq "$API_ERROR_EXIT" ] && ! json_has_error_object "$OPENAI_RESP"; then
+        echo "  ERROR: OpenAI sentinel exit without error payload" >&2
+        continue
+      fi
 
-      if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
+      if json_has_error_object "$OPENAI_RESP"; then
         err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
         echo "  ERROR: $err_msg" >&2
         if echo "$err_msg" | grep -Eqi 'reasoning[_ ]effort'; then
@@ -985,12 +1114,20 @@ else
             echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
             continue
           fi
-          if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+          if [ "$CURL_EXIT" -ne 0 ] && [ "$CURL_EXIT" -ne "$API_ERROR_EXIT" ]; then
             echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
             continue
           fi
+          if ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+            echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
+            continue
+          fi
+          if [ "$CURL_EXIT" -eq "$API_ERROR_EXIT" ] && ! json_has_error_object "$OPENAI_RESP"; then
+            echo "  ERROR: OpenAI sentinel exit without error payload" >&2
+            continue
+          fi
 
-          if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
+          if json_has_error_object "$OPENAI_RESP"; then
             err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
             echo "  ERROR: $err_msg" >&2
             continue
@@ -1068,12 +1205,20 @@ else
       echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
       continue
     fi
-    if [ "$CURL_EXIT" -ne 0 ] || ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+    if [ "$CURL_EXIT" -ne 0 ] && [ "$CURL_EXIT" -ne "$API_ERROR_EXIT" ]; then
       echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
       continue
     fi
+    if ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+      echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
+      continue
+    fi
+    if [ "$CURL_EXIT" -eq "$API_ERROR_EXIT" ] && ! json_has_error_object "$OPENAI_RESP"; then
+      echo "  ERROR: OpenAI sentinel exit without error payload" >&2
+      continue
+    fi
 
-    if echo "$OPENAI_RESP" | jq -e ".error" > /dev/null 2>&1; then
+    if json_has_error_object "$OPENAI_RESP"; then
       err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
       echo "  ERROR: $err_msg" >&2
       continue
@@ -1130,7 +1275,7 @@ if [ -z "$OPENAI_MODEL_USED" ]; then
     OPENAI_MODEL_USED="$OPENAI_MODEL"
   fi
 fi
-echo "OPENAI_MODEL_USED=$OPENAI_MODEL_USED" >> "$GITHUB_ENV"
+append_github_env_pair "OPENAI_MODEL_USED" "$OPENAI_MODEL_USED"
 
 : "${OPENAI_USAGE_OUTPUT_TOKENS:=0}"
 : "${OPENAI_USAGE_REASONING_TOKENS:=0}"
@@ -1187,10 +1332,16 @@ EOF
 fi
 
 if [ -s "$ANTHROPIC_GITHUB_ENV_FILE" ]; then
-  cat "$ANTHROPIC_GITHUB_ENV_FILE" >> "$GITHUB_ENV"
+  ANTHROPIC_MODEL_USED_LINE="$(grep -m1 '^ANTHROPIC_MODEL_USED=' "$ANTHROPIC_GITHUB_ENV_FILE" || true)"
+  if [ -n "$ANTHROPIC_MODEL_USED_LINE" ]; then
+    append_github_env_pair "ANTHROPIC_MODEL_USED" "${ANTHROPIC_MODEL_USED_LINE#ANTHROPIC_MODEL_USED=}"
+  else
+    echo "WARN: Anthropic env file missing ANTHROPIC_MODEL_USED; marking skipped" >&2
+    append_github_env_pair "ANTHROPIC_MODEL_USED" "skipped"
+  fi
 else
   echo "WARN: Anthropic env file missing/empty; marking ANTHROPIC_MODEL_USED=skipped" >&2
-  echo "ANTHROPIC_MODEL_USED=skipped" >> "$GITHUB_ENV"
+  append_github_env_pair "ANTHROPIC_MODEL_USED" "skipped"
 fi
 
 OPENAI_OK="false"
