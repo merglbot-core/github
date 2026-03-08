@@ -16,6 +16,7 @@ echo "========================================="
 
 PARENT_BASHPID="${BASHPID}"
 TMP_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/merglbot-pr-assistant.XXXXXX")"
+readonly API_ERROR_EXIT=75
 cleanup() {
   if [ "${BASHPID}" != "${PARENT_BASHPID}" ]; then
     return 0
@@ -141,6 +142,8 @@ sanitize_model() {
 append_github_env_pair() {
   local env_key="$1"
   local env_value="${2:-}"
+  # Model identifiers are persisted to GITHUB_ENV for downstream telemetry; keep
+  # the accepted charset intentionally narrow and key-specific.
   case "$env_key" in
     ANTHROPIC_MODEL_USED|OPENAI_MODEL_USED)
       ;;
@@ -170,7 +173,7 @@ curl_json_with_backoff() {
     return 2
   fi
 
-  local attempt resp exit_code err_type api_error_exit=75
+  local attempt resp exit_code err_type
   for attempt in 1 2 3; do
     set +e
     resp="$(curl -s --connect-timeout 15 --max-time 180 "$url" "$@")"
@@ -216,7 +219,7 @@ curl_json_with_backoff() {
           ;;
       esac
       printf '%s' "$resp"
-      return "$api_error_exit"
+      return "$API_ERROR_EXIT"
     fi
 
     printf '%s' "$resp"
