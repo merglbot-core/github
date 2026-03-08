@@ -633,19 +633,12 @@ jobs:
             # NOTE: keep the gate on JWT_PATTERN_STRICT only; the loose heuristic is noisy (docs/test fixtures).
             JWT_PATTERN="${JWT_PATTERN_STRICT}"
             for SECRET_SCAN_FILE in pr_diff_full.txt pr_diff.txt pr_title.txt pr_body.txt bugbot_findings.txt changed_files.txt pr_checks_summary.txt; do
-              # pr_diff_full.txt: keep generic-key exclusions for lockfile noise, but still enforce strict JWT detection.
-              PATTERN="$SENSITIVE_PATTERN_NO_GENERIC"
+              # pr_diff_full.txt intentionally excludes both generic key_ heuristics and JWT detection:
+              # full lockfile/package diffs can contain integrity strings and test fixtures that look JWT-like.
+              PATTERN="${SENSITIVE_PATTERN_STRICT}|${JWT_PATTERN}"
               if [ "$SECRET_SCAN_FILE" = "pr_diff_full.txt" ]; then
-                if [ -s "$SECRET_SCAN_FILE" ] && grep -Eqi "${JWT_PATTERN}" "$SECRET_SCAN_FILE"; then
-                  echo "⛔️ Potential secret-like material detected in PR context file: $SECRET_SCAN_FILE; skipping AI review."
-                  SKIP_REVIEW="true"
-                  SKIP_REASON="potential_secret"
-                  break
-                fi
-              else
-                PATTERN="${SENSITIVE_PATTERN_STRICT}|${JWT_PATTERN}"
+                PATTERN="$SENSITIVE_PATTERN_NO_GENERIC"
               fi
-
               if [ -s "$SECRET_SCAN_FILE" ] && grep -Eqi "$PATTERN" "$SECRET_SCAN_FILE"; then
                 echo "⛔️ Potential secret-like material detected in PR context file: $SECRET_SCAN_FILE; skipping AI review."
                 SKIP_REVIEW="true"
