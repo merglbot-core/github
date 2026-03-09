@@ -30,15 +30,17 @@ _GITHUB_TOKEN_CLASSIC="(^|[^[:alnum:]_])${_GHP}[A-Za-z0-9]{30,}($|[^[:alnum:]_])
 _GITHUB_TOKEN_FINE_GRAINED="(^|[^[:alnum:]_])${_GITHUB_PAT_PREFIX}[A-Za-z0-9_]{20,}($|[^[:alnum:]_])"
 _GITHUB_TOKEN_GENERIC="(^|[^[:alnum:]_])${_GH_TOKEN_PREFIX}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
 _GENERIC_KEY="(^|[^[:alnum:]_])(${_GENERIC_API_KEY_PREFIX}|${_GENERIC_SECRET_KEY_PREFIX}|${_GENERIC_PRIVATE_KEY_PREFIX}|${_GENERIC_ACCESS_KEY_PREFIX})[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
+_LEGACY_GENERIC_KEY_STRICT_RX='(^|[^[:alnum:]_])key_[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])'
 _AWS_ACCESS_KEY="(^|[^[:alnum:]_])AKIA[0-9A-Z]{16}($|[^[:alnum:]_])"
 _GOOGLE_API_KEY="(^|[^[:alnum:]_])AIza[0-9A-Za-z_-]{30,}($|[^[:alnum:]_])"
 _GOOGLE_OAUTH_REFRESH="(^|[^[:alnum:]_])ya29\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
 _OPENAI_PROJECT_KEY="(^|[^[:alnum:]_])${_SK_PREFIX}(proj|ant)-[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
 _OPENAI_KEY="(^|[^[:alnum:]_])${_SK_PREFIX}[A-Za-z0-9_-]{30,}($|[^[:alnum:]_])"
 
-SENSITIVE_PATTERN_STRICT="${_BEGIN_PRIVATE_KEY}|${_BEGIN_PGP_PRIVATE_KEY}|${_SLACK_TOKEN}|${_GITHUB_TOKEN_CLASSIC}|${_GITHUB_TOKEN_FINE_GRAINED}|${_GITHUB_TOKEN_GENERIC}|${_GENERIC_KEY}|${_AWS_ACCESS_KEY}|${_GOOGLE_API_KEY}|${_GOOGLE_OAUTH_REFRESH}|${_OPENAI_PROJECT_KEY}|${_OPENAI_KEY}"
+# STRICT keeps the legacy broad key_ heuristic to preserve fail-closed pre-scan coverage.
+SENSITIVE_PATTERN_STRICT="${_BEGIN_PRIVATE_KEY}|${_BEGIN_PGP_PRIVATE_KEY}|${_SLACK_TOKEN}|${_GITHUB_TOKEN_CLASSIC}|${_GITHUB_TOKEN_FINE_GRAINED}|${_GITHUB_TOKEN_GENERIC}|${_GENERIC_KEY}|${_LEGACY_GENERIC_KEY_STRICT_RX}|${_AWS_ACCESS_KEY}|${_GOOGLE_API_KEY}|${_GOOGLE_OAUTH_REFRESH}|${_OPENAI_PROJECT_KEY}|${_OPENAI_KEY}"
 
-# NO_GENERIC excludes only the generic *_key_ heuristic; GitHub token classes stay covered.
+# NO_GENERIC excludes the noisy legacy key_ heuristic while keeping explicit *_key_ prefixes and GitHub token classes covered.
 SENSITIVE_PATTERN_NO_GENERIC="${_BEGIN_PRIVATE_KEY}|${_BEGIN_PGP_PRIVATE_KEY}|${_SLACK_TOKEN}|${_GITHUB_TOKEN_CLASSIC}|${_GITHUB_TOKEN_FINE_GRAINED}|${_GITHUB_TOKEN_GENERIC}|${_AWS_ACCESS_KEY}|${_GOOGLE_API_KEY}|${_GOOGLE_OAUTH_REFRESH}|${_OPENAI_PROJECT_KEY}|${_OPENAI_KEY}"
 
 # JWT detection is intentionally "strict-ish": it's used only as a *pre-scan*

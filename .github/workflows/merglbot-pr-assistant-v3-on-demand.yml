@@ -613,6 +613,7 @@ jobs:
             _GENERIC_SECRET_KEY_PREFIX="secret_ke""y_"
             _GENERIC_PRIVATE_KEY_PREFIX="private_ke""y_"
             _GENERIC_ACCESS_KEY_PREFIX="access_ke""y_"
+            _LEGACY_GENERIC_KEY_STRICT_RX="(^|[^[:alnum:]_])key_[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             _AWS_PREFIX="A""KIA"
             _GOOGLE_PREFIX="AI""za"
             _GOOGLE_REFRESH_PREFIX="ya""29\\."
@@ -629,8 +630,9 @@ jobs:
             _GOOGLE_REFRESH_RX="(^|[^[:alnum:]_])${_GOOGLE_REFRESH_PREFIX}[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             _OPENAI_PROJECT_RX="(^|[^[:alnum:]_])${_SK_PREFIX}(proj|ant)-[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             _OPENAI_RX="(^|[^[:alnum:]_])${_SK_PREFIX}[A-Za-z0-9_-]{30,}($|[^[:alnum:]_])"
-            SENSITIVE_PATTERN_STRICT="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
-            # NO_GENERIC excludes only the noisy generic key_ label; GitHub token classes still stay covered.
+            # STRICT keeps the legacy broad key_ heuristic to preserve fail-closed pre-scan coverage.
+            SENSITIVE_PATTERN_STRICT="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_LEGACY_GENERIC_KEY_STRICT_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
+            # NO_GENERIC excludes the noisy legacy key_ heuristic while keeping explicit *_key_ prefixes and GitHub token classes covered.
             SENSITIVE_PATTERN_NO_GENERIC="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
             JWT_PATTERN_STRICT="(^|[^[:alnum:]_])${_JWT_PREFIX}[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             # Loose JWT pattern (for alignment with redaction; intentionally NOT used for SKIP_REVIEW gating):
