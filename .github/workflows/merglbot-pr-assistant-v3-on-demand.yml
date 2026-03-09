@@ -229,6 +229,7 @@ jobs:
       REVIEW_MODE: ${{ needs.check-trigger.outputs.review_mode }}
       DIFF_SCOPE_MODE: ${{ needs.check-trigger.outputs.diff_scope }}
       INCLUDE_RETRO: ${{ needs.check-trigger.outputs.include_retro }}
+      REPOSITORY_SLUG: ${{ github.repository }}
     
     steps:
       - name: Checkout
@@ -256,10 +257,10 @@ jobs:
           echo "GATHERING PR CONTEXT"
           echo "========================================="
           
-          PR_NUM="${{ env.PR_NUMBER }}"
+          PR_NUM="${PR_NUMBER}"
           echo "PR Number: $PR_NUM"
-          echo "Review Mode: ${{ env.REVIEW_MODE }}"
-          echo "Diff Scope Mode: ${{ env.DIFF_SCOPE_MODE }}"
+          echo "Review Mode: ${REVIEW_MODE}"
+          echo "Diff Scope Mode: ${DIFF_SCOPE_MODE}"
           
           PR_VIEW_FIELDS_WITH_CHECKS="title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles,statusCheckRollup"
           PR_VIEW_FIELDS_NO_CHECKS="title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles"
@@ -382,7 +383,7 @@ jobs:
           
           gh pr view "$PR_NUM" --json files -q '.files[].path' > changed_files.txt 2>/dev/null || echo "" > changed_files.txt
           
-          gh api "repos/${{ github.repository }}/issues/$PR_NUM/comments" --paginate > issue_comments.json 2>/dev/null || echo "[]" > issue_comments.json
+          gh api "repos/${REPOSITORY_SLUG}/issues/$PR_NUM/comments" --paginate > issue_comments.json 2>/dev/null || echo "[]" > issue_comments.json
           
           echo "Detecting previous Merglbot review..."
           LAST_REVIEW_BODY=$(jq -r '[.[] | select(.user.login == "github-actions" or .user.login == "github-actions[bot]") | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .body // empty' issue_comments.json 2>/dev/null || echo "")
@@ -441,18 +442,18 @@ jobs:
             fi
             
             if [ "$DIFF_SCOPE_MODE" != "full" ] && [ -n "$PREV_REVIEW_HEAD_SHA" ] && [ "$PREV_REVIEW_HEAD_SHA" != "$PR_HEAD_SHA" ]; then
-              COMPARE_STATUS=$(gh api "/repos/${{ github.repository }}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" --jq '.status' 2>/dev/null || echo "")
+              COMPARE_STATUS=$(gh api "/repos/${REPOSITORY_SLUG}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" --jq '.status' 2>/dev/null || echo "")
               if [ "$COMPARE_STATUS" == "ahead" ]; then
                 echo "Using DELTA diff since last review: $PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA"
                 DIFF_SCOPE="delta"
                 DIFF_RANGE="$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA"
                 
-                if ! gh api -H "Accept: application/vnd.github.v3.diff" "/repos/${{ github.repository }}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" > pr_diff.txt 2>/dev/null; then
+                if ! gh api -H "Accept: application/vnd.github.v3.diff" "/repos/${REPOSITORY_SLUG}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" > pr_diff.txt 2>/dev/null; then
                   echo "Delta diff fetch failed; falling back to full PR diff."
                   DIFF_SCOPE="full"
                   DIFF_RANGE="$PR_BASE_SHA...$PR_HEAD_SHA"
                 else
-                  gh api "/repos/${{ github.repository }}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" --jq '.commits[] | "- " + (.sha[0:7]) + " " + (.commit.message | split("\n")[0])' 2>/dev/null > new_commits.txt || echo "" > new_commits.txt
+                  gh api "/repos/${REPOSITORY_SLUG}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" --jq '.commits[] | "- " + (.sha[0:7]) + " " + (.commit.message | split("\n")[0])' 2>/dev/null > new_commits.txt || echo "" > new_commits.txt
                 fi
               elif [ "$DIFF_SCOPE_MODE" == "delta" ]; then
                 echo "Requested DELTA diff but compare status is '$COMPARE_STATUS'; falling back to full PR diff."
@@ -550,7 +551,7 @@ jobs:
             fi
           done
           
-          if ! gh api "repos/${{ github.repository }}/pulls/$PR_NUM/comments" --paginate > review_comments.json 2>/dev/null; then
+          if ! gh api "repos/${REPOSITORY_SLUG}/pulls/$PR_NUM/comments" --paginate > review_comments.json 2>/dev/null; then
             echo "::warning::Failed to fetch PR review comments; continuing with none"
             echo "[]" > review_comments.json
           fi
@@ -831,6 +832,7 @@ jobs:
           ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-sonnet-4-6' }}
           OPENAI_SYNTHESIS_MODEL: ${{ (github.event.inputs.openai_synthesis_model != 'org_default' && github.event.inputs.openai_synthesis_model) || vars.MERGLBOT_OPENAI_MODEL_SYNTHESIS || 'gpt-5.2' }}
           OPENAI_SYNTHESIS_REASONING_EFFORT: ${{ (github.event.inputs.openai_synthesis_reasoning_effort != 'org_default' && github.event.inputs.openai_synthesis_reasoning_effort) || vars.MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS || 'medium' }}
+          REVIEW_MODE: ${{ needs.check-trigger.outputs.review_mode }}
         run: |
           set -euo pipefail
 
@@ -1045,7 +1047,7 @@ jobs:
             exit 0
           fi
           
-          if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
+          if [ "${REVIEW_MODE}" == "light" ]; then
             MAX_SYNTH_TOKENS=6000
           else
             MAX_SYNTH_TOKENS=12000
@@ -1343,6 +1345,8 @@ jobs:
           OPENAI_MODEL: ${{ (github.event.inputs.openai_model != 'org_default' && github.event.inputs.openai_model) || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5-mini' }}
           OPENAI_SYNTHESIS_MODEL: ${{ (github.event.inputs.openai_synthesis_model != 'org_default' && github.event.inputs.openai_synthesis_model) || vars.MERGLBOT_OPENAI_MODEL_SYNTHESIS || 'gpt-5.2' }}
           OPENAI_SYNTHESIS_REASONING_EFFORT: ${{ (github.event.inputs.openai_synthesis_reasoning_effort != 'org_default' && github.event.inputs.openai_synthesis_reasoning_effort) || vars.MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS || 'medium' }}
+          PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
+          REVIEW_MODE: ${{ needs.check-trigger.outputs.review_mode }}
         run: |
           set -euo pipefail
           
@@ -1388,7 +1392,7 @@ jobs:
             OPENAI_SYNTHESIS_REASONING_EFFORT="medium"
           fi
 
-          PR_NUM="${{ env.PR_NUMBER }}"
+          PR_NUM="${PR_NUMBER}"
           
           BUGBOT_COUNT="0"
           if [ -f bugbot_count.txt ]; then
@@ -1400,7 +1404,7 @@ jobs:
             BUGBOT_SOURCES=$(< bugbot_sources.txt)
           fi
           
-          REVIEW_MODE="${{ env.REVIEW_MODE }}"
+          CURRENT_REVIEW_MODE="${REVIEW_MODE}"
           
           DIFF_SCOPE="full"
           if [ -f pr_diff_scope.txt ]; then
@@ -1487,7 +1491,7 @@ jobs:
               echo ""
               echo "| Metric | Value |"
               echo "|--------|-------|"
-              echo "| Review Mode | \`$REVIEW_MODE\` |"
+              echo "| Review Mode | \`$CURRENT_REVIEW_MODE\` |"
               echo "| Bot Mode | \`$BOT_MODE\` |"
               echo "| Diff Scope | \`$DIFF_SCOPE\` |"
               echo "| Diff Range | \`$DIFF_RANGE\` |"
@@ -1524,7 +1528,7 @@ jobs:
               echo ""
               echo "---"
               echo ""
-              if [ "$REVIEW_MODE" == "light" ]; then
+              if [ "$CURRENT_REVIEW_MODE" == "light" ]; then
                 echo "*Light mode. For detailed analysis: \`@merglbot review\`*"
               else
                 echo "*Full analysis. For quick review: \`@merglbot review --light\`*"
