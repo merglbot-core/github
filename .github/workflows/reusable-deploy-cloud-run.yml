@@ -280,8 +280,8 @@ jobs:
               line = line.strip()
               if not line or ":" not in line:
                   continue
-              alias, secret = line.split(":", 1)
-              mapping[alias.strip()] = secret.strip()
+              alias, secret_ref = line.split(":", 1)
+              mapping[alias.strip()] = secret_ref.strip()
 
           containers = (
               svc.get("spec", {})
