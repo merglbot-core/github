@@ -436,8 +436,6 @@ jobs:
           fi
 
           echo "DEPLOYMENT_MODE=$DEPLOYMENT_MODE" >> "$GITHUB_ENV"
-          echo "CROSS_PROJECT_ALIAS_SUMMARY=$CROSS_PROJECT_ALIAS_SUMMARY" >> "$GITHUB_ENV"
-          echo "CROSS_PROJECT_ALIAS_COUNT=$CROSS_PROJECT_ALIAS_COUNT" >> "$GITHUB_ENV"
 
           echo "deployment_mode=$DEPLOYMENT_MODE" >> "$GITHUB_OUTPUT"
           {
@@ -445,6 +443,9 @@ jobs:
             echo "$CROSS_PROJECT_ALIAS_SUMMARY"
             echo "EOF"
             echo "cross_project_alias_count=$CROSS_PROJECT_ALIAS_COUNT"
+            echo "cross_project_secret_summary<<EOF"
+            echo "$CROSS_PROJECT_ALIAS_SUMMARY"
+            echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
           # Deploy base revision
@@ -509,6 +510,6 @@ jobs:
           echo "- **Service**: $SERVICE" >> "$GITHUB_STEP_SUMMARY"
           echo "- **URL**: ${{ steps.deploy.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Mode**: ${DEPLOYMENT_MODE:-unknown}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Cross-project aliases**: ${CROSS_PROJECT_ALIAS_SUMMARY:-none}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Cross-project alias count**: ${CROSS_PROJECT_ALIAS_COUNT:-0}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Cross-project aliases**: ${{ steps.deploy.outputs.cross_project_alias_summary || 'none' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Cross-project alias count**: ${{ steps.deploy.outputs.cross_project_alias_count || '0' }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Status**: ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"
