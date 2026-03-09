@@ -607,7 +607,10 @@ jobs:
             _PRIVATE_WORD="PRIVATE"" KEY"
             _PGP_BLOCK_WORD="BLO""CK"
             _SLACK_PREFIX="xo""x[baprs]-"
-            _GENERIC_LABEL_PREFIX="ke""y_"
+            _GENERIC_API_KEY_PREFIX="api_ke""y_"
+            _GENERIC_SECRET_KEY_PREFIX="secret_ke""y_"
+            _GENERIC_PRIVATE_KEY_PREFIX="private_ke""y_"
+            _GENERIC_ACCESS_KEY_PREFIX="access_ke""y_"
             _AWS_PREFIX="A""KIA"
             _GOOGLE_PREFIX="AI""za"
             _GOOGLE_REFRESH_PREFIX="ya""29\\."
@@ -618,7 +621,7 @@ jobs:
             _GH_CLASSIC_RX="(^|[^[:alnum:]_])${_GHP}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
             _GH_FINE_RX="(^|[^[:alnum:]_])${_GH_PAT_PREFIX}[A-Za-z0-9_]{20,}($|[^[:alnum:]_])"
             _GH_GENERIC_RX="(^|[^[:alnum:]_])${_GH_CLASS_PREFIX}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
-            _GENERIC_RX="(^|[^[:alnum:]_])${_GENERIC_LABEL_PREFIX}[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
+            _GENERIC_RX="(^|[^[:alnum:]_])(${_GENERIC_API_KEY_PREFIX}|${_GENERIC_SECRET_KEY_PREFIX}|${_GENERIC_PRIVATE_KEY_PREFIX}|${_GENERIC_ACCESS_KEY_PREFIX})[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             _AWS_RX="(^|[^[:alnum:]_])${_AWS_PREFIX}[0-9A-Z]{16}($|[^[:alnum:]_])"
             _GOOGLE_RX="(^|[^[:alnum:]_])${_GOOGLE_PREFIX}[0-9A-Za-z_-]{30,}($|[^[:alnum:]_])"
             _GOOGLE_REFRESH_RX="(^|[^[:alnum:]_])${_GOOGLE_REFRESH_PREFIX}[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
@@ -640,7 +643,7 @@ jobs:
                 PATTERN="$SENSITIVE_PATTERN_NO_GENERIC"
               fi
               if [ -s "$SECRET_SCAN_FILE" ] && grep -Eqi "$PATTERN" "$SECRET_SCAN_FILE"; then
-                echo "⛔️ Potential secret-like material detected in PR context file: $SECRET_SCAN_FILE; skipping AI review."
+                echo "⛔️ Potential secret-like material detected in PR context; skipping AI review."
                 SKIP_REVIEW="true"
                 SKIP_REASON="potential_secret"
                 break
@@ -864,7 +867,10 @@ jobs:
             raw="$(printf '%s' "$raw" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
             case "$raw" in
               low|medium|high|none) printf '%s' "$raw" ;;
-              xhigh) printf '%s' "high" ;;
+              xhigh)
+                echo "::warning::reasoning_effort=xhigh is deprecated; using high" >&2
+                printf '%s' "high"
+                ;;
               *) printf '%s' "" ;;
             esac
           }
@@ -1354,7 +1360,10 @@ jobs:
             raw="$(printf '%s' "$raw" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
             case "$raw" in
               low|medium|high|none) printf '%s' "$raw" ;;
-              xhigh) printf '%s' "high" ;;
+              xhigh)
+                echo "::warning::reasoning_effort=xhigh is deprecated; using high" >&2
+                printf '%s' "high"
+                ;;
               *) printf '%s' "" ;;
             esac
           }
@@ -1848,6 +1857,7 @@ jobs:
       
       - name: Upload Metrics Artifact
         if: always() && steps.context.outputs.skip_review != 'true'
+        # Verify pin: gh api repos/actions/upload-artifact/git/ref/tags/v4.6.2 --jq .object.sha
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: review-metrics-${{ env.PR_NUMBER }}-${{ github.run_id }}
