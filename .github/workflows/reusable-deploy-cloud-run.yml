@@ -218,7 +218,8 @@ jobs:
           set -euo pipefail
 
           DEPLOYMENT_MODE="no-secrets"
-          CROSS_PROJECT_SECRET_SUMMARY="none"
+          CROSS_PROJECT_ALIAS_SUMMARY="none"
+          CROSS_PROJECT_ALIAS_COUNT=0
           SAME_PROJECT_SECRET_LINES=()
           CROSS_PROJECT_SECRET_LINES=()
 
@@ -306,7 +307,7 @@ jobs:
 
               if mapping.get(env_name) != secret_resource:
                   errors.append(
-                      f"annotation mismatch for {env_name}: expected {secret_resource}, got {mapping.get(env_name)!r}"
+                      f"annotation mismatch for {env_name}: alias mapping is missing or points to an unexpected resource"
                   )
 
               env_entry = env_index.get(env_name)
@@ -397,6 +398,7 @@ jobs:
                   echo "::error::Invalid cross-project secret reference for $env_name: $secret_ref (expected projects/<project-number>/secrets/<secret-id>)"
                   exit 1
                 fi
+                echo "::add-mask::$secret_ref"
                 CROSS_PROJECT_SECRET_LINES+=("$entry")
               else
                 SAME_PROJECT_SECRET_LINES+=("$entry")
@@ -413,10 +415,15 @@ jobs:
               { IFS=,; SECRET_LIST="${SAME_PROJECT_SECRET_LINES[*]}"; }
               gcloud_cmd+=("--update-secrets=${SECRET_LIST}")
             fi
-            CROSS_PROJECT_SECRET_SUMMARY="$(printf '%s\n' "${CROSS_PROJECT_SECRET_LINES[@]}" | paste -sd ',' -)"
+            CROSS_PROJECT_ALIAS_COUNT="${#CROSS_PROJECT_SECRET_LINES[@]}"
+            CROSS_PROJECT_ALIAS_NAMES=()
+            for line in "${CROSS_PROJECT_SECRET_LINES[@]}"; do
+              CROSS_PROJECT_ALIAS_NAMES+=("${line%%=*}")
+            done
+            { IFS=,; CROSS_PROJECT_ALIAS_SUMMARY="${CROSS_PROJECT_ALIAS_NAMES[*]}"; }
             echo "::notice::Cross-project reconcile mode enabled for $SERVICE"
             echo "::notice::Base rollout runs before YAML patch to avoid replaying stale service specs"
-            echo "::notice::Cross-project mappings: $CROSS_PROJECT_SECRET_SUMMARY"
+            echo "::notice::Cross-project aliases: $CROSS_PROJECT_ALIAS_SUMMARY"
           else
             if [ -n "${{ inputs.env_vars }}" ]; then
               gcloud_cmd+=("--set-env-vars=${{ inputs.env_vars }}")
@@ -429,13 +436,15 @@ jobs:
           fi
 
           echo "DEPLOYMENT_MODE=$DEPLOYMENT_MODE" >> "$GITHUB_ENV"
-          echo "CROSS_PROJECT_SECRET_SUMMARY=$CROSS_PROJECT_SECRET_SUMMARY" >> "$GITHUB_ENV"
+          echo "CROSS_PROJECT_ALIAS_SUMMARY=$CROSS_PROJECT_ALIAS_SUMMARY" >> "$GITHUB_ENV"
+          echo "CROSS_PROJECT_ALIAS_COUNT=$CROSS_PROJECT_ALIAS_COUNT" >> "$GITHUB_ENV"
 
           echo "deployment_mode=$DEPLOYMENT_MODE" >> "$GITHUB_OUTPUT"
           {
-            echo "cross_project_secret_summary<<EOF"
-            echo "$CROSS_PROJECT_SECRET_SUMMARY"
+            echo "cross_project_alias_summary<<EOF"
+            echo "$CROSS_PROJECT_ALIAS_SUMMARY"
             echo "EOF"
+            echo "cross_project_alias_count=$CROSS_PROJECT_ALIAS_COUNT"
           } >> "$GITHUB_OUTPUT"
 
           # Deploy base revision
@@ -491,14 +500,15 @@ jobs:
           fi
 
           URL=$(gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format="value(status.url)")
-          echo "url=$URL" >> $GITHUB_OUTPUT
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
       
       - name: Update deployment summary
         if: always()
         run: |
-          echo "## 🚀 Reusable Deployment" >> $GITHUB_STEP_SUMMARY
-          echo "- **Service**: $SERVICE" >> $GITHUB_STEP_SUMMARY
-          echo "- **URL**: ${{ steps.deploy.outputs.url }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Mode**: ${DEPLOYMENT_MODE:-unknown}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Cross-project mappings**: ${CROSS_PROJECT_SECRET_SUMMARY:-none}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Reusable Deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Service**: $SERVICE" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **URL**: ${{ steps.deploy.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Mode**: ${DEPLOYMENT_MODE:-unknown}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Cross-project aliases**: ${CROSS_PROJECT_ALIAS_SUMMARY:-none}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Cross-project alias count**: ${CROSS_PROJECT_ALIAS_COUNT:-0}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Status**: ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"
