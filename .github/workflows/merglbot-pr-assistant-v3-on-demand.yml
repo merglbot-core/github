@@ -868,7 +868,7 @@ jobs:
             case "$raw" in
               low|medium|high|none) printf '%s' "$raw" ;;
               xhigh)
-                echo "::warning::reasoning_effort=xhigh is deprecated; using high" >&2
+                echo "::warning::reasoning_effort=xhigh is deprecated; using high"
                 printf '%s' "high"
                 ;;
               *) printf '%s' "" ;;
@@ -1242,17 +1242,16 @@ jobs:
               fi
 
               if echo "$resp" | jq -e ".error" > /dev/null 2>&1; then
-                local err_type
-                err_type="$(echo "$resp" | jq -r '.error.type // empty' 2>/dev/null || true)"
-                local err_msg
-                err_msg="$(echo "$resp" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
+                local err_type err_code
+                err_type="$(printf '%s' "$resp" | jq -r '.error.type // empty' 2>/dev/null || true)"
+                err_code="$(printf '%s' "$resp" | jq -r '.error.code // empty' 2>/dev/null || true)"
 
                 if [ "$attempt" -lt 3 ] && { [ "$err_type" = "rate_limit_error" ] || [ "$err_type" = "server_error" ]; }; then
                   sleep $((attempt * 2))
                   continue
                 fi
 
-                echo "  ERROR: $err_msg" >&2
+                echo "  ERROR: OpenAI synthesis API error (type=${err_type:-unknown} code=${err_code:-n/a})" >&2
                 return 1
               fi
 
@@ -1361,7 +1360,7 @@ jobs:
             case "$raw" in
               low|medium|high|none) printf '%s' "$raw" ;;
               xhigh)
-                echo "::warning::reasoning_effort=xhigh is deprecated; using high" >&2
+                echo "::warning::reasoning_effort=xhigh is deprecated; using high"
                 printf '%s' "high"
                 ;;
               *) printf '%s' "" ;;

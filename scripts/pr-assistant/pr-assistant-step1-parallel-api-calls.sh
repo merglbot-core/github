@@ -1100,8 +1100,9 @@ else
       fi
 
       if json_has_error_object "$OPENAI_RESP"; then
-        err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
-        if echo "$err_msg" | grep -Eqi 'reasoning[_ ]effort'; then
+        # err_msg is used only for local retry detection; logging stays redacted via log_api_error_summary.
+        err_msg="$(printf '%s' "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
+        if printf '%s' "$err_msg" | grep -Eqi 'reasoning[_ ]effort'; then
           echo "  WARN: Chat Completions rejected reasoning_effort; retrying without it." >&2
 
           jq -n \
