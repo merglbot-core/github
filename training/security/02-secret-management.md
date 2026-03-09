@@ -10,12 +10,16 @@
 
 - Cross-project Secret Manager se na Cloud Run váže přes alias mapping `run.googleapis.com/secrets`.
 - Nepiš `projects/.../secrets/...` do `secretKeyRef.name` (Cloud Run validace to odmítne).
+- Recovery-safe deploy pattern je povinný: nejdřív base rollout image/plain env při zachování stávajících cross-project bindingů, až potom export fresh service YAML, patch alias mappingu a `gcloud run services replace`.
+- Nikdy nereplayuj exportovaný current service YAML před target rolloutem; u rozbité služby to může zacyklit stejnou broken revision a zablokovat recovery deploy.
+- Secret resource identifiers ber jako citlivá metadata: maskuj je, neposílej je přes `$GITHUB_ENV`, a ve workflow outputs/summary preferuj jen aliasy nebo count.
 
 ## Praktický checklist
 
 - [ ] Secret value není v repu
 - [ ] Secret name je konzistentní podle SSOT
-- [ ] Runtime ověřen přes `gcloud run services describe --format=yaml`
+- [ ] Runtime ověřen přes `gcloud run services describe --format="value(spec.template.metadata.annotations['run.googleapis.com/secrets'])"`
+- [ ] `secretKeyRef.name` používá alias, ne full resource path
 
 ## Reference (SSOT)
 
