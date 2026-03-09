@@ -504,7 +504,7 @@ jobs:
           # This keeps prompts small while still surfacing dependency-relevant changes for review.
           DIFF_RANGE_FOR_LOCKFILE="${DIFF_RANGE:-}"
           if [ -z "$DIFF_RANGE_FOR_LOCKFILE" ] && [ -f pr_diff_range.txt ]; then
-            DIFF_RANGE_FOR_LOCKFILE="$(cat pr_diff_range.txt)"
+            DIFF_RANGE_FOR_LOCKFILE="$(< pr_diff_range.txt)"
           fi
 
           if [ -n "$DIFF_RANGE_FOR_LOCKFILE" ] && git diff --stat "$DIFF_RANGE_FOR_LOCKFILE" -- ':(glob)**/package-lock.json' > lockfile_stat.txt 2>/dev/null; then
@@ -954,7 +954,7 @@ jobs:
             CHECKS_FAILED=1
             CHECKS_FAILED_KNOWN="false"
             if [ "$CHECKS_DATA_AVAILABLE" = "true" ] && [ -f pr_checks_failed_count.txt ]; then
-              CHECKS_FAILED_RAW="$(cat pr_checks_failed_count.txt | tr -d '\r' | tr -d ' ' 2>/dev/null || true)"
+              CHECKS_FAILED_RAW="$(tr -d '\r ' < pr_checks_failed_count.txt 2>/dev/null || true)"
               if echo "$CHECKS_FAILED_RAW" | grep -Eq '^[0-9]+$'; then
                 CHECKS_FAILED="$CHECKS_FAILED_RAW"
                 CHECKS_FAILED_KNOWN="true"
@@ -965,7 +965,7 @@ jobs:
             CHECKS_PENDING=1
             CHECKS_PENDING_KNOWN="false"
             if [ "$CHECKS_DATA_AVAILABLE" = "true" ] && [ -f pr_checks_pending_count.txt ]; then
-              CHECKS_PENDING_RAW="$(cat pr_checks_pending_count.txt | tr -d '\r' | tr -d ' ' 2>/dev/null || true)"
+              CHECKS_PENDING_RAW="$(tr -d '\r ' < pr_checks_pending_count.txt 2>/dev/null || true)"
               if echo "$CHECKS_PENDING_RAW" | grep -Eq '^[0-9]+$'; then
                 CHECKS_PENDING="$CHECKS_PENDING_RAW"
                 CHECKS_PENDING_KNOWN="true"
@@ -1763,7 +1763,7 @@ jobs:
           OPENAI_USAGE_JSON="${OPENAI_USAGE_JSON:-{}}"
           SYNTHESIS_USAGE_JSON="${SYNTHESIS_USAGE_JSON:-{}}"
 
-          PR_AUTHOR="$(cat pr_author.txt 2>/dev/null || echo '')"
+          PR_AUTHOR="$(sed -n '1p' pr_author.txt 2>/dev/null || echo '')"
 
           ANTHROPIC_USAGE_JSON_SAFE="$(normalize_usage_json "$ANTHROPIC_USAGE_JSON")"
           OPENAI_USAGE_JSON_SAFE="$(normalize_usage_json "$OPENAI_USAGE_JSON")"
