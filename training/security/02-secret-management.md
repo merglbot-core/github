@@ -12,7 +12,7 @@
 - Nepiš `projects/.../secrets/...` do `secretKeyRef.name` (Cloud Run validace to odmítne).
 - Recovery-safe deploy pattern je povinný: nejdřív base rollout image/plain env při zachování stávajících cross-project bindingů, až potom export fresh service YAML, patch alias mappingu a `gcloud run services replace`.
 - Nikdy nereplayuj exportovaný current service YAML před target rolloutem; u rozbité služby to může zacyklit stejnou broken revision a zablokovat recovery deploy.
-- Secret resource identifiers ber jako citlivá metadata: maskuj je, neposílej je přes `$GITHUB_ENV`, a ve workflow outputs/summary preferuj jen aliasy nebo count.
+- Secret resource identifiers ber jako citlivá metadata: neposílej je přes `$GITHUB_ENV`, `$GITHUB_OUTPUT`, workflow outputs ani job summaries. Pokud musí first-party verifikační krok zalogovat neočekávanou hodnotu, zavolej nejdřív `echo "::add-mask::$VALUE"` a do přenášených outputs/summaries dávej jen aliasy nebo count.
 
 ## Praktický checklist
 
