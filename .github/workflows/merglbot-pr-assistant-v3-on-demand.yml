@@ -414,28 +414,7 @@ jobs:
           SKIP_REVIEW="false"
           SKIP_REASON="none"
           cleanup_context_artifacts() {
-            rm -f \
-              pr_metadata.json \
-              pr_view_err.txt \
-              check_runs.json \
-              pr_title.txt \
-              pr_body.txt \
-              pr_author.txt \
-              pr_additions.txt \
-              pr_deletions.txt \
-              pr_files_count.txt \
-              pr_base_sha.txt \
-              pr_head_sha.txt \
-              pr_checks_summary.txt \
-              pr_checks_failed_count.txt \
-              pr_checks_pending_count.txt \
-              pr_checks_data_available.txt \
-              changed_files.txt \
-              pr_diff.txt \
-              pr_diff_full.txt \
-              pr_diff_scope.txt \
-              pr_diff_range.txt \
-              bugbot_findings.txt || true
+            rm -f pr_diff_full.txt || true
           }
           write_skip_outputs() {
             echo "skip_review=${SKIP_REVIEW:-false}" >> "$GITHUB_OUTPUT"
@@ -895,7 +874,7 @@ jobs:
             case "$raw" in
               low|medium|high|none) printf '%s' "$raw" ;;
               xhigh)
-                echo "::warning::reasoning_effort=xhigh is deprecated; using high"
+                echo "::warning::reasoning_effort=xhigh is deprecated; using high" >&2
                 printf '%s' "high"
                 ;;
               *) printf '%s' "" ;;
@@ -1389,7 +1368,7 @@ jobs:
             case "$raw" in
               low|medium|high|none) printf '%s' "$raw" ;;
               xhigh)
-                echo "::warning::reasoning_effort=xhigh is deprecated; using high"
+                echo "::warning::reasoning_effort=xhigh is deprecated; using high" >&2
                 printf '%s' "high"
                 ;;
               *) printf '%s' "" ;;
@@ -1891,3 +1870,29 @@ jobs:
           name: review-metrics-${{ env.PR_NUMBER }}-${{ github.run_id }}
           path: metrics/
           retention-days: 90
+
+      - name: Cleanup PR context artifacts
+        if: always()
+        run: |
+          rm -f \
+            pr_metadata.json \
+            pr_view_err.txt \
+            check_runs.json \
+            pr_title.txt \
+            pr_body.txt \
+            pr_author.txt \
+            pr_additions.txt \
+            pr_deletions.txt \
+            pr_files_count.txt \
+            pr_base_sha.txt \
+            pr_head_sha.txt \
+            pr_checks_summary.txt \
+            pr_checks_failed_count.txt \
+            pr_checks_pending_count.txt \
+            pr_checks_data_available.txt \
+            changed_files.txt \
+            pr_diff.txt \
+            pr_diff_full.txt \
+            pr_diff_scope.txt \
+            pr_diff_range.txt \
+            bugbot_findings.txt || true
