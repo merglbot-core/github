@@ -1515,7 +1515,7 @@ jobs:
               echo "---"
               echo ""
               if [ "$REVIEW_MODE" == "light" ]; then
-                echo "*Light mode. For detailed analysis: \`@merglbot review\`*"
+                echo "*Light mode. For detailed analysis: \`@merglbot review --full\`*"
               else
                 echo "*Full analysis. For quick review: \`@merglbot review --light\`*"
               fi
