@@ -14,7 +14,7 @@ on:
         description: "Review mode (full = detailed, light = concise)"
         required: false
         type: choice
-        default: "full"
+        default: "light"
         options:
           - full
           - light
@@ -122,8 +122,7 @@ jobs:
         id: get_pr
         env:
           # Security: Use env var to avoid command injection from comment body
-          COMMENT_CONTAINS_LIGHT: ${{ contains(github.event.comment.body, '--light') }}
-          COMMENT_CONTAINS_FULL_DIFF: ${{ contains(github.event.comment.body, '--full-diff') }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
           COMMENT_CONTAINS_RETRO: ${{ contains(github.event.comment.body, '--retro') || contains(github.event.comment.body, '--learn') }}
           IS_WORKFLOW_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
           INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
@@ -166,19 +165,22 @@ jobs:
               exit 1
             fi
             PR_NUMBER_OUT="$INPUT_PR_NUMBER"
-            REVIEW_MODE_OUT="${INPUT_REVIEW_MODE:-full}"
+            REVIEW_MODE_OUT="${INPUT_REVIEW_MODE:-light}"
             DIFF_SCOPE_OUT="${INPUT_DIFF_SCOPE:-auto}"
             INCLUDE_RETRO_OUT="${INPUT_INCLUDE_RETRO:-false}"
-            echo "✅ Manual trigger for PR #$INPUT_PR_NUMBER (mode: ${INPUT_REVIEW_MODE:-full})"
+            echo "✅ Manual trigger for PR #$INPUT_PR_NUMBER (mode: ${INPUT_REVIEW_MODE:-light})"
           else
             PR_NUMBER_OUT="$ISSUE_NUMBER"
-            # Security: Use GitHub native contains() instead of shell grep
-            if [ "$COMMENT_CONTAINS_LIGHT" == "true" ]; then
+            COMMENT_BODY_NORMALIZED="$(printf '%s' "${COMMENT_BODY:-}" | tr '\r\n\t' ' ')"
+            if printf '%s' "$COMMENT_BODY_NORMALIZED" | grep -Eq '(^|[[:space:]])--full($|[[:space:]])'; then
+              REVIEW_MODE_OUT="full"
+              echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: FULL)"
+            elif printf '%s' "$COMMENT_BODY_NORMALIZED" | grep -Eq '(^|[[:space:]])--light($|[[:space:]])'; then
               REVIEW_MODE_OUT="light"
               echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: LIGHT)"
             else
-              REVIEW_MODE_OUT="full"
-              echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: FULL)"
+              REVIEW_MODE_OUT="light"
+              echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: LIGHT DEFAULT)"
             fi
             
             if [ "$COMMENT_CONTAINS_RETRO" == "true" ]; then
@@ -188,7 +190,7 @@ jobs:
               INCLUDE_RETRO_OUT="false"
             fi
             
-            if [ "$COMMENT_CONTAINS_FULL_DIFF" == "true" ]; then
+            if printf '%s' "$COMMENT_BODY_NORMALIZED" | grep -Eq '(^|[[:space:]])--full-diff($|[[:space:]])'; then
               DIFF_SCOPE_OUT="full"
               echo "✅ Diff scope: FULL (requested via --full-diff)"
             else
@@ -1852,4 +1854,4 @@ jobs:
         with:
           name: review-metrics-${{ env.PR_NUMBER }}-${{ github.run_id }}
           path: metrics/
-          retention-days: 90
+          retention-days: 30
