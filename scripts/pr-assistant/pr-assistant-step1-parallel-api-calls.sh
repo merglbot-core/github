@@ -81,21 +81,29 @@ PY
 }
 
 write_step1_reason() {
-  local tmp_file
+  local old_umask tmp_file
+  old_umask="$(umask)"
   umask 077
   mkdir -p "$(dirname "$STEP1_REASON_FILE")"
   if [ -L "$STEP1_REASON_FILE" ]; then
+    umask "$old_umask"
     echo "ERROR: STEP1_REASON_FILE must not be a symlink" >&2
     return 1
   fi
-  tmp_file="$(mktemp "${STEP1_REASON_FILE}.tmp.XXXXXX")"
+  if ! tmp_file="$(mktemp "${STEP1_REASON_FILE}.tmp.XXXXXX")"; then
+    umask "$old_umask"
+    echo "ERROR: STEP1_REASON_FILE temp file could not be created" >&2
+    return 1
+  fi
   if [ -L "$tmp_file" ]; then
     rm -f "$tmp_file"
+    umask "$old_umask"
     echo "ERROR: STEP1_REASON_FILE temp file must not be a symlink" >&2
     return 1
   fi
   printf '%s\n' "$@" > "$tmp_file"
   mv -f "$tmp_file" "$STEP1_REASON_FILE"
+  umask "$old_umask"
 }
 
 STEP1_REASON_FILE="$(resolve_step1_reason_file "$STEP1_REASON_FILE")" || {
@@ -188,7 +196,16 @@ escape_untrusted() {
 }
 
 json_has_error_object() {
-  echo "${1:-}" | jq -e '.error' > /dev/null 2>&1
+  printf '%s' "${1:-}" | jq -e '.error' > /dev/null 2>&1
+}
+
+log_api_error_summary() {
+  local provider="$1"
+  local payload="${2:-}"
+  local err_type err_code
+  err_type="$(printf '%s' "$payload" | jq -r '.error.type // "unknown"' 2>/dev/null || printf 'unknown')"
+  err_code="$(printf '%s' "$payload" | jq -r '.error.code // "none"' 2>/dev/null || printf 'none')"
+  echo "  ERROR: ${provider} API error type=${err_type} code=${err_code}" >&2
 }
 
 curl_json_with_backoff() {
@@ -766,8 +783,7 @@ echo "Prompt size: $PROMPT_SIZE chars"
       fi
 
       if json_has_error_object "$ANTHROPIC_RESP"; then
-        err_msg="$(echo "$ANTHROPIC_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
-        echo "  ERROR: $err_msg" >&2
+        log_api_error_summary "Anthropic" "$ANTHROPIC_RESP"
         continue
       fi
 
@@ -820,6 +836,8 @@ EOF
       ANTHROPIC_MODEL_USED="$ANTHROPIC_MODEL"
     fi
   fi
+  # Subprocess writes review metadata only to its dedicated temp env file.
+  # The parent process is the only writer that merges model metadata into $GITHUB_ENV.
   printf 'ANTHROPIC_MODEL_USED=%s\n' "$(sanitize_model "$ANTHROPIC_MODEL_USED")" > "$ANTHROPIC_GITHUB_ENV_FILE"
 ) &
 ANTHROPIC_PID=$!
@@ -941,8 +959,7 @@ call_openai_responses() {
       continue
     fi
     if json_has_error_object "$resp"; then
-      err_msg="$(echo "$resp" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
-      echo "  ERROR: $err_msg" >&2
+      log_api_error_summary "OpenAI Responses" "$resp"
       continue
     fi
 
@@ -1091,9 +1108,9 @@ else
       fi
 
       if json_has_error_object "$OPENAI_RESP"; then
-        err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
-        echo "  ERROR: $err_msg" >&2
-        if echo "$err_msg" | grep -Eqi 'reasoning[_ ]effort'; then
+        # err_msg is used only for local retry detection; logging stays redacted via log_api_error_summary.
+        err_msg="$(printf '%s' "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
+        if printf '%s' "$err_msg" | grep -Eqi 'reasoning[_ ]effort'; then
           echo "  WARN: Chat Completions rejected reasoning_effort; retrying without it." >&2
 
           jq -n \
@@ -1132,11 +1149,11 @@ else
           fi
 
           if json_has_error_object "$OPENAI_RESP"; then
-            err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
-            echo "  ERROR: $err_msg" >&2
+            log_api_error_summary "OpenAI Chat Completions" "$OPENAI_RESP"
             continue
           fi
         else
+          log_api_error_summary "OpenAI Chat Completions" "$OPENAI_RESP"
           continue
         fi
       fi
@@ -1223,8 +1240,7 @@ else
     fi
 
     if json_has_error_object "$OPENAI_RESP"; then
-      err_msg="$(echo "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
-      echo "  ERROR: $err_msg" >&2
+      log_api_error_summary "OpenAI Chat Completions" "$OPENAI_RESP"
       continue
     fi
 
@@ -1335,6 +1351,8 @@ if [ ! -f anthropic_usage.json ] || ! jq -e . anthropic_usage.json > /dev/null 2
 EOF
 fi
 
+# Parent process reads Anthropic metadata only after wait() and is the sole
+# writer that appends model telemetry to $GITHUB_ENV.
 if [ -s "$ANTHROPIC_GITHUB_ENV_FILE" ]; then
   ANTHROPIC_MODEL_USED_LINE="$(grep -m1 '^ANTHROPIC_MODEL_USED=' "$ANTHROPIC_GITHUB_ENV_FILE" || true)"
   if [ -n "$ANTHROPIC_MODEL_USED_LINE" ]; then
