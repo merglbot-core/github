@@ -16,11 +16,71 @@ on:
         description: 'Container image name (without registry prefix)'
         required: true
         type: string
+      deploy_project_id:
+        description: 'Cloud Run deploy project ID (defaults to secret GCP_PROJECT_ID)'
+        required: false
+        type: string
+        default: ''
+      artifact_project_id:
+        description: 'Artifact Registry project ID (defaults to deploy project)'
+        required: false
+        type: string
+        default: ''
+      artifact_repository:
+        description: 'Artifact Registry repository name'
+        required: false
+        type: string
+        default: 'containers'
       dockerfile:
         description: 'Path to Dockerfile'
         required: false
         type: string
         default: 'Dockerfile'
+      environment_name:
+        description: 'Optional GitHub Environment name for the deploy job'
+        required: false
+        type: string
+        default: ''
+      environment_url:
+        description: 'Optional GitHub Environment URL for the deploy job'
+        required: false
+        type: string
+        default: ''
+      runtime_service_account:
+        description: 'Optional runtime service account email for Cloud Run'
+        required: false
+        type: string
+        default: ''
+      ingress:
+        description: 'Cloud Run ingress setting'
+        required: false
+        type: string
+        default: 'internal-and-cloud-load-balancing'
+      memory:
+        description: 'Cloud Run memory allocation'
+        required: false
+        type: string
+        default: '512Mi'
+      cpu:
+        description: 'Cloud Run CPU allocation'
+        required: false
+        type: string
+        default: '1'
+      timeout:
+        description: 'Cloud Run request timeout in seconds'
+        required: false
+        type: number
+        default: 300
+      port:
+        description: 'Cloud Run container port'
+        required: false
+        type: number
+        default: 8080
+      allow_unauthenticated:
+        description: 'Allow unauthenticated access to the deployed service'
+        required: false
+        type: boolean
+        default: true
       environment:
         description: 'Environment (staging/production)'
         required: false
@@ -51,6 +111,9 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 30  # Build, scan, and deploy usually <15m; buffer for registry latency
+    environment:
+      name: ${{ inputs.environment_name }}
+      url: ${{ inputs.environment_url }}
     permissions:
       contents: read
       id-token: write  # Required for WIF OIDC token
@@ -68,10 +131,45 @@ jobs:
           service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
           token_format: 'access_token'
 
+      - name: Resolve deployment parameters
+        shell: bash
+        env:
+          INPUT_DEPLOY_PROJECT_ID: ${{ inputs.deploy_project_id }}
+          INPUT_ARTIFACT_PROJECT_ID: ${{ inputs.artifact_project_id }}
+          INPUT_ARTIFACT_REPOSITORY: ${{ inputs.artifact_repository }}
+          SECRET_GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+
+          DEPLOY_PROJECT_ID="${INPUT_DEPLOY_PROJECT_ID:-$SECRET_GCP_PROJECT_ID}"
+          ARTIFACT_PROJECT_ID="${INPUT_ARTIFACT_PROJECT_ID:-$DEPLOY_PROJECT_ID}"
+          ARTIFACT_REPOSITORY="${INPUT_ARTIFACT_REPOSITORY:-containers}"
+
+          if [ -z "$DEPLOY_PROJECT_ID" ]; then
+            echo "::error::deploy_project_id is empty and secret GCP_PROJECT_ID is not set"
+            exit 1
+          fi
+
+          if [ -z "$ARTIFACT_PROJECT_ID" ]; then
+            echo "::error::artifact_project_id could not be resolved"
+            exit 1
+          fi
+
+          if [ -z "$ARTIFACT_REPOSITORY" ]; then
+            echo "::error::artifact_repository could not be resolved"
+            exit 1
+          fi
+
+          {
+            printf 'DEPLOY_PROJECT_ID=%s\n' "$DEPLOY_PROJECT_ID"
+            printf 'ARTIFACT_PROJECT_ID=%s\n' "$ARTIFACT_PROJECT_ID"
+            printf 'ARTIFACT_REPOSITORY=%s\n' "$ARTIFACT_REPOSITORY"
+          } >> "$GITHUB_ENV"
+
       - name: Setup gcloud CLI
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db  # v3.0.1
         with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          project_id: ${{ inputs.deploy_project_id || secrets.GCP_PROJECT_ID }}
 
       - name: Configure Docker for Artifact Registry
         run: |
@@ -79,10 +177,10 @@ jobs:
 
       - name: Build Container Image
         run: |
-          IMAGE="${{ inputs.region }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/containers/${{ inputs.image_name }}:${{ github.sha }}"
-          docker build -t $IMAGE -f ${{ inputs.dockerfile }} .
-          docker push $IMAGE
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          IMAGE="${{ inputs.region }}-docker.pkg.dev/${ARTIFACT_PROJECT_ID}/${ARTIFACT_REPOSITORY}/${{ inputs.image_name }}:${{ github.sha }}"
+          docker build -t "$IMAGE" -f "${{ inputs.dockerfile }}" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
       # Container Security: Trivy scan with SARIF upload
       - name: Run Trivy vulnerability scanner
@@ -104,24 +202,64 @@ jobs:
           sarif_file: 'trivy-results.sarif'
 
       - name: Deploy to Cloud Run
+        env:
+          INPUT_TIMEOUT: ${{ inputs.timeout }}
+          INPUT_PORT: ${{ inputs.port }}
         run: |
-          gcloud run deploy ${{ inputs.service_name }} \
-            --image ${{ env.IMAGE }} \
-            --region ${{ inputs.region }} \
-            --platform managed \
-            --min-instances ${{ inputs.min_instances }} \
-            --max-instances ${{ inputs.max_instances }} \
-            --allow-unauthenticated \
-            --set-env-vars="ENVIRONMENT=${{ inputs.environment }}" \
-            --quiet
+          set -euo pipefail
+
+          deploy_args=(
+            "${{ inputs.service_name }}"
+            "--image" "${IMAGE}"
+            "--region" "${{ inputs.region }}"
+            "--project" "${DEPLOY_PROJECT_ID}"
+            "--platform" "managed"
+            "--min-instances" "${{ inputs.min_instances }}"
+            "--max-instances" "${{ inputs.max_instances }}"
+            "--set-env-vars=ENVIRONMENT=${{ inputs.environment }}"
+            "--quiet"
+          )
+
+          if [ -n "${{ inputs.runtime_service_account }}" ]; then
+            deploy_args+=("--service-account" "${{ inputs.runtime_service_account }}")
+          fi
+
+          if [ -n "${{ inputs.ingress }}" ]; then
+            deploy_args+=("--ingress" "${{ inputs.ingress }}")
+          fi
+
+          if [ -n "${{ inputs.memory }}" ]; then
+            deploy_args+=("--memory" "${{ inputs.memory }}")
+          fi
+
+          if [ -n "${{ inputs.cpu }}" ]; then
+            deploy_args+=("--cpu" "${{ inputs.cpu }}")
+          fi
+
+          if [ "${INPUT_TIMEOUT}" -gt 0 ]; then
+            deploy_args+=("--timeout" "${INPUT_TIMEOUT}")
+          fi
+
+          if [ "${INPUT_PORT}" -gt 0 ]; then
+            deploy_args+=("--port" "${INPUT_PORT}")
+          fi
+
+          if [ "${{ inputs.allow_unauthenticated }}" = "true" ]; then
+            deploy_args+=("--allow-unauthenticated")
+          else
+            deploy_args+=("--no-allow-unauthenticated")
+          fi
+
+          gcloud run deploy "${deploy_args[@]}"
 
       - name: Get Service URL
         id: url
         run: |
-          URL=$(gcloud run services describe ${{ inputs.service_name }} \
-            --region ${{ inputs.region }} \
+          URL=$(gcloud run services describe "${{ inputs.service_name }}" \
+            --region "${{ inputs.region }}" \
+            --project "${DEPLOY_PROJECT_ID}" \
             --format 'value(status.url)')
-          echo "url=$URL" >> $GITHUB_OUTPUT
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "🚀 Service deployed to: $URL"
 
       - name: Health Check
