@@ -531,7 +531,7 @@ jobs:
             grep -E "$LOCKFILE_PATH_RX" changed_files.txt > omitted_lockfiles.txt 2>/dev/null || true
             if [ -s omitted_lockfiles.txt ]; then
               if [ ! -f pr_diff_full.txt ]; then
-                echo "WARN: fail-closed: skipping LLM call because omitted lockfiles were detected and pr_diff_full.txt is missing." >&2
+                echo "::warning::Fail-closed: skipping LLM call because omitted lockfiles were detected and pr_diff_full.txt is missing." >&2
                 SKIP_REVIEW="true"
                 SKIP_REASON="potential_secret"
               else
@@ -560,7 +560,9 @@ jobs:
                   }
                 ' pr_diff_full.txt > pr_lockfile_diff_strict.txt
                 if [ ! -s pr_lockfile_diff_strict.txt ]; then
-                  echo "::notice::No lockfile diff lines extracted for strict lockfile scan."
+                  echo "::warning::Fail-closed: omitted lockfiles detected but strict diff extraction is empty." >&2
+                  SKIP_REVIEW="true"
+                  SKIP_REASON="potential_secret"
                 fi
               fi
             fi
@@ -711,6 +713,46 @@ jobs:
             #   (^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}($|[^[:alnum:]_])
             # NOTE: keep the gate on JWT_PATTERN_STRICT only; the loose heuristic is noisy (docs/test fixtures).
             JWT_PATTERN="${JWT_PATTERN_STRICT}"
+            WORKFLOW_PATTERNS_FILE=".github/workflows/merglbot-pr-assistant-v3-on-demand.yml"
+            SCRIPT_PATTERNS_FILE="scripts/pr-assistant/secret-scan-patterns.sh"
+            extract_rhs() {
+              local file="$1"
+              local name="$2"
+              grep -E "^[[:space:]]*${name}=" "$file" | head -n1 | sed -E "s/^[[:space:]]*${name}=//"
+            }
+            compare_pattern() {
+              local workflow_name="$1"
+              local script_name="$2"
+              local workflow_value
+              local script_value
+              workflow_value="$(extract_rhs "$WORKFLOW_PATTERNS_FILE" "$workflow_name")"
+              script_value="$(extract_rhs "$SCRIPT_PATTERNS_FILE" "$script_name")"
+              if [ -z "$workflow_value" ] || [ -z "$script_value" ]; then
+                echo "ERROR: secret-scan pattern definition missing for ${workflow_name}/${script_name}" >&2
+                PATTERN_DRIFT=1
+                return
+              fi
+              if [ "$workflow_value" != "$script_value" ]; then
+                echo "ERROR: secret-scan pattern drift detected: ${workflow_name} != ${script_name}" >&2
+                PATTERN_DRIFT=1
+              fi
+            }
+            PATTERN_DRIFT=0
+            compare_pattern "_GH_CLASSIC_RX" "_GITHUB_TOKEN_CLASSIC"
+            compare_pattern "_GH_FINE_RX" "_GITHUB_TOKEN_FINE_GRAINED"
+            compare_pattern "_GH_GENERIC_RX" "_GITHUB_TOKEN_GENERIC"
+            compare_pattern "_GENERIC_RX" "_GENERIC_KEY"
+            compare_pattern "_LEGACY_GENERIC_KEY_STRICT_RX" "_LEGACY_GENERIC_KEY_STRICT_RX"
+            compare_pattern "_AWS_RX" "_AWS_ACCESS_KEY"
+            compare_pattern "_GOOGLE_RX" "_GOOGLE_API_KEY"
+            compare_pattern "_GOOGLE_REFRESH_RX" "_GOOGLE_OAUTH_REFRESH"
+            compare_pattern "_OPENAI_PROJECT_RX" "_OPENAI_PROJECT_KEY"
+            compare_pattern "_OPENAI_RX" "_OPENAI_KEY"
+            compare_pattern "SENSITIVE_PATTERN_STRICT" "SENSITIVE_PATTERN_STRICT"
+            compare_pattern "SENSITIVE_PATTERN_NO_GENERIC" "SENSITIVE_PATTERN_NO_GENERIC"
+            if [ "$PATTERN_DRIFT" -ne 0 ]; then
+              exit 1
+            fi
             for SECRET_SCAN_FILE in pr_diff_full.txt pr_lockfile_diff_strict.txt pr_diff.txt pr_title.txt pr_body.txt bugbot_findings.txt changed_files.txt new_commits.txt pr_checks_summary.txt; do
               # pr_diff_full.txt intentionally excludes only the broad generic key_ heuristic:
               # full lockfile/package diffs can contain long integrity strings that otherwise cause false positives.
