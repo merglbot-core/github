@@ -121,9 +121,12 @@ jobs:
       - name: Get PR Number and Mode
         id: get_pr
         env:
-          # Security: Use env var to avoid command injection from comment body
-          COMMENT_BODY: ${{ github.event.comment.body }}
-          COMMENT_CONTAINS_RETRO: ${{ contains(github.event.comment.body, '--retro') || contains(github.event.comment.body, '--learn') }}
+          # Security: keep user comment parsing in GitHub expressions; do not export raw
+          # comment text into the shell environment. Flags are whitespace-delimited.
+          COMMENT_CONTAINS_FULL: ${{ contains(format(' {0} ', github.event.comment.body), ' --full ') }}
+          COMMENT_CONTAINS_LIGHT: ${{ contains(format(' {0} ', github.event.comment.body), ' --light ') }}
+          COMMENT_CONTAINS_FULL_DIFF: ${{ contains(format(' {0} ', github.event.comment.body), ' --full-diff ') }}
+          COMMENT_CONTAINS_RETRO: ${{ contains(format(' {0} ', github.event.comment.body), ' --retro ') || contains(format(' {0} ', github.event.comment.body), ' --learn ') }}
           IS_WORKFLOW_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
           INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
           INPUT_REVIEW_MODE: ${{ github.event.inputs.review_mode }}
@@ -149,7 +152,7 @@ jobs:
                 {
                   echo "pr_number=$ISSUE_NUMBER"
                   echo "should_run=false"
-                  echo "review_mode=full"
+                  echo "review_mode=light"
                   echo "diff_scope=auto"
                   echo "include_retro=false"
                 } >> "$GITHUB_OUTPUT"
@@ -171,11 +174,11 @@ jobs:
             echo "✅ Manual trigger for PR #$INPUT_PR_NUMBER (mode: ${INPUT_REVIEW_MODE:-light})"
           else
             PR_NUMBER_OUT="$ISSUE_NUMBER"
-            COMMENT_BODY_NORMALIZED="$(printf '%s' "${COMMENT_BODY:-}" | tr '\r\n\t' ' ')"
-            if printf '%s' "$COMMENT_BODY_NORMALIZED" | grep -Eq '(^|[[:space:]])--full($|[[:space:]])'; then
+            # `--full` intentionally stays separate from `--full-diff`.
+            if [ "$COMMENT_CONTAINS_FULL" == "true" ]; then
               REVIEW_MODE_OUT="full"
               echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: FULL)"
-            elif printf '%s' "$COMMENT_BODY_NORMALIZED" | grep -Eq '(^|[[:space:]])--light($|[[:space:]])'; then
+            elif [ "$COMMENT_CONTAINS_LIGHT" == "true" ]; then
               REVIEW_MODE_OUT="light"
               echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: LIGHT)"
             else
@@ -190,7 +193,7 @@ jobs:
               INCLUDE_RETRO_OUT="false"
             fi
             
-            if printf '%s' "$COMMENT_BODY_NORMALIZED" | grep -Eq '(^|[[:space:]])--full-diff($|[[:space:]])'; then
+            if [ "$COMMENT_CONTAINS_FULL_DIFF" == "true" ]; then
               DIFF_SCOPE_OUT="full"
               echo "✅ Diff scope: FULL (requested via --full-diff)"
             else
