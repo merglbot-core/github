@@ -200,9 +200,12 @@ jobs:
           gcloud auth configure-docker "${ARTIFACT_LOCATION}-docker.pkg.dev" --quiet
 
       - name: Build Container Image
+        env:
+          INPUT_DOCKERFILE: ${{ inputs.dockerfile }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
         run: |
-          IMAGE="${ARTIFACT_LOCATION}-docker.pkg.dev/${ARTIFACT_PROJECT_ID}/${ARTIFACT_REPOSITORY}/${{ inputs.image_name }}:${{ github.sha }}"
-          docker build -t "$IMAGE" -f "${{ inputs.dockerfile }}" .
+          IMAGE="${ARTIFACT_LOCATION}-docker.pkg.dev/${ARTIFACT_PROJECT_ID}/${ARTIFACT_REPOSITORY}/${INPUT_IMAGE_NAME}:${{ github.sha }}"
+          docker build -t "$IMAGE" -f "$INPUT_DOCKERFILE" .
           docker push "$IMAGE"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
@@ -227,37 +230,46 @@ jobs:
 
       - name: Deploy to Cloud Run
         env:
+          INPUT_SERVICE_NAME: ${{ inputs.service_name }}
+          INPUT_REGION: ${{ inputs.region }}
+          INPUT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_MIN_INSTANCES: ${{ inputs.min_instances }}
+          INPUT_MAX_INSTANCES: ${{ inputs.max_instances }}
           INPUT_TIMEOUT: ${{ inputs.timeout }}
           INPUT_PORT: ${{ inputs.port }}
+          INPUT_RUNTIME_SERVICE_ACCOUNT: ${{ inputs.runtime_service_account }}
+          INPUT_INGRESS: ${{ inputs.ingress }}
+          INPUT_MEMORY: ${{ inputs.memory }}
+          INPUT_CPU: ${{ inputs.cpu }}
         run: |
           set -euo pipefail
 
           deploy_args=(
-            "${{ inputs.service_name }}"
+            "${INPUT_SERVICE_NAME}"
             "--image" "${IMAGE}"
-            "--region" "${{ inputs.region }}"
+            "--region" "${INPUT_REGION}"
             "--project" "${DEPLOY_PROJECT_ID}"
             "--platform" "managed"
-            "--min-instances" "${{ inputs.min_instances }}"
-            "--max-instances" "${{ inputs.max_instances }}"
-            "--set-env-vars=ENVIRONMENT=${{ inputs.environment }}"
+            "--min-instances" "${INPUT_MIN_INSTANCES}"
+            "--max-instances" "${INPUT_MAX_INSTANCES}"
+            "--set-env-vars=ENVIRONMENT=${INPUT_ENVIRONMENT}"
             "--quiet"
           )
 
-          if [ -n "${{ inputs.runtime_service_account }}" ]; then
-            deploy_args+=("--service-account" "${{ inputs.runtime_service_account }}")
+          if [ -n "${INPUT_RUNTIME_SERVICE_ACCOUNT}" ]; then
+            deploy_args+=("--service-account" "${INPUT_RUNTIME_SERVICE_ACCOUNT}")
           fi
 
-          if [ -n "${{ inputs.ingress }}" ]; then
-            deploy_args+=("--ingress" "${{ inputs.ingress }}")
+          if [ -n "${INPUT_INGRESS}" ]; then
+            deploy_args+=("--ingress" "${INPUT_INGRESS}")
           fi
 
-          if [ -n "${{ inputs.memory }}" ]; then
-            deploy_args+=("--memory" "${{ inputs.memory }}")
+          if [ -n "${INPUT_MEMORY}" ]; then
+            deploy_args+=("--memory" "${INPUT_MEMORY}")
           fi
 
-          if [ -n "${{ inputs.cpu }}" ]; then
-            deploy_args+=("--cpu" "${{ inputs.cpu }}")
+          if [ -n "${INPUT_CPU}" ]; then
+            deploy_args+=("--cpu" "${INPUT_CPU}")
           fi
 
           if [ "${INPUT_TIMEOUT}" -gt 0 ]; then
@@ -278,9 +290,12 @@ jobs:
 
       - name: Get Service URL
         id: url
+        env:
+          INPUT_SERVICE_NAME: ${{ inputs.service_name }}
+          INPUT_REGION: ${{ inputs.region }}
         run: |
-          URL=$(gcloud run services describe "${{ inputs.service_name }}" \
-            --region "${{ inputs.region }}" \
+          URL=$(gcloud run services describe "${INPUT_SERVICE_NAME}" \
+            --region "${INPUT_REGION}" \
             --project "${DEPLOY_PROJECT_ID}" \
             --format 'value(status.url)')
           echo "url=$URL" >> "$GITHUB_OUTPUT"
