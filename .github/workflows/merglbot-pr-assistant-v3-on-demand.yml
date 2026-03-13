@@ -81,6 +81,7 @@ on:
           - low
           - medium
           - high
+          - none
 
 permissions:
   contents: read
@@ -273,6 +274,7 @@ jobs:
           SKIP_REASON="none"
           cleanup_context_artifacts() {
             rm -f pr_diff_full.txt || true
+            rm -f pr_lockfile_diff_strict.txt || true
           }
           write_skip_outputs() {
             echo "skip_review=${SKIP_REVIEW:-false}" >> "$GITHUB_OUTPUT"
@@ -525,9 +527,51 @@ jobs:
             fi
           fi
 
-          if [ -f changed_files.txt ]; then
+          if [ ! -f changed_files.txt ]; then
+            echo "::warning::Fail-closed: skipping LLM call because changed_files.txt is missing and omitted lockfiles cannot be verified." >&2
+            SKIP_REVIEW="true"
+            SKIP_REASON="missing_changed_files"
+          else
             grep -E "$LOCKFILE_PATH_RX" changed_files.txt > omitted_lockfiles.txt 2>/dev/null || true
             if [ -s omitted_lockfiles.txt ]; then
+              if [ ! -f pr_diff_full.txt ]; then
+                echo "::warning::Fail-closed: skipping LLM call because omitted lockfiles were detected and pr_diff_full.txt is missing." >&2
+                SKIP_REVIEW="true"
+                SKIP_REASON="missing_diff_input"
+              else
+                awk -v lockfile_rx="$LOCKFILE_PATH_RX" '
+                  /^diff --git / {
+                    file = ""
+                    in_lockfile = 0
+
+                    if ($0 ~ /^diff --git "a\//) {
+                      file = $0
+                      sub(/^diff --git "a\//, "", file)
+                      sub(/" "b\/.*$/, "", file)
+                    } else if ($0 ~ /^diff --git a\//) {
+                      file = $0
+                      sub(/^diff --git a\//, "", file)
+                      sub(/ b\/.*$/, "", file)
+                    }
+
+                    if (file != "") {
+                      in_lockfile = (file ~ lockfile_rx)
+                    }
+                    next
+                  }
+                  in_lockfile && /^[ +-]/ && $0 !~ /^(\+\+\+|---)/ {
+                    # Strip the diff marker prefix so strict scanning evaluates the raw lockfile content.
+                    print substr($0, 2)
+                  }
+                ' pr_diff_full.txt > pr_lockfile_diff_strict.txt
+                if [ ! -s pr_lockfile_diff_strict.txt ]; then
+                  echo "::warning::Fail-closed: omitted lockfiles detected but strict diff extraction is empty." >&2
+                  SKIP_REVIEW="true"
+                  SKIP_REASON="lockfile_extraction_empty"
+                fi
+              fi
+            fi
+            if [ "$SKIP_REVIEW" != "true" ] && [ -s omitted_lockfiles.txt ]; then
               if [ -s pr_diff.txt ]; then
                 {
                   echo ""
@@ -632,7 +676,10 @@ jobs:
             # This workflow is the authoritative copy of the secret pre-scan patterns.
             _GH="g""h"
             _GHP="${_GH}""p_"
-            _GH_CLASS_PREFIX="${_GH}""[oprsu]_"
+            _GHO="${_GH}""o_"
+            _GHU="${_GH}""u_"
+            _GHS="${_GH}""s_"
+            _GHR="${_GH}""r_"
             _GH_PAT_PREFIX="git""hub""_pat_"
             _SK_PREFIX="s""k-"
             _PRIVATE_WORD="PRIVATE"" KEY"
@@ -652,7 +699,10 @@ jobs:
             _SLACK_RX="(^|[^[:alnum:]_])${_SLACK_PREFIX}[A-Za-z0-9-]{10,}($|[^[:alnum:]_])"
             _GH_CLASSIC_RX="(^|[^[:alnum:]_])${_GHP}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
             _GH_FINE_RX="(^|[^[:alnum:]_])${_GH_PAT_PREFIX}[A-Za-z0-9_]{20,}($|[^[:alnum:]_])"
-            _GH_GENERIC_RX="(^|[^[:alnum:]_])${_GH_CLASS_PREFIX}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
+            # GitHub token prefixes intentionally mirror documented token families:
+            # ghp_, gho_, ghu_, ghs_, ghr_ and github_pat_. There is no ght_ family.
+            # ghp_ stays in the classic pattern so the generic token classes remain disjoint.
+            _GH_GENERIC_RX="(^|[^[:alnum:]_])(${_GHO}|${_GHU}|${_GHS}|${_GHR})[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
             _GENERIC_RX="(^|[^[:alnum:]_])(${_GENERIC_API_KEY_PREFIX}|${_GENERIC_SECRET_KEY_PREFIX}|${_GENERIC_PRIVATE_KEY_PREFIX}|${_GENERIC_ACCESS_KEY_PREFIX})[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             _AWS_RX="(^|[^[:alnum:]_])${_AWS_PREFIX}[0-9A-Z]{16}($|[^[:alnum:]_])"
             _GOOGLE_RX="(^|[^[:alnum:]_])${_GOOGLE_PREFIX}[0-9A-Za-z_-]{30,}($|[^[:alnum:]_])"
@@ -668,12 +718,92 @@ jobs:
             #   (^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}($|[^[:alnum:]_])
             # NOTE: keep the gate on JWT_PATTERN_STRICT only; the loose heuristic is noisy (docs/test fixtures).
             JWT_PATTERN="${JWT_PATTERN_STRICT}"
-            for SECRET_SCAN_FILE in pr_diff_full.txt pr_diff.txt pr_title.txt pr_body.txt bugbot_findings.txt changed_files.txt new_commits.txt pr_checks_summary.txt; do
+            WORKFLOW_PATTERNS_FILE=".github/workflows/merglbot-pr-assistant-v3-on-demand.yml"
+            SCRIPT_PATTERNS_FILE="scripts/pr-assistant/secret-scan-patterns.sh"
+            extract_rhs() {
+              local file="$1"
+              local name="$2"
+              python3 -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text(); name=sys.argv[2]; match=re.search(rf"^[ \t]*{re.escape(name)}=(.+)$", text, re.MULTILINE); print(match.group(1).strip() if match else "", end="")' "$file" "$name"
+            }
+            normalize_rhs() {
+              local value="$1"
+              printf '%s' "$value" | tr -d "\"'" | sed \
+                -e 's/\${_BEGIN_PRIVATE_BLOCK}/\${_BEGIN_PRIVATE_KEY}/g' \
+                -e 's/\${_BEGIN_PGP_BLOCK}/\${_BEGIN_PGP_PRIVATE_KEY}/g' \
+                -e 's/\${_SLACK_RX}/\${_SLACK_TOKEN}/g' \
+                -e 's/\${_PRIVATE_WORD}/PRIVATE KEY/g' \
+                -e 's/\${_PGP_BLOCK_WORD}/BLOCK/g' \
+                -e 's/\${_SLACK_PREFIX}/xox[baprs]-/g' \
+                -e 's/\${_GH_PAT_PREFIX}/\${_GITHUB_PAT_PREFIX}/g' \
+                -e 's/\${_GH_CLASSIC_RX}/\${_GITHUB_TOKEN_CLASSIC}/g' \
+                -e 's/\${_GH_FINE_RX}/\${_GITHUB_TOKEN_FINE_GRAINED}/g' \
+                -e 's/\${_GH_GENERIC_RX}/\${_GITHUB_TOKEN_GENERIC}/g' \
+                -e 's/\${_GENERIC_RX}/\${_GENERIC_KEY}/g' \
+                -e 's/\${_AWS_RX}/\${_AWS_ACCESS_KEY}/g' \
+                -e 's/\${_GOOGLE_RX}/\${_GOOGLE_API_KEY}/g' \
+                -e 's/\${_GOOGLE_REFRESH_RX}/\${_GOOGLE_OAUTH_REFRESH}/g' \
+                -e 's/\${_OPENAI_PROJECT_RX}/\${_OPENAI_PROJECT_KEY}/g' \
+                -e 's/\${_OPENAI_RX}/\${_OPENAI_KEY}/g' \
+                -e 's/\${_AWS_PREFIX}/AKIA/g' \
+                -e 's/\${_GOOGLE_PREFIX}/AIza/g' \
+                -e 's/\${_GOOGLE_REFRESH_PREFIX}/ya29\\./g'
+            }
+            compare_pattern() {
+              local workflow_name="$1"
+              local script_name="$2"
+              local workflow_value
+              local script_value
+              workflow_value=""
+              script_value=""
+              if ! workflow_value="$(extract_rhs "$WORKFLOW_PATTERNS_FILE" "$workflow_name")"; then
+                workflow_value=""
+              fi
+              if ! script_value="$(extract_rhs "$SCRIPT_PATTERNS_FILE" "$script_name")"; then
+                script_value=""
+              fi
+              if [ -z "$workflow_value" ] || [ -z "$script_value" ]; then
+                echo "ERROR: secret-scan pattern definition missing for ${workflow_name}/${script_name}" >&2
+                PATTERN_DRIFT=1
+                return
+              fi
+              workflow_value="$(normalize_rhs "$workflow_value")"
+              script_value="$(normalize_rhs "$script_value")"
+              if [ "$workflow_value" != "$script_value" ]; then
+                echo "ERROR: secret-scan pattern drift detected: ${workflow_name} != ${script_name}" >&2
+                PATTERN_DRIFT=1
+              fi
+            }
+            PATTERN_DRIFT=0
+            compare_pattern "_GH_CLASSIC_RX" "_GITHUB_TOKEN_CLASSIC"
+            compare_pattern "_GH_FINE_RX" "_GITHUB_TOKEN_FINE_GRAINED"
+            compare_pattern "_GH_GENERIC_RX" "_GITHUB_TOKEN_GENERIC"
+            compare_pattern "_GENERIC_RX" "_GENERIC_KEY"
+            compare_pattern "_LEGACY_GENERIC_KEY_STRICT_RX" "_LEGACY_GENERIC_KEY_STRICT_RX"
+            compare_pattern "_BEGIN_PRIVATE_BLOCK" "_BEGIN_PRIVATE_KEY"
+            compare_pattern "_BEGIN_PGP_BLOCK" "_BEGIN_PGP_PRIVATE_KEY"
+            compare_pattern "_SLACK_RX" "_SLACK_TOKEN"
+            compare_pattern "_AWS_RX" "_AWS_ACCESS_KEY"
+            compare_pattern "_GOOGLE_RX" "_GOOGLE_API_KEY"
+            compare_pattern "_GOOGLE_REFRESH_RX" "_GOOGLE_OAUTH_REFRESH"
+            compare_pattern "_OPENAI_PROJECT_RX" "_OPENAI_PROJECT_KEY"
+            compare_pattern "_OPENAI_RX" "_OPENAI_KEY"
+            compare_pattern "SENSITIVE_PATTERN_STRICT" "SENSITIVE_PATTERN_STRICT"
+            compare_pattern "SENSITIVE_PATTERN_NO_GENERIC" "SENSITIVE_PATTERN_NO_GENERIC"
+            compare_pattern "JWT_PATTERN_STRICT" "JWT_PATTERN_STRICT"
+            if [ "$PATTERN_DRIFT" -ne 0 ]; then
+              exit 1
+            fi
+            for SECRET_SCAN_FILE in pr_diff_full.txt pr_lockfile_diff_strict.txt pr_diff.txt pr_title.txt pr_body.txt bugbot_findings.txt changed_files.txt new_commits.txt pr_checks_summary.txt; do
               # pr_diff_full.txt intentionally excludes only the broad generic key_ heuristic:
               # full lockfile/package diffs can contain long integrity strings that otherwise cause false positives.
               PATTERN="${SENSITIVE_PATTERN_STRICT}|${JWT_PATTERN}"
               if [ "$SECRET_SCAN_FILE" = "pr_diff_full.txt" ]; then
                 PATTERN="${SENSITIVE_PATTERN_NO_GENERIC}|${JWT_PATTERN_STRICT}"
+              elif [ "$SECRET_SCAN_FILE" = "pr_lockfile_diff_strict.txt" ]; then
+                # Lockfile-only diff content is scanned separately with STRICT coverage so the legacy
+                # key_ heuristic still protects omitted lockfile hunks without reintroducing false
+                # positives across the entire raw PR diff.
+                PATTERN="${SENSITIVE_PATTERN_STRICT}|${JWT_PATTERN_STRICT}"
               fi
               if [ -s "$SECRET_SCAN_FILE" ]; then
                 GREP_STATUS=0
@@ -697,6 +827,7 @@ jobs:
 
           # Defense-in-depth: ensure the full diff never proceeds beyond pre-scan (LLM inputs use pr_diff.txt).
           rm -f pr_diff_full.txt || true
+          rm -f pr_lockfile_diff_strict.txt || true
           
           echo "========================================="
           echo "CONTEXT GATHERING COMPLETE"
@@ -777,6 +908,8 @@ jobs:
         if: success() && steps.context.outputs.skip_review != 'true'
         env:
           PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
+          SKIP_REVIEW: ${{ steps.context.outputs.skip_review }}
+          SKIP_REASON: ${{ steps.context.outputs.skip_reason }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_API_VERSION: "2023-06-01"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -785,6 +918,10 @@ jobs:
           STEP1_REASON_FILE: ${{ runner.temp }}/merglbot-step1-fail-reason.txt
         run: |
           set -euo pipefail
+          if [ "${SKIP_REVIEW:-false}" = "true" ]; then
+            echo "::notice::Fail-closed: skipping LLM call (${SKIP_REASON:-unspecified})"
+            exit 0
+          fi
           bash scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh
 
       - name: Step 1 Failure Comment
@@ -1250,6 +1387,7 @@ jobs:
                 input: $prompt,
                 max_output_tokens: $max_output_tokens
               } + (
+                # "none" is an explicit caller request to omit the Responses API reasoning block.
                 if ($effort | length) > 0 and ($effort != "none") then
                   {reasoning: {effort: $effort}}
                 else
@@ -1911,6 +2049,7 @@ jobs:
         if: always() && steps.context.outputs.skip_review != 'true'
         continue-on-error: true
         # Verify pin: gh api repos/actions/upload-artifact/git/ref/tags/v4.6.2 --jq .object.sha
+        # Intentionally upload only `metrics/`; PR context files (including pr_lockfile_diff_strict.txt) are never archived.
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: review-metrics-${{ env.PR_NUMBER }}-${{ github.run_id }}
@@ -1920,6 +2059,7 @@ jobs:
       - name: Cleanup PR context artifacts
         if: always()
         run: |
+          # Context artifacts below are transient review inputs only; they are not part of the uploaded metrics artifact.
           rm -f \
             pr_metadata.json \
             pr_view_err.txt \
@@ -1939,6 +2079,7 @@ jobs:
             changed_files.txt \
             pr_diff.txt \
             pr_diff_full.txt \
+            pr_lockfile_diff_strict.txt \
             pr_diff_scope.txt \
             pr_diff_range.txt \
             bugbot_findings.txt || true

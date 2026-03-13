@@ -14,7 +14,10 @@
 
 _GH="g""h"
 _GHP="${_GH}""p_"
-_GH_TOKEN_PREFIX="${_GH}""[oprsut]_"
+_GHO="${_GH}""o_"
+_GHU="${_GH}""u_"
+_GHS="${_GH}""s_"
+_GHR="${_GH}""r_"
 _GITHUB_PAT_PREFIX="github""_pat_"
 _SK_PREFIX="s""k-"
 _GENERIC_API_KEY_PREFIX="api_ke""y_"
@@ -28,7 +31,10 @@ _BEGIN_PGP_PRIVATE_KEY='-----BEGIN PGP[ ]PRIVATE[ ]KEY[ ]BLOCK-----'
 _SLACK_TOKEN='(^|[^[:alnum:]_])xox[baprs]-[A-Za-z0-9-]{10,}($|[^[:alnum:]_])'
 _GITHUB_TOKEN_CLASSIC="(^|[^[:alnum:]_])${_GHP}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
 _GITHUB_TOKEN_FINE_GRAINED="(^|[^[:alnum:]_])${_GITHUB_PAT_PREFIX}[A-Za-z0-9_]{20,}($|[^[:alnum:]_])"
-_GITHUB_TOKEN_GENERIC="(^|[^[:alnum:]_])${_GH_TOKEN_PREFIX}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
+# GitHub token prefixes intentionally mirror documented token families:
+# ghp_, gho_, ghu_, ghs_, ghr_ and github_pat_. There is no ght_ family.
+# ghp_ stays in the classic pattern so the generic token classes remain disjoint.
+_GITHUB_TOKEN_GENERIC="(^|[^[:alnum:]_])(${_GHO}|${_GHU}|${_GHS}|${_GHR})[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
 _GENERIC_KEY="(^|[^[:alnum:]_])(${_GENERIC_API_KEY_PREFIX}|${_GENERIC_SECRET_KEY_PREFIX}|${_GENERIC_PRIVATE_KEY_PREFIX}|${_GENERIC_ACCESS_KEY_PREFIX})[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
 _LEGACY_GENERIC_KEY_STRICT_RX='(^|[^[:alnum:]_])key_[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])'
 _AWS_ACCESS_KEY="(^|[^[:alnum:]_])AKIA[0-9A-Z]{16}($|[^[:alnum:]_])"
