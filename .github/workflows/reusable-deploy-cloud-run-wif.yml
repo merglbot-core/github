@@ -26,6 +26,11 @@ on:
         required: false
         type: string
         default: ''
+      artifact_location:
+        description: 'Artifact Registry location (defaults to Cloud Run region)'
+        required: false
+        type: string
+        default: ''
       artifact_repository:
         description: 'Artifact Registry repository name'
         required: false
@@ -51,11 +56,21 @@ on:
         required: false
         type: string
         default: ''
+      wif_provider:
+        description: 'Optional WIF provider when caller stores auth metadata in vars'
+        required: false
+        type: string
+        default: ''
+      wif_service_account:
+        description: 'Optional WIF service account when caller stores auth metadata in vars'
+        required: false
+        type: string
+        default: ''
       ingress:
         description: 'Cloud Run ingress setting'
         required: false
         type: string
-        default: 'internal-and-cloud-load-balancing'
+        default: ''
       memory:
         description: 'Cloud Run memory allocation'
         required: false
@@ -99,13 +114,13 @@ on:
     secrets:
       WIF_PROVIDER:
         description: 'Workload Identity Federation provider'
-        required: true
+        required: false
       WIF_SERVICE_ACCOUNT:
         description: 'Service account email for WIF'
-        required: true
+        required: false
       GCP_PROJECT_ID:
         description: 'GCP Project ID'
-        required: true
+        required: false
 
 jobs:
   build-and-deploy:
@@ -127,8 +142,8 @@ jobs:
         id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
         with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ inputs.wif_provider || secrets.WIF_PROVIDER }}
+          service_account: ${{ inputs.wif_service_account || secrets.WIF_SERVICE_ACCOUNT }}
           token_format: 'access_token'
 
       - name: Resolve deployment parameters
@@ -136,13 +151,16 @@ jobs:
         env:
           INPUT_DEPLOY_PROJECT_ID: ${{ inputs.deploy_project_id }}
           INPUT_ARTIFACT_PROJECT_ID: ${{ inputs.artifact_project_id }}
+          INPUT_ARTIFACT_LOCATION: ${{ inputs.artifact_location }}
           INPUT_ARTIFACT_REPOSITORY: ${{ inputs.artifact_repository }}
+          INPUT_REGION: ${{ inputs.region }}
           SECRET_GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
         run: |
           set -euo pipefail
 
           DEPLOY_PROJECT_ID="${INPUT_DEPLOY_PROJECT_ID:-$SECRET_GCP_PROJECT_ID}"
           ARTIFACT_PROJECT_ID="${INPUT_ARTIFACT_PROJECT_ID:-$DEPLOY_PROJECT_ID}"
+          ARTIFACT_LOCATION="${INPUT_ARTIFACT_LOCATION:-$INPUT_REGION}"
           ARTIFACT_REPOSITORY="${INPUT_ARTIFACT_REPOSITORY:-containers}"
 
           if [ -z "$DEPLOY_PROJECT_ID" ]; then
@@ -155,6 +173,11 @@ jobs:
             exit 1
           fi
 
+          if [ -z "$ARTIFACT_LOCATION" ]; then
+            echo "::error::artifact_location could not be resolved"
+            exit 1
+          fi
+
           if [ -z "$ARTIFACT_REPOSITORY" ]; then
             echo "::error::artifact_repository could not be resolved"
             exit 1
@@ -163,21 +186,22 @@ jobs:
           {
             printf 'DEPLOY_PROJECT_ID=%s\n' "$DEPLOY_PROJECT_ID"
             printf 'ARTIFACT_PROJECT_ID=%s\n' "$ARTIFACT_PROJECT_ID"
+            printf 'ARTIFACT_LOCATION=%s\n' "$ARTIFACT_LOCATION"
             printf 'ARTIFACT_REPOSITORY=%s\n' "$ARTIFACT_REPOSITORY"
           } >> "$GITHUB_ENV"
 
       - name: Setup gcloud CLI
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db  # v3.0.1
         with:
-          project_id: ${{ inputs.deploy_project_id || secrets.GCP_PROJECT_ID }}
+          project_id: ${{ env.DEPLOY_PROJECT_ID }}
 
       - name: Configure Docker for Artifact Registry
         run: |
-          gcloud auth configure-docker ${{ inputs.region }}-docker.pkg.dev --quiet
+          gcloud auth configure-docker "${ARTIFACT_LOCATION}-docker.pkg.dev" --quiet
 
       - name: Build Container Image
         run: |
-          IMAGE="${{ inputs.region }}-docker.pkg.dev/${ARTIFACT_PROJECT_ID}/${ARTIFACT_REPOSITORY}/${{ inputs.image_name }}:${{ github.sha }}"
+          IMAGE="${ARTIFACT_LOCATION}-docker.pkg.dev/${ARTIFACT_PROJECT_ID}/${ARTIFACT_REPOSITORY}/${{ inputs.image_name }}:${{ github.sha }}"
           docker build -t "$IMAGE" -f "${{ inputs.dockerfile }}" .
           docker push "$IMAGE"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
