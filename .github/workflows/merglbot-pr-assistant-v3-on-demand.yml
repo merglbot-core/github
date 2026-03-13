@@ -342,15 +342,15 @@ jobs:
             fi
           fi
           
-          # Use printf to avoid echo interpreting user-controlled content as flags (-n/-e)
-          printf '%s\n' "$PR_TITLE" > pr_title.txt
-          printf '%s\n' "$PR_BODY" > pr_body.txt
-          printf '%s\n' "$PR_AUTHOR" > pr_author.txt
-          printf '%s\n' "$PR_ADDITIONS" > pr_additions.txt
-          printf '%s\n' "$PR_DELETIONS" > pr_deletions.txt
-          printf '%s\n' "$PR_FILES" > pr_files_count.txt
-          printf '%s\n' "$PR_BASE_SHA" > pr_base_sha.txt
-          printf '%s\n' "$PR_HEAD_SHA" > pr_head_sha.txt
+            # Use printf to avoid echo interpreting user-controlled content as flags (-n/-e)
+            printf '%s\n' "$PR_TITLE" > pr_title.txt
+            printf '%s\n' "$PR_BODY" > pr_body.txt
+            printf '%s\n' "$PR_AUTHOR" > pr_author.txt
+            printf '%s\n' "$PR_ADDITIONS" > pr_additions.txt
+            printf '%s\n' "$PR_DELETIONS" > pr_deletions.txt
+            printf '%s\n' "$PR_FILES" > pr_files_count.txt
+            printf '%s\n' "$PR_BASE_SHA" > pr_base_sha.txt
+            printf '%s\n' "$PR_HEAD_SHA" > pr_head_sha.txt
 
             # CI / checks summary (best-effort)
             CHECKS_DATA_AVAILABLE="false"
