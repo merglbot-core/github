@@ -713,20 +713,23 @@ jobs:
             #   (^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}($|[^[:alnum:]_])
             # NOTE: keep the gate on JWT_PATTERN_STRICT only; the loose heuristic is noisy (docs/test fixtures).
             JWT_PATTERN="${JWT_PATTERN_STRICT}"
-            WORKFLOW_PATTERNS_FILE=".github/workflows/merglbot-pr-assistant-v3-on-demand.yml"
-            SCRIPT_PATTERNS_FILE="scripts/pr-assistant/secret-scan-patterns.sh"
-            extract_rhs() {
-              local file="$1"
-              local name="$2"
-              grep -E "^[[:space:]]*${name}=" "$file" | head -n1 | sed -E "s/^[[:space:]]*${name}=//"
+            read_script_pattern() {
+              local name="$1"
+              # shellcheck disable=SC2016
+              env -i bash --noprofile --norc -lc '
+                set -euo pipefail
+                source scripts/pr-assistant/secret-scan-patterns.sh
+                pattern_name="$1"
+                printf "%s" "${!pattern_name}"
+              ' bash "$name"
             }
             compare_pattern() {
               local workflow_name="$1"
               local script_name="$2"
               local workflow_value
               local script_value
-              workflow_value="$(extract_rhs "$WORKFLOW_PATTERNS_FILE" "$workflow_name")"
-              script_value="$(extract_rhs "$SCRIPT_PATTERNS_FILE" "$script_name")"
+              workflow_value="${!workflow_name:-}"
+              script_value="$(read_script_pattern "$script_name")"
               if [ -z "$workflow_value" ] || [ -z "$script_value" ]; then
                 echo "ERROR: secret-scan pattern definition missing for ${workflow_name}/${script_name}" >&2
                 PATTERN_DRIFT=1
