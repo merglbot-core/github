@@ -162,7 +162,7 @@ jobs:
 
           flag_present() {
             local flag="$1"
-            COMMENT_BODY="$COMMENT_BODY" python3 -c 'import os, sys; flag = sys.argv[1]; body = os.environ.get("COMMENT_BODY", ""); delimiters = [" ", "\n", "\r", "\t", ".", ",", "!", "?", ")", "]", ":", ";"]; raise SystemExit(0 if body.endswith(flag) or any(f"{flag}{delimiter}" in body for delimiter in delimiters) else 1)' "$flag"
+            COMMENT_BODY="$COMMENT_BODY" python3 -c 'import os, sys; flag = sys.argv[1].lower(); body = os.environ.get("COMMENT_BODY", "").lower(); delimiters = [" ", "\n", "\r", "\t", ".", ",", "!", "?", ")", "]", ":", ";"]; raise SystemExit(0 if body.endswith(flag) or any(f"{flag}{delimiter}" in body for delimiter in delimiters) else 1)' "$flag"
           }
 
           if [ "$IS_WORKFLOW_DISPATCH" == "true" ]; then
