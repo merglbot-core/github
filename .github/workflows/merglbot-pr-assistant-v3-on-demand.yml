@@ -237,6 +237,7 @@ jobs:
         # Verify pin: git ls-remote --tags https://github.com/actions/checkout | grep -E 'refs/tags/v6\\.0\\.2$'
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Preflight runner dependencies
         run: |
@@ -261,6 +262,17 @@ jobs:
           echo "PR Number: $PR_NUM"
           echo "Review Mode: ${REVIEW_MODE}"
           echo "Diff Scope Mode: ${DIFF_SCOPE_MODE}"
+
+          SKIP_REVIEW="false"
+          SKIP_REASON="none"
+          cleanup_context_artifacts() {
+            rm -f pr_diff_full.txt || true
+          }
+          write_skip_outputs() {
+            echo "skip_review=${SKIP_REVIEW:-false}" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=${SKIP_REASON:-}" >> "$GITHUB_OUTPUT"
+          }
+          trap 'cleanup_context_artifacts; write_skip_outputs' EXIT
           
           PR_VIEW_FIELDS_WITH_CHECKS="title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles,statusCheckRollup"
           PR_VIEW_FIELDS_NO_CHECKS="title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles"
@@ -286,12 +298,21 @@ jobs:
           PR_FILES=$(jq -r '.changedFiles // 0' pr_metadata.json)
           PR_BASE_SHA=$(jq -r '.baseRefOid // empty' pr_metadata.json)
           PR_HEAD_SHA=$(jq -r '.headRefOid // empty' pr_metadata.json)
+          PR_HEAD_REF=$(jq -r '.headRefName // empty' pr_metadata.json)
           
           echo "Title: $PR_TITLE"
           echo "Author: $PR_AUTHOR"
           echo "Changes: +$PR_ADDITIONS -$PR_DELETIONS in $PR_FILES files"
           echo "Base SHA: ${PR_BASE_SHA:0:12}"
           echo "Head SHA: ${PR_HEAD_SHA:0:12}"
+
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
+            CURRENT_REF_NAME="${GITHUB_REF_NAME:-}"
+            if [ -z "$CURRENT_REF_NAME" ] || [ -z "$PR_HEAD_REF" ] || [ "$CURRENT_REF_NAME" != "$PR_HEAD_REF" ]; then
+              echo "ERROR: workflow_dispatch must run on the PR head branch (expected: ${PR_HEAD_REF:-unknown}, got: ${CURRENT_REF_NAME:-unknown})" >&2
+              exit 1
+            fi
+          fi
           
             # Use printf to avoid echo interpreting user-controlled content as flags (-n/-e)
             printf '%s\n' "$PR_TITLE" > pr_title.txt
@@ -308,32 +329,19 @@ jobs:
             CHECKS_FAILED="0"
             CHECKS_PENDING="0"
 
-            if jq -e '.statusCheckRollup != null' pr_metadata.json > /dev/null 2>&1; then
-              if jq -r '
-                (.statusCheckRollup.contexts // .statusCheckRollup // [])
-                | map(select(.name != null))
-                | map("- " + .name + ": " + ((.conclusion // .state // "UNKNOWN") | tostring | ascii_upcase))
-                | .[]
-              ' pr_metadata.json > pr_checks_summary.txt 2>/dev/null; then
-                if [ -s pr_checks_summary.txt ]; then
-                  CHECKS_FAILED=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "failure" or . == "cancelled" or . == "timed_out" or . == "error") ] | length' pr_metadata.json 2>/dev/null || echo "0")
-                  CHECKS_PENDING=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "pending" or . == "in_progress" or . == "queued") ] | length' pr_metadata.json 2>/dev/null || echo "0")
-                  CHECKS_DATA_AVAILABLE="true"
-                fi
-              fi
-            fi
-
-            if [ "$CHECKS_DATA_AVAILABLE" != "true" ] && [ -n "${PR_HEAD_SHA:-}" ]; then
+            if [ -n "${PR_HEAD_SHA:-}" ]; then
               if (
                 set -o pipefail
-                gh api --silent --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null \
+                gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null \
                   | jq -s '{check_runs: (map(.check_runs // []) | add // [])}' > check_runs.json 2>/dev/null
               ); then
                 if jq -e '.check_runs | type == "array"' check_runs.json > /dev/null 2>&1; then
                   # Exclude check-runs for THIS workflow run so we don't count ourselves as "pending" while gathering context.
                   jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
+                    def run_id:
+                      (try ((.details_url? // "") | tostring | capture("/actions/runs/(?<id>[0-9]+)(/|$)").id) catch "");
                     def is_current_run:
-                      ($current_run_id != "" and ((.details_url? // "") | tostring | contains("/actions/runs/" + $current_run_id)));
+                      ($current_run_id != "" and run_id == $current_run_id);
                     (.check_runs // [])
                     | map(select(is_current_run | not))
                     | map(select(.name != null))
@@ -342,8 +350,10 @@ jobs:
                   ' check_runs.json > pr_checks_summary.txt 2>/dev/null || true
 
                   CHECKS_FAILED=$(jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
+                    def run_id:
+                      (try ((.details_url? // "") | tostring | capture("/actions/runs/(?<id>[0-9]+)(/|$)").id) catch "");
                     def is_current_run:
-                      ($current_run_id != "" and ((.details_url? // "") | tostring | contains("/actions/runs/" + $current_run_id)));
+                      ($current_run_id != "" and run_id == $current_run_id);
                     [ (.check_runs // [])[]?
                       | select(is_current_run | not)
                       | ((.conclusion // .status // "") | ascii_downcase)
@@ -351,8 +361,10 @@ jobs:
                     ] | length
                   ' check_runs.json 2>/dev/null || echo "0")
                   CHECKS_PENDING=$(jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
+                    def run_id:
+                      (try ((.details_url? // "") | tostring | capture("/actions/runs/(?<id>[0-9]+)(/|$)").id) catch "");
                     def is_current_run:
-                      ($current_run_id != "" and ((.details_url? // "") | tostring | contains("/actions/runs/" + $current_run_id)));
+                      ($current_run_id != "" and run_id == $current_run_id);
                     [ (.check_runs // [])[]?
                       | select(is_current_run | not)
                       | ((.conclusion // .status // "") | ascii_downcase)
@@ -366,6 +378,21 @@ jobs:
                 else
                   CHECK_RUNS_JSON_SIZE="$(wc -c < check_runs.json 2>/dev/null || echo "0")"
                   echo "WARN: check_runs.json invalid (size=${CHECK_RUNS_JSON_SIZE}B); skipping check-runs fallback" >&2
+                fi
+              fi
+            fi
+
+            if [ "$CHECKS_DATA_AVAILABLE" != "true" ] && jq -e '.statusCheckRollup != null' pr_metadata.json > /dev/null 2>&1; then
+              if jq -r '
+                (.statusCheckRollup.contexts // .statusCheckRollup // [])
+                | map(select(.name != null))
+                | map("- " + .name + ": " + ((.conclusion // .state // "UNKNOWN") | tostring | ascii_upcase))
+                | .[]
+              ' pr_metadata.json > pr_checks_summary.txt 2>/dev/null; then
+                if [ -s pr_checks_summary.txt ]; then
+                  CHECKS_FAILED=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "failure" or . == "cancelled" or . == "timed_out" or . == "error") ] | length' pr_metadata.json 2>/dev/null || echo "0")
+                  CHECKS_PENDING=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "pending" or . == "in_progress" or . == "queued") ] | length' pr_metadata.json 2>/dev/null || echo "0")
+                  CHECKS_DATA_AVAILABLE="true"
                 fi
               fi
             fi
@@ -411,16 +438,6 @@ jobs:
           echo "$PREV_REVIEW_HEAD_SHA" > prev_review_head_sha.txt
           echo "PREV_REVIEW_HEAD_SHA=$PREV_REVIEW_HEAD_SHA" >> "$GITHUB_ENV"
           
-          SKIP_REVIEW="false"
-          SKIP_REASON="none"
-          cleanup_context_artifacts() {
-            rm -f pr_diff_full.txt || true
-          }
-          write_skip_outputs() {
-            echo "skip_review=${SKIP_REVIEW:-false}" >> "$GITHUB_OUTPUT"
-            echo "skip_reason=${SKIP_REASON:-}" >> "$GITHUB_OUTPUT"
-          }
-          trap 'cleanup_context_artifacts; write_skip_outputs' EXIT
           if [ "$DIFF_SCOPE_MODE" != "full" ] && [ -n "$PREV_REVIEW_HEAD_SHA" ] && [ "$PREV_REVIEW_HEAD_SHA" == "$PR_HEAD_SHA" ]; then
             SKIP_REVIEW="true"
             SKIP_REASON="no_new_commits"
@@ -474,10 +491,11 @@ jobs:
           # Keep a full diff for security pre-scan (fail-closed) and produce a trimmed diff for LLM context.
           # Rationale: large lockfile diffs can cause the LLM prompt to truncate away critical security files
           # (e.g. entrypoints and env-sanitization logic), leading to incomplete reviews.
+          LOCKFILE_PATH_RX='(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|poetry\.lock|Pipfile\.lock|uv\.lock|Cargo\.lock|go\.sum|Gemfile\.lock|composer\.lock|packages\.lock\.json)$'
           if [ -f pr_diff.txt ]; then
             cp pr_diff.txt pr_diff_full.txt
             if [ -s pr_diff_full.txt ]; then
-              awk '
+              awk -v lockfile_rx="$LOCKFILE_PATH_RX" '
                 /^diff --git / {
                   skip = 0;
                   file = "";
@@ -493,31 +511,35 @@ jobs:
                   }
 
                   if (file != "") {
-                    skip = (file ~ /package-lock\.json$/);
+                    skip = (file ~ lockfile_rx);
                   }
                 }
                 !skip { print }
               ' pr_diff_full.txt > pr_diff.txt
             fi
           fi
-          
-          # Provide a minimal lockfile change summary to the LLM without including the full lockfile diff.
-          # This keeps prompts small while still surfacing dependency-relevant changes for review.
-          DIFF_RANGE_FOR_LOCKFILE="${DIFF_RANGE:-}"
-          if [ -z "$DIFF_RANGE_FOR_LOCKFILE" ] && [ -f pr_diff_range.txt ]; then
-            DIFF_RANGE_FOR_LOCKFILE="$(< pr_diff_range.txt)"
-          fi
 
-          if [ -n "$DIFF_RANGE_FOR_LOCKFILE" ] && git diff --stat "$DIFF_RANGE_FOR_LOCKFILE" -- ':(glob)**/package-lock.json' > lockfile_stat.txt 2>/dev/null; then
-            if [ -s lockfile_stat.txt ]; then
+          if [ -f changed_files.txt ]; then
+            grep -E "$LOCKFILE_PATH_RX" changed_files.txt > omitted_lockfiles.txt 2>/dev/null || true
+            if [ -s omitted_lockfiles.txt ]; then
               {
                 echo ""
-                echo "=== LOCKFILE CHANGE SUMMARY (package-lock.json) ==="
-                cat lockfile_stat.txt
+                echo "=== LOCKFILE CHANGE SUMMARY ==="
+                sed 's/^/- /' omitted_lockfiles.txt
                 echo "=== END LOCKFILE CHANGE SUMMARY ==="
                 echo ""
               } >> pr_diff.txt
             fi
+          fi
+
+          if [ ! -s pr_diff.txt ] && [ -s omitted_lockfiles.txt ]; then
+            {
+              echo "NOTE: Diff content contains only omitted lockfiles/dependency lock artifacts."
+              echo ""
+              echo "=== LOCKFILE CHANGE SUMMARY ==="
+              sed 's/^/- /' omitted_lockfiles.txt
+              echo "=== END LOCKFILE CHANGE SUMMARY ==="
+            } > pr_diff.txt
           fi
 
           DIFF_LINES=$(wc -l < pr_diff.txt 2>/dev/null || echo "0")
@@ -598,13 +620,13 @@ jobs:
             # - TypeScript mirrors this via lookarounds: (?<![A-Za-z0-9_]) ... (?![A-Za-z0-9_])
             # NOTE: JWT-like patterns can produce false positives (e.g. documentation/test fixtures). If this
             # becomes noisy, tighten the JWT prefix further rather than disabling the guardrail.
-            # To reduce false positives from lockfile/full-diff integrity strings, keep the JWT scan out of
-            # pr_diff_full.txt (which intentionally includes full package-lock.json diffs).
+            # pr_diff_full.txt uses the stricter JWT heuristic and still excludes only the broad generic key_
+            # matcher to avoid lockfile integrity-string false positives while keeping secret coverage fail-closed.
             # Intentionally inlined here so the workflow never sources shell from the PR checkout.
             # This workflow is the authoritative copy of the secret pre-scan patterns.
             _GH="g""h"
             _GHP="${_GH}""p_"
-            _GH_CLASS_PREFIX="${_GH}""[oprsut]_"
+            _GH_CLASS_PREFIX="${_GH}""[oprsu]_"
             _GH_PAT_PREFIX="git""hub""_pat_"
             _SK_PREFIX="s""k-"
             _PRIVATE_WORD="PRIVATE"" KEY"
@@ -640,18 +662,29 @@ jobs:
             #   (^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}($|[^[:alnum:]_])
             # NOTE: keep the gate on JWT_PATTERN_STRICT only; the loose heuristic is noisy (docs/test fixtures).
             JWT_PATTERN="${JWT_PATTERN_STRICT}"
-            for SECRET_SCAN_FILE in pr_diff_full.txt pr_diff.txt pr_title.txt pr_body.txt bugbot_findings.txt changed_files.txt pr_checks_summary.txt; do
-              # pr_diff_full.txt intentionally excludes both generic key_ heuristics and JWT detection:
-              # full lockfile/package diffs can contain integrity strings and test fixtures that look JWT-like.
+            for SECRET_SCAN_FILE in pr_diff_full.txt pr_diff.txt pr_title.txt pr_body.txt bugbot_findings.txt changed_files.txt new_commits.txt pr_checks_summary.txt; do
+              # pr_diff_full.txt intentionally excludes only the broad generic key_ heuristic:
+              # full lockfile/package diffs can contain long integrity strings that otherwise cause false positives.
               PATTERN="${SENSITIVE_PATTERN_STRICT}|${JWT_PATTERN}"
               if [ "$SECRET_SCAN_FILE" = "pr_diff_full.txt" ]; then
-                PATTERN="$SENSITIVE_PATTERN_NO_GENERIC"
+                PATTERN="${SENSITIVE_PATTERN_NO_GENERIC}|${JWT_PATTERN_STRICT}"
               fi
-              if [ -s "$SECRET_SCAN_FILE" ] && grep -Eqi "$PATTERN" "$SECRET_SCAN_FILE"; then
-                echo "⛔️ Potential secret-like material detected in PR context; skipping AI review."
-                SKIP_REVIEW="true"
-                SKIP_REASON="potential_secret"
-                break
+              if [ -s "$SECRET_SCAN_FILE" ]; then
+                GREP_STATUS=0
+                if grep -Eqi -- "$PATTERN" "$SECRET_SCAN_FILE"; then
+                  echo "⛔️ Potential secret-like material detected in PR context; skipping AI review."
+                  SKIP_REVIEW="true"
+                  SKIP_REASON="potential_secret"
+                  break
+                else
+                  GREP_STATUS=$?
+                  if [ "$GREP_STATUS" -gt 1 ]; then
+                    echo "WARN: Secret pre-scan failed for ${SECRET_SCAN_FILE}; skipping AI review fail-closed." >&2
+                    SKIP_REVIEW="true"
+                    SKIP_REASON="potential_secret"
+                    break
+                  fi
+                fi
               fi
             done
           fi
@@ -1023,7 +1056,13 @@ jobs:
             } > final_review.txt
 
             SYNTHESIS_USAGE_API="ci_only_fallback"
-            printf '%s\n' "{\"api\":\"${SYNTHESIS_USAGE_API}\",\"input_tokens\":${SYNTHESIS_USAGE_INPUT_TOKENS},\"output_tokens\":${SYNTHESIS_USAGE_OUTPUT_TOKENS},\"reasoning_tokens\":${SYNTHESIS_USAGE_REASONING_TOKENS},\"total_tokens\":${SYNTHESIS_USAGE_TOTAL_TOKENS}}" > synthesis_usage.json
+            jq -n \
+              --arg api "$SYNTHESIS_USAGE_API" \
+              --argjson input_tokens "${SYNTHESIS_USAGE_INPUT_TOKENS:-0}" \
+              --argjson output_tokens "${SYNTHESIS_USAGE_OUTPUT_TOKENS:-0}" \
+              --argjson reasoning_tokens "${SYNTHESIS_USAGE_REASONING_TOKENS:-0}" \
+              --argjson total_tokens "${SYNTHESIS_USAGE_TOTAL_TOKENS:-0}" \
+              '{api:$api,input_tokens:$input_tokens,output_tokens:$output_tokens,reasoning_tokens:$reasoning_tokens,total_tokens:$total_tokens}' > synthesis_usage.json
             echo "OPENAI_SYNTHESIS_MODEL_USED=${OPENAI_SYNTHESIS_MODEL_USED}" >> "$GITHUB_ENV"
             echo "OPENAI_SYNTHESIS_REASONING_EFFORT_USED=${OPENAI_SYNTHESIS_REASONING_EFFORT_USED}" >> "$GITHUB_ENV"
             exit 0
@@ -1864,6 +1903,7 @@ jobs:
       
       - name: Upload Metrics Artifact
         if: always() && steps.context.outputs.skip_review != 'true'
+        continue-on-error: true
         # Verify pin: gh api repos/actions/upload-artifact/git/ref/tags/v4.6.2 --jq .object.sha
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:

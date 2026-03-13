@@ -16,7 +16,7 @@ echo "========================================="
 
 PARENT_BASHPID="${BASHPID}"
 TMP_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/merglbot-pr-assistant.XXXXXX")"
-readonly API_ERROR_EXIT=75
+readonly API_ERROR_EXIT=119
 cleanup() {
   if [ "${BASHPID}" != "${PARENT_BASHPID}" ]; then
     return 0
@@ -191,6 +191,30 @@ append_github_env_pair() {
   printf '%s=%s\n' "$env_key" "${env_value:-skipped}" >> "$GITHUB_ENV"
 }
 
+append_runtime_env_pair() {
+  local env_key="$1"
+  local env_value="${2:-}"
+  case "$env_key" in
+    BOT_MODE)
+      if ! printf '%s' "$env_value" | grep -Eq '^(default|dependabot)$'; then
+        echo "ERROR: Invalid value for $env_key" >&2
+        return 1
+      fi
+      ;;
+    OPENAI_REASONING_EFFORT_USED)
+      if ! printf '%s' "$env_value" | grep -Eq '^(low|medium|high|none)$'; then
+        echo "ERROR: Invalid value for $env_key" >&2
+        return 1
+      fi
+      ;;
+    *)
+      echo "ERROR: Unsupported runtime GITHUB_ENV key: $env_key" >&2
+      return 1
+      ;;
+  esac
+  printf '%s=%s\n' "$env_key" "$env_value" >> "$GITHUB_ENV"
+}
+
 escape_untrusted() {
   sed 's/<<<MERGLBOT_/<<<MERGLBOT_ESCAPED_/g'
 }
@@ -199,12 +223,24 @@ json_has_error_object() {
   printf '%s' "${1:-}" | jq -e '.error' > /dev/null 2>&1
 }
 
+sanitize_log_field() {
+  local raw="${1:-}"
+  local fallback="${2:-unknown}"
+  raw="$(printf '%s' "$raw" | tr -cd 'A-Za-z0-9._:-')"
+  if [ -z "$raw" ]; then
+    raw="$fallback"
+  fi
+  printf '%.80s' "$raw"
+}
+
 log_api_error_summary() {
   local provider="$1"
   local payload="${2:-}"
   local err_type err_code
   err_type="$(printf '%s' "$payload" | jq -r '.error.type // "unknown"' 2>/dev/null || printf 'unknown')"
   err_code="$(printf '%s' "$payload" | jq -r '.error.code // "none"' 2>/dev/null || printf 'none')"
+  err_type="$(sanitize_log_field "$err_type" "unknown")"
+  err_code="$(sanitize_log_field "$err_code" "none")"
   echo "  ERROR: ${provider} API error type=${err_type} code=${err_code}" >&2
 }
 
@@ -239,7 +275,7 @@ curl_json_with_backoff() {
       return "$exit_code"
     fi
 
-    if ! echo "$resp" | jq -e . > /dev/null 2>&1; then
+    if ! printf '%s' "$resp" | jq -e . > /dev/null 2>&1; then
       if [ "$attempt" -lt 3 ]; then
         sleep $((attempt * 2))
         continue
@@ -253,7 +289,7 @@ curl_json_with_backoff() {
     # provider JSON error body without treating the request as a generic
     # transport success.
     if json_has_error_object "$resp"; then
-      err_type="$(echo "$resp" | jq -r '.error.type // empty' 2>/dev/null || true)"
+      err_type="$(printf '%s' "$resp" | jq -r '.error.type // empty' 2>/dev/null || true)"
       case "$err_type" in
         rate_limit_error|server_error|api_error|overloaded_error)
           if [ "$attempt" -lt 3 ]; then
@@ -353,8 +389,8 @@ if [ "$IS_DEPENDABOT" = "true" ] && [ "${GITHUB_EVENT_NAME:-}" != "workflow_disp
   OPENAI_MODEL="gpt-5-mini"
 fi
 
-echo "BOT_MODE=$BOT_MODE" >> "$GITHUB_ENV"
-echo "OPENAI_REASONING_EFFORT_USED=$OPENAI_REASONING_EFFORT" >> "$GITHUB_ENV"
+append_runtime_env_pair "BOT_MODE" "$BOT_MODE"
+append_runtime_env_pair "OPENAI_REASONING_EFFORT_USED" "$OPENAI_REASONING_EFFORT"
 
 DIFF_SCOPE="full"
 if [ -f pr_diff_scope.txt ]; then
@@ -730,6 +766,7 @@ echo "Prompt size: $PROMPT_SIZE chars"
 
 # ANTHROPIC CALL (backgrounded so OpenAI can start immediately)
 (
+  set -euo pipefail
   ANTHROPIC_MODEL_USED=""
   if [ "$BOT_MODE" != "dependabot" ] && [ "$ANTHROPIC_API_KEY_PRESENT" == "true" ]; then
     echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
@@ -773,7 +810,7 @@ echo "Prompt size: $PROMPT_SIZE chars"
         echo "  ERROR: Anthropic request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
         continue
       fi
-      if ! echo "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
+      if ! printf '%s' "$ANTHROPIC_RESP" | jq -e . > /dev/null 2>&1; then
         echo "  ERROR: Anthropic request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
         continue
       fi
@@ -799,8 +836,8 @@ echo "Prompt size: $PROMPT_SIZE chars"
 
       # Save numeric-only token usage for downstream telemetry (no prompts, no secrets).
       # This file is consumed by review-metrics.json generation.
-      if echo "$ANTHROPIC_RESP" | jq -e '.usage' > /dev/null 2>&1; then
-        echo "$ANTHROPIC_RESP" | jq -c '.usage | with_entries(select(.value | type == "number"))' > "$ANTHROPIC_USAGE_FILE" 2>/dev/null || true
+      if printf '%s' "$ANTHROPIC_RESP" | jq -e '.usage' > /dev/null 2>&1; then
+        printf '%s' "$ANTHROPIC_RESP" | jq -c '.usage | with_entries(select(.value | type == "number"))' > "$ANTHROPIC_USAGE_FILE" 2>/dev/null || true
       fi
 
       printf '%s' "$ANTHROPIC_CONTENT" > "$ANTHROPIC_REVIEW_FILE"
@@ -1078,9 +1115,14 @@ else
         '{
           model: $model,
           messages: [{role: "user", content: $prompt}],
-          max_completion_tokens: $max_tokens,
-          reasoning_effort: $effort
-        }' > "$OPENAI_PAYLOAD_FILE"
+          max_completion_tokens: $max_tokens
+        } + (
+          if ($effort | length) > 0 and ($effort != "none") then
+            {reasoning_effort: $effort}
+          else
+            {}
+          end
+        )' > "$OPENAI_PAYLOAD_FILE"
 
       set +e
       OPENAI_RESP="$(curl_json_with_backoff "$OPENAI_CHAT_COMPLETIONS_URL" \
@@ -1098,7 +1140,7 @@ else
         echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
         continue
       fi
-      if ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+      if ! printf '%s' "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
         echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
         continue
       fi
@@ -1139,7 +1181,7 @@ else
             echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
             continue
           fi
-          if ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+          if ! printf '%s' "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
             echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
             continue
           fi
@@ -1230,10 +1272,10 @@ else
       echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
       continue
     fi
-    if ! echo "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
-      echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
-      continue
-    fi
+      if ! printf '%s' "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
+        echo "  ERROR: OpenAI request failed or returned non-JSON (exit=$CURL_EXIT)" >&2
+        continue
+      fi
     if [ "$CURL_EXIT" -eq "$API_ERROR_EXIT" ] && ! json_has_error_object "$OPENAI_RESP"; then
       echo "  ERROR: OpenAI sentinel exit without error payload" >&2
       continue
