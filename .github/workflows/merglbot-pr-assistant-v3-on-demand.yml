@@ -531,7 +531,7 @@ jobs:
             grep -E "$LOCKFILE_PATH_RX" changed_files.txt > omitted_lockfiles.txt 2>/dev/null || true
             if [ -s omitted_lockfiles.txt ]; then
               if [ ! -f pr_diff_full.txt ]; then
-                echo "WARN: omitted lockfiles detected but pr_diff_full.txt is missing; skipping AI review fail-closed." >&2
+                echo "WARN: fail-closed: skipping LLM call because omitted lockfiles were detected and pr_diff_full.txt is missing." >&2
                 SKIP_REVIEW="true"
                 SKIP_REASON="potential_secret"
               else
@@ -826,6 +826,8 @@ jobs:
         if: success() && steps.context.outputs.skip_review != 'true'
         env:
           PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
+          SKIP_REVIEW: ${{ steps.context.outputs.skip_review }}
+          SKIP_REASON: ${{ steps.context.outputs.skip_reason }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_API_VERSION: "2023-06-01"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -834,6 +836,10 @@ jobs:
           STEP1_REASON_FILE: ${{ runner.temp }}/merglbot-step1-fail-reason.txt
         run: |
           set -euo pipefail
+          if [ "${SKIP_REVIEW:-false}" = "true" ]; then
+            echo "::notice::Fail-closed: skipping LLM call (${SKIP_REASON:-unspecified})"
+            exit 0
+          fi
           bash scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh
 
       - name: Step 1 Failure Comment
