@@ -122,11 +122,12 @@ jobs:
         id: get_pr
         env:
           # Security: keep user comment parsing in GitHub expressions; do not export raw
-          # comment text into the shell environment. Flags are whitespace-delimited.
-          COMMENT_CONTAINS_FULL: ${{ contains(format(' {0} ', github.event.comment.body), ' --full ') }}
-          COMMENT_CONTAINS_LIGHT: ${{ contains(format(' {0} ', github.event.comment.body), ' --light ') }}
-          COMMENT_CONTAINS_FULL_DIFF: ${{ contains(format(' {0} ', github.event.comment.body), ' --full-diff ') }}
-          COMMENT_CONTAINS_RETRO: ${{ contains(format(' {0} ', github.event.comment.body), ' --retro ') || contains(format(' {0} ', github.event.comment.body), ' --learn ') }}
+          # comment text into the shell environment. Flags must be terminated by
+          # whitespace or the end of the comment, so multi-line commands still work.
+          COMMENT_CONTAINS_FULL: ${{ contains(github.event.comment.body, '--full ') || contains(github.event.comment.body, '--full\n') || contains(github.event.comment.body, '--full\r') || contains(github.event.comment.body, '--full\t') || endsWith(github.event.comment.body, '--full') }}
+          COMMENT_CONTAINS_LIGHT: ${{ contains(github.event.comment.body, '--light ') || contains(github.event.comment.body, '--light\n') || contains(github.event.comment.body, '--light\r') || contains(github.event.comment.body, '--light\t') || endsWith(github.event.comment.body, '--light') }}
+          COMMENT_CONTAINS_FULL_DIFF: ${{ contains(github.event.comment.body, '--full-diff ') || contains(github.event.comment.body, '--full-diff\n') || contains(github.event.comment.body, '--full-diff\r') || contains(github.event.comment.body, '--full-diff\t') || endsWith(github.event.comment.body, '--full-diff') }}
+          COMMENT_CONTAINS_RETRO: ${{ contains(github.event.comment.body, '--retro ') || contains(github.event.comment.body, '--retro\n') || contains(github.event.comment.body, '--retro\r') || contains(github.event.comment.body, '--retro\t') || endsWith(github.event.comment.body, '--retro') || contains(github.event.comment.body, '--learn ') || contains(github.event.comment.body, '--learn\n') || contains(github.event.comment.body, '--learn\r') || contains(github.event.comment.body, '--learn\t') || endsWith(github.event.comment.body, '--learn') }}
           IS_WORKFLOW_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
           INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
           INPUT_REVIEW_MODE: ${{ github.event.inputs.review_mode }}
