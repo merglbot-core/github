@@ -92,7 +92,7 @@ on:
         type: number
         default: 8080
       allow_unauthenticated:
-        description: 'Allow unauthenticated access to the deployed service (explicit opt-in)'
+        description: 'Allow unauthenticated access to the deployed service (defaults to legacy public-service behavior; set false for private services)'
         required: false
         type: boolean
         default: true
