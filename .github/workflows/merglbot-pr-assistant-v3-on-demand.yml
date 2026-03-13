@@ -723,6 +723,9 @@ jobs:
             normalize_rhs() {
               local value="$1"
               printf '%s' "$value" | tr -d "\"'" | sed \
+                -e 's/\${_BEGIN_PRIVATE_BLOCK}/\${_BEGIN_PRIVATE_KEY}/g' \
+                -e 's/\${_BEGIN_PGP_BLOCK}/\${_BEGIN_PGP_PRIVATE_KEY}/g' \
+                -e 's/\${_SLACK_RX}/\${_SLACK_TOKEN}/g' \
                 -e 's/\${_GH_PAT_PREFIX}/\${_GITHUB_PAT_PREFIX}/g' \
                 -e 's/\${_GH_CLASSIC_RX}/\${_GITHUB_TOKEN_CLASSIC}/g' \
                 -e 's/\${_GH_FINE_RX}/\${_GITHUB_TOKEN_FINE_GRAINED}/g' \
@@ -735,7 +738,7 @@ jobs:
                 -e 's/\${_OPENAI_RX}/\${_OPENAI_KEY}/g' \
                 -e 's/\${_AWS_PREFIX}/AKIA/g' \
                 -e 's/\${_GOOGLE_PREFIX}/AIza/g' \
-                -e 's/\${_GOOGLE_REFRESH_PREFIX}/ya29\\\\./g'
+                -e 's/\${_GOOGLE_REFRESH_PREFIX}/ya29\\./g'
             }
             compare_pattern() {
               local workflow_name="$1"
