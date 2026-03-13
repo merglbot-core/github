@@ -231,6 +231,7 @@ jobs:
       REVIEW_MODE: ${{ needs.check-trigger.outputs.review_mode }}
       DIFF_SCOPE_MODE: ${{ needs.check-trigger.outputs.diff_scope }}
       INCLUDE_RETRO: ${{ needs.check-trigger.outputs.include_retro }}
+      REPOSITORY_SLUG: ${{ github.repository }}
     
     steps:
       - name: Checkout
@@ -258,10 +259,10 @@ jobs:
           echo "GATHERING PR CONTEXT"
           echo "========================================="
           
-          PR_NUM="${{ env.PR_NUMBER }}"
+          PR_NUM="${PR_NUMBER}"
           echo "PR Number: $PR_NUM"
-          echo "Review Mode: ${{ env.REVIEW_MODE }}"
-          echo "Diff Scope Mode: ${{ env.DIFF_SCOPE_MODE }}"
+          echo "Review Mode: ${REVIEW_MODE}"
+          echo "Diff Scope Mode: ${DIFF_SCOPE_MODE}"
           
           PR_VIEW_FIELDS_WITH_CHECKS="title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles,statusCheckRollup"
           PR_VIEW_FIELDS_NO_CHECKS="title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles"
@@ -384,7 +385,7 @@ jobs:
           
           gh pr view "$PR_NUM" --json files -q '.files[].path' > changed_files.txt 2>/dev/null || echo "" > changed_files.txt
           
-          gh api "repos/${{ github.repository }}/issues/$PR_NUM/comments" --paginate > issue_comments.json 2>/dev/null || echo "[]" > issue_comments.json
+          gh api "repos/${REPOSITORY_SLUG}/issues/$PR_NUM/comments" --paginate > issue_comments.json 2>/dev/null || echo "[]" > issue_comments.json
           
           echo "Detecting previous Merglbot review..."
           LAST_REVIEW_BODY=$(jq -r '[.[] | select(.user.login == "github-actions" or .user.login == "github-actions[bot]") | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .body // empty' issue_comments.json 2>/dev/null || echo "")
@@ -414,12 +415,14 @@ jobs:
           
           SKIP_REVIEW="false"
           SKIP_REASON="none"
-          write_skip_outputs() {
+          cleanup_context_artifacts() {
             rm -f pr_diff_full.txt || true
+          }
+          write_skip_outputs() {
             echo "skip_review=${SKIP_REVIEW:-false}" >> "$GITHUB_OUTPUT"
             echo "skip_reason=${SKIP_REASON:-}" >> "$GITHUB_OUTPUT"
           }
-          trap write_skip_outputs EXIT
+          trap 'cleanup_context_artifacts; write_skip_outputs' EXIT
           if [ "$DIFF_SCOPE_MODE" != "full" ] && [ -n "$PREV_REVIEW_HEAD_SHA" ] && [ "$PREV_REVIEW_HEAD_SHA" == "$PR_HEAD_SHA" ]; then
             SKIP_REVIEW="true"
             SKIP_REASON="no_new_commits"
@@ -441,18 +444,18 @@ jobs:
             fi
             
             if [ "$DIFF_SCOPE_MODE" != "full" ] && [ -n "$PREV_REVIEW_HEAD_SHA" ] && [ "$PREV_REVIEW_HEAD_SHA" != "$PR_HEAD_SHA" ]; then
-              COMPARE_STATUS=$(gh api "/repos/${{ github.repository }}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" --jq '.status' 2>/dev/null || echo "")
+              COMPARE_STATUS=$(gh api "/repos/${REPOSITORY_SLUG}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" --jq '.status' 2>/dev/null || echo "")
               if [ "$COMPARE_STATUS" == "ahead" ]; then
                 echo "Using DELTA diff since last review: $PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA"
                 DIFF_SCOPE="delta"
                 DIFF_RANGE="$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA"
                 
-                if ! gh api -H "Accept: application/vnd.github.v3.diff" "/repos/${{ github.repository }}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" > pr_diff.txt 2>/dev/null; then
+                if ! gh api -H "Accept: application/vnd.github.v3.diff" "/repos/${REPOSITORY_SLUG}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" > pr_diff.txt 2>/dev/null; then
                   echo "Delta diff fetch failed; falling back to full PR diff."
                   DIFF_SCOPE="full"
                   DIFF_RANGE="$PR_BASE_SHA...$PR_HEAD_SHA"
                 else
-                  gh api "/repos/${{ github.repository }}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" --jq '.commits[] | "- " + (.sha[0:7]) + " " + (.commit.message | split("\n")[0])' 2>/dev/null > new_commits.txt || echo "" > new_commits.txt
+                  gh api "/repos/${REPOSITORY_SLUG}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" --jq '.commits[] | "- " + (.sha[0:7]) + " " + (.commit.message | split("\n")[0])' 2>/dev/null > new_commits.txt || echo "" > new_commits.txt
                 fi
               elif [ "$DIFF_SCOPE_MODE" == "delta" ]; then
                 echo "Requested DELTA diff but compare status is '$COMPARE_STATUS'; falling back to full PR diff."
@@ -504,7 +507,7 @@ jobs:
           # This keeps prompts small while still surfacing dependency-relevant changes for review.
           DIFF_RANGE_FOR_LOCKFILE="${DIFF_RANGE:-}"
           if [ -z "$DIFF_RANGE_FOR_LOCKFILE" ] && [ -f pr_diff_range.txt ]; then
-            DIFF_RANGE_FOR_LOCKFILE="$(cat pr_diff_range.txt)"
+            DIFF_RANGE_FOR_LOCKFILE="$(< pr_diff_range.txt)"
           fi
 
           if [ -n "$DIFF_RANGE_FOR_LOCKFILE" ] && git diff --stat "$DIFF_RANGE_FOR_LOCKFILE" -- ':(glob)**/package-lock.json' > lockfile_stat.txt 2>/dev/null; then
@@ -550,7 +553,7 @@ jobs:
             fi
           done
           
-          if ! gh api "repos/${{ github.repository }}/pulls/$PR_NUM/comments" --paginate > review_comments.json 2>/dev/null; then
+          if ! gh api "repos/${REPOSITORY_SLUG}/pulls/$PR_NUM/comments" --paginate > review_comments.json 2>/dev/null; then
             echo "::warning::Failed to fetch PR review comments; continuing with none"
             echo "[]" > review_comments.json
           fi
@@ -609,7 +612,11 @@ jobs:
             _PRIVATE_WORD="PRIVATE"" KEY"
             _PGP_BLOCK_WORD="BLO""CK"
             _SLACK_PREFIX="xo""x[baprs]-"
-            _GENERIC_LABEL_PREFIX="ke""y_"
+            _GENERIC_API_KEY_PREFIX="api_ke""y_"
+            _GENERIC_SECRET_KEY_PREFIX="secret_ke""y_"
+            _GENERIC_PRIVATE_KEY_PREFIX="private_ke""y_"
+            _GENERIC_ACCESS_KEY_PREFIX="access_ke""y_"
+            _LEGACY_GENERIC_KEY_STRICT_RX="(^|[^[:alnum:]_])key_[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             _AWS_PREFIX="A""KIA"
             _GOOGLE_PREFIX="AI""za"
             _GOOGLE_REFRESH_PREFIX="ya""29\\."
@@ -620,15 +627,16 @@ jobs:
             _GH_CLASSIC_RX="(^|[^[:alnum:]_])${_GHP}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
             _GH_FINE_RX="(^|[^[:alnum:]_])${_GH_PAT_PREFIX}[A-Za-z0-9_]{20,}($|[^[:alnum:]_])"
             _GH_GENERIC_RX="(^|[^[:alnum:]_])${_GH_CLASS_PREFIX}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
-            _GENERIC_RX="(^|[^[:alnum:]_])${_GENERIC_LABEL_PREFIX}[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
+            _GENERIC_RX="(^|[^[:alnum:]_])(${_GENERIC_API_KEY_PREFIX}|${_GENERIC_SECRET_KEY_PREFIX}|${_GENERIC_PRIVATE_KEY_PREFIX}|${_GENERIC_ACCESS_KEY_PREFIX})[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             _AWS_RX="(^|[^[:alnum:]_])${_AWS_PREFIX}[0-9A-Z]{16}($|[^[:alnum:]_])"
             _GOOGLE_RX="(^|[^[:alnum:]_])${_GOOGLE_PREFIX}[0-9A-Za-z_-]{30,}($|[^[:alnum:]_])"
             _GOOGLE_REFRESH_RX="(^|[^[:alnum:]_])${_GOOGLE_REFRESH_PREFIX}[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             _OPENAI_PROJECT_RX="(^|[^[:alnum:]_])${_SK_PREFIX}(proj|ant)-[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             _OPENAI_RX="(^|[^[:alnum:]_])${_SK_PREFIX}[A-Za-z0-9_-]{30,}($|[^[:alnum:]_])"
-            SENSITIVE_PATTERN_STRICT="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
-            # NO_GENERIC excludes only the noisy generic key_ label; GitHub token classes still stay covered.
-            SENSITIVE_PATTERN_NO_GENERIC="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
+            # STRICT keeps the legacy broad key_ heuristic to preserve fail-closed pre-scan coverage.
+            SENSITIVE_PATTERN_STRICT="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_LEGACY_GENERIC_KEY_STRICT_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
+            # NO_GENERIC excludes the noisy legacy key_ heuristic while keeping explicit *_key_ prefixes and GitHub token classes covered.
+            SENSITIVE_PATTERN_NO_GENERIC="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
             JWT_PATTERN_STRICT="(^|[^[:alnum:]_])${_JWT_PREFIX}[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             # Loose JWT pattern (for alignment with redaction; intentionally NOT used for SKIP_REVIEW gating):
             #   (^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}($|[^[:alnum:]_])
@@ -642,7 +650,7 @@ jobs:
                 PATTERN="$SENSITIVE_PATTERN_NO_GENERIC"
               fi
               if [ -s "$SECRET_SCAN_FILE" ] && grep -Eqi "$PATTERN" "$SECRET_SCAN_FILE"; then
-                echo "⛔️ Potential secret-like material detected in PR context file: $SECRET_SCAN_FILE; skipping AI review."
+                echo "⛔️ Potential secret-like material detected in PR context; skipping AI review."
                 SKIP_REVIEW="true"
                 SKIP_REASON="potential_secret"
                 break
@@ -826,6 +834,7 @@ jobs:
           ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-sonnet-4-6' }}
           OPENAI_SYNTHESIS_MODEL: ${{ (github.event.inputs.openai_synthesis_model != 'org_default' && github.event.inputs.openai_synthesis_model) || vars.MERGLBOT_OPENAI_MODEL_SYNTHESIS || 'gpt-5.2' }}
           OPENAI_SYNTHESIS_REASONING_EFFORT: ${{ (github.event.inputs.openai_synthesis_reasoning_effort != 'org_default' && github.event.inputs.openai_synthesis_reasoning_effort) || vars.MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS || 'medium' }}
+          REVIEW_MODE: ${{ needs.check-trigger.outputs.review_mode }}
         run: |
           set -euo pipefail
 
@@ -866,7 +875,10 @@ jobs:
             raw="$(printf '%s' "$raw" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
             case "$raw" in
               low|medium|high|none) printf '%s' "$raw" ;;
-              xhigh) printf '%s' "high" ;;
+              xhigh)
+                echo "::warning::reasoning_effort=xhigh is deprecated; using high" >&2
+                printf '%s' "high"
+                ;;
               *) printf '%s' "" ;;
             esac
           }
@@ -948,7 +960,7 @@ jobs:
             CHECKS_FAILED=1
             CHECKS_FAILED_KNOWN="false"
             if [ "$CHECKS_DATA_AVAILABLE" = "true" ] && [ -f pr_checks_failed_count.txt ]; then
-              CHECKS_FAILED_RAW="$(cat pr_checks_failed_count.txt | tr -d '\r' | tr -d ' ' 2>/dev/null || true)"
+              CHECKS_FAILED_RAW="$(tr -d '\r ' < pr_checks_failed_count.txt 2>/dev/null || true)"
               if echo "$CHECKS_FAILED_RAW" | grep -Eq '^[0-9]+$'; then
                 CHECKS_FAILED="$CHECKS_FAILED_RAW"
                 CHECKS_FAILED_KNOWN="true"
@@ -959,7 +971,7 @@ jobs:
             CHECKS_PENDING=1
             CHECKS_PENDING_KNOWN="false"
             if [ "$CHECKS_DATA_AVAILABLE" = "true" ] && [ -f pr_checks_pending_count.txt ]; then
-              CHECKS_PENDING_RAW="$(cat pr_checks_pending_count.txt | tr -d '\r' | tr -d ' ' 2>/dev/null || true)"
+              CHECKS_PENDING_RAW="$(tr -d '\r ' < pr_checks_pending_count.txt 2>/dev/null || true)"
               if echo "$CHECKS_PENDING_RAW" | grep -Eq '^[0-9]+$'; then
                 CHECKS_PENDING="$CHECKS_PENDING_RAW"
                 CHECKS_PENDING_KNOWN="true"
@@ -1037,7 +1049,7 @@ jobs:
             exit 0
           fi
           
-          if [ "${{ env.REVIEW_MODE }}" == "light" ]; then
+          if [ "${REVIEW_MODE}" == "light" ]; then
             MAX_SYNTH_TOKENS=6000
           else
             MAX_SYNTH_TOKENS=12000
@@ -1238,17 +1250,16 @@ jobs:
               fi
 
               if echo "$resp" | jq -e ".error" > /dev/null 2>&1; then
-                local err_type
-                err_type="$(echo "$resp" | jq -r '.error.type // empty' 2>/dev/null || true)"
-                local err_msg
-                err_msg="$(echo "$resp" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
+                local err_type err_code
+                err_type="$(printf '%s' "$resp" | jq -r '.error.type // empty' 2>/dev/null || true)"
+                err_code="$(printf '%s' "$resp" | jq -r '.error.code // empty' 2>/dev/null || true)"
 
                 if [ "$attempt" -lt 3 ] && { [ "$err_type" = "rate_limit_error" ] || [ "$err_type" = "server_error" ]; }; then
                   sleep $((attempt * 2))
                   continue
                 fi
 
-                echo "  ERROR: $err_msg" >&2
+                echo "  ERROR: OpenAI synthesis API error (type=${err_type:-unknown} code=${err_code:-n/a})" >&2
                 return 1
               fi
 
@@ -1336,6 +1347,8 @@ jobs:
           OPENAI_MODEL: ${{ (github.event.inputs.openai_model != 'org_default' && github.event.inputs.openai_model) || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5-mini' }}
           OPENAI_SYNTHESIS_MODEL: ${{ (github.event.inputs.openai_synthesis_model != 'org_default' && github.event.inputs.openai_synthesis_model) || vars.MERGLBOT_OPENAI_MODEL_SYNTHESIS || 'gpt-5.2' }}
           OPENAI_SYNTHESIS_REASONING_EFFORT: ${{ (github.event.inputs.openai_synthesis_reasoning_effort != 'org_default' && github.event.inputs.openai_synthesis_reasoning_effort) || vars.MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS || 'medium' }}
+          PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
+          REVIEW_MODE: ${{ needs.check-trigger.outputs.review_mode }}
         run: |
           set -euo pipefail
           
@@ -1356,7 +1369,10 @@ jobs:
             raw="$(printf '%s' "$raw" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
             case "$raw" in
               low|medium|high|none) printf '%s' "$raw" ;;
-              xhigh) printf '%s' "high" ;;
+              xhigh)
+                echo "::warning::reasoning_effort=xhigh is deprecated; using high" >&2
+                printf '%s' "high"
+                ;;
               *) printf '%s' "" ;;
             esac
           }
@@ -1378,7 +1394,7 @@ jobs:
             OPENAI_SYNTHESIS_REASONING_EFFORT="medium"
           fi
 
-          PR_NUM="${{ env.PR_NUMBER }}"
+          PR_NUM="${PR_NUMBER}"
           
           BUGBOT_COUNT="0"
           if [ -f bugbot_count.txt ]; then
@@ -1390,7 +1406,7 @@ jobs:
             BUGBOT_SOURCES=$(< bugbot_sources.txt)
           fi
           
-          REVIEW_MODE="${{ env.REVIEW_MODE }}"
+          CURRENT_REVIEW_MODE="${REVIEW_MODE}"
           
           DIFF_SCOPE="full"
           if [ -f pr_diff_scope.txt ]; then
@@ -1477,7 +1493,7 @@ jobs:
               echo ""
               echo "| Metric | Value |"
               echo "|--------|-------|"
-              echo "| Review Mode | \`$REVIEW_MODE\` |"
+              echo "| Review Mode | \`$CURRENT_REVIEW_MODE\` |"
               echo "| Bot Mode | \`$BOT_MODE\` |"
               echo "| Diff Scope | \`$DIFF_SCOPE\` |"
               echo "| Diff Range | \`$DIFF_RANGE\` |"
@@ -1514,7 +1530,7 @@ jobs:
               echo ""
               echo "---"
               echo ""
-              if [ "$REVIEW_MODE" == "light" ]; then
+              if [ "$CURRENT_REVIEW_MODE" == "light" ]; then
                 echo "*Light mode. For detailed analysis: \`@merglbot review --full\`*"
               else
                 echo "*Full analysis. For quick review: \`@merglbot review --light\`*"
@@ -1755,7 +1771,7 @@ jobs:
           OPENAI_USAGE_JSON="${OPENAI_USAGE_JSON:-{}}"
           SYNTHESIS_USAGE_JSON="${SYNTHESIS_USAGE_JSON:-{}}"
 
-          PR_AUTHOR="$(cat pr_author.txt 2>/dev/null || echo '')"
+          PR_AUTHOR="$(sed -n '1p' pr_author.txt 2>/dev/null || echo '')"
 
           ANTHROPIC_USAGE_JSON_SAFE="$(normalize_usage_json "$ANTHROPIC_USAGE_JSON")"
           OPENAI_USAGE_JSON_SAFE="$(normalize_usage_json "$OPENAI_USAGE_JSON")"
@@ -1850,8 +1866,35 @@ jobs:
       
       - name: Upload Metrics Artifact
         if: always() && steps.context.outputs.skip_review != 'true'
+        # Verify pin: gh api repos/actions/upload-artifact/git/ref/tags/v4.6.2 --jq .object.sha
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: review-metrics-${{ env.PR_NUMBER }}-${{ github.run_id }}
           path: metrics/
           retention-days: 30
+
+      - name: Cleanup PR context artifacts
+        if: always()
+        run: |
+          rm -f \
+            pr_metadata.json \
+            pr_view_err.txt \
+            check_runs.json \
+            pr_title.txt \
+            pr_body.txt \
+            pr_author.txt \
+            pr_additions.txt \
+            pr_deletions.txt \
+            pr_files_count.txt \
+            pr_base_sha.txt \
+            pr_head_sha.txt \
+            pr_checks_summary.txt \
+            pr_checks_failed_count.txt \
+            pr_checks_pending_count.txt \
+            pr_checks_data_available.txt \
+            changed_files.txt \
+            pr_diff.txt \
+            pr_diff_full.txt \
+            pr_diff_scope.txt \
+            pr_diff_range.txt \
+            bugbot_findings.txt || true
