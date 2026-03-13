@@ -527,7 +527,11 @@ jobs:
             fi
           fi
 
-          if [ -f changed_files.txt ]; then
+          if [ ! -f changed_files.txt ]; then
+            echo "::warning::Fail-closed: skipping LLM call because changed_files.txt is missing and omitted lockfiles cannot be verified." >&2
+            SKIP_REVIEW="true"
+            SKIP_REASON="missing_changed_files"
+          else
             grep -E "$LOCKFILE_PATH_RX" changed_files.txt > omitted_lockfiles.txt 2>/dev/null || true
             if [ -s omitted_lockfiles.txt ]; then
               if [ ! -f pr_diff_full.txt ]; then
@@ -556,6 +560,7 @@ jobs:
                     next
                   }
                   in_lockfile && /^[ +-]/ && $0 !~ /^(\+\+\+|---)/ {
+                    # Strip the diff marker prefix so strict scanning evaluates the raw lockfile content.
                     print substr($0, 2)
                   }
                 ' pr_diff_full.txt > pr_lockfile_diff_strict.txt
@@ -1376,6 +1381,7 @@ jobs:
                 input: $prompt,
                 max_output_tokens: $max_output_tokens
               } + (
+                # "none" is an explicit caller request to omit the Responses API reasoning block.
                 if ($effort | length) > 0 and ($effort != "none") then
                   {reasoning: {effort: $effort}}
                 else
