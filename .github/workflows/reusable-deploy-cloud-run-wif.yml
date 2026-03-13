@@ -147,6 +147,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "::add-mask::$INPUT_WIF_PROVIDER"
+          echo "::add-mask::$INPUT_WIF_SERVICE_ACCOUNT"
+          echo "::add-mask::$SECRET_WIF_PROVIDER"
+          echo "::add-mask::$SECRET_WIF_SERVICE_ACCOUNT"
+
           WIF_PROVIDER="${INPUT_WIF_PROVIDER:-$SECRET_WIF_PROVIDER}"
           WIF_SERVICE_ACCOUNT="${INPUT_WIF_SERVICE_ACCOUNT:-$SECRET_WIF_SERVICE_ACCOUNT}"
 
@@ -188,6 +193,10 @@ jobs:
           SECRET_GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
         run: |
           set -euo pipefail
+
+          echo "::add-mask::$INPUT_DEPLOY_PROJECT_ID"
+          echo "::add-mask::$INPUT_ARTIFACT_PROJECT_ID"
+          echo "::add-mask::$SECRET_GCP_PROJECT_ID"
 
           DEPLOY_PROJECT_ID="${INPUT_DEPLOY_PROJECT_ID:-$SECRET_GCP_PROJECT_ID}"
           ARTIFACT_PROJECT_ID="${INPUT_ARTIFACT_PROJECT_ID:-$DEPLOY_PROJECT_ID}"
