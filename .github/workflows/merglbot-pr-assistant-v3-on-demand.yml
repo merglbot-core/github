@@ -713,28 +713,44 @@ jobs:
             #   (^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}($|[^[:alnum:]_])
             # NOTE: keep the gate on JWT_PATTERN_STRICT only; the loose heuristic is noisy (docs/test fixtures).
             JWT_PATTERN="${JWT_PATTERN_STRICT}"
-            read_script_pattern() {
-              local name="$1"
-              # shellcheck disable=SC2016
-              env -i bash --noprofile --norc -lc '
-                set -euo pipefail
-                source scripts/pr-assistant/secret-scan-patterns.sh
-                pattern_name="$1"
-                printf "%s" "${!pattern_name}"
-              ' bash "$name"
+            WORKFLOW_PATTERNS_FILE=".github/workflows/merglbot-pr-assistant-v3-on-demand.yml"
+            SCRIPT_PATTERNS_FILE="scripts/pr-assistant/secret-scan-patterns.sh"
+            extract_rhs() {
+              local file="$1"
+              local name="$2"
+              grep -E "^[[:space:]]*${name}=" "$file" | head -n1 | sed -E "s/^[[:space:]]*${name}=//"
+            }
+            normalize_rhs() {
+              local value="$1"
+              printf '%s' "$value" | tr -d "\"'" | sed \
+                -e 's/\${_GH_PAT_PREFIX}/\${_GITHUB_PAT_PREFIX}/g' \
+                -e 's/\${_GH_CLASSIC_RX}/\${_GITHUB_TOKEN_CLASSIC}/g' \
+                -e 's/\${_GH_FINE_RX}/\${_GITHUB_TOKEN_FINE_GRAINED}/g' \
+                -e 's/\${_GH_GENERIC_RX}/\${_GITHUB_TOKEN_GENERIC}/g' \
+                -e 's/\${_GENERIC_RX}/\${_GENERIC_KEY}/g' \
+                -e 's/\${_AWS_RX}/\${_AWS_ACCESS_KEY}/g' \
+                -e 's/\${_GOOGLE_RX}/\${_GOOGLE_API_KEY}/g' \
+                -e 's/\${_GOOGLE_REFRESH_RX}/\${_GOOGLE_OAUTH_REFRESH}/g' \
+                -e 's/\${_OPENAI_PROJECT_RX}/\${_OPENAI_PROJECT_KEY}/g' \
+                -e 's/\${_OPENAI_RX}/\${_OPENAI_KEY}/g' \
+                -e 's/\${_AWS_PREFIX}/AKIA/g' \
+                -e 's/\${_GOOGLE_PREFIX}/AIza/g' \
+                -e 's/\${_GOOGLE_REFRESH_PREFIX}/ya29\\\\./g'
             }
             compare_pattern() {
               local workflow_name="$1"
               local script_name="$2"
               local workflow_value
               local script_value
-              workflow_value="${!workflow_name:-}"
-              script_value="$(read_script_pattern "$script_name")"
+              workflow_value="$(extract_rhs "$WORKFLOW_PATTERNS_FILE" "$workflow_name")"
+              script_value="$(extract_rhs "$SCRIPT_PATTERNS_FILE" "$script_name")"
               if [ -z "$workflow_value" ] || [ -z "$script_value" ]; then
                 echo "ERROR: secret-scan pattern definition missing for ${workflow_name}/${script_name}" >&2
                 PATTERN_DRIFT=1
                 return
               fi
+              workflow_value="$(normalize_rhs "$workflow_value")"
+              script_value="$(normalize_rhs "$script_value")"
               if [ "$workflow_value" != "$script_value" ]; then
                 echo "ERROR: secret-scan pattern drift detected: ${workflow_name} != ${script_name}" >&2
                 PATTERN_DRIFT=1
@@ -753,6 +769,7 @@ jobs:
             compare_pattern "_OPENAI_RX" "_OPENAI_KEY"
             compare_pattern "SENSITIVE_PATTERN_STRICT" "SENSITIVE_PATTERN_STRICT"
             compare_pattern "SENSITIVE_PATTERN_NO_GENERIC" "SENSITIVE_PATTERN_NO_GENERIC"
+            compare_pattern "JWT_PATTERN_STRICT" "JWT_PATTERN_STRICT"
             if [ "$PATTERN_DRIFT" -ne 0 ]; then
               exit 1
             fi
