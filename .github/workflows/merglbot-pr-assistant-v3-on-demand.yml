@@ -533,7 +533,7 @@ jobs:
               if [ ! -f pr_diff_full.txt ]; then
                 echo "::warning::Fail-closed: skipping LLM call because omitted lockfiles were detected and pr_diff_full.txt is missing." >&2
                 SKIP_REVIEW="true"
-                SKIP_REASON="potential_secret"
+                SKIP_REASON="missing_diff_input"
               else
                 awk -v lockfile_rx="$LOCKFILE_PATH_RX" '
                   /^diff --git / {
@@ -555,14 +555,14 @@ jobs:
                     }
                     next
                   }
-                  in_lockfile && /^[+-]/ && $0 !~ /^(\+\+\+|---)/ {
+                  in_lockfile && /^[ +-]/ && $0 !~ /^(\+\+\+|---)/ {
                     print substr($0, 2)
                   }
                 ' pr_diff_full.txt > pr_lockfile_diff_strict.txt
                 if [ ! -s pr_lockfile_diff_strict.txt ]; then
                   echo "::warning::Fail-closed: omitted lockfiles detected but strict diff extraction is empty." >&2
                   SKIP_REVIEW="true"
-                  SKIP_REASON="potential_secret"
+                  SKIP_REASON="lockfile_extraction_empty"
                 fi
               fi
             fi
@@ -718,7 +718,7 @@ jobs:
             extract_rhs() {
               local file="$1"
               local name="$2"
-              grep -E "^[[:space:]]*${name}=" "$file" | head -n1 | sed -E "s/^[[:space:]]*${name}=//"
+              python3 -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text(); name=sys.argv[2]; match=re.search(rf"^[ \t]*{re.escape(name)}=(.+)$", text, re.MULTILINE); print(match.group(1).strip() if match else "", end="")' "$file" "$name"
             }
             normalize_rhs() {
               local value="$1"
