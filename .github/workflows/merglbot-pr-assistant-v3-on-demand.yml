@@ -155,18 +155,17 @@ jobs:
             esac
           fi
 
-          COMMENT_BODY=""
-          if [ "$IS_WORKFLOW_DISPATCH" != "true" ]; then
-            COMMENT_BODY="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")"
-          fi
-
           flag_present() {
             local flag="$1"
+            local comment_body=""
             case "$flag" in
               --full|--light|--retro|--learn|--full-diff) ;;
               *) return 1 ;;
             esac
-            printf '%s' "$COMMENT_BODY" | python3 -c 'import sys; flag = sys.argv[1].lower(); body = sys.stdin.read().lower(); delimiters = [" ", "\n", "\r", "\t", ".", ",", "!", "?", ")", "]", ":", ";"]; raise SystemExit(0 if body.endswith(flag) or any(f"{flag}{delimiter}" in body for delimiter in delimiters) else 1)' "$flag"
+            if [ "$IS_WORKFLOW_DISPATCH" != "true" ]; then
+              comment_body="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")"
+            fi
+            printf '%s' "$comment_body" | python3 -c 'import sys; flag = sys.argv[1].lower(); body = sys.stdin.read().lower(); delimiters = [" ", "\n", "\r", "\t", ".", ",", "!", "?", ")", "]", ":", ";"]; raise SystemExit(0 if body.endswith(flag) or any(f"{flag}{delimiter}" in body for delimiter in delimiters) else 1)' "$flag"
           }
 
           if [ "$IS_WORKFLOW_DISPATCH" == "true" ]; then
@@ -948,6 +947,7 @@ jobs:
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
           OPENAI_SYNTHESIS_MODEL="$(sanitize_model "${OPENAI_SYNTHESIS_MODEL:-}")"
           OPENAI_SYNTHESIS_REASONING_EFFORT="$(sanitize_reasoning_effort "${OPENAI_SYNTHESIS_REASONING_EFFORT:-}")"
+          exec 3>&-
 
           if [ -z "$ANTHROPIC_MODEL" ]; then
             ANTHROPIC_MODEL="claude-sonnet-4-6"
@@ -1449,6 +1449,7 @@ jobs:
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
           OPENAI_SYNTHESIS_MODEL="$(sanitize_model "${OPENAI_SYNTHESIS_MODEL:-}")"
           OPENAI_SYNTHESIS_REASONING_EFFORT="$(sanitize_reasoning_effort "${OPENAI_SYNTHESIS_REASONING_EFFORT:-}")"
+          exec 3>&-
           if [ -z "$ANTHROPIC_MODEL" ]; then
             ANTHROPIC_MODEL="claude-sonnet-4-6"
           fi

@@ -94,23 +94,23 @@ write_step1_reason() {
   umask 077
   mkdir -p "$(dirname "$STEP1_REASON_FILE")"
   if [ -L "$STEP1_REASON_FILE" ]; then
-    umask "$old_umask"
+    umask "${old_umask:-077}"
     echo "ERROR: STEP1_REASON_FILE must not be a symlink" >&2
     return 1
   fi
   if [ -d "$STEP1_REASON_FILE" ]; then
-    umask "$old_umask"
+    umask "${old_umask:-077}"
     echo "ERROR: STEP1_REASON_FILE must not be a directory" >&2
     return 1
   fi
   if ! tmp_file="$(mktemp "${STEP1_REASON_FILE}.tmp.XXXXXX")"; then
-    umask "$old_umask"
+    umask "${old_umask:-077}"
     echo "ERROR: STEP1_REASON_FILE temp file could not be created" >&2
     return 1
   fi
   if [ -L "$tmp_file" ]; then
     rm -f "$tmp_file"
-    umask "$old_umask"
+    umask "${old_umask:-077}"
     echo "ERROR: STEP1_REASON_FILE temp file must not be a symlink" >&2
     return 1
   fi
@@ -143,7 +143,7 @@ PY
     write_ok=1
   fi
   rm -f -- "$tmp_file" || true
-  umask "$old_umask"
+  umask "${old_umask:-077}"
   if [ "$write_ok" -eq 1 ]; then
     return 0
   fi
