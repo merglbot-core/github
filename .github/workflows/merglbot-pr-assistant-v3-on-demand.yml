@@ -274,6 +274,7 @@ jobs:
           SKIP_REASON="none"
           cleanup_context_artifacts() {
             rm -f pr_diff_full.txt || true
+            rm -f pr_lockfile_diff_strict.txt || true
           }
           write_skip_outputs() {
             echo "skip_review=${SKIP_REVIEW:-false}" >> "$GITHUB_OUTPUT"
@@ -535,11 +536,23 @@ jobs:
                 SKIP_REASON="potential_secret"
               else
                 awk -v lockfile_rx="$LOCKFILE_PATH_RX" '
-                  /^diff --git a\// {
-                    file = $0
-                    sub(/^diff --git a\//, "", file)
-                    sub(/ b\/.*$/, "", file)
-                    in_lockfile = (file ~ lockfile_rx)
+                  /^diff --git / {
+                    file = ""
+                    in_lockfile = 0
+
+                    if ($0 ~ /^diff --git "a\//) {
+                      file = $0
+                      sub(/^diff --git "a\//, "", file)
+                      sub(/" "b\/.*$/, "", file)
+                    } else if ($0 ~ /^diff --git a\//) {
+                      file = $0
+                      sub(/^diff --git a\//, "", file)
+                      sub(/ b\/.*$/, "", file)
+                    }
+
+                    if (file != "") {
+                      in_lockfile = (file ~ lockfile_rx)
+                    }
                     next
                   }
                   in_lockfile && /^[+-]/ && $0 !~ /^(\+\+\+|---)/ {
@@ -681,7 +694,8 @@ jobs:
             _GH_FINE_RX="(^|[^[:alnum:]_])${_GH_PAT_PREFIX}[A-Za-z0-9_]{20,}($|[^[:alnum:]_])"
             # GitHub token prefixes intentionally mirror documented token families:
             # ghp_, gho_, ghu_, ghs_, ghr_ and github_pat_. There is no ght_ family.
-            _GH_GENERIC_RX="(^|[^[:alnum:]_])(${_GHP}|${_GHO}|${_GHU}|${_GHS}|${_GHR})[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
+            # ghp_ stays in the classic pattern so the generic token classes remain disjoint.
+            _GH_GENERIC_RX="(^|[^[:alnum:]_])(${_GHO}|${_GHU}|${_GHS}|${_GHR})[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
             _GENERIC_RX="(^|[^[:alnum:]_])(${_GENERIC_API_KEY_PREFIX}|${_GENERIC_SECRET_KEY_PREFIX}|${_GENERIC_PRIVATE_KEY_PREFIX}|${_GENERIC_ACCESS_KEY_PREFIX})[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             _AWS_RX="(^|[^[:alnum:]_])${_AWS_PREFIX}[0-9A-Z]{16}($|[^[:alnum:]_])"
             _GOOGLE_RX="(^|[^[:alnum:]_])${_GOOGLE_PREFIX}[0-9A-Za-z_-]{30,}($|[^[:alnum:]_])"
@@ -731,6 +745,7 @@ jobs:
 
           # Defense-in-depth: ensure the full diff never proceeds beyond pre-scan (LLM inputs use pr_diff.txt).
           rm -f pr_diff_full.txt || true
+          rm -f pr_lockfile_diff_strict.txt || true
           
           echo "========================================="
           echo "CONTEXT GATHERING COMPLETE"
@@ -1973,6 +1988,7 @@ jobs:
             changed_files.txt \
             pr_diff.txt \
             pr_diff_full.txt \
+            pr_lockfile_diff_strict.txt \
             pr_diff_scope.txt \
             pr_diff_range.txt \
             bugbot_findings.txt || true
