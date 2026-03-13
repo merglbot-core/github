@@ -14,7 +14,7 @@ on:
         description: "Review mode (full = detailed, light = concise)"
         required: false
         type: choice
-        default: "full"
+        default: "light"
         options:
           - full
           - light
@@ -121,10 +121,13 @@ jobs:
       - name: Get PR Number and Mode
         id: get_pr
         env:
-          # Security: Use env var to avoid command injection from comment body
-          COMMENT_CONTAINS_LIGHT: ${{ contains(github.event.comment.body, '--light') }}
-          COMMENT_CONTAINS_FULL_DIFF: ${{ contains(github.event.comment.body, '--full-diff') }}
-          COMMENT_CONTAINS_RETRO: ${{ contains(github.event.comment.body, '--retro') || contains(github.event.comment.body, '--learn') }}
+          # Security: keep user comment parsing in GitHub expressions; do not export raw
+          # comment text into the shell environment. Flags must be terminated by
+          # whitespace, selected closing punctuation, or the end of the comment.
+          COMMENT_CONTAINS_FULL: ${{ contains(github.event.comment.body, '--full ') || contains(github.event.comment.body, '--full\n') || contains(github.event.comment.body, '--full\r') || contains(github.event.comment.body, '--full\t') || contains(github.event.comment.body, '--full.') || contains(github.event.comment.body, '--full,') || contains(github.event.comment.body, '--full!') || contains(github.event.comment.body, '--full?') || contains(github.event.comment.body, '--full)') || contains(github.event.comment.body, '--full]') || contains(github.event.comment.body, '--full:') || contains(github.event.comment.body, '--full;') || endsWith(github.event.comment.body, '--full') }}
+          COMMENT_CONTAINS_LIGHT: ${{ contains(github.event.comment.body, '--light ') || contains(github.event.comment.body, '--light\n') || contains(github.event.comment.body, '--light\r') || contains(github.event.comment.body, '--light\t') || contains(github.event.comment.body, '--light.') || contains(github.event.comment.body, '--light,') || contains(github.event.comment.body, '--light!') || contains(github.event.comment.body, '--light?') || contains(github.event.comment.body, '--light)') || contains(github.event.comment.body, '--light]') || contains(github.event.comment.body, '--light:') || contains(github.event.comment.body, '--light;') || endsWith(github.event.comment.body, '--light') }}
+          COMMENT_CONTAINS_FULL_DIFF: ${{ contains(github.event.comment.body, '--full-diff ') || contains(github.event.comment.body, '--full-diff\n') || contains(github.event.comment.body, '--full-diff\r') || contains(github.event.comment.body, '--full-diff\t') || contains(github.event.comment.body, '--full-diff.') || contains(github.event.comment.body, '--full-diff,') || contains(github.event.comment.body, '--full-diff!') || contains(github.event.comment.body, '--full-diff?') || contains(github.event.comment.body, '--full-diff)') || contains(github.event.comment.body, '--full-diff]') || contains(github.event.comment.body, '--full-diff:') || contains(github.event.comment.body, '--full-diff;') || endsWith(github.event.comment.body, '--full-diff') }}
+          COMMENT_CONTAINS_RETRO: ${{ contains(github.event.comment.body, '--retro ') || contains(github.event.comment.body, '--retro\n') || contains(github.event.comment.body, '--retro\r') || contains(github.event.comment.body, '--retro\t') || contains(github.event.comment.body, '--retro.') || contains(github.event.comment.body, '--retro,') || contains(github.event.comment.body, '--retro!') || contains(github.event.comment.body, '--retro?') || contains(github.event.comment.body, '--retro)') || contains(github.event.comment.body, '--retro]') || contains(github.event.comment.body, '--retro:') || contains(github.event.comment.body, '--retro;') || endsWith(github.event.comment.body, '--retro') || contains(github.event.comment.body, '--learn ') || contains(github.event.comment.body, '--learn\n') || contains(github.event.comment.body, '--learn\r') || contains(github.event.comment.body, '--learn\t') || contains(github.event.comment.body, '--learn.') || contains(github.event.comment.body, '--learn,') || contains(github.event.comment.body, '--learn!') || contains(github.event.comment.body, '--learn?') || contains(github.event.comment.body, '--learn)') || contains(github.event.comment.body, '--learn]') || contains(github.event.comment.body, '--learn:') || contains(github.event.comment.body, '--learn;') || endsWith(github.event.comment.body, '--learn') }}
           IS_WORKFLOW_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
           INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
           INPUT_REVIEW_MODE: ${{ github.event.inputs.review_mode }}
@@ -150,7 +153,7 @@ jobs:
                 {
                   echo "pr_number=$ISSUE_NUMBER"
                   echo "should_run=false"
-                  echo "review_mode=full"
+                  echo "review_mode=light"
                   echo "diff_scope=auto"
                   echo "include_retro=false"
                 } >> "$GITHUB_OUTPUT"
@@ -166,19 +169,22 @@ jobs:
               exit 1
             fi
             PR_NUMBER_OUT="$INPUT_PR_NUMBER"
-            REVIEW_MODE_OUT="${INPUT_REVIEW_MODE:-full}"
+            REVIEW_MODE_OUT="${INPUT_REVIEW_MODE:-light}"
             DIFF_SCOPE_OUT="${INPUT_DIFF_SCOPE:-auto}"
             INCLUDE_RETRO_OUT="${INPUT_INCLUDE_RETRO:-false}"
-            echo "✅ Manual trigger for PR #$INPUT_PR_NUMBER (mode: ${INPUT_REVIEW_MODE:-full})"
+            echo "✅ Manual trigger for PR #$INPUT_PR_NUMBER (mode: ${INPUT_REVIEW_MODE:-light})"
           else
             PR_NUMBER_OUT="$ISSUE_NUMBER"
-            # Security: Use GitHub native contains() instead of shell grep
-            if [ "$COMMENT_CONTAINS_LIGHT" == "true" ]; then
+            # `--full` intentionally stays separate from `--full-diff`.
+            if [ "$COMMENT_CONTAINS_FULL" == "true" ]; then
+              REVIEW_MODE_OUT="full"
+              echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: FULL)"
+            elif [ "$COMMENT_CONTAINS_LIGHT" == "true" ]; then
               REVIEW_MODE_OUT="light"
               echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: LIGHT)"
             else
-              REVIEW_MODE_OUT="full"
-              echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: FULL)"
+              REVIEW_MODE_OUT="light"
+              echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: LIGHT DEFAULT)"
             fi
             
             if [ "$COMMENT_CONTAINS_RETRO" == "true" ]; then
@@ -1529,7 +1535,7 @@ jobs:
               echo "---"
               echo ""
               if [ "$CURRENT_REVIEW_MODE" == "light" ]; then
-                echo "*Light mode. For detailed analysis: \`@merglbot review\`*"
+                echo "*Light mode. For detailed analysis: \`@merglbot review --full\`*"
               else
                 echo "*Full analysis. For quick review: \`@merglbot review --light\`*"
               fi
@@ -1869,7 +1875,7 @@ jobs:
         with:
           name: review-metrics-${{ env.PR_NUMBER }}-${{ github.run_id }}
           path: metrics/
-          retention-days: 90
+          retention-days: 30
 
       - name: Cleanup PR context artifacts
         if: always()
