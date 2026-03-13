@@ -318,7 +318,20 @@ jobs:
           echo "Head SHA: ${PR_HEAD_SHA:0:12}"
 
           if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
-            CURRENT_REF_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-${GITHUB_REF##*/}}}"
+            if [ -n "${GITHUB_HEAD_REF:-}" ]; then
+              CURRENT_REF_NAME="${GITHUB_HEAD_REF}"
+            elif [ -n "${GITHUB_REF_NAME:-}" ]; then
+              CURRENT_REF_NAME="${GITHUB_REF_NAME}"
+            else
+              case "${GITHUB_REF:-}" in
+                refs/heads/*) CURRENT_REF_NAME="${GITHUB_REF#refs/heads/}" ;;
+                refs/tags/*) CURRENT_REF_NAME="${GITHUB_REF#refs/tags/}" ;;
+                *)
+                  CURRENT_REF_NAME="${GITHUB_REF:-}"
+                  echo "::warning::Using raw GITHUB_REF fallback during workflow_dispatch branch validation"
+                  ;;
+              esac
+            fi
             if [ -z "$CURRENT_REF_NAME" ] || [ -z "$PR_HEAD_REF" ] || [ "$CURRENT_REF_NAME" != "$PR_HEAD_REF" ]; then
               echo "ERROR: workflow_dispatch must run on the PR head branch (expected: ${PR_HEAD_REF:-unknown}, got: ${CURRENT_REF_NAME:-unknown})" >&2
               exit 1
