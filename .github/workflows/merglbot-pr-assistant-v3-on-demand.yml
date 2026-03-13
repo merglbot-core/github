@@ -528,24 +528,24 @@ jobs:
           if [ -f changed_files.txt ]; then
             grep -E "$LOCKFILE_PATH_RX" changed_files.txt > omitted_lockfiles.txt 2>/dev/null || true
             if [ -s omitted_lockfiles.txt ]; then
-              {
-                echo ""
-                echo "=== LOCKFILE CHANGE SUMMARY ==="
-                sed 's/^/- /' omitted_lockfiles.txt
-                echo "=== END LOCKFILE CHANGE SUMMARY ==="
-                echo ""
-              } >> pr_diff.txt
+              if [ -s pr_diff.txt ]; then
+                {
+                  echo ""
+                  echo "=== LOCKFILE CHANGE SUMMARY ==="
+                  sed 's/^/- /' omitted_lockfiles.txt
+                  echo "=== END LOCKFILE CHANGE SUMMARY ==="
+                  echo ""
+                } >> pr_diff.txt
+              else
+                {
+                  echo "NOTE: Diff content contains only omitted lockfiles/dependency lock artifacts."
+                  echo ""
+                  echo "=== LOCKFILE CHANGE SUMMARY ==="
+                  sed 's/^/- /' omitted_lockfiles.txt
+                  echo "=== END LOCKFILE CHANGE SUMMARY ==="
+                } > pr_diff.txt
+              fi
             fi
-          fi
-
-          if [ ! -s pr_diff.txt ] && [ -s omitted_lockfiles.txt ]; then
-            {
-              echo "NOTE: Diff content contains only omitted lockfiles/dependency lock artifacts."
-              echo ""
-              echo "=== LOCKFILE CHANGE SUMMARY ==="
-              sed 's/^/- /' omitted_lockfiles.txt
-              echo "=== END LOCKFILE CHANGE SUMMARY ==="
-            } > pr_diff.txt
           fi
 
           DIFF_LINES=$(wc -l < pr_diff.txt 2>/dev/null || echo "0")
