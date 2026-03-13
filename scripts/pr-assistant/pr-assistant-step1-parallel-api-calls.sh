@@ -8,15 +8,23 @@ set -euo pipefail
 
 : "${REVIEW_MODE:=full}"
 : "${PR_NUMBER:?PR_NUMBER is required}"
+: "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 : "${GITHUB_ENV:?GITHUB_ENV is required}"
+
+for required_cmd in python3 curl jq ps; do
+  if ! command -v "$required_cmd" > /dev/null 2>&1; then
+    echo "ERROR: $required_cmd is required for pr-assistant-step1-parallel-api-calls.sh" >&2
+    exit 1
+  fi
+done
 
 echo "========================================="
 echo "STEP 1: PARALLEL AI ANALYSIS"
 echo "========================================="
 
 PARENT_BASHPID="${BASHPID}"
-TMP_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/merglbot-pr-assistant.XXXXXX")"
-readonly API_ERROR_EXIT=119
+TMP_DIR="$(mktemp -d "${RUNNER_TEMP}/merglbot-pr-assistant.XXXXXX")"
+readonly API_ERROR_EXIT=75
 cleanup() {
   if [ "${BASHPID}" != "${PARENT_BASHPID}" ]; then
     return 0
@@ -90,6 +98,11 @@ write_step1_reason() {
     echo "ERROR: STEP1_REASON_FILE must not be a symlink" >&2
     return 1
   fi
+  if [ -d "$STEP1_REASON_FILE" ]; then
+    umask "$old_umask"
+    echo "ERROR: STEP1_REASON_FILE must not be a directory" >&2
+    return 1
+  fi
   if ! tmp_file="$(mktemp "${STEP1_REASON_FILE}.tmp.XXXXXX")"; then
     umask "$old_umask"
     echo "ERROR: STEP1_REASON_FILE temp file could not be created" >&2
@@ -102,8 +115,37 @@ write_step1_reason() {
     return 1
   fi
   printf '%s\n' "$@" > "$tmp_file"
-  mv -f "$tmp_file" "$STEP1_REASON_FILE"
+  if python3 - "$tmp_file" "$STEP1_REASON_FILE" <<'PY'
+import os
+import stat
+import sys
+
+src, dst = sys.argv[1], sys.argv[2]
+
+try:
+    st_pre = os.lstat(dst)
+    if stat.S_ISLNK(st_pre.st_mode):
+        raise SystemExit("destination is a symlink")
+except FileNotFoundError:
+    pass
+
+os.replace(src, dst)
+st_post = os.lstat(dst)
+if stat.S_ISLNK(st_post.st_mode) or not stat.S_ISREG(st_post.st_mode):
+    try:
+        os.unlink(dst)
+    except FileNotFoundError:
+        pass
+    raise SystemExit("destination is not a regular file")
+PY
+  then
+    umask "$old_umask"
+    return 0
+  fi
+  rm -f -- "$tmp_file" || true
   umask "$old_umask"
+  echo "ERROR: STEP1_REASON_FILE write verification failed" >&2
+  return 1
 }
 
 STEP1_REASON_FILE="$(resolve_step1_reason_file "$STEP1_REASON_FILE")" || {

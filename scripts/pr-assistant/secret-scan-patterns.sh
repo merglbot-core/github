@@ -22,9 +22,11 @@ _GENERIC_SECRET_KEY_PREFIX="secret_ke""y_"
 _GENERIC_PRIVATE_KEY_PREFIX="private_ke""y_"
 _GENERIC_ACCESS_KEY_PREFIX="access_ke""y_"
 _JWT_PREFIX="ey""J"
+_PRIVATE_WORD="PRIVATE"" KEY"
+_PGP_BLOCK_WORD="BLO""CK"
 
-_BEGIN_PRIVATE_KEY='-----BEGIN [A-Z ]*PRIVATE KEY-----'
-_BEGIN_PGP_PRIVATE_KEY='-----BEGIN PGP[ ]PRIVATE[ ]KEY[ ]BLOCK-----'
+_BEGIN_PRIVATE_KEY="-----BEGIN [A-Z ]*${_PRIVATE_WORD}-----"
+_BEGIN_PGP_PRIVATE_KEY="-----BEGIN PGP[ ]PRIVATE[ ]KEY[ ]${_PGP_BLOCK_WORD}-----"
 _SLACK_TOKEN='(^|[^[:alnum:]_])xox[baprs]-[A-Za-z0-9-]{10,}($|[^[:alnum:]_])'
 _GITHUB_TOKEN_CLASSIC="(^|[^[:alnum:]_])${_GHP}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
 _GITHUB_TOKEN_FINE_GRAINED="(^|[^[:alnum:]_])${_GITHUB_PAT_PREFIX}[A-Za-z0-9_]{20,}($|[^[:alnum:]_])"

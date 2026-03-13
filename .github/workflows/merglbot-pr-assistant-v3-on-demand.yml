@@ -121,13 +121,6 @@ jobs:
       - name: Get PR Number and Mode
         id: get_pr
         env:
-          # Security: keep user comment parsing in GitHub expressions; do not export raw
-          # comment text into the shell environment. Flags must be terminated by
-          # whitespace, selected closing punctuation, or the end of the comment.
-          COMMENT_CONTAINS_FULL: ${{ contains(github.event.comment.body, '--full ') || contains(github.event.comment.body, '--full\n') || contains(github.event.comment.body, '--full\r') || contains(github.event.comment.body, '--full\t') || contains(github.event.comment.body, '--full.') || contains(github.event.comment.body, '--full,') || contains(github.event.comment.body, '--full!') || contains(github.event.comment.body, '--full?') || contains(github.event.comment.body, '--full)') || contains(github.event.comment.body, '--full]') || contains(github.event.comment.body, '--full:') || contains(github.event.comment.body, '--full;') || endsWith(github.event.comment.body, '--full') }}
-          COMMENT_CONTAINS_LIGHT: ${{ contains(github.event.comment.body, '--light ') || contains(github.event.comment.body, '--light\n') || contains(github.event.comment.body, '--light\r') || contains(github.event.comment.body, '--light\t') || contains(github.event.comment.body, '--light.') || contains(github.event.comment.body, '--light,') || contains(github.event.comment.body, '--light!') || contains(github.event.comment.body, '--light?') || contains(github.event.comment.body, '--light)') || contains(github.event.comment.body, '--light]') || contains(github.event.comment.body, '--light:') || contains(github.event.comment.body, '--light;') || endsWith(github.event.comment.body, '--light') }}
-          COMMENT_CONTAINS_FULL_DIFF: ${{ contains(github.event.comment.body, '--full-diff ') || contains(github.event.comment.body, '--full-diff\n') || contains(github.event.comment.body, '--full-diff\r') || contains(github.event.comment.body, '--full-diff\t') || contains(github.event.comment.body, '--full-diff.') || contains(github.event.comment.body, '--full-diff,') || contains(github.event.comment.body, '--full-diff!') || contains(github.event.comment.body, '--full-diff?') || contains(github.event.comment.body, '--full-diff)') || contains(github.event.comment.body, '--full-diff]') || contains(github.event.comment.body, '--full-diff:') || contains(github.event.comment.body, '--full-diff;') || endsWith(github.event.comment.body, '--full-diff') }}
-          COMMENT_CONTAINS_RETRO: ${{ contains(github.event.comment.body, '--retro ') || contains(github.event.comment.body, '--retro\n') || contains(github.event.comment.body, '--retro\r') || contains(github.event.comment.body, '--retro\t') || contains(github.event.comment.body, '--retro.') || contains(github.event.comment.body, '--retro,') || contains(github.event.comment.body, '--retro!') || contains(github.event.comment.body, '--retro?') || contains(github.event.comment.body, '--retro)') || contains(github.event.comment.body, '--retro]') || contains(github.event.comment.body, '--retro:') || contains(github.event.comment.body, '--retro;') || endsWith(github.event.comment.body, '--retro') || contains(github.event.comment.body, '--learn ') || contains(github.event.comment.body, '--learn\n') || contains(github.event.comment.body, '--learn\r') || contains(github.event.comment.body, '--learn\t') || contains(github.event.comment.body, '--learn.') || contains(github.event.comment.body, '--learn,') || contains(github.event.comment.body, '--learn!') || contains(github.event.comment.body, '--learn?') || contains(github.event.comment.body, '--learn)') || contains(github.event.comment.body, '--learn]') || contains(github.event.comment.body, '--learn:') || contains(github.event.comment.body, '--learn;') || endsWith(github.event.comment.body, '--learn') }}
           IS_WORKFLOW_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
           INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
           INPUT_REVIEW_MODE: ${{ github.event.inputs.review_mode }}
@@ -162,6 +155,16 @@ jobs:
             esac
           fi
 
+          COMMENT_BODY=""
+          if [ "$IS_WORKFLOW_DISPATCH" != "true" ]; then
+            COMMENT_BODY="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")"
+          fi
+
+          flag_present() {
+            local flag="$1"
+            COMMENT_BODY="$COMMENT_BODY" python3 -c 'import os, sys; flag = sys.argv[1]; body = os.environ.get("COMMENT_BODY", ""); delimiters = [" ", "\n", "\r", "\t", ".", ",", "!", "?", ")", "]", ":", ";"]; raise SystemExit(0 if body.endswith(flag) or any(f"{flag}{delimiter}" in body for delimiter in delimiters) else 1)' "$flag"
+          }
+
           if [ "$IS_WORKFLOW_DISPATCH" == "true" ]; then
             # Validate PR number is numeric (security)
             if ! [[ "$INPUT_PR_NUMBER" =~ ^[0-9]+$ ]]; then
@@ -176,10 +179,10 @@ jobs:
           else
             PR_NUMBER_OUT="$ISSUE_NUMBER"
             # `--full` intentionally stays separate from `--full-diff`.
-            if [ "$COMMENT_CONTAINS_FULL" == "true" ]; then
+            if flag_present "--full"; then
               REVIEW_MODE_OUT="full"
               echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: FULL)"
-            elif [ "$COMMENT_CONTAINS_LIGHT" == "true" ]; then
+            elif flag_present "--light"; then
               REVIEW_MODE_OUT="light"
               echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: LIGHT)"
             else
@@ -187,14 +190,14 @@ jobs:
               echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: LIGHT DEFAULT)"
             fi
             
-            if [ "$COMMENT_CONTAINS_RETRO" == "true" ]; then
+            if flag_present "--retro" || flag_present "--learn"; then
               INCLUDE_RETRO_OUT="true"
               echo "✅ Retro mode enabled (--retro/--learn)"
             else
               INCLUDE_RETRO_OUT="false"
             fi
             
-            if [ "$COMMENT_CONTAINS_FULL_DIFF" == "true" ]; then
+            if flag_present "--full-diff"; then
               DIFF_SCOPE_OUT="full"
               echo "✅ Diff scope: FULL (requested via --full-diff)"
             else
@@ -248,10 +251,12 @@ jobs:
       - name: Preflight runner dependencies
         run: |
           set -euo pipefail
-          if ! command -v python3 > /dev/null 2>&1; then
-            echo "ERROR: python3 is required for scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh" >&2
-            exit 1
-          fi
+          for required_cmd in python3 gh jq curl git ps; do
+            if ! command -v "$required_cmd" > /dev/null 2>&1; then
+              echo "ERROR: $required_cmd is required for merglbot PR Assistant" >&2
+              exit 1
+            fi
+          done
       
       - name: Gather Full PR Context
         id: context
@@ -313,22 +318,22 @@ jobs:
           echo "Head SHA: ${PR_HEAD_SHA:0:12}"
 
           if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
-            CURRENT_REF_NAME="${GITHUB_REF_NAME:-}"
+            CURRENT_REF_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-${GITHUB_REF##*/}}}"
             if [ -z "$CURRENT_REF_NAME" ] || [ -z "$PR_HEAD_REF" ] || [ "$CURRENT_REF_NAME" != "$PR_HEAD_REF" ]; then
               echo "ERROR: workflow_dispatch must run on the PR head branch (expected: ${PR_HEAD_REF:-unknown}, got: ${CURRENT_REF_NAME:-unknown})" >&2
               exit 1
             fi
           fi
           
-            # Use printf to avoid echo interpreting user-controlled content as flags (-n/-e)
-            printf '%s\n' "$PR_TITLE" > pr_title.txt
-            printf '%s\n' "$PR_BODY" > pr_body.txt
-            printf '%s\n' "$PR_AUTHOR" > pr_author.txt
-            printf '%s\n' "$PR_ADDITIONS" > pr_additions.txt
-            printf '%s\n' "$PR_DELETIONS" > pr_deletions.txt
-            printf '%s\n' "$PR_FILES" > pr_files_count.txt
-            printf '%s\n' "$PR_BASE_SHA" > pr_base_sha.txt
-            printf '%s\n' "$PR_HEAD_SHA" > pr_head_sha.txt
+          # Use printf to avoid echo interpreting user-controlled content as flags (-n/-e)
+          printf '%s\n' "$PR_TITLE" > pr_title.txt
+          printf '%s\n' "$PR_BODY" > pr_body.txt
+          printf '%s\n' "$PR_AUTHOR" > pr_author.txt
+          printf '%s\n' "$PR_ADDITIONS" > pr_additions.txt
+          printf '%s\n' "$PR_DELETIONS" > pr_deletions.txt
+          printf '%s\n' "$PR_FILES" > pr_files_count.txt
+          printf '%s\n' "$PR_BASE_SHA" > pr_base_sha.txt
+          printf '%s\n' "$PR_HEAD_SHA" > pr_head_sha.txt
 
             # CI / checks summary (best-effort)
             CHECKS_DATA_AVAILABLE="false"
@@ -632,7 +637,7 @@ jobs:
             # This workflow is the authoritative copy of the secret pre-scan patterns.
             _GH="g""h"
             _GHP="${_GH}""p_"
-            _GH_CLASS_PREFIX="${_GH}""[oprsu]_"
+            _GH_CLASS_PREFIX="${_GH}""[oprsut]_"
             _GH_PAT_PREFIX="git""hub""_pat_"
             _SK_PREFIX="s""k-"
             _PRIVATE_WORD="PRIVATE"" KEY"
@@ -684,12 +689,12 @@ jobs:
                   break
                 else
                   GREP_STATUS=$?
-                  if [ "$GREP_STATUS" -gt 1 ]; then
-                    echo "WARN: Secret pre-scan failed for ${SECRET_SCAN_FILE}; skipping AI review fail-closed." >&2
-                    SKIP_REVIEW="true"
-                    SKIP_REASON="potential_secret"
-                    break
-                  fi
+                fi
+                if [ "$GREP_STATUS" -gt 1 ]; then
+                  echo "WARN: Secret pre-scan failed for ${SECRET_SCAN_FILE}; skipping AI review fail-closed." >&2
+                  SKIP_REVIEW="true"
+                  SKIP_REASON="potential_secret"
+                  break
                 fi
               fi
             done
@@ -895,6 +900,7 @@ jobs:
 
           # Intentionally inlined here so the workflow never sources shell from the PR checkout.
           # Keep in sync with scripts/pr-assistant/workflow-sanitize.sh.
+          exec 3>&1
           sanitize_model() {
             local raw="${1:-}"
             raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
@@ -913,7 +919,7 @@ jobs:
             case "$raw" in
               low|medium|high|none) printf '%s' "$raw" ;;
               xhigh)
-                echo "::warning::reasoning_effort=xhigh is deprecated; using high" >&2
+                echo "::warning::reasoning_effort=xhigh is deprecated; using high" >&3
                 printf '%s' "high"
                 ;;
               *) printf '%s' "" ;;
@@ -1395,6 +1401,7 @@ jobs:
         run: |
           set -euo pipefail
           
+          exec 3>&1
           sanitize_model() {
             local raw="${1:-}"
             raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
@@ -1413,7 +1420,7 @@ jobs:
             case "$raw" in
               low|medium|high|none) printf '%s' "$raw" ;;
               xhigh)
-                echo "::warning::reasoning_effort=xhigh is deprecated; using high" >&2
+                echo "::warning::reasoning_effort=xhigh is deprecated; using high" >&3
                 printf '%s' "high"
                 ;;
               *) printf '%s' "" ;;
