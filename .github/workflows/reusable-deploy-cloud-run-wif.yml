@@ -138,6 +138,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Resolve WIF parameters
+        id: wif
         shell: bash
         env:
           INPUT_WIF_PROVIDER: ${{ inputs.wif_provider }}
@@ -164,16 +165,16 @@ jobs:
           echo "::add-mask::$WIF_SERVICE_ACCOUNT"
 
           {
-            printf 'WIF_PROVIDER=%s\n' "$WIF_PROVIDER"
-            printf 'WIF_SERVICE_ACCOUNT=%s\n' "$WIF_SERVICE_ACCOUNT"
-          } >> "$GITHUB_ENV"
+            printf 'wif_provider=%s\n' "$WIF_PROVIDER"
+            printf 'wif_service_account=%s\n' "$WIF_SERVICE_ACCOUNT"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to GCP (WIF)
         id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
         with:
-          workload_identity_provider: ${{ env.WIF_PROVIDER }}
-          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ steps.wif.outputs.wif_provider }}
+          service_account: ${{ steps.wif.outputs.wif_service_account }}
           token_format: 'access_token'
 
       - name: Resolve deployment parameters
@@ -288,6 +289,10 @@ jobs:
           )
 
           if [ -n "${INPUT_RUNTIME_SERVICE_ACCOUNT}" ]; then
+            if ! [[ "${INPUT_RUNTIME_SERVICE_ACCOUNT}" =~ ^[^[:space:]@]+@[^[:space:]@]+\\.iam\\.gserviceaccount\\.com$ ]]; then
+              echo "::error::runtime_service_account must be a service account email ending with .iam.gserviceaccount.com, got '${INPUT_RUNTIME_SERVICE_ACCOUNT}'"
+              exit 1
+            fi
             deploy_args+=("--service-account" "${INPUT_RUNTIME_SERVICE_ACCOUNT}")
           fi
 
@@ -312,7 +317,7 @@ jobs:
           fi
 
           if [ -n "${INPUT_CPU}" ]; then
-            if ! [[ "${INPUT_CPU}" =~ ^[0-9]+(\\.[0-9]+)?$ ]]; then
+            if ! [[ "${INPUT_CPU}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
               echo "::error::cpu must be a positive number (e.g. 1, 2, 0.5), got '${INPUT_CPU}'"
               exit 1
             fi
