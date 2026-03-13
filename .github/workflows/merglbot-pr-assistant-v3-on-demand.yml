@@ -2049,6 +2049,7 @@ jobs:
         if: always() && steps.context.outputs.skip_review != 'true'
         continue-on-error: true
         # Verify pin: gh api repos/actions/upload-artifact/git/ref/tags/v4.6.2 --jq .object.sha
+        # Intentionally upload only `metrics/`; PR context files (including pr_lockfile_diff_strict.txt) are never archived.
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: review-metrics-${{ env.PR_NUMBER }}-${{ github.run_id }}
@@ -2058,6 +2059,7 @@ jobs:
       - name: Cleanup PR context artifacts
         if: always()
         run: |
+          # Context artifacts below are transient review inputs only; they are not part of the uploaded metrics artifact.
           rm -f \
             pr_metadata.json \
             pr_view_err.txt \
