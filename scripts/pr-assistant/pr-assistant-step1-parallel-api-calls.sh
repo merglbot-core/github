@@ -24,7 +24,7 @@ echo "========================================="
 
 PARENT_BASHPID="${BASHPID}"
 TMP_DIR="$(mktemp -d "${RUNNER_TEMP}/merglbot-pr-assistant.XXXXXX")"
-readonly API_ERROR_EXIT=75
+readonly API_ERROR_EXIT=119
 cleanup() {
   if [ "${BASHPID}" != "${PARENT_BASHPID}" ]; then
     return 0
