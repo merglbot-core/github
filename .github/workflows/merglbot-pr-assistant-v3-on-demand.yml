@@ -529,18 +529,29 @@ jobs:
           if [ -f changed_files.txt ]; then
             grep -E "$LOCKFILE_PATH_RX" changed_files.txt > omitted_lockfiles.txt 2>/dev/null || true
             if [ -s omitted_lockfiles.txt ]; then
-              awk -v lockfile_rx="$LOCKFILE_PATH_RX" '
-                /^diff --git a\// {
-                  file = $0
-                  sub(/^diff --git a\//, "", file)
-                  sub(/ b\/.*$/, "", file)
-                  in_lockfile = (file ~ lockfile_rx)
-                  next
-                }
-                in_lockfile && /^[+-]/ && $0 !~ /^(\+\+\+|---)/ {
-                  print substr($0, 2)
-                }
-              ' pr_diff_full.txt > pr_lockfile_diff_strict.txt
+              if [ ! -f pr_diff_full.txt ]; then
+                echo "WARN: omitted lockfiles detected but pr_diff_full.txt is missing; skipping AI review fail-closed." >&2
+                SKIP_REVIEW="true"
+                SKIP_REASON="potential_secret"
+              else
+                awk -v lockfile_rx="$LOCKFILE_PATH_RX" '
+                  /^diff --git a\// {
+                    file = $0
+                    sub(/^diff --git a\//, "", file)
+                    sub(/ b\/.*$/, "", file)
+                    in_lockfile = (file ~ lockfile_rx)
+                    next
+                  }
+                  in_lockfile && /^[+-]/ && $0 !~ /^(\+\+\+|---)/ {
+                    print substr($0, 2)
+                  }
+                ' pr_diff_full.txt > pr_lockfile_diff_strict.txt
+                if [ ! -s pr_lockfile_diff_strict.txt ]; then
+                  echo "::notice::No lockfile diff lines extracted for strict lockfile scan."
+                fi
+              fi
+            fi
+            if [ "$SKIP_REVIEW" != "true" ] && [ -s omitted_lockfiles.txt ]; then
               if [ -s pr_diff.txt ]; then
                 {
                   echo ""
@@ -645,7 +656,10 @@ jobs:
             # This workflow is the authoritative copy of the secret pre-scan patterns.
             _GH="g""h"
             _GHP="${_GH}""p_"
-            _GH_CLASS_PREFIX="${_GH}""[oprsu]_"
+            _GHO="${_GH}""o_"
+            _GHU="${_GH}""u_"
+            _GHS="${_GH}""s_"
+            _GHR="${_GH}""r_"
             _GH_PAT_PREFIX="git""hub""_pat_"
             _SK_PREFIX="s""k-"
             _PRIVATE_WORD="PRIVATE"" KEY"
@@ -665,7 +679,9 @@ jobs:
             _SLACK_RX="(^|[^[:alnum:]_])${_SLACK_PREFIX}[A-Za-z0-9-]{10,}($|[^[:alnum:]_])"
             _GH_CLASSIC_RX="(^|[^[:alnum:]_])${_GHP}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
             _GH_FINE_RX="(^|[^[:alnum:]_])${_GH_PAT_PREFIX}[A-Za-z0-9_]{20,}($|[^[:alnum:]_])"
-            _GH_GENERIC_RX="(^|[^[:alnum:]_])${_GH_CLASS_PREFIX}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
+            # GitHub token prefixes intentionally mirror documented token families:
+            # ghp_, gho_, ghu_, ghs_, ghr_ and github_pat_. There is no ght_ family.
+            _GH_GENERIC_RX="(^|[^[:alnum:]_])(${_GHP}|${_GHO}|${_GHU}|${_GHS}|${_GHR})[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
             _GENERIC_RX="(^|[^[:alnum:]_])(${_GENERIC_API_KEY_PREFIX}|${_GENERIC_SECRET_KEY_PREFIX}|${_GENERIC_PRIVATE_KEY_PREFIX}|${_GENERIC_ACCESS_KEY_PREFIX})[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             _AWS_RX="(^|[^[:alnum:]_])${_AWS_PREFIX}[0-9A-Z]{16}($|[^[:alnum:]_])"
             _GOOGLE_RX="(^|[^[:alnum:]_])${_GOOGLE_PREFIX}[0-9A-Za-z_-]{30,}($|[^[:alnum:]_])"
