@@ -14,6 +14,7 @@
 
 _GH="g""h"
 _GHP="${_GH}""p_"
+# Keep only documented short GitHub token classes here; github_pat_ is handled separately below.
 _GH_TOKEN_PREFIX="${_GH}""[oprsu]_"
 _GITHUB_PAT_PREFIX="github""_pat_"
 _SK_PREFIX="s""k-"
