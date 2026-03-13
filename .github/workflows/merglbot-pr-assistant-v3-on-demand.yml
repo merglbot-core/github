@@ -731,6 +731,9 @@ jobs:
                 -e 's/\${_BEGIN_PRIVATE_BLOCK}/\${_BEGIN_PRIVATE_KEY}/g' \
                 -e 's/\${_BEGIN_PGP_BLOCK}/\${_BEGIN_PGP_PRIVATE_KEY}/g' \
                 -e 's/\${_SLACK_RX}/\${_SLACK_TOKEN}/g' \
+                -e 's/\${_PRIVATE_WORD}/PRIVATE KEY/g' \
+                -e 's/\${_PGP_BLOCK_WORD}/BLOCK/g' \
+                -e 's/\${_SLACK_PREFIX}/xox[baprs]-/g' \
                 -e 's/\${_GH_PAT_PREFIX}/\${_GITHUB_PAT_PREFIX}/g' \
                 -e 's/\${_GH_CLASSIC_RX}/\${_GITHUB_TOKEN_CLASSIC}/g' \
                 -e 's/\${_GH_FINE_RX}/\${_GITHUB_TOKEN_FINE_GRAINED}/g' \
