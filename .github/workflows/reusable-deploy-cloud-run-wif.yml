@@ -127,7 +127,7 @@ jobs:
     timeout-minutes: 30  # Build, scan, and deploy usually <15m; buffer for registry latency
     environment:
       name: ${{ inputs.environment_name != '' && inputs.environment_name || inputs.environment }}
-      url: ${{ inputs.environment_url }}
+      url: ${{ inputs.environment_url != '' && inputs.environment_url || '' }}
     permissions:
       contents: read
       id-token: write  # Required for WIF OIDC token
@@ -138,7 +138,6 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Resolve WIF parameters
-        id: wif
         shell: bash
         env:
           INPUT_WIF_PROVIDER: ${{ inputs.wif_provider }}
@@ -165,19 +164,20 @@ jobs:
           echo "::add-mask::$WIF_SERVICE_ACCOUNT"
 
           {
-            printf 'wif_provider=%s\n' "$WIF_PROVIDER"
-            printf 'wif_service_account=%s\n' "$WIF_SERVICE_ACCOUNT"
-          } >> "$GITHUB_OUTPUT"
+            printf 'WIF_PROVIDER=%s\n' "$WIF_PROVIDER"
+            printf 'WIF_SERVICE_ACCOUNT=%s\n' "$WIF_SERVICE_ACCOUNT"
+          } >> "$GITHUB_ENV"
 
       - name: Authenticate to GCP (WIF)
         id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
         with:
-          workload_identity_provider: ${{ steps.wif.outputs.wif_provider }}
-          service_account: ${{ steps.wif.outputs.wif_service_account }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
           token_format: 'access_token'
 
       - name: Resolve deployment parameters
+        id: deploy-params
         shell: bash
         env:
           INPUT_DEPLOY_PROJECT_ID: ${{ inputs.deploy_project_id }}
@@ -213,6 +213,9 @@ jobs:
             echo "::error::artifact_repository could not be resolved"
             exit 1
           fi
+
+          echo "::add-mask::$DEPLOY_PROJECT_ID"
+          echo "::add-mask::$ARTIFACT_PROJECT_ID"
 
           {
             printf 'DEPLOY_PROJECT_ID=%s\n' "$DEPLOY_PROJECT_ID"
