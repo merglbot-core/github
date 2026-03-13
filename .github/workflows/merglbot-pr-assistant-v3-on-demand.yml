@@ -162,6 +162,10 @@ jobs:
 
           flag_present() {
             local flag="$1"
+            case "$flag" in
+              --full|--light|--retro|--learn|--full-diff) ;;
+              *) return 1 ;;
+            esac
             COMMENT_BODY="$COMMENT_BODY" python3 -c 'import os, sys; flag = sys.argv[1].lower(); body = os.environ.get("COMMENT_BODY", "").lower(); delimiters = [" ", "\n", "\r", "\t", ".", ",", "!", "?", ")", "]", ":", ";"]; raise SystemExit(0 if body.endswith(flag) or any(f"{flag}{delimiter}" in body for delimiter in delimiters) else 1)' "$flag"
           }
 
@@ -650,7 +654,7 @@ jobs:
             # This workflow is the authoritative copy of the secret pre-scan patterns.
             _GH="g""h"
             _GHP="${_GH}""p_"
-            _GH_CLASS_PREFIX="${_GH}""[oprsut]_"
+            _GH_CLASS_PREFIX="${_GH}""[oprsu]_"
             _GH_PAT_PREFIX="git""hub""_pat_"
             _SK_PREFIX="s""k-"
             _PRIVATE_WORD="PRIVATE"" KEY"

@@ -115,6 +115,7 @@ write_step1_reason() {
     return 1
   fi
   printf '%s\n' "$@" > "$tmp_file"
+  local write_ok=0
   if python3 - "$tmp_file" "$STEP1_REASON_FILE" <<'PY'
 import os
 import stat
@@ -139,11 +140,13 @@ if stat.S_ISLNK(st_post.st_mode) or not stat.S_ISREG(st_post.st_mode):
     raise SystemExit("destination is not a regular file")
 PY
   then
-    umask "$old_umask"
-    return 0
+    write_ok=1
   fi
   rm -f -- "$tmp_file" || true
   umask "$old_umask"
+  if [ "$write_ok" -eq 1 ]; then
+    return 0
+  fi
   echo "ERROR: STEP1_REASON_FILE write verification failed" >&2
   return 1
 }
