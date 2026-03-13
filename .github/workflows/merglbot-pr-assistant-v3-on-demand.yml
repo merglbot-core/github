@@ -745,8 +745,14 @@ jobs:
               local script_name="$2"
               local workflow_value
               local script_value
-              workflow_value="$(extract_rhs "$WORKFLOW_PATTERNS_FILE" "$workflow_name")"
-              script_value="$(extract_rhs "$SCRIPT_PATTERNS_FILE" "$script_name")"
+              workflow_value=""
+              script_value=""
+              if ! workflow_value="$(extract_rhs "$WORKFLOW_PATTERNS_FILE" "$workflow_name")"; then
+                workflow_value=""
+              fi
+              if ! script_value="$(extract_rhs "$SCRIPT_PATTERNS_FILE" "$script_name")"; then
+                script_value=""
+              fi
               if [ -z "$workflow_value" ] || [ -z "$script_value" ]; then
                 echo "ERROR: secret-scan pattern definition missing for ${workflow_name}/${script_name}" >&2
                 PATTERN_DRIFT=1
