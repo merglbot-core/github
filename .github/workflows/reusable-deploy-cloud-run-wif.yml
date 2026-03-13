@@ -42,10 +42,9 @@ on:
         type: string
         default: 'Dockerfile'
       environment_name:
-        description: 'Optional GitHub Environment name for the deploy job'
-        required: false
+        description: 'GitHub Environment name for the deploy job'
+        required: true
         type: string
-        default: ''
       environment_url:
         description: 'Optional GitHub Environment URL for the deploy job'
         required: false
@@ -92,10 +91,10 @@ on:
         type: number
         default: 8080
       allow_unauthenticated:
-        description: 'Allow unauthenticated access to the deployed service'
+        description: 'Allow unauthenticated access to the deployed service (explicit opt-in)'
         required: false
         type: boolean
-        default: true
+        default: false
       environment:
         description: 'Environment (staging/production)'
         required: false
@@ -138,12 +137,40 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
+      - name: Resolve WIF parameters
+        shell: bash
+        env:
+          INPUT_WIF_PROVIDER: ${{ inputs.wif_provider }}
+          INPUT_WIF_SERVICE_ACCOUNT: ${{ inputs.wif_service_account }}
+          SECRET_WIF_PROVIDER: ${{ secrets.WIF_PROVIDER }}
+          SECRET_WIF_SERVICE_ACCOUNT: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+
+          WIF_PROVIDER="${INPUT_WIF_PROVIDER:-$SECRET_WIF_PROVIDER}"
+          WIF_SERVICE_ACCOUNT="${INPUT_WIF_SERVICE_ACCOUNT:-$SECRET_WIF_SERVICE_ACCOUNT}"
+
+          if [ -z "$WIF_PROVIDER" ]; then
+            echo "::error::wif_provider is empty and secret WIF_PROVIDER is not set"
+            exit 1
+          fi
+
+          if [ -z "$WIF_SERVICE_ACCOUNT" ]; then
+            echo "::error::wif_service_account is empty and secret WIF_SERVICE_ACCOUNT is not set"
+            exit 1
+          fi
+
+          {
+            printf 'WIF_PROVIDER=%s\n' "$WIF_PROVIDER"
+            printf 'WIF_SERVICE_ACCOUNT=%s\n' "$WIF_SERVICE_ACCOUNT"
+          } >> "$GITHUB_ENV"
+
       - name: Authenticate to GCP (WIF)
         id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
         with:
-          workload_identity_provider: ${{ inputs.wif_provider || secrets.WIF_PROVIDER }}
-          service_account: ${{ inputs.wif_service_account || secrets.WIF_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
           token_format: 'access_token'
 
       - name: Resolve deployment parameters
@@ -161,7 +188,7 @@ jobs:
           DEPLOY_PROJECT_ID="${INPUT_DEPLOY_PROJECT_ID:-$SECRET_GCP_PROJECT_ID}"
           ARTIFACT_PROJECT_ID="${INPUT_ARTIFACT_PROJECT_ID:-$DEPLOY_PROJECT_ID}"
           ARTIFACT_LOCATION="${INPUT_ARTIFACT_LOCATION:-$INPUT_REGION}"
-          ARTIFACT_REPOSITORY="${INPUT_ARTIFACT_REPOSITORY:-containers}"
+          ARTIFACT_REPOSITORY="${INPUT_ARTIFACT_REPOSITORY}"
 
           if [ -z "$DEPLOY_PROJECT_ID" ]; then
             echo "::error::deploy_project_id is empty and secret GCP_PROJECT_ID is not set"
@@ -272,10 +299,18 @@ jobs:
             deploy_args+=("--cpu" "${INPUT_CPU}")
           fi
 
+          if ! [[ "${INPUT_TIMEOUT}" =~ ^[0-9]+$ ]]; then
+            echo "::error::timeout must be a non-negative integer, got '${INPUT_TIMEOUT}'"
+            exit 1
+          fi
           if [ "${INPUT_TIMEOUT}" -gt 0 ]; then
             deploy_args+=("--timeout" "${INPUT_TIMEOUT}")
           fi
 
+          if ! [[ "${INPUT_PORT}" =~ ^[0-9]+$ ]]; then
+            echo "::error::port must be a non-negative integer, got '${INPUT_PORT}'"
+            exit 1
+          fi
           if [ "${INPUT_PORT}" -gt 0 ]; then
             deploy_args+=("--port" "${INPUT_PORT}")
           fi
