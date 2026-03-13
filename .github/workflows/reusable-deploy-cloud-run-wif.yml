@@ -138,6 +138,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Resolve WIF parameters
+        id: wif
         shell: bash
         env:
           INPUT_WIF_PROVIDER: ${{ inputs.wif_provider }}
@@ -146,6 +147,8 @@ jobs:
           SECRET_WIF_SERVICE_ACCOUNT: ${{ secrets.WIF_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
+
+          SSOT_WIF_PROVIDER="projects/671585034644/locations/global/workloadIdentityPools/github-actions/providers/github-oidc"
 
           echo "::add-mask::$INPUT_WIF_PROVIDER"
           echo "::add-mask::$INPUT_WIF_SERVICE_ACCOUNT"
@@ -165,20 +168,30 @@ jobs:
             exit 1
           fi
 
+          if [ "$WIF_PROVIDER" != "$SSOT_WIF_PROVIDER" ]; then
+            echo "::error::wif_provider must point to the SSOT provider in merglbot-seed (${SSOT_WIF_PROVIDER})."
+            exit 1
+          fi
+
+          if [[ "$WIF_SERVICE_ACCOUNT" == *@merglbot.iam.gserviceaccount.com ]]; then
+            echo "::error::wif_service_account points to a legacy service account in the DELETE_REQUESTED 'merglbot' project."
+            exit 1
+          fi
+
           echo "::add-mask::$WIF_PROVIDER"
           echo "::add-mask::$WIF_SERVICE_ACCOUNT"
 
           {
-            printf 'WIF_PROVIDER=%s\n' "$WIF_PROVIDER"
-            printf 'WIF_SERVICE_ACCOUNT=%s\n' "$WIF_SERVICE_ACCOUNT"
-          } >> "$GITHUB_ENV"
+            printf 'wif_provider=%s\n' "$WIF_PROVIDER"
+            printf 'wif_service_account=%s\n' "$WIF_SERVICE_ACCOUNT"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to GCP (WIF)
         id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
         with:
-          workload_identity_provider: ${{ env.WIF_PROVIDER }}
-          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ steps.wif.outputs.wif_provider }}
+          service_account: ${{ steps.wif.outputs.wif_service_account }}
           token_format: 'access_token'
 
       - name: Resolve deployment parameters
@@ -193,10 +206,6 @@ jobs:
           SECRET_GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
         run: |
           set -euo pipefail
-
-          echo "::add-mask::$INPUT_DEPLOY_PROJECT_ID"
-          echo "::add-mask::$INPUT_ARTIFACT_PROJECT_ID"
-          echo "::add-mask::$SECRET_GCP_PROJECT_ID"
 
           DEPLOY_PROJECT_ID="${INPUT_DEPLOY_PROJECT_ID:-$SECRET_GCP_PROJECT_ID}"
           ARTIFACT_PROJECT_ID="${INPUT_ARTIFACT_PROJECT_ID:-$DEPLOY_PROJECT_ID}"
@@ -222,9 +231,6 @@ jobs:
             echo "::error::artifact_repository could not be resolved"
             exit 1
           fi
-
-          echo "::add-mask::$DEPLOY_PROJECT_ID"
-          echo "::add-mask::$ARTIFACT_PROJECT_ID"
 
           {
             printf 'DEPLOY_PROJECT_ID=%s\n' "$DEPLOY_PROJECT_ID"
@@ -281,6 +287,7 @@ jobs:
           INPUT_TIMEOUT: ${{ inputs.timeout }}
           INPUT_PORT: ${{ inputs.port }}
           INPUT_RUNTIME_SERVICE_ACCOUNT: ${{ inputs.runtime_service_account }}
+          INPUT_GITHUB_ENVIRONMENT: ${{ inputs.environment_name != '' && inputs.environment_name || inputs.environment }}
           INPUT_INGRESS: ${{ inputs.ingress }}
           INPUT_MEMORY: ${{ inputs.memory }}
           INPUT_CPU: ${{ inputs.cpu }}
@@ -355,6 +362,10 @@ jobs:
             exit 1
           fi
           deploy_args+=("--port" "${INPUT_PORT}")
+
+          if [ "${INPUT_ALLOW_UNAUTHENTICATED}" = "true" ] && [ "${INPUT_GITHUB_ENVIRONMENT}" = "production" ]; then
+            echo "::warning::Deploying with --allow-unauthenticated to production environment"
+          fi
 
           if [ "${INPUT_ALLOW_UNAUTHENTICATED}" = "true" ]; then
             deploy_args+=("--allow-unauthenticated")
