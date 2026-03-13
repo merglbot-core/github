@@ -81,6 +81,7 @@ on:
           - low
           - medium
           - high
+          - none
 
 permissions:
   contents: read
@@ -528,6 +529,18 @@ jobs:
           if [ -f changed_files.txt ]; then
             grep -E "$LOCKFILE_PATH_RX" changed_files.txt > omitted_lockfiles.txt 2>/dev/null || true
             if [ -s omitted_lockfiles.txt ]; then
+              awk -v lockfile_rx="$LOCKFILE_PATH_RX" '
+                /^diff --git a\// {
+                  file = $0
+                  sub(/^diff --git a\//, "", file)
+                  sub(/ b\/.*$/, "", file)
+                  in_lockfile = (file ~ lockfile_rx)
+                  next
+                }
+                in_lockfile && /^[+-]/ && $0 !~ /^(\+\+\+|---)/ {
+                  print substr($0, 2)
+                }
+              ' pr_diff_full.txt > pr_lockfile_diff_strict.txt
               if [ -s pr_diff.txt ]; then
                 {
                   echo ""
@@ -668,12 +681,17 @@ jobs:
             #   (^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}($|[^[:alnum:]_])
             # NOTE: keep the gate on JWT_PATTERN_STRICT only; the loose heuristic is noisy (docs/test fixtures).
             JWT_PATTERN="${JWT_PATTERN_STRICT}"
-            for SECRET_SCAN_FILE in pr_diff_full.txt pr_diff.txt pr_title.txt pr_body.txt bugbot_findings.txt changed_files.txt new_commits.txt pr_checks_summary.txt; do
+            for SECRET_SCAN_FILE in pr_diff_full.txt pr_lockfile_diff_strict.txt pr_diff.txt pr_title.txt pr_body.txt bugbot_findings.txt changed_files.txt new_commits.txt pr_checks_summary.txt; do
               # pr_diff_full.txt intentionally excludes only the broad generic key_ heuristic:
               # full lockfile/package diffs can contain long integrity strings that otherwise cause false positives.
               PATTERN="${SENSITIVE_PATTERN_STRICT}|${JWT_PATTERN}"
               if [ "$SECRET_SCAN_FILE" = "pr_diff_full.txt" ]; then
                 PATTERN="${SENSITIVE_PATTERN_NO_GENERIC}|${JWT_PATTERN_STRICT}"
+              elif [ "$SECRET_SCAN_FILE" = "pr_lockfile_diff_strict.txt" ]; then
+                # Lockfile-only diff content is scanned separately with STRICT coverage so the legacy
+                # key_ heuristic still protects omitted lockfile hunks without reintroducing false
+                # positives across the entire raw PR diff.
+                PATTERN="${SENSITIVE_PATTERN_STRICT}|${JWT_PATTERN_STRICT}"
               fi
               if [ -s "$SECRET_SCAN_FILE" ]; then
                 GREP_STATUS=0

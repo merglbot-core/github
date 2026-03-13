@@ -14,7 +14,7 @@
 
 _GH="g""h"
 _GHP="${_GH}""p_"
-_GH_TOKEN_PREFIX="${_GH}""[oprsut]_"
+_GH_TOKEN_PREFIX="${_GH}""[oprsu]_"
 _GITHUB_PAT_PREFIX="github""_pat_"
 _SK_PREFIX="s""k-"
 _GENERIC_API_KEY_PREFIX="api_ke""y_"
