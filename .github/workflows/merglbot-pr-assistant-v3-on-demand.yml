@@ -903,6 +903,7 @@ jobs:
           OPENAI_SYNTHESIS_PAYLOAD_FILE="${TMP_DIR}/openai_synthesis_payload.json"
           OPENAI_SYNTHESIS_OUT_FILE="${TMP_DIR}/openai_synthesis_out.txt"
           OPENAI_SYNTHESIS_USAGE_FILE="${TMP_DIR}/openai_synthesis_usage.json"
+          SANITIZE_WARNINGS_FILE="${TMP_DIR}/sanitize-warnings.txt"
 
           OPENAI_RESPONSES_URL="${OPENAI_RESPONSES_URL:-https://api.openai.com/v1/responses}"
           OPENAI_RESPONSES_URL="$(printf '%s' "$OPENAI_RESPONSES_URL" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
@@ -917,7 +918,6 @@ jobs:
 
           # Intentionally inlined here so the workflow never sources shell from the PR checkout.
           # Keep in sync with scripts/pr-assistant/workflow-sanitize.sh.
-          exec 3>&1
           sanitize_model() {
             local raw="${1:-}"
             raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
@@ -936,7 +936,7 @@ jobs:
             case "$raw" in
               low|medium|high|none) printf '%s' "$raw" ;;
               xhigh)
-                echo "::warning::reasoning_effort=xhigh is deprecated; using high" >&3
+                printf '%s\n' "::warning::reasoning_effort=xhigh is deprecated; using high" >> "$SANITIZE_WARNINGS_FILE"
                 printf '%s' "high"
                 ;;
               *) printf '%s' "" ;;
@@ -947,7 +947,9 @@ jobs:
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
           OPENAI_SYNTHESIS_MODEL="$(sanitize_model "${OPENAI_SYNTHESIS_MODEL:-}")"
           OPENAI_SYNTHESIS_REASONING_EFFORT="$(sanitize_reasoning_effort "${OPENAI_SYNTHESIS_REASONING_EFFORT:-}")"
-          exec 3>&-
+          if [ -s "$SANITIZE_WARNINGS_FILE" ]; then
+            cat "$SANITIZE_WARNINGS_FILE"
+          fi
 
           if [ -z "$ANTHROPIC_MODEL" ]; then
             ANTHROPIC_MODEL="claude-sonnet-4-6"
@@ -1418,8 +1420,9 @@ jobs:
           REVIEW_MODE: ${{ needs.check-trigger.outputs.review_mode }}
         run: |
           set -euo pipefail
-          
-          exec 3>&1
+
+          SANITIZE_WARNINGS_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/merglbot-sanitize-warnings.XXXXXX")"
+          trap 'rm -f -- "$SANITIZE_WARNINGS_FILE"' EXIT
           sanitize_model() {
             local raw="${1:-}"
             raw="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
@@ -1438,7 +1441,7 @@ jobs:
             case "$raw" in
               low|medium|high|none) printf '%s' "$raw" ;;
               xhigh)
-                echo "::warning::reasoning_effort=xhigh is deprecated; using high" >&3
+                printf '%s\n' "::warning::reasoning_effort=xhigh is deprecated; using high" >> "$SANITIZE_WARNINGS_FILE"
                 printf '%s' "high"
                 ;;
               *) printf '%s' "" ;;
@@ -1449,7 +1452,9 @@ jobs:
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
           OPENAI_SYNTHESIS_MODEL="$(sanitize_model "${OPENAI_SYNTHESIS_MODEL:-}")"
           OPENAI_SYNTHESIS_REASONING_EFFORT="$(sanitize_reasoning_effort "${OPENAI_SYNTHESIS_REASONING_EFFORT:-}")"
-          exec 3>&-
+          if [ -s "$SANITIZE_WARNINGS_FILE" ]; then
+            cat "$SANITIZE_WARNINGS_FILE"
+          fi
           if [ -z "$ANTHROPIC_MODEL" ]; then
             ANTHROPIC_MODEL="claude-sonnet-4-6"
           fi
