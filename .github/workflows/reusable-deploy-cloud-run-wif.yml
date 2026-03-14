@@ -16,11 +16,85 @@ on:
         description: 'Container image name (without registry prefix)'
         required: true
         type: string
+      deploy_project_id:
+        description: 'Cloud Run deploy project ID (defaults to secret GCP_PROJECT_ID)'
+        required: false
+        type: string
+        default: ''
+      artifact_project_id:
+        description: 'Artifact Registry project ID (defaults to deploy project)'
+        required: false
+        type: string
+        default: ''
+      artifact_location:
+        description: 'Artifact Registry location (defaults to Cloud Run region)'
+        required: false
+        type: string
+        default: ''
+      artifact_repository:
+        description: 'Artifact Registry repository name'
+        required: false
+        type: string
+        default: 'containers'
       dockerfile:
         description: 'Path to Dockerfile'
         required: false
         type: string
         default: 'Dockerfile'
+      environment_name:
+        description: 'GitHub Environment name for the deploy job'
+        required: false
+        type: string
+        default: ''
+      environment_url:
+        description: 'Optional GitHub Environment URL for the deploy job'
+        required: false
+        type: string
+        default: ''
+      runtime_service_account:
+        description: 'Optional runtime service account email for Cloud Run'
+        required: false
+        type: string
+        default: ''
+      wif_provider:
+        description: 'Optional WIF provider when caller stores auth metadata in vars'
+        required: false
+        type: string
+        default: ''
+      wif_service_account:
+        description: 'Optional WIF service account when caller stores auth metadata in vars'
+        required: false
+        type: string
+        default: ''
+      ingress:
+        description: 'Cloud Run ingress setting'
+        required: false
+        type: string
+        default: ''
+      memory:
+        description: 'Optional Cloud Run memory allocation override'
+        required: false
+        type: string
+        default: ''
+      cpu:
+        description: 'Optional Cloud Run CPU allocation override'
+        required: false
+        type: string
+        default: ''
+      timeout:
+        description: 'Optional Cloud Run request timeout override in seconds'
+        required: false
+        type: number
+        default: 0
+      port:
+        description: 'Optional Cloud Run container port override'
+        required: false
+        type: number
+        default: 0
+      allow_unauthenticated:
+        description: 'Allow unauthenticated access to the deployed service (true = public internet access). REQUIRED: callers must set this explicitly.'
+        required: true
+        type: boolean
       environment:
         description: 'Environment (staging/production)'
         required: false
@@ -39,18 +113,21 @@ on:
     secrets:
       WIF_PROVIDER:
         description: 'Workload Identity Federation provider'
-        required: true
+        required: false
       WIF_SERVICE_ACCOUNT:
         description: 'Service account email for WIF'
-        required: true
+        required: false
       GCP_PROJECT_ID:
         description: 'GCP Project ID'
-        required: true
+        required: false
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 30  # Build, scan, and deploy usually <15m; buffer for registry latency
+    environment:
+      name: ${{ inputs.environment_name != '' && inputs.environment_name || inputs.environment }}
+      url: ${{ inputs.environment_url != '' && inputs.environment_url || '' }}
     permissions:
       contents: read
       id-token: write  # Required for WIF OIDC token
@@ -60,29 +137,127 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
+      - name: Resolve WIF parameters
+        id: wif
+        shell: bash
+        env:
+          INPUT_WIF_PROVIDER: ${{ inputs.wif_provider }}
+          INPUT_WIF_SERVICE_ACCOUNT: ${{ inputs.wif_service_account }}
+          SECRET_WIF_PROVIDER: ${{ secrets.WIF_PROVIDER }}
+          SECRET_WIF_SERVICE_ACCOUNT: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+
+          # Canonical provider is intentionally pinned to the platform SSOT.
+          SSOT_WIF_PROVIDER="projects/671585034644/locations/global/workloadIdentityPools/github-actions/providers/github-oidc"
+
+          echo "::add-mask::$INPUT_WIF_PROVIDER"
+          echo "::add-mask::$INPUT_WIF_SERVICE_ACCOUNT"
+          echo "::add-mask::$SECRET_WIF_PROVIDER"
+          echo "::add-mask::$SECRET_WIF_SERVICE_ACCOUNT"
+
+          WIF_PROVIDER="${INPUT_WIF_PROVIDER:-$SECRET_WIF_PROVIDER}"
+          WIF_SERVICE_ACCOUNT="${INPUT_WIF_SERVICE_ACCOUNT:-$SECRET_WIF_SERVICE_ACCOUNT}"
+
+          if [ -z "$WIF_PROVIDER" ]; then
+            echo "::error::wif_provider is empty and secret WIF_PROVIDER is not set"
+            exit 1
+          fi
+
+          if [ -z "$WIF_SERVICE_ACCOUNT" ]; then
+            echo "::error::wif_service_account is empty and secret WIF_SERVICE_ACCOUNT is not set"
+            exit 1
+          fi
+
+          if [ "$WIF_PROVIDER" != "$SSOT_WIF_PROVIDER" ]; then
+            echo "::error::wif_provider must point to the SSOT provider in merglbot-seed (${SSOT_WIF_PROVIDER})."
+            exit 1
+          fi
+
+          if [[ "$WIF_SERVICE_ACCOUNT" == *@merglbot.iam.gserviceaccount.com ]]; then
+            echo "::error::wif_service_account points to a legacy service account in the DELETE_REQUESTED 'merglbot' project."
+            exit 1
+          fi
+
+          echo "::add-mask::$WIF_PROVIDER"
+          echo "::add-mask::$WIF_SERVICE_ACCOUNT"
+
+          {
+            printf 'wif_provider=%s\n' "$WIF_PROVIDER"
+            printf 'wif_service_account=%s\n' "$WIF_SERVICE_ACCOUNT"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Authenticate to GCP (WIF)
         id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
         with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ steps.wif.outputs.wif_provider }}
+          service_account: ${{ steps.wif.outputs.wif_service_account }}
           token_format: 'access_token'
+
+      - name: Resolve deployment parameters
+        id: deploy-params
+        shell: bash
+        env:
+          INPUT_DEPLOY_PROJECT_ID: ${{ inputs.deploy_project_id }}
+          INPUT_ARTIFACT_PROJECT_ID: ${{ inputs.artifact_project_id }}
+          INPUT_ARTIFACT_LOCATION: ${{ inputs.artifact_location }}
+          INPUT_ARTIFACT_REPOSITORY: ${{ inputs.artifact_repository }}
+          INPUT_REGION: ${{ inputs.region }}
+          SECRET_GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+
+          DEPLOY_PROJECT_ID="${INPUT_DEPLOY_PROJECT_ID:-$SECRET_GCP_PROJECT_ID}"
+          ARTIFACT_PROJECT_ID="${INPUT_ARTIFACT_PROJECT_ID:-$DEPLOY_PROJECT_ID}"
+          ARTIFACT_LOCATION="${INPUT_ARTIFACT_LOCATION:-$INPUT_REGION}"
+          ARTIFACT_REPOSITORY="${INPUT_ARTIFACT_REPOSITORY}"
+
+          if [ -z "$DEPLOY_PROJECT_ID" ]; then
+            echo "::error::deploy_project_id is empty and secret GCP_PROJECT_ID is not set"
+            exit 1
+          fi
+
+          if [ -z "$ARTIFACT_PROJECT_ID" ]; then
+            echo "::error::artifact_project_id could not be resolved"
+            exit 1
+          fi
+
+          if [ -z "$ARTIFACT_LOCATION" ]; then
+            echo "::error::artifact_location could not be resolved"
+            exit 1
+          fi
+
+          if [ -z "$ARTIFACT_REPOSITORY" ]; then
+            echo "::error::artifact_repository could not be resolved"
+            exit 1
+          fi
+
+          {
+            printf 'DEPLOY_PROJECT_ID=%s\n' "$DEPLOY_PROJECT_ID"
+            printf 'ARTIFACT_PROJECT_ID=%s\n' "$ARTIFACT_PROJECT_ID"
+            printf 'ARTIFACT_LOCATION=%s\n' "$ARTIFACT_LOCATION"
+            printf 'ARTIFACT_REPOSITORY=%s\n' "$ARTIFACT_REPOSITORY"
+          } >> "$GITHUB_ENV"
 
       - name: Setup gcloud CLI
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db  # v3.0.1
         with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          project_id: ${{ env.DEPLOY_PROJECT_ID }}
 
       - name: Configure Docker for Artifact Registry
         run: |
-          gcloud auth configure-docker ${{ inputs.region }}-docker.pkg.dev --quiet
+          gcloud auth configure-docker "${ARTIFACT_LOCATION}-docker.pkg.dev" --quiet
 
       - name: Build Container Image
+        env:
+          INPUT_DOCKERFILE: ${{ inputs.dockerfile }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
         run: |
-          IMAGE="${{ inputs.region }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/containers/${{ inputs.image_name }}:${{ github.sha }}"
-          docker build -t $IMAGE -f ${{ inputs.dockerfile }} .
-          docker push $IMAGE
-          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          IMAGE="${ARTIFACT_LOCATION}-docker.pkg.dev/${ARTIFACT_PROJECT_ID}/${ARTIFACT_REPOSITORY}/${INPUT_IMAGE_NAME}:${{ github.sha }}"
+          docker build -t "$IMAGE" -f "$INPUT_DOCKERFILE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
       # Container Security: Trivy scan with SARIF upload
       - name: Run Trivy vulnerability scanner
@@ -104,24 +279,114 @@ jobs:
           sarif_file: 'trivy-results.sarif'
 
       - name: Deploy to Cloud Run
+        env:
+          INPUT_SERVICE_NAME: ${{ inputs.service_name }}
+          INPUT_REGION: ${{ inputs.region }}
+          INPUT_ENVIRONMENT: ${{ inputs.environment_name != '' && inputs.environment_name || inputs.environment }}
+          INPUT_MIN_INSTANCES: ${{ inputs.min_instances }}
+          INPUT_MAX_INSTANCES: ${{ inputs.max_instances }}
+          INPUT_TIMEOUT: ${{ inputs.timeout }}
+          INPUT_PORT: ${{ inputs.port }}
+          INPUT_RUNTIME_SERVICE_ACCOUNT: ${{ inputs.runtime_service_account }}
+          INPUT_INGRESS: ${{ inputs.ingress }}
+          INPUT_MEMORY: ${{ inputs.memory }}
+          INPUT_CPU: ${{ inputs.cpu }}
+          INPUT_ALLOW_UNAUTHENTICATED: ${{ inputs.allow_unauthenticated }}
         run: |
-          gcloud run deploy ${{ inputs.service_name }} \
-            --image ${{ env.IMAGE }} \
-            --region ${{ inputs.region }} \
-            --platform managed \
-            --min-instances ${{ inputs.min_instances }} \
-            --max-instances ${{ inputs.max_instances }} \
-            --allow-unauthenticated \
-            --set-env-vars="ENVIRONMENT=${{ inputs.environment }}" \
-            --quiet
+          set -euo pipefail
+
+          NORMALIZED_DEPLOY_ENVIRONMENT="$(printf '%s' "${INPUT_ENVIRONMENT}" | tr '[:upper:]' '[:lower:]')"
+
+          deploy_args=(
+            "${INPUT_SERVICE_NAME}"
+            "--image" "${IMAGE}"
+            "--region" "${INPUT_REGION}"
+            "--project" "${DEPLOY_PROJECT_ID}"
+            "--platform" "managed"
+            "--min-instances" "${INPUT_MIN_INSTANCES}"
+            "--max-instances" "${INPUT_MAX_INSTANCES}"
+            "--set-env-vars=ENVIRONMENT=${INPUT_ENVIRONMENT}"
+            "--quiet"
+          )
+
+          if [ -n "${INPUT_RUNTIME_SERVICE_ACCOUNT}" ]; then
+            if ! [[ "${INPUT_RUNTIME_SERVICE_ACCOUNT}" =~ ^[^[:space:]@]+@[^[:space:]@]+\\.iam\\.gserviceaccount\\.com$ ]]; then
+              echo "::error::runtime_service_account must be a service account email ending with .iam.gserviceaccount.com, got '${INPUT_RUNTIME_SERVICE_ACCOUNT}'"
+              exit 1
+            fi
+            deploy_args+=("--service-account" "${INPUT_RUNTIME_SERVICE_ACCOUNT}")
+          fi
+
+          if [ -n "${INPUT_INGRESS}" ]; then
+            case "${INPUT_INGRESS}" in
+              all|internal|internal-and-cloud-load-balancing)
+                ;;
+              *)
+                echo "::error::ingress must be one of: all, internal, internal-and-cloud-load-balancing. Got '${INPUT_INGRESS}'"
+                exit 1
+                ;;
+            esac
+            deploy_args+=("--ingress" "${INPUT_INGRESS}")
+          fi
+
+          if [ -n "${INPUT_MEMORY}" ]; then
+            if ! [[ "${INPUT_MEMORY}" =~ ^[0-9]+(Mi|Gi)$ ]]; then
+              echo "::error::memory must match pattern NNNMi or NNNGi, got '${INPUT_MEMORY}'"
+              exit 1
+            fi
+            deploy_args+=("--memory" "${INPUT_MEMORY}")
+          fi
+
+          if [ -n "${INPUT_CPU}" ]; then
+            if ! [[ "${INPUT_CPU}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+              echo "::error::cpu must be a positive number (e.g. 1, 2, 0.5), got '${INPUT_CPU}'"
+              exit 1
+            fi
+            deploy_args+=("--cpu" "${INPUT_CPU}")
+          fi
+
+          if ! [[ "${INPUT_TIMEOUT}" =~ ^[0-9]+$ ]]; then
+            echo "::error::timeout must be a non-negative integer, got '${INPUT_TIMEOUT}'"
+            exit 1
+          fi
+          if [ "${INPUT_TIMEOUT}" -gt 0 ]; then
+            deploy_args+=("--timeout" "${INPUT_TIMEOUT}")
+          fi
+
+          if ! [[ "${INPUT_PORT}" =~ ^[0-9]+$ ]]; then
+            echo "::error::port must be a non-negative integer, got '${INPUT_PORT}'"
+            exit 1
+          fi
+          if [ "${INPUT_PORT}" -gt 0 ]; then
+            deploy_args+=("--port" "${INPUT_PORT}")
+          fi
+
+          if [ "${INPUT_ALLOW_UNAUTHENTICATED}" = "true" ] && [ "${NORMALIZED_DEPLOY_ENVIRONMENT}" = "production" ]; then
+            if [ "${INPUT_INGRESS}" != "internal-and-cloud-load-balancing" ]; then
+              echo "::error::allow_unauthenticated=true is only permitted for production when ingress=internal-and-cloud-load-balancing."
+              exit 1
+            fi
+          fi
+
+          if [ "${INPUT_ALLOW_UNAUTHENTICATED}" = "true" ]; then
+            deploy_args+=("--allow-unauthenticated")
+          else
+            deploy_args+=("--no-allow-unauthenticated")
+          fi
+
+          gcloud run deploy "${deploy_args[@]}"
 
       - name: Get Service URL
         id: url
+        env:
+          INPUT_SERVICE_NAME: ${{ inputs.service_name }}
+          INPUT_REGION: ${{ inputs.region }}
         run: |
-          URL=$(gcloud run services describe ${{ inputs.service_name }} \
-            --region ${{ inputs.region }} \
+          URL=$(gcloud run services describe "${INPUT_SERVICE_NAME}" \
+            --region "${INPUT_REGION}" \
+            --project "${DEPLOY_PROJECT_ID}" \
             --format 'value(status.url)')
-          echo "url=$URL" >> $GITHUB_OUTPUT
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "🚀 Service deployed to: $URL"
 
       - name: Health Check
