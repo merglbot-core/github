@@ -72,25 +72,25 @@ on:
         type: string
         default: ''
       memory:
-        description: 'Cloud Run memory allocation'
+        description: 'Optional Cloud Run memory allocation override'
         required: false
         type: string
-        default: '512Mi'
+        default: ''
       cpu:
-        description: 'Cloud Run CPU allocation'
+        description: 'Optional Cloud Run CPU allocation override'
         required: false
         type: string
-        default: '1'
+        default: ''
       timeout:
-        description: 'Cloud Run request timeout in seconds'
+        description: 'Optional Cloud Run request timeout override in seconds'
         required: false
         type: number
-        default: 300
+        default: 0
       port:
-        description: 'Cloud Run container port'
+        description: 'Optional Cloud Run container port override'
         required: false
         type: number
-        default: 8080
+        default: 0
       allow_unauthenticated:
         description: 'Allow unauthenticated access to the deployed service (true = public internet access). REQUIRED: callers must set this explicitly.'
         required: true
@@ -148,6 +148,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Canonical provider is intentionally pinned to the platform SSOT.
           SSOT_WIF_PROVIDER="projects/671585034644/locations/global/workloadIdentityPools/github-actions/providers/github-oidc"
 
           echo "::add-mask::$INPUT_WIF_PROVIDER"
@@ -295,6 +296,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          NORMALIZED_ENVIRONMENT="$(printf '%s' "${INPUT_GITHUB_ENVIRONMENT}" | tr '[:upper:]' '[:lower:]')"
+
           deploy_args=(
             "${INPUT_SERVICE_NAME}"
             "--image" "${IMAGE}"
@@ -347,24 +350,23 @@ jobs:
             echo "::error::timeout must be a non-negative integer, got '${INPUT_TIMEOUT}'"
             exit 1
           fi
-          if [ "${INPUT_TIMEOUT}" -le 0 ]; then
-            echo "::error::timeout must be a positive integer. Omit the input to use the default. Got '${INPUT_TIMEOUT}'"
-            exit 1
+          if [ "${INPUT_TIMEOUT}" -gt 0 ]; then
+            deploy_args+=("--timeout" "${INPUT_TIMEOUT}")
           fi
-          deploy_args+=("--timeout" "${INPUT_TIMEOUT}")
 
           if ! [[ "${INPUT_PORT}" =~ ^[0-9]+$ ]]; then
             echo "::error::port must be a non-negative integer, got '${INPUT_PORT}'"
             exit 1
           fi
-          if [ "${INPUT_PORT}" -le 0 ]; then
-            echo "::error::port must be a positive integer. Omit the input to use the default. Got '${INPUT_PORT}'"
-            exit 1
+          if [ "${INPUT_PORT}" -gt 0 ]; then
+            deploy_args+=("--port" "${INPUT_PORT}")
           fi
-          deploy_args+=("--port" "${INPUT_PORT}")
 
-          if [ "${INPUT_ALLOW_UNAUTHENTICATED}" = "true" ] && [ "${INPUT_GITHUB_ENVIRONMENT}" = "production" ]; then
-            echo "::warning::Deploying with --allow-unauthenticated to production environment"
+          if [ "${INPUT_ALLOW_UNAUTHENTICATED}" = "true" ] && [ "${NORMALIZED_ENVIRONMENT}" = "production" ]; then
+            if [ "${INPUT_INGRESS}" != "internal-and-cloud-load-balancing" ]; then
+              echo "::error::allow_unauthenticated=true is only permitted for production when ingress=internal-and-cloud-load-balancing."
+              exit 1
+            fi
           fi
 
           if [ "${INPUT_ALLOW_UNAUTHENTICATED}" = "true" ]; then
