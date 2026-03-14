@@ -282,7 +282,7 @@ jobs:
         env:
           INPUT_SERVICE_NAME: ${{ inputs.service_name }}
           INPUT_REGION: ${{ inputs.region }}
-          INPUT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_ENVIRONMENT: ${{ inputs.environment_name != '' && inputs.environment_name || inputs.environment }}
           INPUT_MIN_INSTANCES: ${{ inputs.min_instances }}
           INPUT_MAX_INSTANCES: ${{ inputs.max_instances }}
           INPUT_TIMEOUT: ${{ inputs.timeout }}
