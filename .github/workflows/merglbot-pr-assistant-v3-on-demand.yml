@@ -165,7 +165,7 @@ jobs:
             if [ "$IS_WORKFLOW_DISPATCH" != "true" ]; then
               comment_body="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")"
             fi
-            printf '%s' "$comment_body" | python3 -c 'import sys; flag = sys.argv[1].lower(); body = sys.stdin.read().lower(); delimiters = [" ", "\n", "\r", "\t", ".", ",", "!", "?", ")", "]", ":", ";"]; raise SystemExit(0 if body.endswith(flag) or any(f"{flag}{delimiter}" in body for delimiter in delimiters) else 1)' "$flag"
+            printf '%s' "$comment_body" | python3 -c 'import re, sys; flag = re.escape((sys.argv[1] or "").strip().lower()); body = sys.stdin.read().lower(); pattern = re.compile(rf"(?<![A-Za-z0-9_-]){flag}(?![A-Za-z0-9_-])"); raise SystemExit(0 if pattern.search(body) else 1)' "$flag"
           }
 
           if [ "$IS_WORKFLOW_DISPATCH" == "true" ]; then
@@ -341,96 +341,96 @@ jobs:
             fi
           fi
           
-            # Use printf to avoid echo interpreting user-controlled content as flags (-n/-e)
-            printf '%s\n' "$PR_TITLE" > pr_title.txt
-            printf '%s\n' "$PR_BODY" > pr_body.txt
-            printf '%s\n' "$PR_AUTHOR" > pr_author.txt
-            printf '%s\n' "$PR_ADDITIONS" > pr_additions.txt
-            printf '%s\n' "$PR_DELETIONS" > pr_deletions.txt
-            printf '%s\n' "$PR_FILES" > pr_files_count.txt
-            printf '%s\n' "$PR_BASE_SHA" > pr_base_sha.txt
-            printf '%s\n' "$PR_HEAD_SHA" > pr_head_sha.txt
+          # Use printf to avoid echo interpreting user-controlled content as flags (-n/-e)
+          printf '%s\n' "$PR_TITLE" > pr_title.txt
+          printf '%s\n' "$PR_BODY" > pr_body.txt
+          printf '%s\n' "$PR_AUTHOR" > pr_author.txt
+          printf '%s\n' "$PR_ADDITIONS" > pr_additions.txt
+          printf '%s\n' "$PR_DELETIONS" > pr_deletions.txt
+          printf '%s\n' "$PR_FILES" > pr_files_count.txt
+          printf '%s\n' "$PR_BASE_SHA" > pr_base_sha.txt
+          printf '%s\n' "$PR_HEAD_SHA" > pr_head_sha.txt
 
-            # CI / checks summary (best-effort)
-            CHECKS_DATA_AVAILABLE="false"
-            CHECKS_FAILED="0"
-            CHECKS_PENDING="0"
+          # CI / checks summary (best-effort)
+          CHECKS_DATA_AVAILABLE="false"
+          CHECKS_FAILED="0"
+          CHECKS_PENDING="0"
 
-            if [ -n "${PR_HEAD_SHA:-}" ]; then
-              if (
-                set -o pipefail
-                gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null \
-                  | jq -s '{check_runs: (map(.check_runs // []) | add // [])}' > check_runs.json 2>/dev/null
-              ); then
-                if jq -e '.check_runs | type == "array"' check_runs.json > /dev/null 2>&1; then
-                  # Exclude check-runs for THIS workflow run so we don't count ourselves as "pending" while gathering context.
-                  jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
-                    def run_id:
-                      (try ((.details_url? // "") | tostring | capture("/actions/runs/(?<id>[0-9]+)(/|$)").id) catch "");
-                    def is_current_run:
-                      ($current_run_id != "" and run_id == $current_run_id);
-                    (.check_runs // [])
-                    | map(select(is_current_run | not))
-                    | map(select(.name != null))
-                    | map("- " + .name + ": " + ((.conclusion // .status // "UNKNOWN") | tostring | ascii_upcase))
-                    | .[]
-                  ' check_runs.json > pr_checks_summary.txt 2>/dev/null || true
+          if [ -n "${PR_HEAD_SHA:-}" ]; then
+            if (
+              set -o pipefail
+              gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null \
+                | jq -s '{check_runs: (map(.check_runs // []) | add // [])}' > check_runs.json 2>/dev/null
+            ); then
+              if jq -e '.check_runs | type == "array"' check_runs.json > /dev/null 2>&1; then
+                # Exclude check-runs for THIS workflow run so we don't count ourselves as "pending" while gathering context.
+                jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
+                  def run_id:
+                    (try ((.details_url? // "") | tostring | capture("/actions/runs/(?<id>[0-9]+)(/|$)").id) catch "");
+                  def is_current_run:
+                    ($current_run_id != "" and run_id == $current_run_id);
+                  (.check_runs // [])
+                  | map(select(is_current_run | not))
+                  | map(select(.name != null))
+                  | map("- " + .name + ": " + ((.conclusion // .status // "UNKNOWN") | tostring | ascii_upcase))
+                  | .[]
+                ' check_runs.json > pr_checks_summary.txt 2>/dev/null || true
 
-                  CHECKS_FAILED=$(jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
-                    def run_id:
-                      (try ((.details_url? // "") | tostring | capture("/actions/runs/(?<id>[0-9]+)(/|$)").id) catch "");
-                    def is_current_run:
-                      ($current_run_id != "" and run_id == $current_run_id);
-                    [ (.check_runs // [])[]?
-                      | select(is_current_run | not)
-                      | ((.conclusion // .status // "") | ascii_downcase)
-                      | select(. == "failure" or . == "cancelled" or . == "timed_out" or . == "error")
-                    ] | length
-                  ' check_runs.json 2>/dev/null || echo "0")
-                  CHECKS_PENDING=$(jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
-                    def run_id:
-                      (try ((.details_url? // "") | tostring | capture("/actions/runs/(?<id>[0-9]+)(/|$)").id) catch "");
-                    def is_current_run:
-                      ($current_run_id != "" and run_id == $current_run_id);
-                    [ (.check_runs // [])[]?
-                      | select(is_current_run | not)
-                      | ((.conclusion // .status // "") | ascii_downcase)
-                      | select(. == "pending" or . == "in_progress" or . == "queued")
-                    ] | length
-                  ' check_runs.json 2>/dev/null || echo "0")
+                CHECKS_FAILED=$(jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
+                  def run_id:
+                    (try ((.details_url? // "") | tostring | capture("/actions/runs/(?<id>[0-9]+)(/|$)").id) catch "");
+                  def is_current_run:
+                    ($current_run_id != "" and run_id == $current_run_id);
+                  [ (.check_runs // [])[]?
+                    | select(is_current_run | not)
+                    | ((.conclusion // .status // "") | ascii_downcase)
+                    | select(. == "failure" or . == "cancelled" or . == "timed_out" or . == "error")
+                  ] | length
+                ' check_runs.json 2>/dev/null || echo "0")
+                CHECKS_PENDING=$(jq -r --arg current_run_id "${GITHUB_RUN_ID:-}" '
+                  def run_id:
+                    (try ((.details_url? // "") | tostring | capture("/actions/runs/(?<id>[0-9]+)(/|$)").id) catch "");
+                  def is_current_run:
+                    ($current_run_id != "" and run_id == $current_run_id);
+                  [ (.check_runs // [])[]?
+                    | select(is_current_run | not)
+                    | ((.conclusion // .status // "") | ascii_downcase)
+                    | select(. == "pending" or . == "in_progress" or . == "queued")
+                  ] | length
+                ' check_runs.json 2>/dev/null || echo "0")
 
-                  if [ -s pr_checks_summary.txt ]; then
-                    CHECKS_DATA_AVAILABLE="true"
-                  fi
-                else
-                  CHECK_RUNS_JSON_SIZE="$(wc -c < check_runs.json 2>/dev/null || echo "0")"
-                  echo "WARN: check_runs.json invalid (size=${CHECK_RUNS_JSON_SIZE}B); skipping check-runs fallback" >&2
-                fi
-              fi
-            fi
-
-            if [ "$CHECKS_DATA_AVAILABLE" != "true" ] && jq -e '.statusCheckRollup != null' pr_metadata.json > /dev/null 2>&1; then
-              if jq -r '
-                (.statusCheckRollup.contexts // .statusCheckRollup // [])
-                | map(select(.name != null))
-                | map("- " + .name + ": " + ((.conclusion // .state // "UNKNOWN") | tostring | ascii_upcase))
-                | .[]
-              ' pr_metadata.json > pr_checks_summary.txt 2>/dev/null; then
                 if [ -s pr_checks_summary.txt ]; then
-                  CHECKS_FAILED=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "failure" or . == "cancelled" or . == "timed_out" or . == "error") ] | length' pr_metadata.json 2>/dev/null || echo "0")
-                  CHECKS_PENDING=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "pending" or . == "in_progress" or . == "queued") ] | length' pr_metadata.json 2>/dev/null || echo "0")
                   CHECKS_DATA_AVAILABLE="true"
                 fi
+              else
+                CHECK_RUNS_JSON_SIZE="$(wc -c < check_runs.json 2>/dev/null || echo "0")"
+                echo "WARN: check_runs.json invalid (size=${CHECK_RUNS_JSON_SIZE}B); skipping check-runs fallback" >&2
               fi
             fi
+          fi
 
-            if [ ! -s pr_checks_summary.txt ]; then
-              echo "No CI/checks data available." > pr_checks_summary.txt
+          if [ "$CHECKS_DATA_AVAILABLE" != "true" ] && jq -e '.statusCheckRollup != null' pr_metadata.json > /dev/null 2>&1; then
+            if jq -r '
+              (.statusCheckRollup.contexts // .statusCheckRollup // [])
+              | map(select(.name != null))
+              | map("- " + .name + ": " + ((.conclusion // .state // "UNKNOWN") | tostring | ascii_upcase))
+              | .[]
+            ' pr_metadata.json > pr_checks_summary.txt 2>/dev/null; then
+              if [ -s pr_checks_summary.txt ]; then
+                CHECKS_FAILED=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "failure" or . == "cancelled" or . == "timed_out" or . == "error") ] | length' pr_metadata.json 2>/dev/null || echo "0")
+                CHECKS_PENDING=$(jq -r '[ (.statusCheckRollup.contexts // .statusCheckRollup // [])[]? | ((.conclusion // .state // "") | ascii_downcase) | select(. == "pending" or . == "in_progress" or . == "queued") ] | length' pr_metadata.json 2>/dev/null || echo "0")
+                CHECKS_DATA_AVAILABLE="true"
+              fi
             fi
+          fi
 
-            printf '%s\n' "$CHECKS_FAILED" > pr_checks_failed_count.txt
-            printf '%s\n' "$CHECKS_PENDING" > pr_checks_pending_count.txt
-            printf '%s\n' "$CHECKS_DATA_AVAILABLE" > pr_checks_data_available.txt
+          if [ ! -s pr_checks_summary.txt ]; then
+            echo "No CI/checks data available." > pr_checks_summary.txt
+          fi
+
+          printf '%s\n' "$CHECKS_FAILED" > pr_checks_failed_count.txt
+          printf '%s\n' "$CHECKS_PENDING" > pr_checks_pending_count.txt
+          printf '%s\n' "$CHECKS_DATA_AVAILABLE" > pr_checks_data_available.txt
           
           echo "PR_BASE_SHA=$PR_BASE_SHA" >> "$GITHUB_ENV"
           echo "PR_HEAD_SHA=$PR_HEAD_SHA" >> "$GITHUB_ENV"
@@ -654,7 +654,7 @@ jobs:
             _GH="g""h"
             _GHP="${_GH}""p_"
             # Keep only documented short GitHub token classes here; github_pat_ is handled separately below.
-            _GH_CLASS_PREFIX="${_GH}""[oprsu]_"
+            _GH_CLASS_PREFIX="${_GH}""[oprstu]_"
             _GH_PAT_PREFIX="git""hub""_pat_"
             _SK_PREFIX="s""k-"
             _PRIVATE_WORD="PRIVATE"" KEY"
@@ -822,6 +822,10 @@ jobs:
             echo "WARN: PR number unavailable; cannot post failure comment" >&2
             exit 0
           fi
+          if ! [[ "$PR_NUM" =~ ^[0-9]+$ ]]; then
+            echo "WARN: Invalid PR number; cannot post failure comment" >&2
+            exit 0
+          fi
           REASON="unknown"
           ANTHROPIC_SKIP_REASON=""
           OPENAI_SKIP_REASON=""
@@ -930,23 +934,26 @@ jobs:
             printf '%s' "$raw"
           }
 
+          SANITIZED_REASONING_EFFORT=""
           sanitize_reasoning_effort() {
             local raw="${1:-}"
             raw="$(printf '%s' "$raw" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            SANITIZED_REASONING_EFFORT=""
             case "$raw" in
-              low|medium|high|none) printf '%s' "$raw" ;;
+              low|medium|high|none) SANITIZED_REASONING_EFFORT="$raw" ;;
               xhigh)
                 printf '%s\n' "::warning::reasoning_effort=xhigh is deprecated; using high" >> "$SANITIZE_WARNINGS_FILE"
-                printf '%s' "high"
+                SANITIZED_REASONING_EFFORT="high"
                 ;;
-              *) printf '%s' "" ;;
+              *) ;;
             esac
           }
 
           ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
           OPENAI_SYNTHESIS_MODEL="$(sanitize_model "${OPENAI_SYNTHESIS_MODEL:-}")"
-          OPENAI_SYNTHESIS_REASONING_EFFORT="$(sanitize_reasoning_effort "${OPENAI_SYNTHESIS_REASONING_EFFORT:-}")"
+          sanitize_reasoning_effort "${OPENAI_SYNTHESIS_REASONING_EFFORT:-}"
+          OPENAI_SYNTHESIS_REASONING_EFFORT="$SANITIZED_REASONING_EFFORT"
           if [ -s "$SANITIZE_WARNINGS_FILE" ]; then
             cat "$SANITIZE_WARNINGS_FILE"
           fi
@@ -1435,23 +1442,26 @@ jobs:
             printf '%s' "$raw"
           }
 
+          SANITIZED_REASONING_EFFORT=""
           sanitize_reasoning_effort() {
             local raw="${1:-}"
             raw="$(printf '%s' "$raw" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            SANITIZED_REASONING_EFFORT=""
             case "$raw" in
-              low|medium|high|none) printf '%s' "$raw" ;;
+              low|medium|high|none) SANITIZED_REASONING_EFFORT="$raw" ;;
               xhigh)
                 printf '%s\n' "::warning::reasoning_effort=xhigh is deprecated; using high" >> "$SANITIZE_WARNINGS_FILE"
-                printf '%s' "high"
+                SANITIZED_REASONING_EFFORT="high"
                 ;;
-              *) printf '%s' "" ;;
+              *) ;;
             esac
           }
 
           ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
           OPENAI_SYNTHESIS_MODEL="$(sanitize_model "${OPENAI_SYNTHESIS_MODEL:-}")"
-          OPENAI_SYNTHESIS_REASONING_EFFORT="$(sanitize_reasoning_effort "${OPENAI_SYNTHESIS_REASONING_EFFORT:-}")"
+          sanitize_reasoning_effort "${OPENAI_SYNTHESIS_REASONING_EFFORT:-}"
+          OPENAI_SYNTHESIS_REASONING_EFFORT="$SANITIZED_REASONING_EFFORT"
           if [ -s "$SANITIZE_WARNINGS_FILE" ]; then
             cat "$SANITIZE_WARNINGS_FILE"
           fi

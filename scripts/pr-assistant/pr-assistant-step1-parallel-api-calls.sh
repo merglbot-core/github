@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-: "${REVIEW_MODE:=full}"
+: "${REVIEW_MODE:=light}"
 : "${PR_NUMBER:?PR_NUMBER is required}"
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
 : "${GITHUB_ENV:?GITHUB_ENV is required}"
@@ -31,6 +31,11 @@ cleanup() {
   fi
   set +e
   if [ -n "${ANTHROPIC_PID:-}" ] && kill -0 "$ANTHROPIC_PID" 2>/dev/null; then
+    while IFS= read -r child_pid; do
+      if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
+        kill "$child_pid" 2>/dev/null || true
+      fi
+    done < <(descendant_pids "$ANTHROPIC_PID" 2>/dev/null || true)
     kill "$ANTHROPIC_PID" 2>/dev/null || true
     wait "$ANTHROPIC_PID" 2>/dev/null || true
   fi
@@ -58,6 +63,55 @@ RAW_OPENAI_CHAT_COMPLETIONS_URL="${OPENAI_CHAT_COMPLETIONS_URL:-$DEFAULT_OPENAI_
 
 trim_ws() {
   printf '%s' "${1:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+normalize_api_error_message() {
+  printf '%s' "${1:-}" | tr '\r\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
+descendant_pids() {
+  local root_pid="${1:-}"
+  if ! [[ "$root_pid" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+  python3 - "$root_pid" <<'PY'
+import subprocess
+import sys
+
+root = sys.argv[1]
+try:
+    ps_output = subprocess.check_output(["ps", "-eo", "pid=,ppid="], text=True)
+except Exception:
+    raise SystemExit(0)
+
+children = {}
+for line in ps_output.splitlines():
+    parts = line.split()
+    if len(parts) != 2:
+        continue
+    pid, ppid = parts
+    if not pid.isdigit() or not ppid.isdigit():
+        continue
+    children.setdefault(ppid, []).append(pid)
+
+result = []
+stack = [(root, False)]
+visited = set()
+while stack:
+    pid, expanded = stack.pop()
+    if not expanded:
+        if pid in visited:
+            continue
+        visited.add(pid)
+        stack.append((pid, True))
+        for child in children.get(pid, []):
+            stack.append((child, False))
+    elif pid != root:
+        result.append(pid)
+
+for pid in result:
+    print(pid)
+PY
 }
 
 resolve_step1_reason_file() {
@@ -575,6 +629,11 @@ echo "  PR Body: ${#PR_BODY} chars"
 echo "  PR Diff: ${#PR_DIFF} chars"
 echo "  Bugbot Sources: $BUGBOT_SOURCES ($BUGBOT_COUNT)"
 
+PR_DIFF_LINE_COUNT="0"
+if [ -n "${PR_DIFF_SOURCE_FILE:-}" ] && [ -f "$PR_DIFF_SOURCE_FILE" ]; then
+  PR_DIFF_LINE_COUNT="$(wc -l < "$PR_DIFF_SOURCE_FILE" 2>/dev/null | tr -d ' ' || echo 0)"
+fi
+
 if [ "${REVIEW_MODE}" == "light" ]; then
   REVIEW_DEPTH="LIGHT"
   OUTPUT_INSTRUCTIONS="Output a CONCISE review (max 500 words). Focus only on critical and high priority issues."
@@ -731,6 +790,17 @@ printf '%s\n' ""
 printf '%s\n' "PR Number: #$PR_NUMBER"
 printf '%s\n' "Author: @$PR_AUTHOR"
 printf '%s\n' "Changes: +$PR_ADDITIONS / -$PR_DELETIONS in $PR_FILES_COUNT files"
+printf '%s\n' ""
+printf '%s\n' "## DIFF EVIDENCE"
+printf '%s\n' ""
+printf '%s\n' "Diff Source File: ${PR_DIFF_SOURCE_FILE:-none}"
+printf '%s\n' "Diff Size: ${PR_DIFF_SIZE:-0} chars"
+printf '%s\n' "Diff Lines: ${PR_DIFF_LINE_COUNT:-0}"
+if [ "${PR_DIFF_SIZE:-0}" -gt 0 ]; then
+  printf '%s\n' "Use the non-zero diff metadata below as evidence that the patch content is present."
+else
+  printf '%s\n' "The diff block below is empty; only in that case may you claim the patch content is missing."
+fi
 printf '%s\n' ""
 printf '%s\n' "## UNTRUSTED INPUT (PROMPT INJECTION WARNING)"
 printf '%s\n' ""
@@ -1197,6 +1267,7 @@ else
       if json_has_error_object "$OPENAI_RESP"; then
         # err_msg is used only for local retry detection; logging stays redacted via log_api_error_summary.
         err_msg="$(printf '%s' "$OPENAI_RESP" | jq -r '.error.message // "unknown error"' 2>/dev/null || echo 'unknown error')"
+        err_msg="$(normalize_api_error_message "$err_msg")"
         if printf '%s' "$err_msg" | grep -Eqi 'reasoning[_ ]effort'; then
           echo "  WARN: Chat Completions rejected reasoning_effort; retrying without it." >&2
 

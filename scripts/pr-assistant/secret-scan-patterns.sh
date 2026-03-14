@@ -15,7 +15,7 @@
 _GH="g""h"
 _GHP="${_GH}""p_"
 # Keep only documented short GitHub token classes here; github_pat_ is handled separately below.
-_GH_TOKEN_PREFIX="${_GH}""[oprsu]_"
+_GH_TOKEN_PREFIX="${_GH}""[oprstu]_"
 _GITHUB_PAT_PREFIX="github""_pat_"
 _SK_PREFIX="s""k-"
 _GENERIC_API_KEY_PREFIX="api_ke""y_"
@@ -36,7 +36,8 @@ _GENERIC_KEY="(^|[^[:alnum:]_])(${_GENERIC_API_KEY_PREFIX}|${_GENERIC_SECRET_KEY
 _LEGACY_GENERIC_KEY_STRICT_RX='(^|[^[:alnum:]_])key_[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])'
 _AWS_ACCESS_KEY="(^|[^[:alnum:]_])AKIA[0-9A-Z]{16}($|[^[:alnum:]_])"
 _GOOGLE_API_KEY="(^|[^[:alnum:]_])AIza[0-9A-Za-z_-]{30,}($|[^[:alnum:]_])"
-_GOOGLE_OAUTH_REFRESH="(^|[^[:alnum:]_])ya29\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
+_GOOGLE_REFRESH_PREFIX="ya""29\\."
+_GOOGLE_OAUTH_REFRESH="(^|[^[:alnum:]_])${_GOOGLE_REFRESH_PREFIX}[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
 _OPENAI_PROJECT_KEY="(^|[^[:alnum:]_])${_SK_PREFIX}(proj|ant)-[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
 _OPENAI_KEY="(^|[^[:alnum:]_])${_SK_PREFIX}[A-Za-z0-9_-]{30,}($|[^[:alnum:]_])"
 
