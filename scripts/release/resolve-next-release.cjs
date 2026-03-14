@@ -122,13 +122,27 @@ function commandOutput(command, args, options = {}) {
   }
 }
 
-function ghApi(path, allowFailure = false) {
+function ghApi(path, allow404 = false) {
   const env = {
     ...process.env,
     GH_TOKEN: process.env.GH_TOKEN || process.env.GITHUB_TOKEN || '',
   };
-  const raw = commandOutput('gh', ['api', path], { env, allowFailure });
-  return raw ? JSON.parse(raw) : null;
+
+  try {
+    const raw = execFileSync('gh', ['api', path], {
+      cwd: process.cwd(),
+      env,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    return raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    const stderr = error.stderr ? String(error.stderr).trim() : '';
+    if (allow404 && /404|Not Found/i.test(stderr)) {
+      return null;
+    }
+    throw new Error(`GitHub API request failed for ${path}: ${stderr || error.message}`);
+  }
 }
 
 function getHeadSha() {
