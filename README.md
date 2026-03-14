@@ -24,7 +24,7 @@ jobs:
     # Default policy: pin to an immutable merged commit SHA.
     # Use a stable tag only if that workflow has an explicitly approved versioned release channel.
     # For reusable-deploy-cloud-run-wif.yml, current platform policy is merged SHA pinning only.
-    uses: merglbot-core/github/.github/workflows/deploy-cloud-run.yml@<commit_sha>
+    uses: merglbot-core/github/.github/workflows/reusable-deploy-cloud-run-wif.yml@<commit_sha>
     with:
       service-name: my-service
       region: europe-west1
