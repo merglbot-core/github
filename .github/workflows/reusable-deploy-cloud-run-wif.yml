@@ -288,7 +288,6 @@ jobs:
           INPUT_TIMEOUT: ${{ inputs.timeout }}
           INPUT_PORT: ${{ inputs.port }}
           INPUT_RUNTIME_SERVICE_ACCOUNT: ${{ inputs.runtime_service_account }}
-          INPUT_GITHUB_ENVIRONMENT: ${{ inputs.environment_name != '' && inputs.environment_name || inputs.environment }}
           INPUT_INGRESS: ${{ inputs.ingress }}
           INPUT_MEMORY: ${{ inputs.memory }}
           INPUT_CPU: ${{ inputs.cpu }}
@@ -296,7 +295,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          NORMALIZED_ENVIRONMENT="$(printf '%s' "${INPUT_GITHUB_ENVIRONMENT}" | tr '[:upper:]' '[:lower:]')"
+          NORMALIZED_DEPLOY_ENVIRONMENT="$(printf '%s' "${INPUT_ENVIRONMENT}" | tr '[:upper:]' '[:lower:]')"
 
           deploy_args=(
             "${INPUT_SERVICE_NAME}"
@@ -362,7 +361,7 @@ jobs:
             deploy_args+=("--port" "${INPUT_PORT}")
           fi
 
-          if [ "${INPUT_ALLOW_UNAUTHENTICATED}" = "true" ] && [ "${NORMALIZED_ENVIRONMENT}" = "production" ]; then
+          if [ "${INPUT_ALLOW_UNAUTHENTICATED}" = "true" ] && [ "${NORMALIZED_DEPLOY_ENVIRONMENT}" = "production" ]; then
             if [ "${INPUT_INGRESS}" != "internal-and-cloud-load-balancing" ]; then
               echo "::error::allow_unauthenticated=true is only permitted for production when ingress=internal-and-cloud-load-balancing."
               exit 1
