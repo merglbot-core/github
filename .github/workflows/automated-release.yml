@@ -104,6 +104,7 @@ jobs:
             "resolved_version=\(.resolved_version)",
             "release_needed=\(.release_needed)",
             "release_status=\(.release_status)",
+            "tag_name=\(.tag_name)",
             "tag_status=\(.tag_status)",
             "release_url=\(.release_url)",
             "tag_commit_sha=\(.tag_commit_sha)",

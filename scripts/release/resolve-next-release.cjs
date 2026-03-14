@@ -249,7 +249,7 @@ async function resolveWithSemanticRelease() {
     {
       cwd: process.cwd(),
       env: process.env,
-      stdout: process.stdout,
+      stdout: process.stderr,
       stderr: process.stderr,
     }
   );
