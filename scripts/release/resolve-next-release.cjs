@@ -141,7 +141,8 @@ function ghApi(path, allow404 = false) {
     if (allow404 && /404|Not Found/i.test(stderr)) {
       return null;
     }
-    throw new Error(`GitHub API request failed for ${path}: ${stderr || error.message}`);
+    const safeStderr = (stderr || '').slice(0, 200).replace(/gh[pos]_[A-Za-z0-9_]+/g, '<redacted>');
+    throw new Error(`GitHub API request failed for ${path}: ${safeStderr || error.message}`);
   }
 }
 
