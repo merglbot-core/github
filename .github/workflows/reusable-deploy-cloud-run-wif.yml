@@ -310,7 +310,7 @@ jobs:
           )
 
           if [ -n "${INPUT_RUNTIME_SERVICE_ACCOUNT}" ]; then
-            if ! [[ "${INPUT_RUNTIME_SERVICE_ACCOUNT}" =~ ^[^[:space:]@]+@[^[:space:]@]+\\.iam\\.gserviceaccount\\.com$ ]]; then
+            if ! [[ "${INPUT_RUNTIME_SERVICE_ACCOUNT}" =~ ^[^[:space:]@]+@[^[:space:]@]+\.iam\.gserviceaccount\.com$ ]]; then
               echo "::error::runtime_service_account must be a service account email ending with .iam.gserviceaccount.com, got '${INPUT_RUNTIME_SERVICE_ACCOUNT}'"
               exit 1
             fi
