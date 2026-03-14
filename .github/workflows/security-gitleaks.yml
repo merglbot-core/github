@@ -74,13 +74,33 @@ jobs:
         with:
           fetch-depth: 0  # Full history for comprehensive scanning
           persist-credentials: false
+
+      - name: Scrub checkout auth metadata (avoid false positives)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # actions/checkout may add temporary auth headers / includeIf credentials.
+          # Secret scanners must not treat these as repo leaks.
+          if [ -d .git ]; then
+            git config --local --unset-all http.https://github.com/.extraheader || true
+
+            # Remove includeIf entries pointing to temporary credential configs.
+            # (actions/checkout normally removes these in its post-step, but scanners run before that.)
+            while IFS= read -r key; do
+              [ -z "$key" ] && continue
+              git config --local --unset-all "$key" || true
+            done < <(git config --local --name-only --get-regexp '^includeif\.gitdir:' || true)
+          fi
       
       - name: Install Gitleaks CLI
         run: |
           set -euo pipefail
-          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
-          tar -xzf gitleaks_8.18.4_linux_x64.tar.gz
-          sudo mv gitleaks /usr/local/bin/
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          wget -q -O "$tmp_dir/gitleaks.tgz" https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+          tar -xzf "$tmp_dir/gitleaks.tgz" -C "$tmp_dir" gitleaks
+          sudo mv "$tmp_dir/gitleaks" /usr/local/bin/
           gitleaks version
       
       - name: Run Gitleaks
@@ -93,10 +113,54 @@ jobs:
           
           # Run gitleaks and generate SARIF report
           if [ "${{ inputs.fail-on-detection }}" = "true" ]; then
-            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --verbose --no-git
+            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --redact --no-git
           else
-            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --verbose --no-git || true
+            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --redact --no-git || true
           fi
+
+      - name: Summarize findings (redacted)
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f gitleaks-report.sarif ]; then
+            echo "## Gitleaks results (redacted)" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "- No SARIF report found." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "## Gitleaks results (redacted)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          findings_count="$(jq -r '(.runs[0].results // []) | length' gitleaks-report.sarif 2>/dev/null || echo 0)"
+          echo "- Findings: **${findings_count}**" >> "$GITHUB_STEP_SUMMARY"
+
+          jq -r '
+            (.runs[0].results // [])[0:20][] |
+            "- `\(.ruleId // "unknown")` — `\((.locations[0].physicalLocation.artifactLocation.uri // "unknown"))`\(
+              if ((.locations[0].physicalLocation.region.startLine // null) | type) == "number"
+              then ":" + (.locations[0].physicalLocation.region.startLine | tostring)
+              else ""
+              end
+            )
+          ' gitleaks-report.sarif >> "$GITHUB_STEP_SUMMARY" || true
+
+          if [ "${findings_count}" -gt 20 ]; then
+            echo "- … plus $((findings_count - 20)) more" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload gitleaks report (SARIF, redacted)
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: gitleaks-report-sarif
+          path: gitleaks-report.sarif
+          if-no-files-found: ignore
+          retention-days: 7
       
       - name: Upload SARIF report
         if: always()

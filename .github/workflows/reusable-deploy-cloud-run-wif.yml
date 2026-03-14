@@ -78,22 +78,27 @@ jobs:
           gcloud auth configure-docker ${{ inputs.region }}-docker.pkg.dev --quiet
 
       - name: Build Container Image
+        id: build
         run: |
           IMAGE="${{ inputs.region }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/containers/${{ inputs.image_name }}:${{ github.sha }}"
           docker build -t $IMAGE -f ${{ inputs.dockerfile }} .
           docker push $IMAGE
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
-      # Container Security: Trivy scan with SARIF upload
-      - name: Run Trivy vulnerability scanner
+      # Container Security: Trivy scan
+      # - SARIF is non-blocking (Code Scanning visibility)
+      # - Separate gate blocks deploy on CRITICAL (no gating softening)
+      - name: Run Trivy vulnerability scanner (SARIF)
         uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518  # v0.34.1
-        continue-on-error: true  # Allow deploy while we tune blocking thresholds
+        continue-on-error: true
         with:
+          version: 'v0.69.3'
           image-ref: ${{ env.IMAGE }}
           format: 'sarif'
           output: 'trivy-results.sarif'
-          severity: 'CRITICAL'
-          exit-code: '0'         # Do not fail deploy on scan; surfaced via SARIF
+          severity: 'HIGH,CRITICAL'
+          limit-severities-for-sarif: true
+          exit-code: '0'
           ignore-unfixed: true
 
       - name: Upload Trivy results
@@ -102,6 +107,17 @@ jobs:
         continue-on-error: true
         with:
           sarif_file: 'trivy-results.sarif'
+
+      - name: Run Trivy vulnerability scanner (gate)
+        if: ${{ always() && steps.build.outcome == 'success' }}
+        uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518  # v0.34.1
+        with:
+          version: 'v0.69.3'
+          image-ref: ${{ env.IMAGE }}
+          format: 'table'
+          severity: 'CRITICAL'
+          exit-code: '1'
+          ignore-unfixed: true
 
       - name: Deploy to Cloud Run
         run: |
