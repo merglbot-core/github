@@ -301,6 +301,7 @@ jobs:
           format: 'json'
           output: 'reports/dependency-audit.json'
           severity: 'CRITICAL,HIGH,MEDIUM'
+          version: 'v0.65.0'
           
       - name: Process vulnerability results
         id: vulns
