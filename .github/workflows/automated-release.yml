@@ -213,6 +213,11 @@ jobs:
         if: always()
         run: |
           set -eo pipefail
+          # Fail closed: if the plan step did not succeed, surface the failure
+          if [ "${{ steps.plan.outcome }}" != "success" ]; then
+            echo "::error::Plan step did not succeed (outcome: ${{ steps.plan.outcome }}). Failing closed."
+            exit 1
+          fi
           if [ "${{ steps.plan.outputs.release_needed }}" != "true" ]; then
             RELEASE_STATUS="release_skipped_no_release_needed"
             RELEASE_URL=""
@@ -291,13 +296,8 @@ jobs:
           RELEASE_STATUS="${{ needs.release.outputs.release_status }}"
           VERSION="v${{ needs.release.outputs.version }}"
 
-          if [ "$RELEASE_STATUS" = "release_created" ]; then
-            SLACK_TEXT="🚀 New Release Created: ${VERSION}"
-            SLACK_COLOR="good"
-          else
-            SLACK_TEXT="ℹ️ Release ${VERSION} already existed (idempotent no-op)"
-            SLACK_COLOR="#cccccc"
-          fi
+          SLACK_TEXT="🚀 New Release Created: ${VERSION}"
+          SLACK_COLOR="good"
 
           PAYLOAD=$(jq -n \
             --arg text "$SLACK_TEXT" \
