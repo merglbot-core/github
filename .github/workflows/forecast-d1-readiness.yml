@@ -816,7 +816,7 @@ jobs:
 
       - name: Upload guardrail artifacts
         if: always() && steps.guardrail.outputs.outdir != '' && steps.guardrail.outputs.status != 'NOOP'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: forecast-d1-readiness-${{ github.run_id }}
           path: |
@@ -826,7 +826,7 @@ jobs:
 
       - name: Upload Proteinaco guardrail artifacts
         if: always() && steps.guardrail_proteinaco.outputs.outdir != '' && steps.guardrail_proteinaco.outputs.status != 'NOOP'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: forecast-d1-readiness-proteinaco-${{ github.run_id }}
           path: |
@@ -836,7 +836,7 @@ jobs:
 
       - name: Upload Ruzovyslon guardrail artifacts
         if: always() && steps.guardrail_ruzovyslon.outputs.outdir != '' && steps.guardrail_ruzovyslon.outputs.status != 'NOOP'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: forecast-d1-readiness-ruzovyslon-${{ github.run_id }}
           path: |
@@ -846,7 +846,7 @@ jobs:
 
       - name: Upload Autodoplnky guardrail artifacts
         if: always() && steps.guardrail_autodoplnky.outputs.outdir != '' && steps.guardrail_autodoplnky.outputs.status != 'NOOP'
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: forecast-d1-readiness-autodoplnky-${{ github.run_id }}
           path: |
@@ -2128,7 +2128,7 @@ jobs:
 
       - name: Upload stats artifacts
         if: always() && steps.stats.outputs.outdir != ''
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: forecast-d1-readiness-stats-${{ github.run_id }}
           path: ${{ steps.stats.outputs.outdir }}/
