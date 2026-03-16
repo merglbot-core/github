@@ -105,7 +105,7 @@ jobs:
             --output reports/gitignore-audit.json
           
       - name: Upload gitignore report
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: gitignore-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/gitignore-audit.json
@@ -174,7 +174,7 @@ jobs:
           
       - name: Upload secrets report
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: secrets-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/secrets-audit.json
@@ -227,7 +227,7 @@ jobs:
           fi
           
       - name: Upload bot config report
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: bot-config-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/bot-config-audit.json
@@ -268,7 +268,7 @@ jobs:
           mkdir -p reports
           echo '{"adoption_rate": 0, "message": "Pre-commit check skipped - script not implemented yet"}' > reports/precommit-audit.json
       - name: Upload pre-commit report
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: precommit-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/precommit-audit.json
@@ -294,13 +294,23 @@ jobs:
           fi
 
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518  # v0.34.1
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'json'
-          output: 'reports/dependency-audit.json'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+        env:
+          TRIVY_IMAGE: aquasec/trivy:0.65.0
+          TRIVY_CACHE_DIR: ${{ runner.temp }}/trivy-cache
+        run: |
+          set -euo pipefail
+          mkdir -p "$TRIVY_CACHE_DIR"
+          docker run --rm \
+            -v "$PWD:/work" \
+            -v "$TRIVY_CACHE_DIR:/root/.cache/trivy" \
+            "$TRIVY_IMAGE" \
+            fs \
+            --scanners vuln \
+            --vuln-type os,library \
+            --format json \
+            --output /work/reports/dependency-audit.json \
+            --severity CRITICAL,HIGH,MEDIUM \
+            /work
           
       - name: Process vulnerability results
         id: vulns
@@ -322,7 +332,7 @@ jobs:
           fi
           
       - name: Upload vulnerability report
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: dependency-audit-${{ needs.prepare.outputs.audit_id }}
           path: reports/dependency-audit.json
@@ -355,7 +365,7 @@ jobs:
 # 301:           echo "- Changelog compliance: ${CHANGELOG_COMPLIANCE}%" >> "$GITHUB_STEP_SUMMARY"
 # 302:           
       # - name: Upload release report
-      #   uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+      #   uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
       #   with:
       #     name: release-audit-${{ needs.prepare.outputs.audit_id }}
       #     path: reports/release-audit.json
@@ -371,7 +381,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         
       - name: Download all artifacts
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           path: audit-artifacts
           pattern: '*-audit-${{ needs.prepare.outputs.audit_id }}'
@@ -385,7 +395,7 @@ jobs:
             --quarter "${AUDIT_QUARTER:-Manual}"
           
       - name: Upload consolidated report
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: security-audit-report-${{ needs.prepare.outputs.audit_id }}
           path: reports/consolidated-audit.html
@@ -417,7 +427,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         
       - name: Download audit artifacts
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           path: audit-artifacts
           pattern: '*-audit-${{ needs.prepare.outputs.audit_id }}'
