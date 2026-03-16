@@ -58,10 +58,7 @@ jobs:
           To run the authoritative workflow manually:
 
           \`\`\`bash
-          gh workflow run terraform-sync-validation.yml \
-            -R merglbot-core/infra \
-            --ref main \
-            -f workspace=${SELECTED_WORKSPACE}
+          gh workflow run terraform-sync-validation.yml -R merglbot-core/infra --ref main -f workspace=${SELECTED_WORKSPACE}
           \`\`\`
 
           This compatibility workflow is manual-only and intentionally does not:
