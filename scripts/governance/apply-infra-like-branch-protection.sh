@@ -27,17 +27,17 @@ TARGET_REPOS=()
 SPECIFIC_BRANCH=""
 
 DEFAULT_ORGS=(
-  merglbot-core
-  merglbot-public
-  merglbot-cerano
-  merglbot-denatura
-  merglbot-proteinaco
-  merglbot-extractors
-  merglbot-ruzovyslon
-  merglbot-milan-private
   merglbot-autodoplnky
+  merglbot-cerano
+  merglbot-core
+  merglbot-denatura
+  merglbot-extractors
   merglbot-hodinarstvibechyne
   merglbot-kiteboarding
+  merglbot-milan-private
+  merglbot-proteinaco
+  merglbot-public
+  merglbot-ruzovyslon
 )
 
 usage() {

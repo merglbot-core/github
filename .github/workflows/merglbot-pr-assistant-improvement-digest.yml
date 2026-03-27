@@ -68,7 +68,7 @@ jobs:
 
       - name: Create / Update PR
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.ENTERPRISE_GITHUB_TOKEN || github.token }}
         run: |
           set -euo pipefail
 

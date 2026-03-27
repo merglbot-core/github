@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ORGS: "merglbot-core merglbot-public merglbot-cerano merglbot-denatura merglbot-extractors merglbot-proteinaco merglbot-ruzovyslon merglbot-milan-private merglbot-autodoplnky merglbot-hodinarstvibechyne merglbot-kiteboarding"
+  ORGS: "merglbot-autodoplnky merglbot-cerano merglbot-core merglbot-denatura merglbot-extractors merglbot-hodinarstvibechyne merglbot-kiteboarding merglbot-milan-private merglbot-proteinaco merglbot-public merglbot-ruzovyslon"
 
 jobs:
   audit-settings:
@@ -136,7 +136,7 @@ jobs:
           fi
 
       - name: Upload audit report
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: enterprise-audit-${{ steps.setup.outputs.audit_id }}
           path: reports/

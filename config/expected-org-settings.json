@@ -6,17 +6,17 @@
   "last_updated": "2025-11-27",
   
   "organizations": [
-    "merglbot-core",
-    "merglbot-public",
+    "merglbot-autodoplnky",
     "merglbot-cerano",
+    "merglbot-core",
     "merglbot-denatura",
     "merglbot-extractors",
-    "merglbot-proteinaco",
-    "merglbot-ruzovyslon",
-    "merglbot-milan-private",
-    "merglbot-autodoplnky",
     "merglbot-hodinarstvibechyne",
-    "merglbot-kiteboarding"
+    "merglbot-kiteboarding",
+    "merglbot-milan-private",
+    "merglbot-proteinaco",
+    "merglbot-public",
+    "merglbot-ruzovyslon"
   ],
   
   "expected_settings": {

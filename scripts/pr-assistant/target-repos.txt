@@ -6,8 +6,8 @@
 # excluding:
 # - merglbot-core/github (canonical workflow source; do not deploy copy into itself)
 # - archived/read-only repos (listed at bottom)
-merglbot-core/ai_prompts
 merglbot-core/agents-orchestrator
+merglbot-core/ai_prompts
 merglbot-core/dataform
 merglbot-core/fb-viz-api
 merglbot-core/infra
