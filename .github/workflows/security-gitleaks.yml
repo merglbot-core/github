@@ -141,12 +141,12 @@ jobs:
 
           jq -r '
             (.runs[0].results // [])[0:20][] |
-            "- `\(.ruleId // "unknown")` — `\((.locations[0].physicalLocation.artifactLocation.uri // "unknown"))`\(
+            "- `\(.ruleId // "unknown")` — `\((.locations[0].physicalLocation.artifactLocation.uri // "unknown"))\(
               if ((.locations[0].physicalLocation.region.startLine // null) | type) == "number"
               then ":" + (.locations[0].physicalLocation.region.startLine | tostring)
               else ""
               end
-            )
+            )`"
           ' gitleaks-report.sarif >> "$GITHUB_STEP_SUMMARY" || true
 
           if [ "${findings_count}" -gt 20 ]; then
