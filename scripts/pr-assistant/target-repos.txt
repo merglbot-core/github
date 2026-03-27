@@ -6,6 +6,7 @@
 # excluding:
 # - merglbot-core/github (canonical workflow source; do not deploy copy into itself)
 # - archived/read-only repos (listed at bottom)
+merglbot-core/agents-orchestrator
 merglbot-core/ai_prompts
 merglbot-core/dataform
 merglbot-core/fb-viz-api
@@ -21,6 +22,7 @@ merglbot-public/website
 merglbot-cerano/cerano-web
 merglbot-cerano/feed-generator
 merglbot-cerano/product-forecasting
+merglbot-cerano/viz-api
 merglbot-denatura/denatura-fb-viz
 merglbot-denatura/marketing_actions_detector
 merglbot-denatura/marketing-planning
