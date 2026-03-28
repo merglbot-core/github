@@ -31,6 +31,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       changelog: ${{ steps.changelog.outputs.changelog }}
+      release_outcome: ${{ steps.release_state.outputs.release_outcome }}
       release_status: ${{ steps.release_state.outputs.release_status }}
       
     steps:
@@ -201,6 +202,7 @@ jobs:
           if gh release view "$VERSION" >/dev/null 2>&1; then
             echo "Release $VERSION already exists, skipping release creation (idempotent)"
             {
+              echo "release_outcome=release_already_exists"
               echo "release_status=release_already_exists"
               echo "release_url=${RELEASE_URL}"
             } >> "$GITHUB_OUTPUT"
@@ -216,6 +218,7 @@ jobs:
               --latest
             echo "Release $VERSION created"
             {
+              echo "release_outcome=release_created"
               echo "release_status=release_created"
               echo "release_url=${RELEASE_URL}"
             } >> "$GITHUB_OUTPUT"
@@ -227,31 +230,34 @@ jobs:
         run: |
           set -eo pipefail
           if [ "${{ steps.version.outputs.skip }}" = "true" ]; then
-            RELEASE_STATUS="release_skipped_no_version"
+            RELEASE_OUTCOME="release_skipped_no_version"
           else
-            RELEASE_STATUS="${{ steps.github_release.outputs.release_status }}"
+            RELEASE_OUTCOME="${{ steps.github_release.outputs.release_outcome }}"
           fi
 
-          if [ -z "$RELEASE_STATUS" ]; then
+          if [ -z "$RELEASE_OUTCOME" ]; then
             echo "::error::Release outcome could not be determined."
             exit 1
           fi
 
-          echo "Release outcome: $RELEASE_STATUS"
-          echo "release_status=$RELEASE_STATUS" >> "$GITHUB_OUTPUT"
+          echo "Release outcome: $RELEASE_OUTCOME"
+          {
+            echo "release_outcome=$RELEASE_OUTCOME"
+            echo "release_status=$RELEASE_OUTCOME"
+          } >> "$GITHUB_OUTPUT"
       
       - name: Update GITHUB_STEP_SUMMARY
         if: always()
         run: |
           set -eo pipefail
-          RELEASE_STATUS="${{ steps.release_state.outputs.release_status }}"
+          RELEASE_OUTCOME="${{ steps.release_state.outputs.release_outcome }}"
 
-          if [ "$RELEASE_STATUS" = "release_skipped_no_version" ]; then
+          if [ "$RELEASE_OUTCOME" = "release_skipped_no_version" ]; then
             {
               echo "### ⏭️ Release Skipped"
               echo "No changes requiring a release were detected."
             } >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$RELEASE_STATUS" = "release_already_exists" ]; then
+          elif [ "$RELEASE_OUTCOME" = "release_already_exists" ]; then
             {
               echo "### ℹ️ Release v${{ steps.version.outputs.version }} Already Exists"
               echo "This run was an idempotent no-op: the tag and GitHub release were already present."
@@ -260,10 +266,10 @@ jobs:
             echo "### 🎉 Release v${{ steps.version.outputs.version }} Created" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          if [ "$RELEASE_STATUS" != "release_skipped_no_version" ]; then
+          if [ "$RELEASE_OUTCOME" != "release_skipped_no_version" ]; then
             {
               echo ""
-              echo "- Outcome: \`$RELEASE_STATUS\`"
+              echo "- Outcome: \`$RELEASE_OUTCOME\`"
               echo "- Release URL: ${{ steps.github_release.outputs.release_url }}"
               echo ""
             } >> "$GITHUB_STEP_SUMMARY"
@@ -271,13 +277,13 @@ jobs:
 
           if [ -f CHANGELOG_TEMP.md ]; then
             cat CHANGELOG_TEMP.md >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$RELEASE_STATUS" != "release_skipped_no_version" ]; then
+          elif [ "$RELEASE_OUTCOME" != "release_skipped_no_version" ]; then
             echo "_Changelog file missing._" >> "$GITHUB_STEP_SUMMARY"
           fi
   
   notify:
     needs: release
-    if: needs.release.outputs.release_status != 'release_skipped_no_version'
+    if: needs.release.outputs.release_outcome == 'release_created'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     
@@ -293,22 +299,15 @@ jobs:
             exit 0
           fi
 
-          RELEASE_STATUS="${{ needs.release.outputs.release_status }}"
           VERSION="v${{ needs.release.outputs.version }}"
           RELEASE_URL="${{ github.server_url }}/${{ github.repository }}/releases/tag/${VERSION}"
-
-          if [ "$RELEASE_STATUS" = "release_created" ]; then
-            SLACK_TEXT="🚀 New Release Created: ${VERSION}"
-            SLACK_COLOR="good"
-          else
-            SLACK_TEXT="ℹ️ Release ${VERSION} already existed (idempotent no-op)"
-            SLACK_COLOR="#cccccc"
-          fi
+          SLACK_TEXT="🚀 New Release Created: ${VERSION}"
+          SLACK_COLOR="good"
 
           PAYLOAD=$(jq -n \
             --arg text "$SLACK_TEXT" \
             --arg color "$SLACK_COLOR" \
-            --arg outcome "${{ needs.release.outputs.release_status }}" \
+            --arg outcome "${{ needs.release.outputs.release_outcome }}" \
             --arg version "$VERSION" \
             --arg repository "${{ github.repository }}" \
             --arg release_url "$RELEASE_URL" \

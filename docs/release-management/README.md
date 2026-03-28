@@ -137,7 +137,8 @@ The `automated-release.yml` workflow handles:
 - Changelog generation
 - Tag creation
 - GitHub Release creation
-- Slack notifications
+- Explicit release outcomes (`release_created`, `release_already_exists`, `release_skipped_no_version`)
+- Slack notifications for newly created releases only
 - Artifact building
 
 ### Trigger Methods
