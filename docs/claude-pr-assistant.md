@@ -17,6 +17,13 @@ This triggers a review-only multi-model review using **`claude-opus-4-6` + `gpt-
 
 Review output is intentionally **review-only**. Closeout remains a separate handoff path and final merge stays **`human_merge_only`**.
 
+The review comment now also carries advisory docs metadata:
+- `docs_follow_up_hint`: `likely_required`, `not_observed`, or `none`
+- `suggested_docs_targets`: JSON array of advisory repo-relative targets for `merglbot-public/docs`, or `[]`
+- `docs_signal_basis`: always `review_output_only`
+
+These fields are soft review metadata only. They do not add a required check, they do not create a merge blocker, and `documentation_obligation_state` remains non-authoritative review output rather than docs-classifier truth.
+
 For lighter review: `@merglbot review --light`
 
 ---
