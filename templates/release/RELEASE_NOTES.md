@@ -159,7 +159,7 @@ We'd love to hear your feedback! Please report any issues or suggestions:
 ## Support
 - 📧 Email: support@merglbot.ai
 - 💬 Slack: #support
-- 📚 Documentation: [docs.merglbot.ai](https://docs.merglbot.ai)
+- 📚 Documentation: [Merglbot Documentation Index](https://github.com/merglbot-public/docs/blob/main/DOCUMENTATION_INDEX.md)
 
 ---
 

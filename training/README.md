@@ -136,7 +136,7 @@ We continuously improve our training materials based on your feedback:
 ## 🔗 Additional Resources
 
 - [Merglbot Docs (SSOT)](https://github.com/merglbot-public/docs)
-- [merglbot.ai Platform Documentation](https://docs.merglbot.ai)
+- [Merglbot Documentation Index](https://github.com/merglbot-public/docs/blob/main/DOCUMENTATION_INDEX.md)
 - [Security Incident Reports Archive](../docs/security/incidents)
 - [Release Notes History](../docs/releases)
 
