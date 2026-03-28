@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Purpose: Set org-level GitHub Actions variables for PR Assistant v3 model defaults.
+# Purpose: Set org-level GitHub Actions variables for explicit PR Assistant v3 override defaults.
 # Usage:
 #   ./scripts/pr-assistant/set-org-vars.sh
 #   ./scripts/pr-assistant/set-org-vars.sh --dry-run
@@ -59,23 +59,23 @@ sanitize_reasoning_effort() {
   esac
 }
 
-OPENAI_MODEL_DEFAULT="$(sanitize_model "${MERGLBOT_OPENAI_MODEL_DEFAULT:-gpt-5-mini}")"
-ANTHROPIC_MODEL_DEFAULT="$(sanitize_model "${MERGLBOT_ANTHROPIC_MODEL_DEFAULT:-claude-sonnet-4-6}")"
-OPENAI_SYNTHESIS_MODEL_DEFAULT="$(sanitize_model "${MERGLBOT_OPENAI_MODEL_SYNTHESIS_DEFAULT:-gpt-5.2}")"
-OPENAI_SYNTHESIS_REASONING_EFFORT_DEFAULT="$(sanitize_reasoning_effort "${MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS_DEFAULT:-medium}")"
+OPENAI_MODEL_DEFAULT="$(sanitize_model "${MERGLBOT_OPENAI_MODEL_DEFAULT:-gpt-5.4}")"
+ANTHROPIC_MODEL_DEFAULT="$(sanitize_model "${MERGLBOT_ANTHROPIC_MODEL_DEFAULT:-claude-opus-4-6}")"
+OPENAI_SYNTHESIS_MODEL_DEFAULT="$(sanitize_model "${MERGLBOT_OPENAI_MODEL_SYNTHESIS_DEFAULT:-gpt-5.4}")"
+OPENAI_SYNTHESIS_REASONING_EFFORT_DEFAULT="$(sanitize_reasoning_effort "${MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS_DEFAULT:-high}")"
 
 if [ -z "$OPENAI_MODEL_DEFAULT" ]; then
-  OPENAI_MODEL_DEFAULT="gpt-5-mini"
+  OPENAI_MODEL_DEFAULT="gpt-5.4"
 fi
 if [ -z "$ANTHROPIC_MODEL_DEFAULT" ]; then
-  ANTHROPIC_MODEL_DEFAULT="claude-sonnet-4-6"
+  ANTHROPIC_MODEL_DEFAULT="claude-opus-4-6"
 fi
 if [ -z "$OPENAI_SYNTHESIS_MODEL_DEFAULT" ]; then
-  OPENAI_SYNTHESIS_MODEL_DEFAULT="gpt-5.2"
+  OPENAI_SYNTHESIS_MODEL_DEFAULT="gpt-5.4"
 fi
 if [ -z "$OPENAI_SYNTHESIS_REASONING_EFFORT_DEFAULT" ]; then
-  echo "WARN: Invalid MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS_DEFAULT; defaulting to 'medium' (expected low|medium|high|xhigh)" >&2
-  OPENAI_SYNTHESIS_REASONING_EFFORT_DEFAULT="medium"
+  echo "WARN: Invalid MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS_DEFAULT; defaulting to 'high' (expected low|medium|high|xhigh)" >&2
+  OPENAI_SYNTHESIS_REASONING_EFFORT_DEFAULT="high"
 fi
 
 ORGS=(
