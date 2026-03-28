@@ -325,7 +325,7 @@ node scripts/release/generate-changelog.js \
 
 ## 🔗 Related Documentation
 
-- [MERGLBOT Release Management Standards](https://docs.merglbot.ai/merglbot/release-management)
+- [MERGLBOT Documentation Index](https://github.com/merglbot-public/docs/blob/main/DOCUMENTATION_INDEX.md)
 - [CI/CD Pipeline Documentation](../ci-cd/README.md)
 - [Monitoring and Alerting](../monitoring/README.md)
 - [Security Policies](../security/README.md)
