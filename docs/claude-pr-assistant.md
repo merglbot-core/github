@@ -13,7 +13,9 @@ On any PR in any Merglbot repository, comment:
 @merglbot review
 ```
 
-This triggers a multi-model review using **`claude-sonnet-4-6` + `gpt-5-mini` (`reasoning_effort=high`)** with **final synthesis on OpenAI `gpt-5.2` (`reasoning_effort=medium`)**.
+This triggers a review-only multi-model review using **`claude-opus-4-6` + `gpt-5.4` (`reasoning_effort=high`)** with **final synthesis on OpenAI `gpt-5.4` (`reasoning_effort=high`)**.
+
+Review output is intentionally **review-only**. Closeout remains a separate handoff path and final merge stays **`human_merge_only`**.
 
 For lighter review: `@merglbot review --light`
 

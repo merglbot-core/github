@@ -35,26 +35,42 @@ on:
           - auto
           - delta
           - full
+      dispatch_source:
+        description: "Dispatch source (manual_dispatch or issue_comment_dispatch)"
+        required: false
+        type: string
+        default: "manual_dispatch"
+      expected_head_sha:
+        description: "Expected PR head SHA for fail-closed head binding"
+        required: false
+        type: string
+        default: ""
+      trigger_comment_id:
+        description: "Originating issue comment id when dispatched from comment trigger"
+        required: false
+        type: string
+        default: ""
       anthropic_model:
-        description: "Anthropic model (org_default = use org var MERGLBOT_ANTHROPIC_MODEL)"
+        description: "Anthropic model (canonical default is claude-opus-4-6; org_default is override-only)"
         required: false
         type: choice
-        default: "org_default"
+        default: "claude-opus-4-6"
         options:
+          - claude-opus-4-6
           - org_default
           - claude-sonnet-4-6
-          - claude-opus-4-6
           - claude-opus-4-5-20251101
           - claude-opus-4-5-20250929
           - claude-sonnet-4-5-20250929
           - claude-opus-4-1-20250805
           - claude-3-5-haiku-20241022
       openai_model:
-        description: "OpenAI model (org_default = use org var MERGLBOT_OPENAI_MODEL)"
+        description: "OpenAI model (canonical default is gpt-5.4; org_default is override-only)"
         required: false
         type: choice
-        default: "org_default"
+        default: "gpt-5.4"
         options:
+          - gpt-5.4
           - org_default
           - gpt-5-mini
           - gpt-5.2
@@ -62,20 +78,21 @@ on:
           - gpt-5
           - gpt-4-turbo
       openai_synthesis_model:
-        description: "OpenAI synthesis model (org_default = use org var MERGLBOT_OPENAI_MODEL_SYNTHESIS)"
+        description: "OpenAI synthesis model (canonical default is gpt-5.4; org_default is override-only)"
         required: false
         type: choice
-        default: "org_default"
+        default: "gpt-5.4"
         options:
+          - gpt-5.4
           - org_default
           - gpt-5.2
           - gpt-5.1
           - gpt-5-mini
       openai_synthesis_reasoning_effort:
-        description: "OpenAI synthesis reasoning effort (org_default = use org var MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS)"
+        description: "OpenAI synthesis reasoning effort (canonical default is high; org_default is override-only)"
         required: false
         type: choice
-        default: "org_default"
+        default: "high"
         options:
           - org_default
           - low
@@ -90,8 +107,8 @@ permissions:
   checks: read
 
 concurrency:
-  # Avoid unrelated issue_comment events cancelling active review runs (e.g. gemini quota warnings).
-  group: merglbot-review-${{ github.event.issue.number || github.event.inputs.pr_number }}-${{ (github.event_name == 'workflow_dispatch') && 'review' || ((github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '@merglbot review')) && 'review' || 'other') }}
+  # Keep the lightweight issue_comment dispatcher distinct from the head-bound workflow_dispatch review run.
+  group: merglbot-review-${{ github.event.issue.number || github.event.inputs.pr_number }}-${{ github.event_name }}-${{ github.event.inputs.expected_head_sha || github.event.comment.id || github.run_id }}
   cancel-in-progress: true
 
 defaults:
@@ -117,6 +134,8 @@ jobs:
       review_mode: ${{ steps.get_pr.outputs.review_mode }}
       diff_scope: ${{ steps.get_pr.outputs.diff_scope }}
       include_retro: ${{ steps.get_pr.outputs.include_retro }}
+      dispatch_source: ${{ steps.get_pr.outputs.dispatch_source }}
+      trigger_comment_id: ${{ steps.get_pr.outputs.trigger_comment_id }}
     steps:
       - name: Get PR Number and Mode
         id: get_pr
@@ -126,7 +145,10 @@ jobs:
           INPUT_REVIEW_MODE: ${{ github.event.inputs.review_mode }}
           INPUT_INCLUDE_RETRO: ${{ github.event.inputs.include_retro }}
           INPUT_DIFF_SCOPE: ${{ github.event.inputs.diff_scope }}
+          INPUT_DISPATCH_SOURCE: ${{ github.event.inputs.dispatch_source }}
+          INPUT_TRIGGER_COMMENT_ID: ${{ github.event.inputs.trigger_comment_id }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
           AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
         run: |
           validate_bool() {
@@ -149,6 +171,8 @@ jobs:
                   echo "review_mode=light"
                   echo "diff_scope=auto"
                   echo "include_retro=false"
+                  echo "dispatch_source=issue_comment_dispatch"
+                  echo "trigger_comment_id=${COMMENT_ID:-}"
                 } >> "$GITHUB_OUTPUT"
                 exit 0
                 ;;
@@ -178,9 +202,13 @@ jobs:
             REVIEW_MODE_OUT="${INPUT_REVIEW_MODE:-light}"
             DIFF_SCOPE_OUT="${INPUT_DIFF_SCOPE:-auto}"
             INCLUDE_RETRO_OUT="${INPUT_INCLUDE_RETRO:-false}"
+            DISPATCH_SOURCE_OUT="${INPUT_DISPATCH_SOURCE:-manual_dispatch}"
+            TRIGGER_COMMENT_ID_OUT="${INPUT_TRIGGER_COMMENT_ID:-}"
             echo "✅ Manual trigger for PR #$INPUT_PR_NUMBER (mode: ${INPUT_REVIEW_MODE:-light})"
           else
             PR_NUMBER_OUT="$ISSUE_NUMBER"
+            DISPATCH_SOURCE_OUT="issue_comment_dispatch"
+            TRIGGER_COMMENT_ID_OUT="${COMMENT_ID:-}"
             # `--full` intentionally stays separate from `--full-diff`.
             if flag_present "--full"; then
               REVIEW_MODE_OUT="full"
@@ -219,12 +247,59 @@ jobs:
             echo "review_mode=$REVIEW_MODE_OUT"
             echo "diff_scope=$DIFF_SCOPE_OUT"
             echo "include_retro=$INCLUDE_RETRO_OUT"
+            echo "dispatch_source=$DISPATCH_SOURCE_OUT"
+            echo "trigger_comment_id=$TRIGGER_COMMENT_ID_OUT"
           } >> "$GITHUB_OUTPUT"
+
+  dispatch-review-on-head:
+    name: Dispatch Review On PR Head
+    needs: check-trigger
+    if: github.event_name == 'issue_comment' && needs.check-trigger.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Dispatch head-bound review run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
+          REVIEW_MODE: ${{ needs.check-trigger.outputs.review_mode }}
+          DIFF_SCOPE_MODE: ${{ needs.check-trigger.outputs.diff_scope }}
+          INCLUDE_RETRO: ${{ needs.check-trigger.outputs.include_retro }}
+          TRIGGER_COMMENT_ID: ${{ needs.check-trigger.outputs.trigger_comment_id }}
+        run: |
+          set -euo pipefail
+
+          gh pr view "$PR_NUMBER" --json headRefName,headRefOid > pr_dispatch.json
+          PR_HEAD_REF="$(jq -r '.headRefName // empty' pr_dispatch.json)"
+          PR_HEAD_SHA="$(jq -r '.headRefOid // empty' pr_dispatch.json)"
+
+          if [ -z "${PR_HEAD_REF:-}" ] || [ -z "${PR_HEAD_SHA:-}" ]; then
+            echo "ERROR: Unable to resolve PR head ref/SHA for dispatch" >&2
+            exit 1
+          fi
+
+          gh workflow run "merglbot-pr-assistant-v3-on-demand.yml" \
+            --ref "$PR_HEAD_REF" \
+            -f pr_number="$PR_NUMBER" \
+            -f review_mode="$REVIEW_MODE" \
+            -f include_retro="$INCLUDE_RETRO" \
+            -f diff_scope="$DIFF_SCOPE_MODE" \
+            -f anthropic_model="claude-opus-4-6" \
+            -f openai_model="gpt-5.4" \
+            -f openai_synthesis_model="gpt-5.4" \
+            -f openai_synthesis_reasoning_effort="high" \
+            -f dispatch_source="issue_comment_dispatch" \
+            -f expected_head_sha="$PR_HEAD_SHA" \
+            -f trigger_comment_id="$TRIGGER_COMMENT_ID"
 
   multi-model-review:
     name: Multi-Model PR Review v3
     needs: check-trigger
-    if: needs.check-trigger.outputs.should_run == 'true'
+    if: needs.check-trigger.outputs.should_run == 'true' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30  # Context gather + LLM calls; typical 10-20m
     
@@ -265,6 +340,9 @@ jobs:
         id: context
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_HEAD_SHA_INPUT: ${{ github.event.inputs.expected_head_sha || '' }}
+          DISPATCH_SOURCE: ${{ github.event.inputs.dispatch_source || needs.check-trigger.outputs.dispatch_source || 'manual_dispatch' }}
+          TRIGGER_COMMENT_ID: ${{ github.event.inputs.trigger_comment_id || needs.check-trigger.outputs.trigger_comment_id || '' }}
         run: |
           set -euo pipefail
           
@@ -276,6 +354,8 @@ jobs:
           echo "PR Number: $PR_NUM"
           echo "Review Mode: ${REVIEW_MODE}"
           echo "Diff Scope Mode: ${DIFF_SCOPE_MODE}"
+          echo "Dispatch Source: ${DISPATCH_SOURCE:-manual_dispatch}"
+          echo "Trigger Comment ID: ${TRIGGER_COMMENT_ID:-none}"
 
           SKIP_REVIEW="false"
           SKIP_REASON="none"
@@ -339,6 +419,14 @@ jobs:
               echo "ERROR: workflow_dispatch must run on the PR head branch (expected: ${PR_HEAD_REF:-unknown}, got: ${CURRENT_REF_NAME:-unknown})" >&2
               exit 1
             fi
+            if [ -n "${EXPECTED_HEAD_SHA_INPUT:-}" ] && [ "${EXPECTED_HEAD_SHA_INPUT}" != "${PR_HEAD_SHA:-}" ]; then
+              echo "ERROR: expected_head_sha does not match live PR head (expected: ${EXPECTED_HEAD_SHA_INPUT:0:12}, live: ${PR_HEAD_SHA:0:12})" >&2
+              exit 1
+            fi
+            if [ -n "${GITHUB_SHA:-}" ] && [ -n "${PR_HEAD_SHA:-}" ] && [ "${GITHUB_SHA}" != "${PR_HEAD_SHA}" ]; then
+              echo "ERROR: workflow_dispatch run is not bound to the PR head SHA (github.sha=${GITHUB_SHA:0:12}, pr_head_sha=${PR_HEAD_SHA:0:12})" >&2
+              exit 1
+            fi
           fi
           
           # Use printf to avoid echo interpreting user-controlled content as flags (-n/-e)
@@ -350,6 +438,8 @@ jobs:
           printf '%s\n' "$PR_FILES" > pr_files_count.txt
           printf '%s\n' "$PR_BASE_SHA" > pr_base_sha.txt
           printf '%s\n' "$PR_HEAD_SHA" > pr_head_sha.txt
+          printf '%s\n' "${DISPATCH_SOURCE:-manual_dispatch}" > dispatch_source.txt
+          printf '%s\n' "${TRIGGER_COMMENT_ID:-}" > trigger_comment_id.txt
 
           # CI / checks summary (best-effort)
           CHECKS_DATA_AVAILABLE="false"
@@ -802,8 +892,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_API_VERSION: "2023-06-01"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-sonnet-4-6' }}
-          OPENAI_MODEL: ${{ (github.event.inputs.openai_model != 'org_default' && github.event.inputs.openai_model) || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5-mini' }}
+          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model == 'org_default' && (vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-6') || github.event.inputs.anthropic_model || 'claude-opus-4-6' }}
+          OPENAI_MODEL: ${{ github.event.inputs.openai_model == 'org_default' && (vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.4') || github.event.inputs.openai_model || 'gpt-5.4' }}
           STEP1_REASON_FILE: ${{ runner.temp }}/merglbot-step1-fail-reason.txt
         run: |
           set -euo pipefail
@@ -893,10 +983,10 @@ jobs:
         if: success() && steps.context.outputs.skip_review != 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ (github.event.inputs.openai_model != 'org_default' && github.event.inputs.openai_model) || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5-mini' }}
-          ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-sonnet-4-6' }}
-          OPENAI_SYNTHESIS_MODEL: ${{ (github.event.inputs.openai_synthesis_model != 'org_default' && github.event.inputs.openai_synthesis_model) || vars.MERGLBOT_OPENAI_MODEL_SYNTHESIS || 'gpt-5.2' }}
-          OPENAI_SYNTHESIS_REASONING_EFFORT: ${{ (github.event.inputs.openai_synthesis_reasoning_effort != 'org_default' && github.event.inputs.openai_synthesis_reasoning_effort) || vars.MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS || 'medium' }}
+          OPENAI_MODEL: ${{ github.event.inputs.openai_model == 'org_default' && (vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.4') || github.event.inputs.openai_model || 'gpt-5.4' }}
+          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model == 'org_default' && (vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-6') || github.event.inputs.anthropic_model || 'claude-opus-4-6' }}
+          OPENAI_SYNTHESIS_MODEL: ${{ github.event.inputs.openai_synthesis_model == 'org_default' && (vars.MERGLBOT_OPENAI_MODEL_SYNTHESIS || 'gpt-5.4') || github.event.inputs.openai_synthesis_model || 'gpt-5.4' }}
+          OPENAI_SYNTHESIS_REASONING_EFFORT: ${{ github.event.inputs.openai_synthesis_reasoning_effort == 'org_default' && (vars.MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS || 'high') || github.event.inputs.openai_synthesis_reasoning_effort || 'high' }}
           REVIEW_MODE: ${{ needs.check-trigger.outputs.review_mode }}
         run: |
           set -euo pipefail
@@ -959,16 +1049,16 @@ jobs:
           fi
 
           if [ -z "$ANTHROPIC_MODEL" ]; then
-            ANTHROPIC_MODEL="claude-sonnet-4-6"
+            ANTHROPIC_MODEL="claude-opus-4-6"
           fi
           if [ -z "$OPENAI_MODEL" ]; then
-            OPENAI_MODEL="gpt-5-mini"
+            OPENAI_MODEL="gpt-5.4"
           fi
           if [ -z "$OPENAI_SYNTHESIS_MODEL" ]; then
-            OPENAI_SYNTHESIS_MODEL="gpt-5.2"
+            OPENAI_SYNTHESIS_MODEL="gpt-5.4"
           fi
           if [ -z "$OPENAI_SYNTHESIS_REASONING_EFFORT" ]; then
-            OPENAI_SYNTHESIS_REASONING_EFFORT="medium"
+            OPENAI_SYNTHESIS_REASONING_EFFORT="high"
           fi
 
           # Default synthesis usage telemetry (overwritten on successful OpenAI call).
@@ -1048,7 +1138,7 @@ jobs:
               fi
             fi
 
-            VERDICT="CHANGES NEEDED"
+            VERDICT="blocked_missing_authority"
 
             {
               echo "# Code Review Summary"
@@ -1091,6 +1181,7 @@ jobs:
               echo "## SSOT Sync (Docs)"
               echo "None"
               echo ""
+              echo "Documentation Obligation State: unknown"
               echo "Verdict: $VERDICT"
             } > final_review.txt
 
@@ -1143,7 +1234,7 @@ jobs:
           printf '%s\n' "3. Filter false positives"
           printf '%s\n' "4. Preserve code examples and MERGLBOT citations"
           printf '%s\n' "5. Always include SSOT Sync (Docs) section (or 'None')"
-          printf '%s\n' "6. End with clear APPROVE or CHANGES NEEDED"
+          printf '%s\n' "6. Stay strictly review-only and end with approved_for_closeout, changes_required, or blocked_missing_authority"
           printf '%s\n' "7. Evidence-first: every kept finding must include file:line + a quoted diff excerpt; drop unverified speculation."
           printf '%s\n' ""
           printf '%s\n' "## UNTRUSTED INPUT (PROMPT INJECTION WARNING)"
@@ -1178,9 +1269,11 @@ jobs:
           fi
           
           printf '%s\n' "## Zaver"
-          printf '%s\n' "Verdict: [APPROVE or CHANGES NEEDED]"
+          printf '%s\n' "Verdict: [approved_for_closeout or changes_required or blocked_missing_authority]"
+          printf '%s\n' "Documentation Obligation State: [satisfied or not_required or missing or unknown]"
           printf '%s\n' ""
           printf '%s\n' "DO NOT add Review Models section."
+          printf '%s\n' "Do NOT include merge instructions, closeout execution steps, or post-merge claims."
           printf '%s\n' "Use Czech for text, English for code."
           printf '%s\n' ""
           printf '%s\n' "---"
@@ -1370,7 +1463,7 @@ jobs:
           echo "Calling OpenAI for synthesis (requested: $OPENAI_SYNTHESIS_MODEL, reasoning_effort: $OPENAI_SYNTHESIS_REASONING_EFFORT)..."
 
           OPENAI_SYNTHESIS_MODELS_TRIED="|"
-          for MODEL_TO_TRY in "$OPENAI_SYNTHESIS_MODEL" "gpt-5.2" "gpt-5.1" "gpt-5-mini"; do
+          for MODEL_TO_TRY in "$OPENAI_SYNTHESIS_MODEL" "gpt-5.4" "gpt-5.2" "gpt-5.1" "gpt-5-mini"; do
             if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
               continue
             fi
@@ -1414,17 +1507,53 @@ jobs:
           echo "========================================="
           echo "STEP 3 COMPLETE"
           echo "========================================="
+
+      - name: Verify PR Check Surface
+        if: success() && steps.context.outputs.skip_review != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f pr_head_sha.txt ]; then
+            echo "ERROR: Missing pr_head_sha.txt; cannot verify PR-visible check surface" >&2
+            exit 1
+          fi
+
+          PR_HEAD_SHA="$(< pr_head_sha.txt)"
+          if [ -z "${PR_HEAD_SHA:-}" ]; then
+            echo "ERROR: Empty PR head SHA; cannot verify PR-visible check surface" >&2
+            exit 1
+          fi
+
+          MATCH_COUNT="0"
+          for attempt in $(seq 1 20); do
+            MATCH_COUNT="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" \
+              --jq --arg run_id "${GITHUB_RUN_ID}" '[.check_runs[]? | select(((.details_url // "") | contains("/actions/runs/" + $run_id)))] | length' 2>/dev/null || echo "0")"
+            if [[ "${MATCH_COUNT:-0}" =~ ^[0-9]+$ ]] && [ "${MATCH_COUNT}" -gt 0 ]; then
+              printf '%s\n' "verified" > pr_check_surface_state.txt
+              break
+            fi
+            sleep 3
+          done
+
+          if ! [[ "${MATCH_COUNT:-0}" =~ ^[0-9]+$ ]] || [ "${MATCH_COUNT}" -eq 0 ]; then
+            echo "ERROR: Current workflow run is not visible as a PR check on head ${PR_HEAD_SHA:0:12}" >&2
+            exit 1
+          fi
       
       - name: Post Review Comment
         if: success() && steps.context.outputs.skip_review != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-sonnet-4-6' }}
-          OPENAI_MODEL: ${{ (github.event.inputs.openai_model != 'org_default' && github.event.inputs.openai_model) || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5-mini' }}
-          OPENAI_SYNTHESIS_MODEL: ${{ (github.event.inputs.openai_synthesis_model != 'org_default' && github.event.inputs.openai_synthesis_model) || vars.MERGLBOT_OPENAI_MODEL_SYNTHESIS || 'gpt-5.2' }}
-          OPENAI_SYNTHESIS_REASONING_EFFORT: ${{ (github.event.inputs.openai_synthesis_reasoning_effort != 'org_default' && github.event.inputs.openai_synthesis_reasoning_effort) || vars.MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS || 'medium' }}
+          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model == 'org_default' && (vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-6') || github.event.inputs.anthropic_model || 'claude-opus-4-6' }}
+          OPENAI_MODEL: ${{ github.event.inputs.openai_model == 'org_default' && (vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.4') || github.event.inputs.openai_model || 'gpt-5.4' }}
+          OPENAI_SYNTHESIS_MODEL: ${{ github.event.inputs.openai_synthesis_model == 'org_default' && (vars.MERGLBOT_OPENAI_MODEL_SYNTHESIS || 'gpt-5.4') || github.event.inputs.openai_synthesis_model || 'gpt-5.4' }}
+          OPENAI_SYNTHESIS_REASONING_EFFORT: ${{ github.event.inputs.openai_synthesis_reasoning_effort == 'org_default' && (vars.MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS || 'high') || github.event.inputs.openai_synthesis_reasoning_effort || 'high' }}
           PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
           REVIEW_MODE: ${{ needs.check-trigger.outputs.review_mode }}
+          DISPATCH_SOURCE: ${{ github.event.inputs.dispatch_source || needs.check-trigger.outputs.dispatch_source || 'manual_dispatch' }}
+          TRIGGER_COMMENT_ID: ${{ github.event.inputs.trigger_comment_id || needs.check-trigger.outputs.trigger_comment_id || '' }}
         run: |
           set -euo pipefail
 
@@ -1466,16 +1595,16 @@ jobs:
             cat "$SANITIZE_WARNINGS_FILE"
           fi
           if [ -z "$ANTHROPIC_MODEL" ]; then
-            ANTHROPIC_MODEL="claude-sonnet-4-6"
+            ANTHROPIC_MODEL="claude-opus-4-6"
           fi
           if [ -z "$OPENAI_MODEL" ]; then
-            OPENAI_MODEL="gpt-5-mini"
+            OPENAI_MODEL="gpt-5.4"
           fi
           if [ -z "$OPENAI_SYNTHESIS_MODEL" ]; then
-            OPENAI_SYNTHESIS_MODEL="gpt-5.2"
+            OPENAI_SYNTHESIS_MODEL="gpt-5.4"
           fi
           if [ -z "$OPENAI_SYNTHESIS_REASONING_EFFORT" ]; then
-            OPENAI_SYNTHESIS_REASONING_EFFORT="medium"
+            OPENAI_SYNTHESIS_REASONING_EFFORT="high"
           fi
 
           PR_NUM="${PR_NUMBER}"
@@ -1545,6 +1674,39 @@ jobs:
           ANTHROPIC_WORDS="$(safe_word_count anthropic_review.txt)"
           OPENAI_WORDS="$(safe_word_count openai_review.txt)"
           FINAL_WORDS="$(safe_word_count final_review.txt)"
+
+          DOCUMENTATION_OBLIGATION_STATE="unknown"
+          DOC_STATE_LINE="$(grep -im1 '^Documentation Obligation State:' final_review.txt 2>/dev/null || true)"
+          if [ -n "$DOC_STATE_LINE" ]; then
+            DOCUMENTATION_OBLIGATION_STATE="$(printf '%s' "$DOC_STATE_LINE" | sed -E 's/^Documentation Obligation State:[[:space:]]*//I' | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -d '\r' | sed -E 's/[^a-z_]+//g')"
+          elif awk 'BEGIN{IGNORECASE=1; in_section=0} /^##[[:space:]]+SSOT Sync \(Docs\)/{in_section=1; next} /^##[[:space:]]/{in_section=0} in_section && $0 ~ /^[[:space:]]*None[[:space:]]*$/ {found=1} END{exit(found?0:1)}' final_review.txt 2>/dev/null; then
+            DOCUMENTATION_OBLIGATION_STATE="not_required"
+          fi
+          case "$DOCUMENTATION_OBLIGATION_STATE" in
+            satisfied|not_required|missing|unknown) ;;
+            *) DOCUMENTATION_OBLIGATION_STATE="unknown" ;;
+          esac
+
+          REVIEW_VERDICT="blocked_missing_authority"
+          VERDICT_LINE="$(grep -im1 '^Verdict:' final_review.txt 2>/dev/null || true)"
+          if [ -n "$VERDICT_LINE" ]; then
+            REVIEW_VERDICT_RAW="$(printf '%s' "$VERDICT_LINE" | sed -E 's/^Verdict:[[:space:]]*//I' | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -d '\r' | sed -E 's/[^a-z_]+//g')"
+            case "$REVIEW_VERDICT_RAW" in
+              approved_for_closeout|approve) REVIEW_VERDICT="approved_for_closeout" ;;
+              changes_required|changes_needed) REVIEW_VERDICT="changes_required" ;;
+              blocked_missing_authority) REVIEW_VERDICT="blocked_missing_authority" ;;
+            esac
+          fi
+          if [ "$DOCUMENTATION_OBLIGATION_STATE" = "unknown" ]; then
+            REVIEW_VERDICT="blocked_missing_authority"
+          fi
+
+          FOLLOW_UP_ID="pr-${PR_NUM}-review-${GITHUB_RUN_ID}"
+          CLOSEOUT_MODE="human_merge_only"
+          PR_CHECK_SURFACE_STATE="$(tr -d '\r\n' < pr_check_surface_state.txt 2>/dev/null || true)"
+          if [ -z "${PR_CHECK_SURFACE_STATE:-}" ]; then
+            PR_CHECK_SURFACE_STATE="missing"
+          fi
           
           echo "Building PR comment..."
           
@@ -1602,11 +1764,31 @@ jobs:
               echo "- Changed files list"
               echo "- Bugbot findings ($BUGBOT_COUNT sources)"
               echo "- Merglbot Appendix v2.15 (MERGLBOT rules)"
+              echo "- Review boundary: review-only (`human_merge_only` closeout path)"
+              echo ""
+              echo "### Handoff Receipt"
+              echo ""
+              echo "| Field | Value |"
+              echo "|-------|-------|"
+              echo "| follow_up_id | \`$FOLLOW_UP_ID\` |"
+              echo "| review_head_sha | \`${PR_HEAD_SHA}\` |"
+              echo "| review_verdict | \`$REVIEW_VERDICT\` |"
+              echo "| documentation_obligation_state | \`$DOCUMENTATION_OBLIGATION_STATE\` |"
+              echo "| closeout_mode | \`$CLOSEOUT_MODE\` |"
+              echo "| pr_check_surface | \`$PR_CHECK_SURFACE_STATE\` |"
               echo ""
               echo "</details>"
               echo ""
               echo "<!-- MERGLBOT_PR_ASSISTANT_V3 -->"
+              echo "<!-- MERGLBOT_REVIEW_BOUNDARY: review_only -->"
+              echo "<!-- MERGLBOT_FOLLOW_UP_ID: $FOLLOW_UP_ID -->"
               echo "<!-- MERGLBOT_REVIEW_HEAD_SHA: $PR_HEAD_SHA -->"
+              echo "<!-- MERGLBOT_REVIEW_VERDICT: $REVIEW_VERDICT -->"
+              echo "<!-- MERGLBOT_DOCUMENTATION_OBLIGATION_STATE: $DOCUMENTATION_OBLIGATION_STATE -->"
+              echo "<!-- MERGLBOT_CLOSEOUT_MODE: $CLOSEOUT_MODE -->"
+              echo "<!-- MERGLBOT_PR_CHECK_SURFACE: $PR_CHECK_SURFACE_STATE -->"
+              echo "<!-- MERGLBOT_DISPATCH_SOURCE: ${DISPATCH_SOURCE:-manual_dispatch} -->"
+              echo "<!-- MERGLBOT_TRIGGER_COMMENT_ID: ${TRIGGER_COMMENT_ID:-} -->"
               echo "<!-- MERGLBOT_PREV_REVIEW_HEAD_SHA: $PREV_REVIEW_HEAD_SHA -->"
               echo "<!-- MERGLBOT_DIFF_SCOPE: $DIFF_SCOPE -->"
               echo "<!-- MERGLBOT_DIFF_RANGE: $DIFF_RANGE -->"
@@ -1710,8 +1892,8 @@ jobs:
       - name: Save Review Metrics (Feedback Loop)
         if: always() && steps.context.outputs.skip_review != 'true'
         env:
-          ANTHROPIC_MODEL: ${{ (github.event.inputs.anthropic_model != 'org_default' && github.event.inputs.anthropic_model) || vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-sonnet-4-6' }}
-          OPENAI_MODEL: ${{ (github.event.inputs.openai_model != 'org_default' && github.event.inputs.openai_model) || vars.MERGLBOT_OPENAI_MODEL || 'gpt-5-mini' }}
+          ANTHROPIC_MODEL: ${{ github.event.inputs.anthropic_model == 'org_default' && (vars.MERGLBOT_ANTHROPIC_MODEL || 'claude-opus-4-6') || github.event.inputs.anthropic_model || 'claude-opus-4-6' }}
+          OPENAI_MODEL: ${{ github.event.inputs.openai_model == 'org_default' && (vars.MERGLBOT_OPENAI_MODEL || 'gpt-5.4') || github.event.inputs.openai_model || 'gpt-5.4' }}
           REPO: ${{ github.repository }}
           TRIGGER: ${{ github.event_name }}
           RUN_ID: ${{ github.run_id }}
@@ -1737,10 +1919,10 @@ jobs:
           ANTHROPIC_MODEL="$(sanitize_model "${ANTHROPIC_MODEL:-}")"
           OPENAI_MODEL="$(sanitize_model "${OPENAI_MODEL:-}")"
           if [ -z "$ANTHROPIC_MODEL" ]; then
-            ANTHROPIC_MODEL="claude-sonnet-4-6"
+            ANTHROPIC_MODEL="claude-opus-4-6"
           fi
           if [ -z "$OPENAI_MODEL" ]; then
-            OPENAI_MODEL="gpt-5-mini"
+            OPENAI_MODEL="gpt-5.4"
           fi
 
           TIMESTAMP=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -1823,10 +2005,14 @@ jobs:
           if [ -n "$VERDICT_LINE" ]; then
             VERDICT_VALUE_RAW=$(printf '%s' "$VERDICT_LINE" | sed -E 's/^Verdict:[[:space:]]*//I')
             VERDICT_VALUE_CLEAN="$(printf '%s' "$VERDICT_VALUE_RAW" | tr -d '\r' | tr '_' ' ' | sed -E 's/[`*]+//g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
-            if echo "$VERDICT_VALUE_CLEAN" | grep -Eqi '^changes[[:space:]]+needed'; then
-              VERDICT="CHANGES_NEEDED"
-            elif echo "$VERDICT_VALUE_CLEAN" | grep -Eqi '^approve'; then
-              VERDICT="APPROVE"
+            if echo "$VERDICT_VALUE_CLEAN" | grep -Eqi '^approved[[:space:]]+for[[:space:]]+closeout$'; then
+              VERDICT="APPROVED_FOR_CLOSEOUT"
+            elif echo "$VERDICT_VALUE_CLEAN" | grep -Eqi '^changes[[:space:]]+(required|needed)$'; then
+              VERDICT="CHANGES_REQUIRED"
+            elif echo "$VERDICT_VALUE_CLEAN" | grep -Eqi '^blocked[[:space:]]+missing[[:space:]]+authority$'; then
+              VERDICT="BLOCKED_MISSING_AUTHORITY"
+            elif echo "$VERDICT_VALUE_CLEAN" | grep -Eqi '^approve$'; then
+              VERDICT="APPROVED_FOR_CLOSEOUT"
             fi
           fi
           
