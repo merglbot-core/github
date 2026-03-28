@@ -45,6 +45,8 @@ done
 WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 SOURCE_WORKFLOW="${WORKSPACE_ROOT}/merglbot-core/github/.github/workflows/merglbot-pr-assistant-v3-on-demand.yml"
 SOURCE_STEP1="${WORKSPACE_ROOT}/merglbot-core/github/scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh"
+MANIFEST_TOOL="${WORKSPACE_ROOT}/merglbot-core/github/scripts/pr-assistant/repo-policy-manifest.py"
+MANIFEST_FILE="${WORKSPACE_ROOT}/merglbot-core/github/scripts/pr-assistant/repo-policy-manifest.json"
 TARGET_REPOS_FILE="${WORKSPACE_ROOT}/merglbot-core/github/scripts/pr-assistant/target-repos.txt"
 
 if [ ! -f "$SOURCE_WORKFLOW" ]; then
@@ -57,10 +59,24 @@ if [ ! -f "$SOURCE_STEP1" ]; then
   exit 1
 fi
 
+if [ ! -f "$MANIFEST_TOOL" ]; then
+  echo "ERROR: Repo-policy manifest tool not found: $MANIFEST_TOOL" >&2
+  exit 1
+fi
+
+if [ ! -f "$MANIFEST_FILE" ]; then
+  echo "ERROR: Repo-policy manifest not found: $MANIFEST_FILE" >&2
+  exit 1
+fi
+
 if [ ! -f "$TARGET_REPOS_FILE" ]; then
   echo "ERROR: Target repos file not found: $TARGET_REPOS_FILE" >&2
   exit 1
 fi
+
+python3 "$MANIFEST_TOOL" verify-manifest \
+  --manifest "$MANIFEST_FILE" \
+  --target-list "$TARGET_REPOS_FILE"
 
 # Platform scope (exclude Merglevsky-cz entirely).
 TARGET_REPOS=()

@@ -45,12 +45,28 @@ if [ -z "$OUTPUT" ]; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+MANIFEST_TOOL="${ROOT_DIR}/scripts/pr-assistant/repo-policy-manifest.py"
+MANIFEST_FILE="${ROOT_DIR}/scripts/pr-assistant/repo-policy-manifest.json"
 TARGET_REPOS_FILE="${ROOT_DIR}/scripts/pr-assistant/target-repos.txt"
+
+if [ ! -f "$MANIFEST_TOOL" ]; then
+  echo "Manifest tool not found: $MANIFEST_TOOL" >&2
+  exit 1
+fi
+
+if [ ! -f "$MANIFEST_FILE" ]; then
+  echo "Manifest file not found: $MANIFEST_FILE" >&2
+  exit 1
+fi
 
 if [ ! -f "$TARGET_REPOS_FILE" ]; then
   echo "Target repos file not found: $TARGET_REPOS_FILE" >&2
   exit 1
 fi
+
+python3 "$MANIFEST_TOOL" verify-manifest \
+  --manifest "$MANIFEST_FILE" \
+  --target-list "$TARGET_REPOS_FILE"
 
 SINCE_DATE="$(date -u -d "$DAYS_BACK days ago" '+%Y-%m-%dT00:00:00Z' 2>/dev/null || date -u -v-"${DAYS_BACK}"d '+%Y-%m-%dT00:00:00Z')"
 NOW_UTC="$(date -u '+%Y-%m-%d %H:%M UTC')"

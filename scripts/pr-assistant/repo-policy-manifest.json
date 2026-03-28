@@ -1,0 +1,352 @@
+{
+  "schema_version": 1,
+  "baseline_date": "2026-03-28",
+  "baseline_artifact": "scripts/pr-assistant/baselines/2026-03-28/repo-policy-coverage-baseline.json",
+  "canonical_source": {
+    "repo": "merglbot-core/github",
+    "workflow_path": ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
+    "step1_path": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh"
+  },
+  "repos": [
+    {
+      "repo": "merglbot-core/agents-orchestrator",
+      "enabled": true,
+      "rollout_tier": "core",
+      "admission_state": "phase05_candidate",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": "Phase 02 and Phase 03 proving ground; keep eligible for Phase 05 canary admission."
+    },
+    {
+      "repo": "merglbot-core/ai_prompts",
+      "enabled": true,
+      "rollout_tier": "core",
+      "admission_state": "phase05_candidate",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": "Prompt-contract peer; keep aligned with runtime before Phase 05."
+    },
+    {
+      "repo": "merglbot-core/dataform",
+      "enabled": true,
+      "rollout_tier": "core",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-core/fb-viz-api",
+      "enabled": true,
+      "rollout_tier": "core",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-core/infra",
+      "enabled": true,
+      "rollout_tier": "core",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-core/merglbot-admin",
+      "enabled": true,
+      "rollout_tier": "core",
+      "admission_state": "phase05_candidate",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": "High-visibility internal app; treat as canary candidate after manifest baseline."
+    },
+    {
+      "repo": "merglbot-core/platform",
+      "enabled": true,
+      "rollout_tier": "core",
+      "admission_state": "phase05_candidate",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": "Core platform repo; keep eligible for Phase 05 canary admission."
+    },
+    {
+      "repo": "merglbot-core/tf-modules-",
+      "enabled": true,
+      "rollout_tier": "core",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": "Repo slug intentionally ends with a trailing hyphen."
+    },
+    {
+      "repo": "merglbot-public/docs",
+      "enabled": true,
+      "rollout_tier": "public",
+      "admission_state": "phase05_candidate",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": "Public SSOT repo; keep eligible for Phase 05 canary admission."
+    },
+    {
+      "repo": "merglbot-public/kazdavterina-web",
+      "enabled": true,
+      "rollout_tier": "public",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-public/livero-web",
+      "enabled": true,
+      "rollout_tier": "public",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-public/website",
+      "enabled": true,
+      "rollout_tier": "public",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-cerano/cerano-web",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-cerano/feed-generator",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-cerano/product-forecasting",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-cerano/viz-api",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-denatura/denatura-fb-viz",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-denatura/marketing_actions_detector",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-denatura/marketing-planning",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-proteinaco/abc_product_material_analysis",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-proteinaco/btf-legacy-implementation",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-proteinaco/btf-viz",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-proteinaco/proteinaco-web",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-proteinaco/viz-api",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-ruzovyslon/business_forecasting",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-ruzovyslon/data-pipelines",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-ruzovyslon/kbc_data_quality_metodology",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-ruzovyslon/ruzovyslon-web",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-ruzovyslon/viz-api",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-extractors/facebook-extractor",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-milan-private/fakturoid",
+      "enabled": true,
+      "rollout_tier": "private",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": "Private repo; baseline only until Phase 05 policy explicitly includes private repos."
+    },
+    {
+      "repo": "merglbot-autodoplnky/autodoplnky-web",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-hodinarstvibechyne/hodinarstvi-web",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
+      "repo": "merglbot-kiteboarding/kiteboarding-web",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    }
+  ]
+}

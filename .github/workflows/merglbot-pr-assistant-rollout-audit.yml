@@ -1,0 +1,41 @@
+name: PR Assistant Rollout Audit
+
+on:
+  pull_request:
+    paths:
+      - "scripts/pr-assistant/repo-policy-manifest.json"
+      - "scripts/pr-assistant/repo-policy-manifest.py"
+      - "scripts/pr-assistant/target-repos.txt"
+      - "scripts/pr-assistant/deploy-v3.sh"
+      - "scripts/pr-assistant/generate-improvement-digest.sh"
+      - "scripts/pr-assistant/baselines/**"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/pr-assistant/repo-policy-manifest.json"
+      - "scripts/pr-assistant/repo-policy-manifest.py"
+      - "scripts/pr-assistant/target-repos.txt"
+      - "scripts/pr-assistant/deploy-v3.sh"
+      - "scripts/pr-assistant/generate-improvement-digest.sh"
+      - "scripts/pr-assistant/baselines/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-assistant-rollout-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rollout-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Verify manifest, compatibility target list, and coverage baseline
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/pr-assistant/repo-policy-manifest.py verify --token-env GITHUB_TOKEN
