@@ -415,10 +415,10 @@ if [ "$OPENAI_MODEL" = "org_default" ]; then
   OPENAI_MODEL=""
 fi
 if [ -z "$ANTHROPIC_MODEL" ]; then
-  ANTHROPIC_MODEL="claude-sonnet-4-6"
+  ANTHROPIC_MODEL="claude-opus-4-6"
 fi
 if [ -z "$OPENAI_MODEL" ]; then
-  OPENAI_MODEL="gpt-5-mini"
+  OPENAI_MODEL="gpt-5.4"
 fi
 
 OPENAI_SKIP_REASON=""
@@ -485,7 +485,7 @@ fi
 if [ "$IS_DEPENDABOT" = "true" ] && [ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" ]; then
   BOT_MODE="dependabot"
   OPENAI_REASONING_EFFORT="medium"
-  OPENAI_MODEL="gpt-5-mini"
+  OPENAI_MODEL="gpt-5.4"
 fi
 
 append_runtime_env_pair "BOT_MODE" "$BOT_MODE"
@@ -678,7 +678,7 @@ printf '%s\n' "4. Auth: Auth V2 Multi-Segment (platform_admin/client/demo) - viz
 printf '%s\n' "5. Workflow: Plan - Act - Verify"
 printf '%s\n' "6. PR Size: Dle MERGLBOT_PR_SIZE_AND_REVIEW_HYGIENE.md (vyjimka jen u cistych docs) - MERGLBOT-PR-001"
 printf '%s\n' "7. Commits: Conventional (feat:, fix:, docs:, chore:, ci:)"
-printf '%s\n' "8. Branch: feat/, fix/, docs/, ci/ - vzdy squash merge do main"
+printf '%s\n' "8. Review boundary: review-only lane, merge mode remains human_merge_only"
 printf '%s\n' "9. SSOT: Dokumentace v merglbot-public/docs/"
 printf '%s\n' "10. Destructive: Double-confirm pred destruktivni akci"
 printf '%s\n' "11. CI Idempotency: CI kroky musi byt idempotentni"
@@ -728,6 +728,7 @@ printf '%s\n' "2. Respects PRs stated goal - dont suggest unrelated changes"
 printf '%s\n' "3. Analyzes ALL bugbot findings - validate, filter false positives"
 printf '%s\n' "4. Follows Merglbot standards - cite MERGLBOT rules"
 printf '%s\n' "5. Provides actionable feedback with code examples"
+printf '%s\n' "6. Stays strictly review-only - no merge instructions, no closeout execution, no post-merge claims"
 printf '%s\n' ""
 printf '%s\n' "## OUTPUT REQUIREMENTS"
 printf '%s\n' ""
@@ -772,7 +773,8 @@ if [ "${INCLUDE_RETRO:-false}" == "true" ]; then
 fi
 
 printf '%s\n' "## Zaver"
-printf '%s\n' "Verdict: [APPROVE or CHANGES NEEDED]"
+printf '%s\n' "Verdict: [approved_for_closeout or changes_required or blocked_missing_authority]"
+printf '%s\n' "Documentation Obligation State: [satisfied or not_required or missing or unknown]"
 printf '%s\n' "[1-2 sentences]"
 printf '%s\n' ""
 printf '%s\n' "### Rules"
@@ -887,7 +889,7 @@ echo "Prompt size: $PROMPT_SIZE chars"
     echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
 
     ANTHROPIC_MODELS_TRIED="|"
-    for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-sonnet-4-6" "claude-opus-4-6" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
+    for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-6" "claude-sonnet-4-6" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
       if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
         continue
       fi
@@ -1187,7 +1189,7 @@ if [ "$OPENAI_API_KEY_PRESENT" != "true" ]; then
   printf '%s' "API_ERROR" > openai_review.txt
 else
   OPENAI_MODELS_TRIED="|"
-  for MODEL_TO_TRY in "$OPENAI_MODEL" "gpt-5-mini" "gpt-5.2" "gpt-5.1" "gpt-5" "gpt-4-turbo"; do
+  for MODEL_TO_TRY in "$OPENAI_MODEL" "gpt-5.4" "gpt-5.2" "gpt-5.1" "gpt-5-mini" "gpt-5" "gpt-4-turbo"; do
     if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
       continue
     fi
