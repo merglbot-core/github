@@ -68,7 +68,7 @@ jobs:
     environment: ${{ inputs.environment }}
     timeout-minutes: 45
     permissions:
-      contents: write          # needed for release asset upload on tags
+      contents: read           # standard deploy callers only need repository read access
       id-token: write          # needed for WIF to GCP
       security-events: write   # needed for SARIF upload
       actions: read            # needed for SARIF upload telemetry (avoids "Resource not accessible by integration")
@@ -200,19 +200,6 @@ jobs:
           name: 'sbom-${{ github.sha }}'
           path: 'sbom.json'
           retention-days: 365
-      
-      - name: Upload SBOM to release (if tag)
-        # Avoid publishing SBOMs to public repos by default; remove the guard if transparency to public is desired.
-        # Using gh CLI instead of softprops/action-gh-release (not allowed in enterprise)
-        if: startsWith(github.ref, 'refs/tags/') && github.repository_visibility != 'public'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG_NAME="${GITHUB_REF#refs/tags/}"
-          # Create release if it doesn't exist, then upload SBOM
-          gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" 2>/dev/null || \
-            gh release create "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --title "$TAG_NAME" --generate-notes
-          gh release upload "$TAG_NAME" sbom.json --repo "$GITHUB_REPOSITORY" --clobber
       
       # Container Security: Cosign Signing (Keyless with OIDC)
       - name: Install Cosign
@@ -525,3 +512,30 @@ jobs:
           echo "- **Mode**: ${DEPLOYMENT_MODE:-unknown}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Cross-project alias count**: ${{ steps.deploy.outputs.cross_project_alias_count || '0' }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Status**: ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"
+
+  publish_release_sbom:
+    needs: deploy
+    if: ${{ needs.deploy.result == 'success' && startsWith(github.ref, 'refs/tags/') && github.repository_visibility != 'public' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # required to create/update GitHub releases on tag refs
+      actions: read # required to download the SBOM artifact from the deploy job
+
+    steps:
+      - name: Download SBOM artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sbom-${{ github.sha }}
+
+      - name: Upload SBOM to release
+        # Avoid publishing SBOMs to public repos by default; remove the guard if transparency to public is desired.
+        # Using gh CLI instead of softprops/action-gh-release (not allowed in enterprise)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          # Create release if it doesn't exist, then upload SBOM
+          gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" 2>/dev/null || \
+            gh release create "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --title "$TAG_NAME" --generate-notes
+          gh release upload "$TAG_NAME" sbom.json --repo "$GITHUB_REPOSITORY" --clobber
