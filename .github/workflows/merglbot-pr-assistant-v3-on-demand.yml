@@ -1536,27 +1536,28 @@ jobs:
 
           DOCUMENTATION_OBLIGATION_STATE="unknown"
           DOCS_EXPLICIT_NONE="false"
-          DOCS_SUBSTANTIVE="false"
+          DOCS_NONEMPTY="false"
           while IFS= read -r docs_line; do
             docs_line="$(printf '%s' "$docs_line" | tr -d '\r' | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
             if [ -z "$docs_line" ]; then
               continue
             fi
+            DOCS_NONEMPTY="true"
             case "$docs_line" in
               none|"- none"|"- none.")
                 DOCS_EXPLICIT_NONE="true"
                 ;;
-              "[list docs"*|"- [ ] doc:"*)
-                ;;
               *)
-                DOCS_SUBSTANTIVE="true"
+                DOCS_EXPLICIT_NONE="false"
                 ;;
             esac
           done <<< "$DOCS_SECTION_CONTENT"
-          if [ "$DOCS_SUBSTANTIVE" = "true" ]; then
-            DOCUMENTATION_OBLIGATION_STATE="required"
+          if [ "$DOCS_NONEMPTY" != "true" ]; then
+            DOCUMENTATION_OBLIGATION_STATE="unknown"
           elif [ "$DOCS_EXPLICIT_NONE" = "true" ]; then
             DOCUMENTATION_OBLIGATION_STATE="none_required"
+          else
+            DOCUMENTATION_OBLIGATION_STATE="required"
           fi
           if [ "$DOCUMENTATION_OBLIGATION_STATE" = "unknown" ]; then
             echo "ERROR: documentation_obligation_state resolved to unknown; refusing to publish handoff receipt." >&2
