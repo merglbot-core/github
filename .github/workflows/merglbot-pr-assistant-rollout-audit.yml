@@ -38,4 +38,16 @@ jobs:
           GH_TOKEN: ${{ secrets.ENTERPRISE_GITHUB_TOKEN || github.token }}
         run: |
           set -euo pipefail
-          python3 scripts/pr-assistant/repo-policy-manifest.py verify --token-env GH_TOKEN
+          if gh api repos/merglbot-core/agents-orchestrator > /dev/null 2>&1; then
+            python3 scripts/pr-assistant/repo-policy-manifest.py verify --token-env GH_TOKEN
+            exit 0
+          fi
+
+          python3 scripts/pr-assistant/repo-policy-manifest.py verify-manifest
+          {
+            echo "## PR Assistant Rollout Audit"
+            echo ""
+            echo "- Cross-repo live audit skipped in Actions because the available token cannot read the full rollout scope."
+            echo "- Manifest schema, compatibility target list, and committed baseline artifact were still verified locally."
+            echo "- Run the same workflow with an enterprise-wide token (or re-run locally with broader GitHub access) to refresh the authoritative live audit."
+          } >> "$GITHUB_STEP_SUMMARY"
