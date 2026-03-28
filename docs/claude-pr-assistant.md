@@ -13,7 +13,11 @@ On any PR in any Merglbot repository, comment:
 @merglbot review
 ```
 
-This triggers a multi-model review using **`claude-sonnet-4-6` + `gpt-5-mini` (`reasoning_effort=high`)** with **final synthesis on OpenAI `gpt-5.2` (`reasoning_effort=medium`)**.
+This triggers a review-first multi-model review using **`claude-opus-4-6` + `gpt-5.4` (`reasoning_effort=high`)** with **final synthesis on OpenAI `gpt-5.4` (`reasoning_effort=high`)**.
+
+The runtime stays strictly in PR review scope. It does not merge, close out, deploy, or perform post-merge actions.
+
+When a review comment is published, it now carries a fail-closed handoff receipt with `follow_up_id`, `review_head_sha`, `review_verdict`, `documentation_obligation_state`, and `closeout_mode=human_merge_only`.
 
 For lighter review: `@merglbot review --light`
 
