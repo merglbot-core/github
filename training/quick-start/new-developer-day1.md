@@ -379,8 +379,7 @@ After completing Day 1:
 
 ## 🎓 Learning Resources
 
-- [MERGLBOT Standards Repository](https://github.com/merglbot-public/docs)
-- [Documentation Index](https://github.com/merglbot-public/docs/blob/main/DOCUMENTATION_INDEX.md)
+- [Merglbot Documentation Index (SSOT)](https://github.com/merglbot-public/docs/blob/main/DOCUMENTATION_INDEX.md)
 - [Team Wiki](https://wiki.merglbot.ai)
 - [Training Videos](https://training.merglbot.ai)
 
