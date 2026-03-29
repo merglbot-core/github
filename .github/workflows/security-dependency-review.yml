@@ -66,6 +66,6 @@ jobs:
           vulnerability-check: true
           license-check: true
           
-          # Retry configuration for API rate limits
-          retry-on-snapshot-warnings: true
-          retry-on-snapshot-warnings-timeout: 600
+          # Do not block required PR checks waiting for dependency snapshots
+          # that these repos do not produce; the default is fail-fast.
+          retry-on-snapshot-warnings: false
