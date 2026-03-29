@@ -52,6 +52,7 @@ merglbot-denatura/marketing_actions_detector
 merglbot-extractors/denatura-additional-costs-extractor
 merglbot-extractors/denatura-shoptet-export-extractor
 merglbot-extractors/facebook-extractor
+merglbot-extractors/ruzovyslon-forecast-exporter
 merglbot-extractors/shoptet-extractor
 
 merglbot-hodinarstvibechyne/hodinarstvi-web
