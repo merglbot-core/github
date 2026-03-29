@@ -1,58 +1,81 @@
 # Derived compatibility artifact for PR Assistant rollout tooling.
-# Canonical source of truth: scripts/pr-assistant/repo-policy-manifest.json
+# Generated from scripts/pr-assistant/repo-policy-manifest.json
+# Inventory policy source: scripts/pr-assistant/repo-policy-inventory-policy.json
 # Regenerate / verify:
 #   python3 scripts/pr-assistant/repo-policy-manifest.py sync-target-repos --check
 #   python3 scripts/pr-assistant/repo-policy-manifest.py sync-target-repos --write
-# Enabled copy-deploy targets only. Canonical source repo remains merglbot-core/github.
+# Enabled copy-deploy targets only. canonical_self entries stay in the manifest and coverage audit only.
 
-# NOTE: Successor pilot repo for advisory docs cooperation; refresh rollout copy and verify classifier-wins-over-hint behavior.
-merglbot-core/agents-orchestrator
-# NOTE: Prompt-contract peer; not part of the successor advisory docs pilot rollout.
-merglbot-core/ai_prompts
-merglbot-core/dataform
-merglbot-core/fb-viz-api
-merglbot-core/infra
-# NOTE: High-visibility internal app; keep baseline-only until a separate successor rollout decision exists.
-merglbot-core/merglbot-admin
-# NOTE: Successor pilot repo for advisory docs cooperation; refresh rollout copy before broader rollout decisions.
-merglbot-core/platform
-# NOTE: Repo slug intentionally ends with a trailing hyphen.
-merglbot-core/tf-modules-
+lrtch/cbdnadzlato
+lrtch/madhand
+lrtch/mamata-proxy
+lrtch/mamata-strapi
+lrtch/mamata-strapi-client
+lrtch/mamata-xml-distributor
+lrtch/phi-vm-ansible-roles
+lrtch/psychedelicintegration
+lrtch/stanpersecurity
+lrtch/vibewrapper
+lrtch/vm-builder
+lrtch/vm1-portainer
+lrtch/vm1-traefik
+lrtch/vw-pipelines
+lrtch/vw-test-app
+lrtch/vw-vyroba-proteinaco
+lrtch/web-kb
 
-# NOTE: Successor pilot repo for advisory docs cooperation; SSOT must stay aligned with manifest-governed pilot status.
-merglbot-public/docs
-merglbot-public/kazdavterina-web
-merglbot-public/livero-web
-merglbot-public/website
+merglbot-autodoplnky/autodoplnky-web
 
 merglbot-cerano/cerano-web
 merglbot-cerano/feed-generator
 merglbot-cerano/product-forecasting
 merglbot-cerano/viz-api
 
+# NOTE: Advisory docs pilot repo; keep classifier-wins-over-hint behavior authoritative in orchestrator runtime.
+merglbot-core/agents-orchestrator
+# NOTE: Prompt-contract peer; included in enterprise rollout but not in the advisory docs pilot scope.
+merglbot-core/ai_prompts
+merglbot-core/dataform
+merglbot-core/fb-viz-api
+merglbot-core/infra
+# NOTE: High-visibility internal app; enterprise rollout target with human-merge-only governance.
+merglbot-core/merglbot-admin
+# NOTE: Advisory docs pilot repo; refresh rollout copy before broader rollout waves.
+merglbot-core/platform
+# NOTE: Repo slug intentionally ends with a trailing hyphen.
+merglbot-core/tf-modules-
+
 merglbot-denatura/denatura-fb-viz
-merglbot-denatura/marketing_actions_detector
 merglbot-denatura/marketing-planning
+merglbot-denatura/marketing_actions_detector
+
+merglbot-extractors/denatura-additional-costs-extractor
+merglbot-extractors/denatura-shoptet-export-extractor
+merglbot-extractors/facebook-extractor
+merglbot-extractors/shoptet-extractor
+
+merglbot-hodinarstvibechyne/hodinarstvi-web
+
+merglbot-kiteboarding/kiteboarding-web
+
+merglbot-milan-private/fakturoid
+merglbot-milan-private/plane_so
 
 merglbot-proteinaco/abc_product_material_analysis
+merglbot-proteinaco/basket-analysis
 merglbot-proteinaco/btf-legacy-implementation
 merglbot-proteinaco/btf-viz
 merglbot-proteinaco/proteinaco-web
 merglbot-proteinaco/viz-api
+
+# NOTE: SSOT pilot repo; advisory docs hint remains non-authoritative review metadata.
+merglbot-public/docs
+merglbot-public/kazdavterina-web
+merglbot-public/livero-web
+merglbot-public/website
 
 merglbot-ruzovyslon/business_forecasting
 merglbot-ruzovyslon/data-pipelines
 merglbot-ruzovyslon/kbc_data_quality_metodology
 merglbot-ruzovyslon/ruzovyslon-web
 merglbot-ruzovyslon/viz-api
-
-merglbot-extractors/facebook-extractor
-
-# NOTE: Private repo; baseline only until Phase 05 policy explicitly includes private repos.
-merglbot-milan-private/fakturoid
-
-merglbot-autodoplnky/autodoplnky-web
-
-merglbot-hodinarstvibechyne/hodinarstvi-web
-
-merglbot-kiteboarding/kiteboarding-web

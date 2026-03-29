@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Validate the PR Assistant repo-policy manifest and audit rollout coverage."""
+"""Generate, validate, and audit the PR Assistant enterprise rollout manifest."""
 
 from __future__ import annotations
 
 import argparse
 import base64
+import copy
 import json
 import os
 import pathlib
 import subprocess
-import sys
 import textwrap
 import urllib.error
 import urllib.parse
@@ -18,14 +18,19 @@ from dataclasses import dataclass
 from typing import Any
 
 
-ALLOWED_ROLLOUT_TIERS = {"core", "public", "client", "private"}
+ALLOWED_ROLLOUT_TIERS = {"core", "public", "client", "private", "shared"}
 ALLOWED_ADMISSION_STATES = {"baseline_only", "advisory_docs_pilot"}
+ALLOWED_DEPLOY_MODES = {"copy_target", "canonical_self"}
+DEFAULT_MANIFEST_PATH = "scripts/pr-assistant/repo-policy-manifest.json"
+DEFAULT_POLICY_PATH = "scripts/pr-assistant/repo-policy-inventory-policy.json"
+DEFAULT_TARGET_LIST_PATH = "scripts/pr-assistant/target-repos.txt"
 REQUIRED_REPO_FIELDS = (
     "repo",
     "enabled",
     "rollout_tier",
     "admission_state",
     "human_merge_only",
+    "deploy_mode",
     "expected_workflow",
     "notes",
 )
@@ -42,6 +47,7 @@ CONTRACT_MARKERS = (
 @dataclass
 class RepoAudit:
     repo: str
+    deploy_mode: str
     default_branch: str | None
     workflow_present: bool
     workflow_sha: str | None
@@ -60,44 +66,79 @@ class RepoAudit:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validate the PR Assistant repo-policy manifest and coverage baseline."
+        description="Validate the PR Assistant enterprise repo-policy manifest and rollout coverage."
     )
     parser.add_argument(
         "--manifest",
-        default="scripts/pr-assistant/repo-policy-manifest.json",
-        help="Path to repo-policy manifest JSON.",
+        default=DEFAULT_MANIFEST_PATH,
+        help="Path to the generated repo-policy manifest JSON.",
+    )
+    parser.add_argument(
+        "--inventory-policy",
+        default=DEFAULT_POLICY_PATH,
+        help="Path to the human-authored inventory policy JSON.",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    sync_parser = subparsers.add_parser(
+    sync_manifest_parser = subparsers.add_parser(
+        "sync-manifest-from-github",
+        help="Regenerate repo-policy-manifest.json from live GitHub inventory plus policy overrides.",
+    )
+    sync_manifest_parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Fail if repo-policy-manifest.json differs from the generated inventory view.",
+    )
+    sync_manifest_parser.add_argument(
+        "--write",
+        action="store_true",
+        help="Write the regenerated repo-policy-manifest.json.",
+    )
+    sync_manifest_parser.add_argument(
+        "--token-env",
+        default="GITHUB_TOKEN",
+        help="Environment variable containing a GitHub token for inventory reads.",
+    )
+
+    sync_targets_parser = subparsers.add_parser(
         "sync-target-repos",
         help="Render target-repos.txt from the manifest and optionally write it.",
     )
-    sync_parser.add_argument(
+    sync_targets_parser.add_argument(
         "--target-list",
-        default="scripts/pr-assistant/target-repos.txt",
+        default=DEFAULT_TARGET_LIST_PATH,
         help="Compatibility target-repos.txt path.",
     )
-    sync_parser.add_argument(
+    sync_targets_parser.add_argument(
         "--check",
         action="store_true",
         help="Fail if target-repos.txt does not match the manifest render.",
     )
-    sync_parser.add_argument(
+    sync_targets_parser.add_argument(
         "--write",
         action="store_true",
         help="Write the rendered compatibility file.",
     )
 
-    local_parser = subparsers.add_parser(
+    verify_manifest_parser = subparsers.add_parser(
         "verify-manifest",
-        help="Validate schema and ensure target-repos.txt matches the manifest.",
+        help="Validate manifest schema and ensure target-repos.txt matches the manifest.",
     )
-    local_parser.add_argument(
+    verify_manifest_parser.add_argument(
         "--target-list",
-        default="scripts/pr-assistant/target-repos.txt",
+        default=DEFAULT_TARGET_LIST_PATH,
         help="Compatibility target-repos.txt path.",
+    )
+
+    verify_inventory_parser = subparsers.add_parser(
+        "verify-enterprise-inventory",
+        help="Verify that the committed manifest exactly matches current live GitHub inventory.",
+    )
+    verify_inventory_parser.add_argument(
+        "--token-env",
+        default="GITHUB_TOKEN",
+        help="Environment variable containing a GitHub token for inventory reads.",
     )
 
     baseline_parser = subparsers.add_parser(
@@ -120,11 +161,11 @@ def parse_args() -> argparse.Namespace:
 
     verify_parser = subparsers.add_parser(
         "verify",
-        help="Run manifest validation and compare the generated coverage baseline.",
+        help="Run enterprise inventory, manifest, target-list, and coverage-baseline verification.",
     )
     verify_parser.add_argument(
         "--target-list",
-        default="scripts/pr-assistant/target-repos.txt",
+        default=DEFAULT_TARGET_LIST_PATH,
         help="Compatibility target-repos.txt path.",
     )
     verify_parser.add_argument(
@@ -145,15 +186,172 @@ def load_json(path: pathlib.Path) -> Any:
         raise SystemExit(f"Invalid JSON in {path}: {exc}") from exc
 
 
-def validate_manifest(manifest: dict[str, Any], manifest_path: pathlib.Path) -> None:
+def validate_repo_name(value: str, *, label: str) -> None:
+    if not isinstance(value, str) or "/" not in value or value.startswith("/") or value.endswith("/"):
+        raise SystemExit(f"{label} must be org/repo")
+
+
+def validate_inventory_policy(policy: dict[str, Any], policy_path: pathlib.Path) -> None:
+    if not isinstance(policy, dict):
+        raise SystemExit(f"{policy_path} must contain a JSON object at the root.")
+
+    required_root_keys = (
+        "schema_version",
+        "baseline_date",
+        "baseline_artifact",
+        "canonical_source",
+        "required_orgs",
+        "excluded_orgs",
+        "excluded_repos",
+        "default_rollout_tier",
+        "repo_defaults",
+        "org_defaults",
+        "repo_overrides",
+    )
+    for key in required_root_keys:
+        if key not in policy:
+            raise SystemExit(f"{policy_path} missing required root key: {key}")
+
+    if policy["schema_version"] != 1:
+        raise SystemExit(f"{policy_path} has unsupported schema_version={policy['schema_version']}")
+
+    baseline_date = policy["baseline_date"]
+    if not isinstance(baseline_date, str) or len(baseline_date) != 10:
+        raise SystemExit(f"{policy_path} baseline_date must be YYYY-MM-DD")
+
+    baseline_artifact = policy["baseline_artifact"]
+    if not isinstance(baseline_artifact, str) or not baseline_artifact.endswith(".json"):
+        raise SystemExit(f"{policy_path} baseline_artifact must be a .json path")
+
+    canonical = policy["canonical_source"]
+    if not isinstance(canonical, dict):
+        raise SystemExit(f"{policy_path} canonical_source must be an object")
+    for key in ("repo", "workflow_path", "step1_path"):
+        value = canonical.get(key)
+        if not isinstance(value, str) or not value:
+            raise SystemExit(f"{policy_path} canonical_source.{key} must be a non-empty string")
+    validate_repo_name(canonical["repo"], label=f"{policy_path} canonical_source.repo")
+
+    required_orgs = policy["required_orgs"]
+    if not isinstance(required_orgs, list) or not required_orgs:
+        raise SystemExit(f"{policy_path} required_orgs must be a non-empty array")
+    for index, org in enumerate(required_orgs, start=1):
+        if not isinstance(org, str) or not org:
+            raise SystemExit(f"{policy_path} required_orgs[{index}] must be a non-empty string")
+
+    excluded_orgs = policy["excluded_orgs"]
+    if not isinstance(excluded_orgs, list):
+        raise SystemExit(f"{policy_path} excluded_orgs must be an array")
+    for index, org in enumerate(excluded_orgs, start=1):
+        if not isinstance(org, str) or not org:
+            raise SystemExit(f"{policy_path} excluded_orgs[{index}] must be a non-empty string")
+
+    excluded_repos = policy["excluded_repos"]
+    if not isinstance(excluded_repos, list):
+        raise SystemExit(f"{policy_path} excluded_repos must be an array")
+    for index, repo in enumerate(excluded_repos, start=1):
+        validate_repo_name(repo, label=f"{policy_path} excluded_repos[{index}]")
+
+    default_rollout_tier = policy["default_rollout_tier"]
+    if default_rollout_tier not in ALLOWED_ROLLOUT_TIERS:
+        raise SystemExit(
+            f"{policy_path} default_rollout_tier must be one of {sorted(ALLOWED_ROLLOUT_TIERS)}"
+        )
+
+    repo_defaults = policy["repo_defaults"]
+    if not isinstance(repo_defaults, dict):
+        raise SystemExit(f"{policy_path} repo_defaults must be an object")
+    missing_defaults = [field for field in REQUIRED_REPO_FIELDS if field not in {"repo", *repo_defaults.keys()}]
+    if missing_defaults:
+        raise SystemExit(
+            f"{policy_path} repo_defaults missing required fields: {', '.join(sorted(missing_defaults))}"
+        )
+    validate_repo_override(repo_defaults, policy_path, label="repo_defaults")
+
+    org_defaults = policy["org_defaults"]
+    if not isinstance(org_defaults, dict):
+        raise SystemExit(f"{policy_path} org_defaults must be an object")
+    for org, override in org_defaults.items():
+        if not isinstance(org, str) or not org:
+            raise SystemExit(f"{policy_path} org_defaults contains an invalid org key")
+        if not isinstance(override, dict):
+            raise SystemExit(f"{policy_path} org_defaults.{org} must be an object")
+        validate_repo_override(override, policy_path, label=f"org_defaults.{org}")
+
+    repo_overrides = policy["repo_overrides"]
+    if not isinstance(repo_overrides, dict):
+        raise SystemExit(f"{policy_path} repo_overrides must be an object")
+    for repo, override in repo_overrides.items():
+        validate_repo_name(repo, label=f"{policy_path} repo_overrides key")
+        if not isinstance(override, dict):
+            raise SystemExit(f"{policy_path} repo_overrides.{repo} must be an object")
+        validate_repo_override(override, policy_path, label=f"repo_overrides.{repo}")
+
+
+def validate_repo_override(override: dict[str, Any], path: pathlib.Path, *, label: str) -> None:
+    allowed_keys = {
+        "enabled",
+        "rollout_tier",
+        "admission_state",
+        "human_merge_only",
+        "deploy_mode",
+        "expected_workflow",
+        "expected_step1",
+        "notes",
+    }
+    unknown = sorted(set(override) - allowed_keys)
+    if unknown:
+        raise SystemExit(f"{path} {label} contains unsupported keys: {', '.join(unknown)}")
+
+    if "enabled" in override and not isinstance(override["enabled"], bool):
+        raise SystemExit(f"{path} {label}.enabled must be boolean")
+    if "rollout_tier" in override and override["rollout_tier"] not in ALLOWED_ROLLOUT_TIERS:
+        raise SystemExit(f"{path} {label}.rollout_tier must be one of {sorted(ALLOWED_ROLLOUT_TIERS)}")
+    if "admission_state" in override and override["admission_state"] not in ALLOWED_ADMISSION_STATES:
+        raise SystemExit(
+            f"{path} {label}.admission_state must be one of {sorted(ALLOWED_ADMISSION_STATES)}"
+        )
+    if "human_merge_only" in override and override["human_merge_only"] is not True:
+        raise SystemExit(f"{path} {label}.human_merge_only must stay true")
+    if "deploy_mode" in override and override["deploy_mode"] not in ALLOWED_DEPLOY_MODES:
+        raise SystemExit(f"{path} {label}.deploy_mode must be one of {sorted(ALLOWED_DEPLOY_MODES)}")
+    if "expected_workflow" in override:
+        value = override["expected_workflow"]
+        if not isinstance(value, str) or not value.startswith(".github/workflows/"):
+            raise SystemExit(f"{path} {label}.expected_workflow must point into .github/workflows/")
+    if "expected_step1" in override:
+        value = override["expected_step1"]
+        if value is not None and (
+            not isinstance(value, str) or not value.startswith("scripts/pr-assistant/")
+        ):
+            raise SystemExit(f"{path} {label}.expected_step1 must point into scripts/pr-assistant/")
+    if "notes" in override and not isinstance(override["notes"], str):
+        raise SystemExit(f"{path} {label}.notes must be a string")
+
+
+def validate_manifest(
+    manifest: dict[str, Any],
+    manifest_path: pathlib.Path,
+    *,
+    allow_example_repo: bool = False,
+) -> None:
     if not isinstance(manifest, dict):
         raise SystemExit(f"{manifest_path} must contain a JSON object at the root.")
 
-    for key in ("schema_version", "baseline_date", "baseline_artifact", "canonical_source", "repos"):
+    required_root_keys = (
+        "schema_version",
+        "baseline_date",
+        "baseline_artifact",
+        "inventory_policy",
+        "managed_orgs",
+        "canonical_source",
+        "repos",
+    )
+    for key in required_root_keys:
         if key not in manifest:
             raise SystemExit(f"{manifest_path} missing required root key: {key}")
 
-    if manifest["schema_version"] != 1:
+    if manifest["schema_version"] != 2:
         raise SystemExit(f"{manifest_path} has unsupported schema_version={manifest['schema_version']}")
 
     baseline_date = manifest["baseline_date"]
@@ -164,6 +362,17 @@ def validate_manifest(manifest: dict[str, Any], manifest_path: pathlib.Path) -> 
     if not isinstance(baseline_artifact, str) or not baseline_artifact.endswith(".json"):
         raise SystemExit(f"{manifest_path} baseline_artifact must be a .json path")
 
+    inventory_policy = manifest["inventory_policy"]
+    if not isinstance(inventory_policy, str) or not inventory_policy.endswith(".json"):
+        raise SystemExit(f"{manifest_path} inventory_policy must be a .json path")
+
+    managed_orgs = manifest["managed_orgs"]
+    if not isinstance(managed_orgs, list) or not managed_orgs:
+        raise SystemExit(f"{manifest_path} managed_orgs must be a non-empty array")
+    for index, org in enumerate(managed_orgs, start=1):
+        if not isinstance(org, str) or not org:
+            raise SystemExit(f"{manifest_path} managed_orgs[{index}] must be a non-empty string")
+
     canonical = manifest["canonical_source"]
     if not isinstance(canonical, dict):
         raise SystemExit(f"{manifest_path} canonical_source must be an object")
@@ -171,12 +380,14 @@ def validate_manifest(manifest: dict[str, Any], manifest_path: pathlib.Path) -> 
         value = canonical.get(key)
         if not isinstance(value, str) or not value:
             raise SystemExit(f"{manifest_path} canonical_source.{key} must be a non-empty string")
+    validate_repo_name(canonical["repo"], label=f"{manifest_path} canonical_source.repo")
 
     repos = manifest["repos"]
     if not isinstance(repos, list) or not repos:
         raise SystemExit(f"{manifest_path} repos must be a non-empty array")
 
     seen_repos: set[str] = set()
+    seen_canonical_self = 0
     for index, repo_entry in enumerate(repos, start=1):
         if not isinstance(repo_entry, dict):
             raise SystemExit(f"{manifest_path} repos[{index}] must be an object")
@@ -185,8 +396,10 @@ def validate_manifest(manifest: dict[str, Any], manifest_path: pathlib.Path) -> 
             raise SystemExit(f"{manifest_path} repos[{index}] missing required fields: {', '.join(missing)}")
 
         repo = repo_entry["repo"]
-        if not isinstance(repo, str) or "/" not in repo or repo.startswith("/") or repo.endswith("/"):
-            raise SystemExit(f"{manifest_path} repos[{index}].repo must be org/repo")
+        if repo == "example/example" and allow_example_repo:
+            pass
+        else:
+            validate_repo_name(repo, label=f"{manifest_path} repos[{index}].repo")
         if repo in seen_repos:
             raise SystemExit(f"{manifest_path} contains duplicate repo entry: {repo}")
         seen_repos.add(repo)
@@ -211,6 +424,18 @@ def validate_manifest(manifest: dict[str, Any], manifest_path: pathlib.Path) -> 
         if human_merge_only is not True:
             raise SystemExit(f"{manifest_path} repos[{index}].human_merge_only must stay true")
 
+        deploy_mode = repo_entry["deploy_mode"]
+        if deploy_mode not in ALLOWED_DEPLOY_MODES:
+            raise SystemExit(
+                f"{manifest_path} repos[{index}].deploy_mode must be one of {sorted(ALLOWED_DEPLOY_MODES)}"
+            )
+        if deploy_mode == "canonical_self":
+            seen_canonical_self += 1
+            if repo != canonical["repo"]:
+                raise SystemExit(
+                    f"{manifest_path} repos[{index}] uses deploy_mode=canonical_self but repo != canonical_source.repo"
+                )
+
         expected_workflow = repo_entry["expected_workflow"]
         if not isinstance(expected_workflow, str) or not expected_workflow.startswith(".github/workflows/"):
             raise SystemExit(
@@ -229,22 +454,26 @@ def validate_manifest(manifest: dict[str, Any], manifest_path: pathlib.Path) -> 
         if not isinstance(notes, str):
             raise SystemExit(f"{manifest_path} repos[{index}].notes must be a string")
 
+    if seen_canonical_self != 1:
+        raise SystemExit(f"{manifest_path} must contain exactly one deploy_mode=canonical_self repo entry")
+
 
 def render_target_repos(manifest: dict[str, Any]) -> str:
     header = textwrap.dedent(
         """\
         # Derived compatibility artifact for PR Assistant rollout tooling.
-        # Canonical source of truth: scripts/pr-assistant/repo-policy-manifest.json
+        # Generated from scripts/pr-assistant/repo-policy-manifest.json
+        # Inventory policy source: scripts/pr-assistant/repo-policy-inventory-policy.json
         # Regenerate / verify:
         #   python3 scripts/pr-assistant/repo-policy-manifest.py sync-target-repos --check
         #   python3 scripts/pr-assistant/repo-policy-manifest.py sync-target-repos --write
-        # Enabled copy-deploy targets only. Canonical source repo remains merglbot-core/github.
+        # Enabled copy-deploy targets only. canonical_self entries stay in the manifest and coverage audit only.
         """
     )
     lines = [header.rstrip(), ""]
     last_org = None
     for entry in manifest["repos"]:
-        if not entry["enabled"]:
+        if not entry["enabled"] or entry["deploy_mode"] != "copy_target":
             continue
         org = entry["repo"].split("/", 1)[0]
         if org != last_org and last_org is not None:
@@ -330,6 +559,119 @@ def github_request(path: str, token: str) -> Any:
         raise SystemExit(f"GitHub API {exc.code} for {path}: {exc.read().decode('utf-8', errors='replace')}") from exc
 
 
+def github_paginated_request(path: str, token: str) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    page = 1
+    separator = "&" if "?" in path else "?"
+    while True:
+        data = github_request(f"{path}{separator}per_page=100&page={page}", token)
+        if not data:
+            break
+        if not isinstance(data, list):
+            raise SystemExit(f"Expected list response from GitHub API for {path}, got: {type(data).__name__}")
+        results.extend(data)
+        if len(data) < 100:
+            break
+        page += 1
+    return results
+
+
+def read_live_inventory(policy: dict[str, Any], token: str) -> tuple[list[str], list[str]]:
+    visible_orgs = sorted(
+        org["login"]
+        for org in github_paginated_request("/user/orgs", token)
+        if org["login"] not in set(policy["excluded_orgs"])
+    )
+
+    missing_required_orgs = sorted(set(policy["required_orgs"]) - set(visible_orgs))
+    if missing_required_orgs:
+        raise SystemExit(
+            "Live GitHub inventory is incomplete for this token. Missing required org visibility: "
+            + ", ".join(missing_required_orgs)
+        )
+
+    excluded_repos = set(policy["excluded_repos"])
+    repos: list[str] = []
+    for org in visible_orgs:
+        repo_payload = github_paginated_request(f"/orgs/{org}/repos?type=all&sort=full_name&direction=asc", token)
+        for repo in repo_payload:
+            if repo.get("archived"):
+                continue
+            full_name = repo["full_name"]
+            if full_name in excluded_repos:
+                continue
+            repos.append(full_name)
+
+    repos = sorted(set(repos), key=lambda value: tuple(value.split("/", 1)))
+    return visible_orgs, repos
+
+
+def build_manifest_from_inventory(policy: dict[str, Any], managed_orgs: list[str], repos: list[str]) -> dict[str, Any]:
+    manifest = {
+        "schema_version": 2,
+        "baseline_date": policy["baseline_date"],
+        "baseline_artifact": policy["baseline_artifact"],
+        "inventory_policy": DEFAULT_POLICY_PATH,
+        "managed_orgs": managed_orgs,
+        "canonical_source": copy.deepcopy(policy["canonical_source"]),
+        "repos": [],
+    }
+
+    repo_defaults = copy.deepcopy(policy["repo_defaults"])
+    org_defaults = policy["org_defaults"]
+    repo_overrides = policy["repo_overrides"]
+
+    for repo in repos:
+        org = repo.split("/", 1)[0]
+        entry = {"repo": repo, **copy.deepcopy(repo_defaults)}
+        if org in org_defaults:
+            entry.update(copy.deepcopy(org_defaults[org]))
+        if repo in repo_overrides:
+            entry.update(copy.deepcopy(repo_overrides[repo]))
+        manifest["repos"].append(entry)
+
+    validate_manifest(manifest, pathlib.Path(DEFAULT_MANIFEST_PATH))
+    return manifest
+
+
+def sync_manifest_from_github(
+    manifest_path: pathlib.Path,
+    policy_path: pathlib.Path,
+    *,
+    token_env: str,
+    check: bool,
+    write: bool,
+) -> dict[str, Any]:
+    policy = load_json(policy_path)
+    validate_inventory_policy(policy, policy_path)
+    token = get_token(token_env)
+    managed_orgs, repos = read_live_inventory(policy, token)
+    rendered = build_manifest_from_inventory(policy, managed_orgs, repos)
+
+    if check or not write:
+        current = load_json(manifest_path)
+        if current != rendered:
+            current_repos = {entry["repo"] for entry in current.get("repos", []) if isinstance(entry, dict) and "repo" in entry}
+            rendered_repos = {entry["repo"] for entry in rendered["repos"]}
+            missing = sorted(rendered_repos - current_repos)
+            extra = sorted(current_repos - rendered_repos)
+            details = []
+            if missing:
+                details.append(f"missing repos in manifest: {', '.join(missing[:10])}" + (" ..." if len(missing) > 10 else ""))
+            if extra:
+                details.append(f"extra repos in manifest: {', '.join(extra[:10])}" + (" ..." if len(extra) > 10 else ""))
+            suffix = f" ({'; '.join(details)})" if details else ""
+            raise SystemExit(
+                f"{manifest_path} drifted from live GitHub inventory and inventory policy."
+                f"{suffix} Run sync-manifest-from-github --write to refresh the manifest."
+            )
+
+    if write:
+        write_json(manifest_path, rendered)
+
+    return rendered
+
+
 def get_repo_default_branch(repo: str, token: str) -> str | None:
     data = github_request(f"/repos/{repo}", token)
     if not data:
@@ -380,12 +722,20 @@ def audit_repo(
     workflow_matches = bool(workflow_sha and workflow_sha == canonical_workflow_sha)
     step1_matches = bool(step1_sha and step1_sha == canonical_step1_sha) if expected_step1 else True
 
-    if workflow_present and step1_present and workflow_matches and step1_matches:
-        deployment_state = "deployed_canonical_copy"
-    elif workflow_present or step1_present:
-        deployment_state = "deployed_copy_drift"
+    if repo_entry["deploy_mode"] == "canonical_self":
+        if workflow_present and step1_present and workflow_matches and step1_matches:
+            deployment_state = "canonical_self"
+        elif workflow_present or step1_present:
+            deployment_state = "canonical_self_drift"
+        else:
+            deployment_state = "not_deployed"
     else:
-        deployment_state = "not_deployed"
+        if workflow_present and step1_present and workflow_matches and step1_matches:
+            deployment_state = "deployed_canonical_copy"
+        elif workflow_present or step1_present:
+            deployment_state = "deployed_copy_drift"
+        else:
+            deployment_state = "not_deployed"
 
     phase03_contract_compliant = bool(
         workflow_present
@@ -408,6 +758,7 @@ def audit_repo(
 
     return RepoAudit(
         repo=repo,
+        deploy_mode=repo_entry["deploy_mode"],
         default_branch=default_branch,
         workflow_present=workflow_present,
         workflow_sha=workflow_sha,
@@ -453,6 +804,7 @@ def build_coverage_baseline(manifest: dict[str, Any], token_env: str) -> dict[st
                 "rollout_tier": repo_entry["rollout_tier"],
                 "admission_state": repo_entry["admission_state"],
                 "human_merge_only": repo_entry["human_merge_only"],
+                "deploy_mode": repo_entry["deploy_mode"],
                 "expected_workflow": repo_entry["expected_workflow"],
                 "expected_step1": repo_entry.get("expected_step1"),
                 "notes": repo_entry["notes"],
@@ -473,13 +825,21 @@ def build_coverage_baseline(manifest: dict[str, Any], token_env: str) -> dict[st
         )
 
     summary = {
+        "managed_org_count": len(manifest["managed_orgs"]),
         "repo_count": len(repo_entries),
         "enabled_count": sum(1 for entry in repo_entries if entry["enabled"]),
+        "copy_target_count": sum(1 for entry in repo_entries if entry["deploy_mode"] == "copy_target"),
+        "canonical_self_count": sum(1 for entry in repo_entries if entry["deploy_mode"] == "canonical_self"),
         "canonical_copy_count": sum(
             1 for entry in repo_entries if entry["deployment_state"] == "deployed_canonical_copy"
         ),
+        "canonical_self_ready_count": sum(
+            1 for entry in repo_entries if entry["deployment_state"] == "canonical_self"
+        ),
         "drift_count": sum(
-            1 for entry in repo_entries if entry["deployment_state"] == "deployed_copy_drift"
+            1
+            for entry in repo_entries
+            if entry["deployment_state"] in {"deployed_copy_drift", "canonical_self_drift"}
         ),
         "not_deployed_count": sum(
             1 for entry in repo_entries if entry["deployment_state"] == "not_deployed"
@@ -496,10 +856,12 @@ def build_coverage_baseline(manifest: dict[str, Any], token_env: str) -> dict[st
     }
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "baseline_date": manifest["baseline_date"],
-        "manifest_path": "scripts/pr-assistant/repo-policy-manifest.json",
-        "target_list_path": "scripts/pr-assistant/target-repos.txt",
+        "inventory_policy": manifest["inventory_policy"],
+        "managed_orgs": manifest["managed_orgs"],
+        "manifest_path": DEFAULT_MANIFEST_PATH,
+        "target_list_path": DEFAULT_TARGET_LIST_PATH,
         "canonical_source": {
             "repo": canonical["repo"],
             "workflow_path": canonical["workflow_path"],
@@ -529,6 +891,18 @@ def compare_json(expected_path: pathlib.Path, payload: dict[str, Any]) -> None:
 def main() -> None:
     args = parse_args()
     manifest_path = pathlib.Path(args.manifest)
+    policy_path = pathlib.Path(args.inventory_policy)
+
+    if args.command == "sync-manifest-from-github":
+        sync_manifest_from_github(
+            manifest_path,
+            policy_path,
+            token_env=args.token_env,
+            check=args.check or not args.write,
+            write=args.write,
+        )
+        return
+
     manifest = load_json(manifest_path)
     validate_manifest(manifest, manifest_path)
 
@@ -554,6 +928,16 @@ def main() -> None:
         load_json(baseline_artifact)
         return
 
+    if args.command == "verify-enterprise-inventory":
+        sync_manifest_from_github(
+            manifest_path,
+            policy_path,
+            token_env=args.token_env,
+            check=True,
+            write=False,
+        )
+        return
+
     if args.command == "build-coverage-baseline":
         payload = build_coverage_baseline(manifest, args.token_env)
         if args.output:
@@ -565,6 +949,13 @@ def main() -> None:
         return
 
     if args.command == "verify":
+        sync_manifest_from_github(
+            manifest_path,
+            policy_path,
+            token_env=args.token_env,
+            check=True,
+            write=False,
+        )
         sync_target_repos(
             manifest,
             pathlib.Path(args.target_list),

@@ -3,6 +3,7 @@
 # Usage:
 #   ./scripts/pr-assistant/deploy-v3.sh --dry-run
 #   ./scripts/pr-assistant/deploy-v3.sh --only merglbot-core/platform,merglbot-public/docs --dry-run
+#   ./scripts/pr-assistant/deploy-v3.sh --workspace-root /tmp/pr-assistant-rollout-workspace --only merglbot-core/platform
 #   ./scripts/pr-assistant/deploy-v3.sh
 #
 # Notes:
@@ -13,6 +14,7 @@ set -euo pipefail
 DRY_RUN="false"
 FORCE="false"
 ONLY_REPOS_RAW=""
+WORKSPACE_ROOT_OVERRIDE=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run)
@@ -35,6 +37,18 @@ while [ "$#" -gt 0 ]; do
       ONLY_REPOS_RAW="${1#--only=}"
       shift
       ;;
+    --workspace-root)
+      if [ "$#" -lt 2 ]; then
+        echo "ERROR: --workspace-root requires an absolute directory path" >&2
+        exit 2
+      fi
+      WORKSPACE_ROOT_OVERRIDE="$2"
+      shift 2
+      ;;
+    --workspace-root=*)
+      WORKSPACE_ROOT_OVERRIDE="${1#--workspace-root=}"
+      shift
+      ;;
     *)
       echo "ERROR: Unknown argument: $1" >&2
       exit 2
@@ -42,7 +56,11 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+if [ -n "$WORKSPACE_ROOT_OVERRIDE" ]; then
+  WORKSPACE_ROOT="$WORKSPACE_ROOT_OVERRIDE"
+else
+  WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+fi
 SOURCE_WORKFLOW="${WORKSPACE_ROOT}/merglbot-core/github/.github/workflows/merglbot-pr-assistant-v3-on-demand.yml"
 SOURCE_STEP1="${WORKSPACE_ROOT}/merglbot-core/github/scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh"
 MANIFEST_TOOL="${WORKSPACE_ROOT}/merglbot-core/github/scripts/pr-assistant/repo-policy-manifest.py"
@@ -74,8 +92,9 @@ if [ ! -f "$TARGET_REPOS_FILE" ]; then
   exit 1
 fi
 
-python3 "$MANIFEST_TOOL" verify-manifest \
+python3 "$MANIFEST_TOOL" \
   --manifest "$MANIFEST_FILE" \
+  verify-manifest \
   --target-list "$TARGET_REPOS_FILE"
 
 # Platform scope (exclude Merglevsky-cz entirely).
