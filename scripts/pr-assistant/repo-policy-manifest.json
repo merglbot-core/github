@@ -432,6 +432,17 @@
       "notes": ""
     },
     {
+      "repo": "merglbot-extractors/ruzovyslon-forecast-exporter",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "deploy_mode": "copy_target",
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
       "repo": "merglbot-extractors/shoptet-extractor",
       "enabled": true,
       "rollout_tier": "client",
