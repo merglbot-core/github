@@ -6,9 +6,9 @@
   "canonical_source": {
     "repo": "merglbot-core/github",
     "workflow_path": ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
-    "workflow_sha": "f75292ca26f9fe48ee3ef431c0d6609183521979",
+    "workflow_sha": "3e51009e7861b16558c45111a460a5fb7bc12fb4",
     "step1_path": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
-    "step1_sha": "89ffbf78cc714a37091372fa75b519d914b99352"
+    "step1_sha": "aa92a93d2ca8edb2618755c4cbd4593b779bd2f9"
   },
   "summary": {
     "repo_count": 34,
@@ -17,41 +17,42 @@
     "drift_count": 34,
     "not_deployed_count": 0,
     "phase03_contract_compliant_count": 0,
-    "phase05_eligible_count": 0
+    "advisory_docs_pilot_count": 3,
+    "advisory_docs_pilot_ready_count": 0
   },
   "repos": [
     {
       "repo": "merglbot-core/agents-orchestrator",
       "enabled": true,
       "rollout_tier": "core",
-      "admission_state": "phase05_candidate",
+      "admission_state": "advisory_docs_pilot",
       "human_merge_only": true,
       "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
       "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
-      "notes": "Phase 02 and Phase 03 proving ground; keep eligible for Phase 05 canary admission.",
+      "notes": "Successor pilot repo for advisory docs cooperation; refresh rollout copy and verify classifier-wins-over-hint behavior.",
       "default_branch": "main",
       "workflow_present": true,
-      "workflow_sha": "6d3b1421cc1da5a296a4e504a075f8c31cd054b2",
+      "workflow_sha": "8e09a3a1046d9a71943c60777be570b7bc71aefe",
       "workflow_matches_canonical": false,
       "step1_present": true,
-      "step1_sha": "c72091966a43299767192ae4ce3941ba549c8a62",
-      "step1_matches_canonical": false,
-      "review_boundary_marker_present": false,
-      "handoff_contract_present": false,
-      "documentation_gate_present": false,
+      "step1_sha": "aa92a93d2ca8edb2618755c4cbd4593b779bd2f9",
+      "step1_matches_canonical": true,
+      "review_boundary_marker_present": true,
+      "handoff_contract_present": true,
+      "documentation_gate_present": true,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "blocked_contract_drift"
+      "advisory_docs_pilot_status": "blocked_contract_drift"
     },
     {
       "repo": "merglbot-core/ai_prompts",
       "enabled": true,
       "rollout_tier": "core",
-      "admission_state": "phase05_candidate",
+      "admission_state": "baseline_only",
       "human_merge_only": true,
       "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
       "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
-      "notes": "Prompt-contract peer; keep aligned with runtime before Phase 05.",
+      "notes": "Prompt-contract peer; not part of the successor advisory docs pilot rollout.",
       "default_branch": "main",
       "workflow_present": true,
       "workflow_sha": "846bf964f65c0ccc3b91646a4b3a72ce96557cce",
@@ -64,7 +65,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "blocked_contract_drift"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-core/dataform",
@@ -87,7 +88,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-core/fb-viz-api",
@@ -110,7 +111,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-core/infra",
@@ -133,17 +134,17 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-core/merglbot-admin",
       "enabled": true,
       "rollout_tier": "core",
-      "admission_state": "phase05_candidate",
+      "admission_state": "baseline_only",
       "human_merge_only": true,
       "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
       "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
-      "notes": "High-visibility internal app; treat as canary candidate after manifest baseline.",
+      "notes": "High-visibility internal app; keep baseline-only until a separate successor rollout decision exists.",
       "default_branch": "main",
       "workflow_present": true,
       "workflow_sha": "1951646619ad70f4fc8c46440b459c9af390b6cc",
@@ -156,30 +157,30 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "blocked_contract_drift"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-core/platform",
       "enabled": true,
       "rollout_tier": "core",
-      "admission_state": "phase05_candidate",
+      "admission_state": "advisory_docs_pilot",
       "human_merge_only": true,
       "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
       "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
-      "notes": "Core platform repo; keep eligible for Phase 05 canary admission.",
+      "notes": "Successor pilot repo for advisory docs cooperation; refresh rollout copy before broader rollout decisions.",
       "default_branch": "main",
       "workflow_present": true,
-      "workflow_sha": "df5b6694edf8d2d8081e1ea531d2bc4762d9d17d",
+      "workflow_sha": "8e09a3a1046d9a71943c60777be570b7bc71aefe",
       "workflow_matches_canonical": false,
       "step1_present": true,
-      "step1_sha": "e411fd8f2bf241e41c599ccc7d888f2e46d979ec",
-      "step1_matches_canonical": false,
-      "review_boundary_marker_present": false,
-      "handoff_contract_present": false,
-      "documentation_gate_present": false,
+      "step1_sha": "aa92a93d2ca8edb2618755c4cbd4593b779bd2f9",
+      "step1_matches_canonical": true,
+      "review_boundary_marker_present": true,
+      "handoff_contract_present": true,
+      "documentation_gate_present": true,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "blocked_contract_drift"
+      "advisory_docs_pilot_status": "blocked_contract_drift"
     },
     {
       "repo": "merglbot-core/tf-modules-",
@@ -202,30 +203,30 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-public/docs",
       "enabled": true,
       "rollout_tier": "public",
-      "admission_state": "phase05_candidate",
+      "admission_state": "advisory_docs_pilot",
       "human_merge_only": true,
       "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
       "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
-      "notes": "Public SSOT repo; keep eligible for Phase 05 canary admission.",
+      "notes": "Successor pilot repo for advisory docs cooperation; SSOT must stay aligned with manifest-governed pilot status.",
       "default_branch": "main",
       "workflow_present": true,
-      "workflow_sha": "31fea4c8ae8357397b86fe6f01e0189169f42f7d",
+      "workflow_sha": "8e09a3a1046d9a71943c60777be570b7bc71aefe",
       "workflow_matches_canonical": false,
       "step1_present": true,
-      "step1_sha": "9c44e277f78b4663bbcf31e758ea70d51f8d6a0e",
-      "step1_matches_canonical": false,
-      "review_boundary_marker_present": false,
-      "handoff_contract_present": false,
-      "documentation_gate_present": false,
+      "step1_sha": "aa92a93d2ca8edb2618755c4cbd4593b779bd2f9",
+      "step1_matches_canonical": true,
+      "review_boundary_marker_present": true,
+      "handoff_contract_present": true,
+      "documentation_gate_present": true,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "blocked_contract_drift"
+      "advisory_docs_pilot_status": "blocked_contract_drift"
     },
     {
       "repo": "merglbot-public/kazdavterina-web",
@@ -248,7 +249,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-public/livero-web",
@@ -271,7 +272,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-public/website",
@@ -294,7 +295,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-cerano/cerano-web",
@@ -317,7 +318,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-cerano/feed-generator",
@@ -340,7 +341,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-cerano/product-forecasting",
@@ -363,7 +364,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-cerano/viz-api",
@@ -386,7 +387,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-denatura/denatura-fb-viz",
@@ -409,7 +410,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-denatura/marketing_actions_detector",
@@ -432,7 +433,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-denatura/marketing-planning",
@@ -455,7 +456,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-proteinaco/abc_product_material_analysis",
@@ -478,7 +479,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-proteinaco/btf-legacy-implementation",
@@ -501,7 +502,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-proteinaco/btf-viz",
@@ -524,7 +525,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-proteinaco/proteinaco-web",
@@ -547,7 +548,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-proteinaco/viz-api",
@@ -570,7 +571,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-ruzovyslon/business_forecasting",
@@ -593,7 +594,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-ruzovyslon/data-pipelines",
@@ -616,7 +617,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-ruzovyslon/kbc_data_quality_metodology",
@@ -639,7 +640,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-ruzovyslon/ruzovyslon-web",
@@ -662,7 +663,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-ruzovyslon/viz-api",
@@ -685,7 +686,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-extractors/facebook-extractor",
@@ -708,7 +709,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-milan-private/fakturoid",
@@ -731,7 +732,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-autodoplnky/autodoplnky-web",
@@ -754,7 +755,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-hodinarstvibechyne/hodinarstvi-web",
@@ -777,7 +778,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     },
     {
       "repo": "merglbot-kiteboarding/kiteboarding-web",
@@ -800,7 +801,7 @@
       "documentation_gate_present": false,
       "deployment_state": "deployed_copy_drift",
       "phase03_contract_compliant": false,
-      "phase05_canary_eligibility": "not_requested"
+      "advisory_docs_pilot_status": "not_requested"
     }
   ]
 }

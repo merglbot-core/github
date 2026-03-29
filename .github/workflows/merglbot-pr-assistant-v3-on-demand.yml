@@ -35,11 +35,6 @@ on:
           - auto
           - delta
           - full
-      dispatch_source:
-        description: "Dispatch source (manual_dispatch or issue_comment_dispatch)"
-        required: false
-        type: string
-        default: "manual_dispatch"
       expected_head_sha:
         description: "Expected PR head SHA for fail-closed head binding"
         required: false
@@ -134,7 +129,6 @@ jobs:
       review_mode: ${{ steps.get_pr.outputs.review_mode }}
       diff_scope: ${{ steps.get_pr.outputs.diff_scope }}
       include_retro: ${{ steps.get_pr.outputs.include_retro }}
-      dispatch_source: ${{ steps.get_pr.outputs.dispatch_source }}
       trigger_comment_id: ${{ steps.get_pr.outputs.trigger_comment_id }}
     steps:
       - name: Get PR Number and Mode
@@ -145,7 +139,6 @@ jobs:
           INPUT_REVIEW_MODE: ${{ github.event.inputs.review_mode }}
           INPUT_INCLUDE_RETRO: ${{ github.event.inputs.include_retro }}
           INPUT_DIFF_SCOPE: ${{ github.event.inputs.diff_scope }}
-          INPUT_DISPATCH_SOURCE: ${{ github.event.inputs.dispatch_source }}
           INPUT_TRIGGER_COMMENT_ID: ${{ github.event.inputs.trigger_comment_id }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
@@ -171,7 +164,6 @@ jobs:
                   echo "review_mode=light"
                   echo "diff_scope=auto"
                   echo "include_retro=false"
-                  echo "dispatch_source=issue_comment_dispatch"
                   echo "trigger_comment_id=${COMMENT_ID:-}"
                 } >> "$GITHUB_OUTPUT"
                 exit 0
@@ -202,12 +194,10 @@ jobs:
             REVIEW_MODE_OUT="${INPUT_REVIEW_MODE:-light}"
             DIFF_SCOPE_OUT="${INPUT_DIFF_SCOPE:-auto}"
             INCLUDE_RETRO_OUT="${INPUT_INCLUDE_RETRO:-false}"
-            DISPATCH_SOURCE_OUT="${INPUT_DISPATCH_SOURCE:-manual_dispatch}"
             TRIGGER_COMMENT_ID_OUT="${INPUT_TRIGGER_COMMENT_ID:-}"
             echo "✅ Manual trigger for PR #$INPUT_PR_NUMBER (mode: ${INPUT_REVIEW_MODE:-light})"
           else
             PR_NUMBER_OUT="$ISSUE_NUMBER"
-            DISPATCH_SOURCE_OUT="issue_comment_dispatch"
             TRIGGER_COMMENT_ID_OUT="${COMMENT_ID:-}"
             # `--full` intentionally stays separate from `--full-diff`.
             if flag_present "--full"; then
@@ -247,7 +237,6 @@ jobs:
             echo "review_mode=$REVIEW_MODE_OUT"
             echo "diff_scope=$DIFF_SCOPE_OUT"
             echo "include_retro=$INCLUDE_RETRO_OUT"
-            echo "dispatch_source=$DISPATCH_SOURCE_OUT"
             echo "trigger_comment_id=$TRIGGER_COMMENT_ID_OUT"
           } >> "$GITHUB_OUTPUT"
 
@@ -292,7 +281,6 @@ jobs:
             -f openai_model="gpt-5.4" \
             -f openai_synthesis_model="gpt-5.4" \
             -f openai_synthesis_reasoning_effort="high" \
-            -f dispatch_source="issue_comment_dispatch" \
             -f expected_head_sha="$PR_HEAD_SHA" \
             -f trigger_comment_id="$TRIGGER_COMMENT_ID"
 
@@ -341,11 +329,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXPECTED_HEAD_SHA_INPUT: ${{ github.event.inputs.expected_head_sha || '' }}
-          DISPATCH_SOURCE: ${{ github.event.inputs.dispatch_source || needs.check-trigger.outputs.dispatch_source || 'manual_dispatch' }}
           TRIGGER_COMMENT_ID: ${{ github.event.inputs.trigger_comment_id || needs.check-trigger.outputs.trigger_comment_id || '' }}
         run: |
           set -euo pipefail
           
+          DISPATCH_SOURCE="manual_dispatch"
+          if [ -n "${TRIGGER_COMMENT_ID:-}" ] || [ -n "${EXPECTED_HEAD_SHA_INPUT:-}" ]; then
+            DISPATCH_SOURCE="issue_comment_dispatch"
+          fi
+
           echo "========================================="
           echo "GATHERING PR CONTEXT"
           echo "========================================="
@@ -744,7 +736,7 @@ jobs:
             _GH="g""h"
             _GHP="${_GH}""p_"
             # Keep only documented short GitHub token classes here; github_pat_ is handled separately below.
-            _GH_CLASS_PREFIX="${_GH}""[oprstu]_"
+            _GH_CLASS_PREFIX="${_GH}""[oprsut]_"
             _GH_PAT_PREFIX="git""hub""_pat_"
             _SK_PREFIX="s""k-"
             _PRIVATE_WORD="PRIVATE"" KEY"
@@ -772,9 +764,11 @@ jobs:
             _OPENAI_PROJECT_RX="(^|[^[:alnum:]_])${_SK_PREFIX}(proj|ant)-[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             _OPENAI_RX="(^|[^[:alnum:]_])${_SK_PREFIX}[A-Za-z0-9_-]{30,}($|[^[:alnum:]_])"
             # STRICT keeps the legacy broad key_ heuristic to preserve fail-closed pre-scan coverage.
-            SENSITIVE_PATTERN_STRICT="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_LEGACY_GENERIC_KEY_STRICT_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
-            # NO_GENERIC excludes the noisy legacy key_ heuristic while keeping explicit *_key_ prefixes and GitHub token classes covered.
-            SENSITIVE_PATTERN_NO_GENERIC="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
+            SECRET_PATTERN_STRICT="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_LEGACY_GENERIC_KEY_STRICT_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
+            # NO_KEY excludes the noisy legacy key_ heuristic while keeping explicit *_key_ prefixes and GitHub token classes covered.
+            SECRET_PATTERN_STRICT_NO_KEY="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
+            SENSITIVE_PATTERN_STRICT="${SECRET_PATTERN_STRICT}"
+            SENSITIVE_PATTERN_NO_GENERIC="${SECRET_PATTERN_STRICT_NO_KEY}"
             JWT_PATTERN_STRICT="(^|[^[:alnum:]_])${_JWT_PREFIX}[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             # Loose JWT pattern (for alignment with redaction; intentionally NOT used for SKIP_REVIEW gating):
             #   (^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}($|[^[:alnum:]_])
@@ -1533,10 +1527,11 @@ jobs:
             exit 1
           fi
 
+          CHECK_SURFACE_JQ="[.check_runs[]? | select(((.details_url // \"\") | contains(\"/actions/runs/\" + \$run_id)))] | length"
           MATCH_COUNT="0"
-          for attempt in $(seq 1 20); do
+          for _ in $(seq 1 20); do
             MATCH_COUNT="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" \
-              --jq --arg run_id "${GITHUB_RUN_ID}" '[.check_runs[]? | select(((.details_url // "") | contains("/actions/runs/" + $run_id)))] | length' 2>/dev/null || echo "0")"
+              --jq --arg run_id "${GITHUB_RUN_ID}" "$CHECK_SURFACE_JQ" 2>/dev/null || echo "0")"
             if [[ "${MATCH_COUNT:-0}" =~ ^[0-9]+$ ]] && [ "${MATCH_COUNT}" -gt 0 ]; then
               printf '%s\n' "verified" > pr_check_surface_state.txt
               break
@@ -1559,10 +1554,14 @@ jobs:
           OPENAI_SYNTHESIS_REASONING_EFFORT: ${{ github.event.inputs.openai_synthesis_reasoning_effort == 'org_default' && (vars.MERGLBOT_OPENAI_REASONING_EFFORT_SYNTHESIS || 'high') || github.event.inputs.openai_synthesis_reasoning_effort || 'high' }}
           PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
           REVIEW_MODE: ${{ needs.check-trigger.outputs.review_mode }}
-          DISPATCH_SOURCE: ${{ github.event.inputs.dispatch_source || needs.check-trigger.outputs.dispatch_source || 'manual_dispatch' }}
           TRIGGER_COMMENT_ID: ${{ github.event.inputs.trigger_comment_id || needs.check-trigger.outputs.trigger_comment_id || '' }}
         run: |
           set -euo pipefail
+
+          DISPATCH_SOURCE="manual_dispatch"
+          if [ -n "${TRIGGER_COMMENT_ID:-}" ]; then
+            DISPATCH_SOURCE="issue_comment_dispatch"
+          fi
 
           SANITIZE_WARNINGS_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/merglbot-sanitize-warnings.XXXXXX")"
           trap 'rm -f -- "$SANITIZE_WARNINGS_FILE"' EXIT
@@ -1782,19 +1781,19 @@ jobs:
               echo ""
               echo "| Phase | Model | Config |"
               echo "|-------|-------|--------|"
-              echo "| Primary Analysis | Anthropic \`$ANTHROPIC_MODEL_FINAL\` | temp=0.2 |"
-              echo "| Secondary Analysis | OpenAI \`$OPENAI_MODEL_FINAL\` | $OPENAI_CONFIG_DESC |"
-              echo "| Final Synthesis | OpenAI \`$OPENAI_SYNTHESIS_MODEL_FINAL\` | $OPENAI_SYNTHESIS_CONFIG_DESC |"
+              printf '%s\n' "| Primary Analysis | Anthropic \`$ANTHROPIC_MODEL_FINAL\` | temp=0.2 |"
+              printf '%s\n' "| Secondary Analysis | OpenAI \`$OPENAI_MODEL_FINAL\` | $OPENAI_CONFIG_DESC |"
+              printf '%s\n' "| Final Synthesis | OpenAI \`$OPENAI_SYNTHESIS_MODEL_FINAL\` | $OPENAI_SYNTHESIS_CONFIG_DESC |"
               echo ""
               echo "### Review Statistics"
               echo ""
               echo "| Metric | Value |"
               echo "|--------|-------|"
-              echo "| Review Mode | \`$CURRENT_REVIEW_MODE\` |"
-              echo "| Bot Mode | \`$BOT_MODE\` |"
-              echo "| Diff Scope | \`$DIFF_SCOPE\` |"
-              echo "| Diff Range | \`$DIFF_RANGE\` |"
-              echo "| Head SHA | \`${PR_HEAD_SHA:0:12}\` |"
+              printf '%s\n' "| Review Mode | \`$CURRENT_REVIEW_MODE\` |"
+              printf '%s\n' "| Bot Mode | \`$BOT_MODE\` |"
+              printf '%s\n' "| Diff Scope | \`$DIFF_SCOPE\` |"
+              printf '%s\n' "| Diff Range | \`$DIFF_RANGE\` |"
+              printf '%s\n' "| Head SHA | \`${PR_HEAD_SHA:0:12}\` |"
               echo "| Anthropic Output | $ANTHROPIC_WORDS words |"
               echo "| OpenAI Output | $OPENAI_WORDS words |"
               echo "| Final Review | $FINAL_WORDS words |"
@@ -1811,25 +1810,25 @@ jobs:
               echo ""
               echo "- Full PR description"
               echo "- CI / checks summary"
-              echo "- Diff scope: \`$DIFF_SCOPE\` (\`$DIFF_RANGE\`)"
+              printf '%s\n' "- Diff scope: \`$DIFF_SCOPE\` (\`$DIFF_RANGE\`)"
               echo "- Changed files list"
               echo "- Bugbot findings ($BUGBOT_COUNT sources)"
               echo "- Merglbot Appendix v2.15 (MERGLBOT rules)"
-              echo "- Review boundary: review-only (`human_merge_only` closeout path)"
+              printf '%s\n' "- Review boundary: review-only (\`human_merge_only\` closeout path)"
               echo ""
               echo "### Handoff Receipt"
               echo ""
               echo "| Field | Value |"
               echo "|-------|-------|"
-              echo "| follow_up_id | \`$FOLLOW_UP_ID\` |"
-              echo "| review_head_sha | \`${PR_HEAD_SHA}\` |"
-              echo "| review_verdict | \`$REVIEW_VERDICT\` |"
-              echo "| documentation_obligation_state | \`$DOCUMENTATION_OBLIGATION_STATE\` |"
-              echo "| docs_follow_up_hint | \`$DOCS_FOLLOW_UP_HINT\` |"
-              echo "| suggested_docs_targets | \`$SUGGESTED_DOCS_TARGETS_JSON\` |"
-              echo "| docs_signal_basis | \`$DOCS_SIGNAL_BASIS\` |"
-              echo "| closeout_mode | \`$CLOSEOUT_MODE\` |"
-              echo "| pr_check_surface | \`$PR_CHECK_SURFACE_STATE\` |"
+              printf '%s\n' "| follow_up_id | \`$FOLLOW_UP_ID\` |"
+              printf '%s\n' "| review_head_sha | \`${PR_HEAD_SHA}\` |"
+              printf '%s\n' "| review_verdict | \`$REVIEW_VERDICT\` |"
+              printf '%s\n' "| documentation_obligation_state | \`$DOCUMENTATION_OBLIGATION_STATE\` |"
+              printf '%s\n' "| docs_follow_up_hint | \`$DOCS_FOLLOW_UP_HINT\` |"
+              printf '%s\n' "| suggested_docs_targets | \`$SUGGESTED_DOCS_TARGETS_JSON\` |"
+              printf '%s\n' "| docs_signal_basis | \`$DOCS_SIGNAL_BASIS\` |"
+              printf '%s\n' "| closeout_mode | \`$CLOSEOUT_MODE\` |"
+              printf '%s\n' "| pr_check_surface | \`$PR_CHECK_SURFACE_STATE\` |"
               echo ""
               echo "</details>"
               echo ""
@@ -1854,9 +1853,9 @@ jobs:
               echo "---"
               echo ""
               if [ "$CURRENT_REVIEW_MODE" == "light" ]; then
-                echo "*Light mode. For detailed analysis: \`@merglbot review --full\`*"
+                printf '%s\n' "*Light mode. For detailed analysis: \`@merglbot review --full\`*"
               else
-                echo "*Full analysis. For quick review: \`@merglbot review --light\`*"
+                printf '%s\n' "*Full analysis. For quick review: \`@merglbot review --light\`*"
               fi
               echo ""
               echo "---"

@@ -5,21 +5,21 @@
 #   python3 scripts/pr-assistant/repo-policy-manifest.py sync-target-repos --write
 # Enabled copy-deploy targets only. Canonical source repo remains merglbot-core/github.
 
-# NOTE: Phase 02 and Phase 03 proving ground; keep eligible for Phase 05 canary admission.
+# NOTE: Successor pilot repo for advisory docs cooperation; refresh rollout copy and verify classifier-wins-over-hint behavior.
 merglbot-core/agents-orchestrator
-# NOTE: Prompt-contract peer; keep aligned with runtime before Phase 05.
+# NOTE: Prompt-contract peer; not part of the successor advisory docs pilot rollout.
 merglbot-core/ai_prompts
 merglbot-core/dataform
 merglbot-core/fb-viz-api
 merglbot-core/infra
-# NOTE: High-visibility internal app; treat as canary candidate after manifest baseline.
+# NOTE: High-visibility internal app; keep baseline-only until a separate successor rollout decision exists.
 merglbot-core/merglbot-admin
-# NOTE: Core platform repo; keep eligible for Phase 05 canary admission.
+# NOTE: Successor pilot repo for advisory docs cooperation; refresh rollout copy before broader rollout decisions.
 merglbot-core/platform
 # NOTE: Repo slug intentionally ends with a trailing hyphen.
 merglbot-core/tf-modules-
 
-# NOTE: Public SSOT repo; keep eligible for Phase 05 canary admission.
+# NOTE: Successor pilot repo for advisory docs cooperation; SSOT must stay aligned with manifest-governed pilot status.
 merglbot-public/docs
 merglbot-public/kazdavterina-web
 merglbot-public/livero-web
