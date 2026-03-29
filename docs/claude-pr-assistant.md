@@ -32,8 +32,10 @@ For lighter review: `@merglbot review --light`
 
 - **Canonical source**: `merglbot-core/github/.github/workflows/merglbot-pr-assistant-v3-on-demand.yml`
 - **Deployed copy** (per target repo): `.github/workflows/merglbot-pr-v3-on-demand.yml` via `scripts/pr-assistant/deploy-v3.sh`
-- **Coverage SSOT**: `scripts/pr-assistant/repo-policy-manifest.json`
-- **Coverage baseline**: `scripts/pr-assistant/baselines/2026-03-28/repo-policy-coverage-baseline.json`
+- **Inventory policy**: `scripts/pr-assistant/repo-policy-inventory-policy.json`
+- **Coverage SSOT**: generated `scripts/pr-assistant/repo-policy-manifest.json`
+- **Coverage baseline**: `scripts/pr-assistant/baselines/2026-03-29/repo-policy-coverage-baseline.json`
+- **Scope sync automation**: `.github/workflows/merglbot-pr-assistant-manifest-sync.yml`
 
 ---
 
