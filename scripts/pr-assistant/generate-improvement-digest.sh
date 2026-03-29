@@ -64,8 +64,9 @@ if [ ! -f "$TARGET_REPOS_FILE" ]; then
   exit 1
 fi
 
-python3 "$MANIFEST_TOOL" verify-manifest \
+python3 "$MANIFEST_TOOL" \
   --manifest "$MANIFEST_FILE" \
+  verify-manifest \
   --target-list "$TARGET_REPOS_FILE"
 
 SINCE_DATE="$(date -u -d "$DAYS_BACK days ago" '+%Y-%m-%dT00:00:00Z' 2>/dev/null || date -u -v-"${DAYS_BACK}"d '+%Y-%m-%dT00:00:00Z')"

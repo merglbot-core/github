@@ -92,8 +92,9 @@ if [ ! -f "$TARGET_REPOS_FILE" ]; then
   exit 1
 fi
 
-python3 "$MANIFEST_TOOL" verify-manifest \
+python3 "$MANIFEST_TOOL" \
   --manifest "$MANIFEST_FILE" \
+  verify-manifest \
   --target-list "$TARGET_REPOS_FILE"
 
 # Platform scope (exclude Merglevsky-cz entirely).
