@@ -147,6 +147,28 @@ BRANCH="codex/pr-assistant-v3-rollout-wave-${WAVE}-${DATE_TAG}"
 PR_TITLE="chore(ci): roll out PR Assistant v3 reusable snapshot"
 PR_BODY="Automated enterprise rollout wave ${WAVE} for the current PR Assistant v3 reusable workflow snapshot."
 
+repo_manifest_paths() {
+  local repo="$1"
+  python3 - "$repo" "${REPO_ROOT}/scripts/pr-assistant/repo-policy-manifest.json" <<'PY'
+import json
+import pathlib
+import sys
+
+repo = sys.argv[1]
+manifest_path = pathlib.Path(sys.argv[2])
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+for entry in manifest["repos"]:
+    if entry["repo"] != repo:
+        continue
+    print(entry["expected_workflow"])
+    expected_step1 = entry.get("expected_step1")
+    if expected_step1:
+        print(expected_step1)
+    sys.exit(0)
+raise SystemExit(f"missing repo-policy manifest entry for {repo}")
+PY
+}
+
 ensure_repo_checkout() {
   local repo="$1"
   local repo_dir="${WORKSPACE_ROOT}/${repo}"
@@ -173,8 +195,20 @@ ensure_repo_checkout() {
 commit_push_and_pr() {
   local repo="$1"
   local repo_dir="${WORKSPACE_ROOT}/${repo}"
+  local repo_paths=()
+  local relative_path
 
-  git -C "$repo_dir" add .github/workflows/merglbot-pr-v3-on-demand.yml scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh
+  while IFS= read -r relative_path; do
+    [ -z "$relative_path" ] && continue
+    repo_paths+=("$relative_path")
+  done < <(repo_manifest_paths "$repo")
+
+  if [ "${#repo_paths[@]}" -eq 0 ]; then
+    echo "ERROR: no repo-policy manifest paths resolved for ${repo}" >&2
+    exit 1
+  fi
+
+  git -C "$repo_dir" add -- "${repo_paths[@]}"
   if git -C "$repo_dir" diff --cached --quiet; then
     echo "No content changes for ${repo}"
     return 0
