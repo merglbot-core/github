@@ -19,7 +19,7 @@ from typing import Any
 
 
 ALLOWED_ROLLOUT_TIERS = {"core", "public", "client", "private"}
-ALLOWED_ADMISSION_STATES = {"baseline_only", "phase05_candidate"}
+ALLOWED_ADMISSION_STATES = {"baseline_only", "advisory_docs_pilot"}
 REQUIRED_REPO_FIELDS = (
     "repo",
     "enabled",
@@ -54,7 +54,7 @@ class RepoAudit:
     documentation_gate_present: bool
     deployment_state: str
     phase03_contract_compliant: bool
-    phase05_canary_eligibility: str
+    advisory_docs_pilot_status: str
     notes: str
 
 
@@ -398,13 +398,13 @@ def audit_repo(
     )
 
     if not repo_entry["enabled"]:
-        phase05_canary_eligibility = "disabled"
-    elif repo_entry["admission_state"] != "phase05_candidate":
-        phase05_canary_eligibility = "not_requested"
+        advisory_docs_pilot_status = "disabled"
+    elif repo_entry["admission_state"] != "advisory_docs_pilot":
+        advisory_docs_pilot_status = "not_requested"
     elif not phase03_contract_compliant:
-        phase05_canary_eligibility = "blocked_contract_drift"
+        advisory_docs_pilot_status = "blocked_contract_drift"
     else:
-        phase05_canary_eligibility = "eligible"
+        advisory_docs_pilot_status = "ready"
 
     return RepoAudit(
         repo=repo,
@@ -420,7 +420,7 @@ def audit_repo(
         documentation_gate_present=documentation_gate_present,
         deployment_state=deployment_state,
         phase03_contract_compliant=phase03_contract_compliant,
-        phase05_canary_eligibility=phase05_canary_eligibility,
+        advisory_docs_pilot_status=advisory_docs_pilot_status,
         notes=repo_entry["notes"],
     )
 
@@ -468,7 +468,7 @@ def build_coverage_baseline(manifest: dict[str, Any], token_env: str) -> dict[st
                 "documentation_gate_present": audit.documentation_gate_present,
                 "deployment_state": audit.deployment_state,
                 "phase03_contract_compliant": audit.phase03_contract_compliant,
-                "phase05_canary_eligibility": audit.phase05_canary_eligibility,
+                "advisory_docs_pilot_status": audit.advisory_docs_pilot_status,
             }
         )
 
@@ -487,8 +487,11 @@ def build_coverage_baseline(manifest: dict[str, Any], token_env: str) -> dict[st
         "phase03_contract_compliant_count": sum(
             1 for entry in repo_entries if entry["phase03_contract_compliant"]
         ),
-        "phase05_eligible_count": sum(
-            1 for entry in repo_entries if entry["phase05_canary_eligibility"] == "eligible"
+        "advisory_docs_pilot_count": sum(
+            1 for entry in repo_entries if entry["admission_state"] == "advisory_docs_pilot"
+        ),
+        "advisory_docs_pilot_ready_count": sum(
+            1 for entry in repo_entries if entry["advisory_docs_pilot_status"] == "ready"
         ),
     }
 

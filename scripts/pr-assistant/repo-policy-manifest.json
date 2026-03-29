@@ -12,21 +12,21 @@
       "repo": "merglbot-core/agents-orchestrator",
       "enabled": true,
       "rollout_tier": "core",
-      "admission_state": "phase05_candidate",
+      "admission_state": "advisory_docs_pilot",
       "human_merge_only": true,
       "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
       "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
-      "notes": "Phase 02 and Phase 03 proving ground; keep eligible for Phase 05 canary admission."
+      "notes": "Successor pilot repo for advisory docs cooperation; refresh rollout copy and verify classifier-wins-over-hint behavior."
     },
     {
       "repo": "merglbot-core/ai_prompts",
       "enabled": true,
       "rollout_tier": "core",
-      "admission_state": "phase05_candidate",
+      "admission_state": "baseline_only",
       "human_merge_only": true,
       "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
       "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
-      "notes": "Prompt-contract peer; keep aligned with runtime before Phase 05."
+      "notes": "Prompt-contract peer; not part of the successor advisory docs pilot rollout."
     },
     {
       "repo": "merglbot-core/dataform",
@@ -62,21 +62,21 @@
       "repo": "merglbot-core/merglbot-admin",
       "enabled": true,
       "rollout_tier": "core",
-      "admission_state": "phase05_candidate",
+      "admission_state": "baseline_only",
       "human_merge_only": true,
       "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
       "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
-      "notes": "High-visibility internal app; treat as canary candidate after manifest baseline."
+      "notes": "High-visibility internal app; keep baseline-only until a separate successor rollout decision exists."
     },
     {
       "repo": "merglbot-core/platform",
       "enabled": true,
       "rollout_tier": "core",
-      "admission_state": "phase05_candidate",
+      "admission_state": "advisory_docs_pilot",
       "human_merge_only": true,
       "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
       "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
-      "notes": "Core platform repo; keep eligible for Phase 05 canary admission."
+      "notes": "Successor pilot repo for advisory docs cooperation; refresh rollout copy before broader rollout decisions."
     },
     {
       "repo": "merglbot-core/tf-modules-",
@@ -92,11 +92,11 @@
       "repo": "merglbot-public/docs",
       "enabled": true,
       "rollout_tier": "public",
-      "admission_state": "phase05_candidate",
+      "admission_state": "advisory_docs_pilot",
       "human_merge_only": true,
       "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
       "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
-      "notes": "Public SSOT repo; keep eligible for Phase 05 canary admission."
+      "notes": "Successor pilot repo for advisory docs cooperation; SSOT must stay aligned with manifest-governed pilot status."
     },
     {
       "repo": "merglbot-public/kazdavterina-web",
