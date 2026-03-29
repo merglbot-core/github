@@ -43,16 +43,26 @@ jobs:
           git config user.email "bot@merglbot.ai"
 
           BRANCH="codex/pr-assistant-manifest-sync"
+          TMP_DIR="$(mktemp -d)"
+          trap 'rm -rf "$TMP_DIR"' EXIT
+          cp scripts/pr-assistant/repo-policy-inventory-policy.json "${TMP_DIR}/repo-policy-inventory-policy.json"
+          cp scripts/pr-assistant/repo-policy-manifest.json "${TMP_DIR}/repo-policy-manifest.json"
+          cp scripts/pr-assistant/target-repos.txt "${TMP_DIR}/target-repos.txt"
+
           if git ls-remote --exit-code origin "refs/heads/${BRANCH}" > /dev/null 2>&1; then
             git fetch origin "${BRANCH}:${BRANCH}"
+            git restore --source=HEAD --worktree --staged \
+              scripts/pr-assistant/repo-policy-inventory-policy.json \
+              scripts/pr-assistant/repo-policy-manifest.json \
+              scripts/pr-assistant/target-repos.txt
             git checkout "${BRANCH}"
-            git restore --source=HEAD --worktree --staged .
-            git checkout -- scripts/pr-assistant/repo-policy-inventory-policy.json scripts/pr-assistant/repo-policy-manifest.json scripts/pr-assistant/target-repos.txt
-            python3 scripts/pr-assistant/repo-policy-manifest.py sync-manifest-from-github --write --token-env GH_TOKEN
-            python3 scripts/pr-assistant/repo-policy-manifest.py sync-target-repos --write
           else
             git checkout -b "${BRANCH}"
           fi
+
+          cp "${TMP_DIR}/repo-policy-inventory-policy.json" scripts/pr-assistant/repo-policy-inventory-policy.json
+          cp "${TMP_DIR}/repo-policy-manifest.json" scripts/pr-assistant/repo-policy-manifest.json
+          cp "${TMP_DIR}/target-repos.txt" scripts/pr-assistant/target-repos.txt
 
           git add scripts/pr-assistant/repo-policy-inventory-policy.json \
                   scripts/pr-assistant/repo-policy-manifest.json \

@@ -108,7 +108,7 @@ wave_matches_repo() {
       [[ "$repo" == merglbot-extractors/* || "$repo" == merglbot-milan-private/* || "$repo" == merglbot-autodoplnky/* || "$repo" == merglbot-hodinarstvibechyne/* || "$repo" == merglbot-kiteboarding/* ]]
       ;;
     4)
-      [[ "$repo" == lrtch/* ]]
+      [[ "$repo" == lrtch/* || "$repo" == merglbot-shared/* ]]
       ;;
   esac
 }
