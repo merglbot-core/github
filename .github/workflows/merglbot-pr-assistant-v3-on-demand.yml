@@ -1743,10 +1743,18 @@ jobs:
             grep -im1 "^${field_name}:" final_review.txt 2>/dev/null || true
           }
 
+          normalize_machine_token() {
+            printf '%s' "$1" \
+              | tr '[:upper:]' '[:lower:]' \
+              | tr ' ' '_' \
+              | tr -d '\r' \
+              | sed -E 's/[^a-z_]+//g; s/^_+//; s/_+$//; s/_{2,}/_/g'
+          }
+
           DOCUMENTATION_OBLIGATION_STATE="unknown"
           DOC_STATE_LINE="$(extract_zaver_review_field_line 'Documentation Obligation State' || true)"
           if [ -n "$DOC_STATE_LINE" ]; then
-            DOCUMENTATION_OBLIGATION_STATE="$(printf '%s' "$DOC_STATE_LINE" | sed -E 's/^Documentation Obligation State:[[:space:]]*//I' | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -d '\r' | sed -E 's/[^a-z_]+//g')"
+            DOCUMENTATION_OBLIGATION_STATE="$(normalize_machine_token "$(printf '%s' "$DOC_STATE_LINE" | sed -E 's/^Documentation Obligation State:[[:space:]]*//I')")"
           elif awk 'BEGIN{IGNORECASE=1; in_section=0} /^##[[:space:]]+SSOT Sync \(Docs\)/{in_section=1; next} /^##[[:space:]]/{in_section=0} in_section && $0 ~ /^[[:space:]]*None[[:space:]]*$/ {found=1} END{exit(found?0:1)}' final_review.txt 2>/dev/null; then
             DOCUMENTATION_OBLIGATION_STATE="not_required"
           fi
@@ -1758,7 +1766,7 @@ jobs:
           DOCS_FOLLOW_UP_HINT="none"
           DOCS_FOLLOW_UP_HINT_LINE="$(extract_final_review_field_line 'Docs Follow-Up Hint' || true)"
           if [ -n "$DOCS_FOLLOW_UP_HINT_LINE" ]; then
-            DOCS_FOLLOW_UP_HINT="$(printf '%s' "$DOCS_FOLLOW_UP_HINT_LINE" | sed -E 's/^Docs Follow-Up Hint:[[:space:]]*//I' | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -d '\r' | sed -E 's/[^a-z_]+//g')"
+            DOCS_FOLLOW_UP_HINT="$(normalize_machine_token "$(printf '%s' "$DOCS_FOLLOW_UP_HINT_LINE" | sed -E 's/^Docs Follow-Up Hint:[[:space:]]*//I')")"
           fi
           case "$DOCS_FOLLOW_UP_HINT" in
             likely_required|not_observed|none) ;;
@@ -1768,7 +1776,7 @@ jobs:
           DOCS_SIGNAL_BASIS="review_output_only"
           DOCS_SIGNAL_BASIS_LINE="$(extract_final_review_field_line 'Docs Signal Basis' || true)"
           if [ -n "$DOCS_SIGNAL_BASIS_LINE" ]; then
-            DOCS_SIGNAL_BASIS_RAW="$(printf '%s' "$DOCS_SIGNAL_BASIS_LINE" | sed -E 's/^Docs Signal Basis:[[:space:]]*//I' | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -d '\r')"
+            DOCS_SIGNAL_BASIS_RAW="$(normalize_machine_token "$(printf '%s' "$DOCS_SIGNAL_BASIS_LINE" | sed -E 's/^Docs Signal Basis:[[:space:]]*//I')")"
             if [ "$DOCS_SIGNAL_BASIS_RAW" = "review_output_only" ]; then
               DOCS_SIGNAL_BASIS="review_output_only"
             fi
@@ -1802,7 +1810,7 @@ jobs:
           REVIEW_VERDICT="blocked_missing_authority"
           VERDICT_LINE="$(extract_zaver_review_field_line 'Verdict' || true)"
           if [ -n "$VERDICT_LINE" ]; then
-            REVIEW_VERDICT_RAW="$(printf '%s' "$VERDICT_LINE" | sed -E 's/^Verdict:[[:space:]]*//I' | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -d '\r' | sed -E 's/[^a-z_]+//g')"
+            REVIEW_VERDICT_RAW="$(normalize_machine_token "$(printf '%s' "$VERDICT_LINE" | sed -E 's/^Verdict:[[:space:]]*//I')")"
             case "$REVIEW_VERDICT_RAW" in
               approved_for_closeout|approve) REVIEW_VERDICT="approved_for_closeout" ;;
               changes_required|changes_needed) REVIEW_VERDICT="changes_required" ;;
