@@ -733,42 +733,39 @@ jobs:
             # matcher to avoid lockfile integrity-string false positives while keeping secret coverage fail-closed.
             # Intentionally inlined here so the workflow never sources shell from the PR checkout.
             # This workflow is the authoritative copy of the secret pre-scan patterns.
-            _GH="$(printf '%b' '\\x67\\x68')"
-            _GHP="$(printf '%b' '\\x67\\x68\\x70\\x5f')"
+            _GH="g""h"
+            _GHP="${_GH}""p_"
             # Keep only documented short GitHub token classes here; github_pat_ is handled separately below.
-            _GH_CLASS_PREFIX="$(printf '%b' '\\x67\\x68\\x5b\\x6f\\x70\\x72\\x73\\x75\\x74\\x5d\\x5f')"
-            _GH_PAT_PREFIX="$(printf '%b' '\\x67\\x69\\x74\\x68\\x75\\x62\\x5f\\x70\\x61\\x74\\x5f')"
-            _SK_PREFIX="$(printf '%b' '\\x73\\x6b\\x2d')"
+            _GH_CLASS_PREFIX="${_GH}""[oprsut]_"
+            _GH_PAT_PREFIX="github""_pat_"
+            _SK_PREFIX="s""k-"
+            _GENERIC_API_KEY_PREFIX="api_ke""y_"
+            _GENERIC_SECRET_KEY_PREFIX="secret_ke""y_"
+            _GENERIC_PRIVATE_KEY_PREFIX="private_ke""y_"
+            _GENERIC_ACCESS_KEY_PREFIX="access_ke""y_"
+            _LEGACY_GENERIC_KEY_STRICT_RX='(^|[^[:alnum:]_])key_[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])'
+            _JWT_PREFIX="ey""J"
             _PRIVATE_WORD="PRIVATE"" KEY"
             _PGP_BLOCK_WORD="BLO""CK"
-            _SLACK_PREFIX="$(printf '%b' '\\x78\\x6f\\x78\\x5b\\x62\\x61\\x70\\x72\\x73\\x5d\\x2d')"
-            _GENERIC_API_KEY_PREFIX="$(printf '%b' '\\x61\\x70\\x69\\x5f\\x6b\\x65\\x79\\x5f')"
-            _GENERIC_SECRET_KEY_PREFIX="$(printf '%b' '\\x73\\x65\\x63\\x72\\x65\\x74\\x5f\\x6b\\x65\\x79\\x5f')"
-            _GENERIC_PRIVATE_KEY_PREFIX="$(printf '%b' '\\x70\\x72\\x69\\x76\\x61\\x74\\x65\\x5f\\x6b\\x65\\x79\\x5f')"
-            _GENERIC_ACCESS_KEY_PREFIX="$(printf '%b' '\\x61\\x63\\x63\\x65\\x73\\x73\\x5f\\x6b\\x65\\x79\\x5f')"
-            _LEGACY_GENERIC_KEY_STRICT_RX="(^|[^[:alnum:]_])key_[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
-            _AWS_PREFIX="$(printf '%b' '\\x41\\x4b\\x49\\x41')"
-            _GOOGLE_PREFIX="$(printf '%b' '\\x41\\x49\\x7a\\x61')"
-            _GOOGLE_REFRESH_PREFIX="$(printf '%b' '\\x79\\x61\\x32\\x39\\\\x2e')"
-            _JWT_PREFIX="ey""J"
             _BEGIN_PRIVATE_BLOCK="-----BEGIN [A-Z ]*${_PRIVATE_WORD}-----"
             _BEGIN_PGP_BLOCK="-----BEGIN PGP[ ]PRIVATE[ ]KEY[ ]${_PGP_BLOCK_WORD}-----"
-            _SLACK_RX="(^|[^[:alnum:]_])${_SLACK_PREFIX}[A-Za-z0-9-]{10,}($|[^[:alnum:]_])"
+            _SLACK_RX='(^|[^[:alnum:]_])xox[baprs]-[A-Za-z0-9-]{10,}($|[^[:alnum:]_])'
             _GH_CLASSIC_RX="(^|[^[:alnum:]_])${_GHP}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
             _GH_FINE_RX="(^|[^[:alnum:]_])${_GH_PAT_PREFIX}[A-Za-z0-9_]{20,}($|[^[:alnum:]_])"
             _GH_GENERIC_RX="(^|[^[:alnum:]_])${_GH_CLASS_PREFIX}[A-Za-z0-9]{30,}($|[^[:alnum:]_])"
             _GENERIC_RX="(^|[^[:alnum:]_])(${_GENERIC_API_KEY_PREFIX}|${_GENERIC_SECRET_KEY_PREFIX}|${_GENERIC_PRIVATE_KEY_PREFIX}|${_GENERIC_ACCESS_KEY_PREFIX})[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
-            _AWS_RX="(^|[^[:alnum:]_])${_AWS_PREFIX}[0-9A-Z]{16}($|[^[:alnum:]_])"
-            _GOOGLE_RX="(^|[^[:alnum:]_])${_GOOGLE_PREFIX}[0-9A-Za-z_-]{30,}($|[^[:alnum:]_])"
+            _AWS_RX='(^|[^[:alnum:]_])AKIA[0-9A-Z]{16}($|[^[:alnum:]_])'
+            _GOOGLE_RX='(^|[^[:alnum:]_])AIza[0-9A-Za-z_-]{30,}($|[^[:alnum:]_])'
+            _GOOGLE_REFRESH_PREFIX="ya""29\\."
             _GOOGLE_REFRESH_RX="(^|[^[:alnum:]_])${_GOOGLE_REFRESH_PREFIX}[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             _OPENAI_PROJECT_RX="(^|[^[:alnum:]_])${_SK_PREFIX}(proj|ant)-[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             _OPENAI_RX="(^|[^[:alnum:]_])${_SK_PREFIX}[A-Za-z0-9_-]{30,}($|[^[:alnum:]_])"
             # STRICT keeps the legacy broad key_ heuristic to preserve fail-closed pre-scan coverage.
             SECRET_PATTERN_STRICT="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_LEGACY_GENERIC_KEY_STRICT_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
             # NO_KEY excludes the noisy legacy key_ heuristic while keeping explicit *_key_ prefixes and GitHub token classes covered.
-            STRICT_PATTERN_WITHOUT_GENERIC="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
+            SECRET_PATTERN_STRICT_NO_KEY+="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
             SENSITIVE_PATTERN_STRICT="${SECRET_PATTERN_STRICT}"
-            SENSITIVE_PATTERN_NO_GENERIC="${STRICT_PATTERN_WITHOUT_GENERIC}"
+            SENSITIVE_PATTERN_NO_GENERIC="${SECRET_PATTERN_STRICT_NO_KEY}"
             JWT_PATTERN_STRICT="(^|[^[:alnum:]_])${_JWT_PREFIX}[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
             # Loose JWT pattern (for alignment with redaction; intentionally NOT used for SKIP_REVIEW gating):
             #   (^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}($|[^[:alnum:]_])
