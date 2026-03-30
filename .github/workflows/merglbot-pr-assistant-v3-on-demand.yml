@@ -1527,20 +1527,53 @@ jobs:
             exit 1
           fi
 
-          CHECK_SURFACE_JQ="[.check_runs[]? | select(((.details_url // \"\") | contains(\"/actions/runs/\" + \$run_id)))] | length"
+          # GitHub can lag when projecting a fresh workflow_dispatch run onto the PR checks surface.
+          # Fail closed if it never appears, but resolve against the current run's own job URLs instead
+          # of relying only on a substring match over details_url.
+          gh run view "${GITHUB_RUN_ID}" --json jobs \
+            | jq '[.jobs[]? | .url // empty | select(length > 0)]' > current_run_job_urls.json
+
+          JOB_URL_COUNT="$(jq -r 'length' current_run_job_urls.json 2>/dev/null || echo "0")"
+          if ! [[ "${JOB_URL_COUNT:-0}" =~ ^[0-9]+$ ]] || [ "${JOB_URL_COUNT}" -eq 0 ]; then
+            echo "ERROR: Unable to resolve current workflow job URLs for PR check surface verification" >&2
+            exit 1
+          fi
+
           MATCH_COUNT="0"
-          for _ in $(seq 1 20); do
-            MATCH_COUNT="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" \
-              --jq --arg run_id "${GITHUB_RUN_ID}" "$CHECK_SURFACE_JQ" 2>/dev/null || echo "0")"
-            if [[ "${MATCH_COUNT:-0}" =~ ^[0-9]+$ ]] && [ "${MATCH_COUNT}" -gt 0 ]; then
-              printf '%s\n' "verified" > pr_check_surface_state.txt
-              break
+          for _ in $(seq 1 30); do
+            if gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null \
+              | jq -s '{check_runs: (map(.check_runs // []) | add // [])}' > pr_head_check_runs.json.tmp 2>/dev/null; then
+              mv -f pr_head_check_runs.json.tmp pr_head_check_runs.json
+              MATCH_COUNT="$(jq -r --arg run_id "${GITHUB_RUN_ID}" --slurpfile current_run_job_urls current_run_job_urls.json '
+                ($current_run_job_urls[0] // []) as $job_urls
+                | [
+                    (.check_runs // [])[]?
+                    | (.details_url // "") as $details_url
+                    | select(
+                        (($job_urls | index($details_url)) != null)
+                        or ($details_url | contains("/actions/runs/" + $run_id))
+                      )
+                  ] | length
+              ' pr_head_check_runs.json 2>/dev/null || echo "0")"
+              if [[ "${MATCH_COUNT:-0}" =~ ^[0-9]+$ ]] && [ "${MATCH_COUNT}" -gt 0 ]; then
+                printf '%s\n' "verified" > pr_check_surface_state.txt
+                break
+              fi
             fi
-            sleep 3
+            sleep 5
           done
 
           if ! [[ "${MATCH_COUNT:-0}" =~ ^[0-9]+$ ]] || [ "${MATCH_COUNT}" -eq 0 ]; then
             echo "ERROR: Current workflow run is not visible as a PR check on head ${PR_HEAD_SHA:0:12}" >&2
+            echo "Observed current run job URLs:" >&2
+            jq -r '.[]' current_run_job_urls.json >&2 || true
+            echo "Observed PR check runs on head:" >&2
+            jq -r '
+              (.check_runs // [])[]?
+              | "- " + (.name // "unknown")
+                + " [" + ((.status // "unknown") | tostring) + "/" + ((.conclusion // "null") | tostring) + "] "
+                + (.details_url // "no-details-url")
+            ' pr_head_check_runs.json >&2 || true
             exit 1
           fi
       
