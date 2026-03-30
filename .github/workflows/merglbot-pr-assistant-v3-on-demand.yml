@@ -265,8 +265,8 @@ jobs:
           gh pr view "$PR_NUMBER" --json headRefName,headRefOid > pr_dispatch.json
           PR_HEAD_REF="$(jq -r '.headRefName // empty' pr_dispatch.json)"
           PR_HEAD_SHA="$(jq -r '.headRefOid // empty' pr_dispatch.json)"
-          SELF_WORKFLOW_FILE="${GITHUB_WORKFLOW_REF#${GITHUB_REPOSITORY}/.github/workflows/}"
-          SELF_WORKFLOW_FILE="${SELF_WORKFLOW_FILE%@*}"
+          SELF_WORKFLOW_REF="${GITHUB_WORKFLOW_REF%@*}"
+          SELF_WORKFLOW_FILE="${SELF_WORKFLOW_REF##*/}"
 
           if [ -z "${PR_HEAD_REF:-}" ] || [ -z "${PR_HEAD_SHA:-}" ] || [ -z "${SELF_WORKFLOW_FILE:-}" ]; then
             echo "ERROR: Unable to resolve PR head ref/SHA for dispatch" >&2
