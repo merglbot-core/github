@@ -265,13 +265,15 @@ jobs:
           gh pr view "$PR_NUMBER" --json headRefName,headRefOid > pr_dispatch.json
           PR_HEAD_REF="$(jq -r '.headRefName // empty' pr_dispatch.json)"
           PR_HEAD_SHA="$(jq -r '.headRefOid // empty' pr_dispatch.json)"
+          SELF_WORKFLOW_FILE="${GITHUB_WORKFLOW_REF#${GITHUB_REPOSITORY}/.github/workflows/}"
+          SELF_WORKFLOW_FILE="${SELF_WORKFLOW_FILE%@*}"
 
-          if [ -z "${PR_HEAD_REF:-}" ] || [ -z "${PR_HEAD_SHA:-}" ]; then
+          if [ -z "${PR_HEAD_REF:-}" ] || [ -z "${PR_HEAD_SHA:-}" ] || [ -z "${SELF_WORKFLOW_FILE:-}" ]; then
             echo "ERROR: Unable to resolve PR head ref/SHA for dispatch" >&2
             exit 1
           fi
 
-          gh workflow run "merglbot-pr-assistant-v3-on-demand.yml" \
+          gh workflow run "$SELF_WORKFLOW_FILE" \
             --ref "$PR_HEAD_REF" \
             -f pr_number="$PR_NUMBER" \
             -f review_mode="$REVIEW_MODE" \
@@ -763,7 +765,7 @@ jobs:
             # STRICT keeps the legacy broad key_ heuristic to preserve fail-closed pre-scan coverage.
             SECRET_PATTERN_STRICT="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_LEGACY_GENERIC_KEY_STRICT_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
             # NO_KEY excludes the noisy legacy key_ heuristic while keeping explicit *_key_ prefixes and GitHub token classes covered.
-            SECRET_PATTERN_STRICT_NO_KEY+="${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
+            printf -v SECRET_PATTERN_STRICT_NO_KEY '%s' "${_BEGIN_PRIVATE_BLOCK}|${_BEGIN_PGP_BLOCK}|${_SLACK_RX}|${_GH_CLASSIC_RX}|${_GH_FINE_RX}|${_GH_GENERIC_RX}|${_GENERIC_RX}|${_AWS_RX}|${_GOOGLE_RX}|${_GOOGLE_REFRESH_RX}|${_OPENAI_PROJECT_RX}|${_OPENAI_RX}"
             SENSITIVE_PATTERN_STRICT="${SECRET_PATTERN_STRICT}"
             SENSITIVE_PATTERN_NO_GENERIC="${SECRET_PATTERN_STRICT_NO_KEY}"
             JWT_PATTERN_STRICT="(^|[^[:alnum:]_])${_JWT_PREFIX}[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}($|[^[:alnum:]_])"
