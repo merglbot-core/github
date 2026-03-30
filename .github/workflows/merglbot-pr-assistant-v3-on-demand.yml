@@ -254,6 +254,7 @@ jobs:
       - name: Dispatch head-bound review run
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ needs.check-trigger.outputs.pr_number }}
           REVIEW_MODE: ${{ needs.check-trigger.outputs.review_mode }}
           DIFF_SCOPE_MODE: ${{ needs.check-trigger.outputs.diff_scope }}
@@ -262,7 +263,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          gh pr view "$PR_NUMBER" --json headRefName,headRefOid > pr_dispatch.json
+          gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json headRefName,headRefOid > pr_dispatch.json
           PR_HEAD_REF="$(jq -r '.headRefName // empty' pr_dispatch.json)"
           PR_HEAD_SHA="$(jq -r '.headRefOid // empty' pr_dispatch.json)"
           SELF_WORKFLOW_REF="${GITHUB_WORKFLOW_REF%@*}"
@@ -274,6 +275,7 @@ jobs:
           fi
 
           gh workflow run "$SELF_WORKFLOW_FILE" \
+            --repo "$GH_REPO" \
             --ref "$PR_HEAD_REF" \
             -f pr_number="$PR_NUMBER" \
             -f review_mode="$REVIEW_MODE" \
