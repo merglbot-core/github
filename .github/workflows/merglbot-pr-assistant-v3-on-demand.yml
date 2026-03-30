@@ -1713,8 +1713,33 @@ jobs:
           OPENAI_WORDS="$(safe_word_count openai_review.txt)"
           FINAL_WORDS="$(safe_word_count final_review.txt)"
 
+          extract_final_review_field_line() {
+            local field_name="$1"
+            local zaver_line=""
+            zaver_line="$(
+              awk -v field_name="$field_name" '
+                BEGIN { IGNORECASE = 1; in_zaver = 0 }
+                /^##[[:space:]]+Zaver[[:space:]]*$/ { in_zaver = 1; next }
+                /^##[[:space:]]+/ {
+                  if (in_zaver) {
+                    exit
+                  }
+                }
+                in_zaver && tolower($0) ~ ("^" tolower(field_name) ":[[:space:]]*") {
+                  print
+                  exit
+                }
+              ' final_review.txt 2>/dev/null || true
+            )"
+            if [ -n "$zaver_line" ]; then
+              printf '%s\n' "$zaver_line"
+              return 0
+            fi
+            grep -im1 "^${field_name}:" final_review.txt 2>/dev/null || true
+          }
+
           DOCUMENTATION_OBLIGATION_STATE="unknown"
-          DOC_STATE_LINE="$(grep -im1 '^Documentation Obligation State:' final_review.txt 2>/dev/null || true)"
+          DOC_STATE_LINE="$(extract_final_review_field_line 'Documentation Obligation State' || true)"
           if [ -n "$DOC_STATE_LINE" ]; then
             DOCUMENTATION_OBLIGATION_STATE="$(printf '%s' "$DOC_STATE_LINE" | sed -E 's/^Documentation Obligation State:[[:space:]]*//I' | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -d '\r' | sed -E 's/[^a-z_]+//g')"
           elif awk 'BEGIN{IGNORECASE=1; in_section=0} /^##[[:space:]]+SSOT Sync \(Docs\)/{in_section=1; next} /^##[[:space:]]/{in_section=0} in_section && $0 ~ /^[[:space:]]*None[[:space:]]*$/ {found=1} END{exit(found?0:1)}' final_review.txt 2>/dev/null; then
@@ -1726,7 +1751,7 @@ jobs:
           esac
 
           DOCS_FOLLOW_UP_HINT="none"
-          DOCS_FOLLOW_UP_HINT_LINE="$(grep -im1 '^Docs Follow-Up Hint:' final_review.txt 2>/dev/null || true)"
+          DOCS_FOLLOW_UP_HINT_LINE="$(extract_final_review_field_line 'Docs Follow-Up Hint' || true)"
           if [ -n "$DOCS_FOLLOW_UP_HINT_LINE" ]; then
             DOCS_FOLLOW_UP_HINT="$(printf '%s' "$DOCS_FOLLOW_UP_HINT_LINE" | sed -E 's/^Docs Follow-Up Hint:[[:space:]]*//I' | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -d '\r' | sed -E 's/[^a-z_]+//g')"
           fi
@@ -1736,7 +1761,7 @@ jobs:
           esac
 
           DOCS_SIGNAL_BASIS="review_output_only"
-          DOCS_SIGNAL_BASIS_LINE="$(grep -im1 '^Docs Signal Basis:' final_review.txt 2>/dev/null || true)"
+          DOCS_SIGNAL_BASIS_LINE="$(extract_final_review_field_line 'Docs Signal Basis' || true)"
           if [ -n "$DOCS_SIGNAL_BASIS_LINE" ]; then
             DOCS_SIGNAL_BASIS_RAW="$(printf '%s' "$DOCS_SIGNAL_BASIS_LINE" | sed -E 's/^Docs Signal Basis:[[:space:]]*//I' | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -d '\r')"
             if [ "$DOCS_SIGNAL_BASIS_RAW" = "review_output_only" ]; then
@@ -1745,7 +1770,7 @@ jobs:
           fi
 
           SUGGESTED_DOCS_TARGETS_JSON="[]"
-          SUGGESTED_DOCS_TARGETS_LINE="$(grep -im1 '^Suggested Docs Targets:' final_review.txt 2>/dev/null || true)"
+          SUGGESTED_DOCS_TARGETS_LINE="$(extract_final_review_field_line 'Suggested Docs Targets' || true)"
           if [ -n "$SUGGESTED_DOCS_TARGETS_LINE" ]; then
             SUGGESTED_DOCS_TARGETS_RAW="$(printf '%s' "$SUGGESTED_DOCS_TARGETS_LINE" | sed -E 's/^Suggested Docs Targets:[[:space:]]*//I' | tr -d '\r')"
             if printf '%s' "$SUGGESTED_DOCS_TARGETS_RAW" | jq -ce '
@@ -1770,7 +1795,7 @@ jobs:
           fi
 
           REVIEW_VERDICT="blocked_missing_authority"
-          VERDICT_LINE="$(grep -im1 '^Verdict:' final_review.txt 2>/dev/null || true)"
+          VERDICT_LINE="$(extract_final_review_field_line 'Verdict' || true)"
           if [ -n "$VERDICT_LINE" ]; then
             REVIEW_VERDICT_RAW="$(printf '%s' "$VERDICT_LINE" | sed -E 's/^Verdict:[[:space:]]*//I' | tr '[:upper:]' '[:lower:]' | tr ' ' '_' | tr -d '\r' | sed -E 's/[^a-z_]+//g')"
             case "$REVIEW_VERDICT_RAW" in
@@ -1778,9 +1803,6 @@ jobs:
               changes_required|changes_needed) REVIEW_VERDICT="changes_required" ;;
               blocked_missing_authority) REVIEW_VERDICT="blocked_missing_authority" ;;
             esac
-          fi
-          if [ "$DOCUMENTATION_OBLIGATION_STATE" = "unknown" ]; then
-            REVIEW_VERDICT="blocked_missing_authority"
           fi
 
           FOLLOW_UP_ID="pr-${PR_NUM}-review-${GITHUB_RUN_ID}"
