@@ -6,24 +6,6 @@
 #   python3 scripts/pr-assistant/repo-policy-manifest.py sync-target-repos --write
 # Enabled copy-deploy targets only. canonical_self entries stay in the manifest and coverage audit only.
 
-lrtch/cbdnadzlato
-lrtch/madhand
-lrtch/mamata-proxy
-lrtch/mamata-strapi
-lrtch/mamata-strapi-client
-lrtch/mamata-xml-distributor
-lrtch/phi-vm-ansible-roles
-lrtch/psychedelicintegration
-lrtch/stanpersecurity
-lrtch/vibewrapper
-lrtch/vm-builder
-lrtch/vm1-portainer
-lrtch/vm1-traefik
-lrtch/vw-pipelines
-lrtch/vw-test-app
-lrtch/vw-vyroba-proteinaco
-lrtch/web-kb
-
 merglbot-autodoplnky/autodoplnky-web
 
 merglbot-cerano/cerano-web

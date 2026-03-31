@@ -67,5 +67,5 @@ jobs:
             echo ""
             echo "- Cross-repo live inventory verification skipped in Actions because the available token cannot read every required org."
             echo "- Manifest schema, compatibility target list, and committed baseline artifact were still verified locally."
-            echo "- Run the same workflow with the enterprise-wide token (or re-run locally with broader GitHub access) to verify the full 13-org / 57-repo rollout scope."
+            echo "- Run the same workflow with the enterprise-wide token (or re-run locally with broader GitHub access) to verify the full 12-org / 41-managed-repo rollout scope."
           } >> "$GITHUB_STEP_SUMMARY"
