@@ -1,14 +1,13 @@
 {
   "schema_version": 1,
-  "baseline_date": "2026-03-29",
-  "baseline_artifact": "scripts/pr-assistant/baselines/2026-03-29/repo-policy-coverage-baseline.json",
+  "baseline_date": "2026-03-31",
+  "baseline_artifact": "scripts/pr-assistant/baselines/2026-03-31/repo-policy-coverage-baseline.json",
   "canonical_source": {
     "repo": "merglbot-core/github",
     "workflow_path": ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
     "step1_path": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh"
   },
   "required_orgs": [
-    "lrtch",
     "merglbot-autodoplnky",
     "merglbot-cerano",
     "merglbot-core",
@@ -23,7 +22,8 @@
     "merglbot-shared"
   ],
   "excluded_orgs": [
-    "Merglevsky-cz"
+    "Merglevsky-cz",
+    "lrtch"
   ],
   "excluded_repos": [],
   "default_rollout_tier": "client",
@@ -38,9 +38,6 @@
     "notes": ""
   },
   "org_defaults": {
-    "lrtch": {
-      "rollout_tier": "client"
-    },
     "merglbot-autodoplnky": {
       "rollout_tier": "client"
     },
