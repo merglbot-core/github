@@ -135,8 +135,8 @@ if [ -n "$ONLY_REPOS_RAW" ]; then
 fi
 
 if [ "${#TARGET_REPOS[@]}" -eq 0 ]; then
-  echo "ERROR: no target repos selected for wave ${WAVE}" >&2
-  exit 1
+  echo "No target repos selected for wave ${WAVE}; nothing to launch."
+  exit 0
 fi
 
 WORKSPACE_ROOT="${CACHE_ROOT}/workspace"
