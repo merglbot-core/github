@@ -44,7 +44,6 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
-      actions: read  # Required for SARIF/artifact upload reads in this job.
       contents: read
       pull-requests: write
       security-events: write
@@ -156,7 +155,7 @@ jobs:
       - name: Upload gitleaks report (SARIF, redacted)
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: gitleaks-report-sarif
           path: gitleaks-report.sarif
