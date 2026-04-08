@@ -16,6 +16,16 @@ on:
         description: 'GCP Project ID'
         required: true
         type: string
+      artifact_project_id:
+        description: 'Optional Artifact Registry project override for image push'
+        required: false
+        type: string
+        default: ''
+      artifact_repository:
+        description: 'Artifact Registry repository name'
+        required: false
+        type: string
+        default: 'docker'
       service_account:
         description: 'Email of the Cloud Run service account'
         required: true
@@ -59,8 +69,9 @@ env:
   SERVICE: ${{ inputs.service }}
   REGION: ${{ inputs.region }}
   PROJECT_ID: ${{ inputs.project_id }}
+  IMAGE_PROJECT_ID: ${{ inputs.artifact_project_id || inputs.project_id }}
   GAR_LOCATION: ${{ secrets.GAR_LOCATION }}
-  ARTIFACT_REPO: docker
+  ARTIFACT_REPO: ${{ inputs.artifact_repository }}
 
 jobs:
   deploy:
@@ -113,7 +124,7 @@ jobs:
         id: build
         run: |
           set -euo pipefail
-          IMAGE="${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.SERVICE }}"
+          IMAGE="${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.IMAGE_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.SERVICE }}"
           TAG="${{ github.sha }}"
           
           docker build -t "${IMAGE}:${TAG}" -f "${{ inputs.dockerfile }}" .
