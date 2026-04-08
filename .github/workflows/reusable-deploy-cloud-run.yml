@@ -123,13 +123,15 @@ jobs:
       
       - name: Build and Push Docker image
         id: build
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           IMAGE="${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.IMAGE_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.SERVICE }}"
           TAG="${{ github.sha }}"
           
           docker build \
-            --build-arg NODE_AUTH_TOKEN="${{ github.token }}" \
+            --secret id=node_auth_token,env=NODE_AUTH_TOKEN \
             -t "${IMAGE}:${TAG}" \
             -f "${{ inputs.dockerfile }}" .
           
