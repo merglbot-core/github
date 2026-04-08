@@ -24,6 +24,7 @@ merglbot-core/infra
 merglbot-core/merglbot-admin
 # NOTE: Advisory docs pilot repo; refresh rollout copy before broader rollout waves.
 merglbot-core/platform
+merglbot-core/project-management-app
 # NOTE: Repo slug intentionally ends with a trailing hyphen.
 merglbot-core/tf-modules-
 
