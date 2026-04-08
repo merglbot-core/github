@@ -167,6 +167,17 @@
       "notes": "Advisory docs pilot repo; refresh rollout copy before broader rollout waves."
     },
     {
+      "repo": "merglbot-core/project-management-app",
+      "enabled": true,
+      "rollout_tier": "core",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "deploy_mode": "copy_target",
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": ""
+    },
+    {
       "repo": "merglbot-core/tf-modules-",
       "enabled": true,
       "rollout_tier": "core",
