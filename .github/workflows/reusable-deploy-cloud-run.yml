@@ -83,6 +83,7 @@ jobs:
       id-token: write          # needed for WIF to GCP
       security-events: write   # needed for SARIF upload
       actions: read            # needed for SARIF upload telemetry (avoids "Resource not accessible by integration")
+      packages: read           # enables caller Docker builds to resolve private GitHub Packages via github.token
 
     steps:
       - name: Checkout code
@@ -127,7 +128,10 @@ jobs:
           IMAGE="${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.IMAGE_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.SERVICE }}"
           TAG="${{ github.sha }}"
           
-          docker build -t "${IMAGE}:${TAG}" -f "${{ inputs.dockerfile }}" .
+          docker build \
+            --build-arg NODE_AUTH_TOKEN="${{ github.token }}" \
+            -t "${IMAGE}:${TAG}" \
+            -f "${{ inputs.dockerfile }}" .
           
           # Push and capture digest directly from push output (most reliable)
           PUSH_OUTPUT=$(docker push "${IMAGE}:${TAG}" 2>&1 | tee /dev/stderr)
@@ -181,7 +185,7 @@ jobs:
       
       - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@89a39a4e59826350b863aa6b6252a07ad50cf83e  # v4
-        if: always()
+        if: ${{ always() && hashFiles('trivy-results.sarif') != '' }}
         continue-on-error: true  # Don't fail if SARIF upload has permission issues
         with:
           sarif_file: 'trivy-results.sarif'
