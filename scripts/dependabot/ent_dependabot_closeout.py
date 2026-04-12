@@ -33,24 +33,36 @@ REBASE_POLL_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REBASE_POLL_SECONDS", "
 DEPENDENCY_FILE_PATTERNS = [
     re.compile(pattern)
     for pattern in [
-        r"(^|/)package(-lock)?\.json$",
+        r"(^|/)package-lock\.json$",
         r"(^|/)npm-shrinkwrap\.json$",
         r"(^|/)pnpm-lock\.yaml$",
         r"(^|/)yarn\.lock$",
         r"(^|/)bun\.lockb?$",
         r"(^|/)requirements.*\.txt$",
         r"(^|/)constraints.*\.txt$",
-        r"(^|/)pyproject\.toml$",
         r"(^|/)poetry\.lock$",
-        r"(^|/)Pipfile(\.lock)?$",
-        r"(^|/)go\.(mod|sum)$",
-        r"(^|/)Gemfile(\.lock)?$",
-        r"(^|/)Cargo\.(toml|lock)$",
-        r"(^|/)composer\.(json|lock)$",
-        r"(^|/)pom\.xml$",
-        r"(^|/)build\.gradle(\.kts)?$",
+        r"(^|/)Pipfile\.lock$",
+        r"(^|/)go\.sum$",
+        r"(^|/)Gemfile\.lock$",
+        r"(^|/)Cargo\.lock$",
+        r"(^|/)composer\.lock$",
         r"(^|/)gradle\.lockfile$",
         r"(^|/)packages\.lock\.json$",
+    ]
+]
+
+MIXED_PURPOSE_MANIFEST_PATTERNS = [
+    re.compile(pattern)
+    for pattern in [
+        r"(^|/)package\.json$",
+        r"(^|/)pyproject\.toml$",
+        r"(^|/)Pipfile$",
+        r"(^|/)go\.mod$",
+        r"(^|/)Gemfile$",
+        r"(^|/)Cargo\.toml$",
+        r"(^|/)composer\.json$",
+        r"(^|/)pom\.xml$",
+        r"(^|/)build\.gradle(\.kts)?$",
         r"(^|/)Directory\.Packages\.props$",
         r"(^|/)global\.json$",
     ]
@@ -234,16 +246,23 @@ def is_dependency_file(path: str) -> bool:
     return any(pattern.search(path) for pattern in DEPENDENCY_FILE_PATTERNS)
 
 
+def is_mixed_purpose_manifest(path: str) -> bool:
+    return any(pattern.search(path) for pattern in MIXED_PURPOSE_MANIFEST_PATTERNS)
+
+
 def is_sensitive_file(path: str) -> bool:
     return any(pattern.search(path) for pattern in SENSITIVE_FILE_PATTERNS)
 
 
 def classify_change_scope(files: list[str]) -> tuple[bool, list[str], list[str]]:
     sensitive = [path for path in files if is_sensitive_file(path)]
-    unsupported = [path for path in files if not is_dependency_file(path)]
+    mixed = [path for path in files if is_mixed_purpose_manifest(path)]
+    unsupported = [path for path in files if not is_dependency_file(path) and not is_mixed_purpose_manifest(path)]
     blockers: list[str] = []
     if sensitive:
         blockers.append("sensitive_file_scope:" + ",".join(sensitive))
+    if mixed:
+        blockers.append("mixed_purpose_manifest_requires_content_validation:" + ",".join(mixed))
     if unsupported:
         blockers.append("non_manifest_lockfile_scope:" + ",".join(unsupported))
     return not blockers, blockers, [path for path in files if is_dependency_file(path)]
@@ -616,7 +635,7 @@ def process_repo(
                 continue
             try:
                 receipt = process_pr(pr, mode=mode, output_dir=output_dir, allow_policy_alignment=allow_policy_alignment, workflow_url=workflow_url)
-            except Exception as exc:
+            except GhError as exc:
                 receipt = ItemReceipt(
                     repo=pr.repo,
                     pr_number=pr.number,
@@ -751,7 +770,8 @@ def self_test() -> int:
 | [`merglbot-public/docs`](https://github.com/merglbot-public/docs) | Docs | Markdown | Active |
 """
     assert parse_repository_map(sample) == ["merglbot-core/github", "merglbot-public/docs"]
-    assert classify_change_scope(["package-lock.json", "apps/web/package.json"])[0] is True
+    assert classify_change_scope(["package-lock.json", "apps/web/yarn.lock"])[0] is True
+    assert classify_change_scope(["apps/web/package.json"])[0] is False
     assert classify_change_scope([".github/workflows/ci.yml"])[0] is False
     assert classify_change_scope(["terraform/main.tf"])[0] is False
     report = build_report(

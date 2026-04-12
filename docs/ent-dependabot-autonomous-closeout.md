@@ -16,7 +16,10 @@ canonical 42-repo Merglbot ENT scope from `merglbot-public/docs/REPOSITORY_MAP.m
 - `dry-run` scans and classifies Dependabot PRs without GitHub writes.
 - `apply` may close irrelevant Dependabot PRs, align bounded branch protection,
   and squash-merge PRs that satisfy every current-head gate.
-- Default merge eligibility is limited to manifest/lockfile dependency updates.
+- Default merge eligibility is limited to lockfiles and simple dependency-only
+  metadata files. Mixed-purpose manifests such as `package.json`,
+  `pyproject.toml`, `pom.xml`, `build.gradle(.kts)`, `go.mod`, or `global.json`
+  are blocked until a content-aware validator proves dependency-only hunks.
   Dependabot PRs touching `.github/workflows/**`, reusable workflow wiring,
   Dockerfiles, Terraform, deploy config, auth/IAM, secrets, runtime bootstrap,
   or data/schema promotion surfaces are blocked for human checkpoint unless a
