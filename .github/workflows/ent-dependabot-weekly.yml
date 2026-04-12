@@ -52,7 +52,7 @@ jobs:
       repo_scope: ${{ github.event_name == 'schedule' && 'all' || inputs.repo_scope }}
       single_repo: ${{ github.event_name == 'schedule' && '' || inputs.single_repo }}
       max_parallel_repos: 3
-      max_prs_per_repo: ${{ github.event_name == 'schedule' && 0 || inputs.max_prs_per_repo }}
+      max_prs_per_repo: ${{ inputs.max_prs_per_repo || 0 }}
       allow_policy_alignment: true
       comment_report: true
       tracking_issue: "https://github.com/merglbot-public/docs/issues/636"
