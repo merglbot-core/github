@@ -44,6 +44,16 @@ GitHub Enterprise hosts without hard-coding `github.com`. `ok=true` is reserved
 for current-head `status=success` with `verdict=approved_for_closeout`; blocked
 or failed receipts remain parseable evidence but are not merge approval.
 
+The PR Assistant receipt is intentionally fail-closed for documentation
+authority. If the generated review does not explicitly report
+`documentation_obligation_state=satisfied` or
+`documentation_obligation_state=not_required`, the workflow must emit
+`MERGLBOT_REVIEW_VERDICT=blocked_missing_authority` instead of approving
+closeout. The metrics artifact mirrors the same lowercase
+`review_receipt.verdict` value that appears in the visible review receipt and
+hidden markers, while the legacy top-level `verdict` field remains available
+for historical dashboards.
+
 For lighter review: `@merglbot review --light`
 
 ---
