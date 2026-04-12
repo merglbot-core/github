@@ -11,7 +11,6 @@ import argparse
 import json
 import re
 import subprocess
-import sys
 from typing import Any
 
 
@@ -23,7 +22,13 @@ PR_ASSISTANT_WORKFLOW_PATHS = {
 
 
 def gh_json(args: list[str]) -> Any:
-    proc = subprocess.run(["gh", *args], check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.run(
+        ["gh", *args],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or f"gh {' '.join(args)} failed")
     return json.loads(proc.stdout)
@@ -53,9 +58,18 @@ def expected_run_url(pr_url: str, run_id: str) -> str:
 
 
 def verify(repo: str, pr_number: int) -> dict[str, Any]:
-    pr = gh_json(["pr", "view", str(pr_number), "--repo", repo, "--json", "headRefOid,url,state"])
+    pr = gh_json(
+        ["pr", "view", str(pr_number), "--repo", repo, "--json", "headRefOid,url,state"]
+    )
     head_sha = str(pr.get("headRefOid") or "")
-    comments_pages = gh_json(["api", "--paginate", "--slurp", f"repos/{repo}/issues/{pr_number}/comments?per_page=100"])
+    comments_pages = gh_json(
+        [
+            "api",
+            "--paginate",
+            "--slurp",
+            f"repos/{repo}/issues/{pr_number}/comments?per_page=100",
+        ]
+    )
     comments = [
         item
         for page in (comments_pages if isinstance(comments_pages, list) else [])
@@ -83,7 +97,13 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
         blockers.append("unsupported_or_missing_receipt_schema")
     if status not in {"success", "blocked", "failed"}:
         blockers.append("missing_or_invalid_review_status")
-    if verdict not in {"approved_for_closeout", "changes_required", "blocked_missing_authority", "review_generation_failed"}:
+    valid_verdicts = {
+        "approved_for_closeout",
+        "changes_required",
+        "blocked_missing_authority",
+        "review_generation_failed",
+    }
+    if verdict not in valid_verdicts:
         blockers.append("missing_or_invalid_review_verdict")
     if status != "success" or verdict != "approved_for_closeout":
         blockers.append("review_not_approved_for_closeout")
@@ -146,9 +166,13 @@ def self_test() -> int:
     assert markers["MERGLBOT_REVIEW_HEAD_SHA"] == "abc123"
     assert markers["MERGLBOT_REVIEW_STATUS"] == "success"
     assert markers["MERGLBOT_RUN_ID"] == "42"
-    trusted_markers, _ = latest_receipt([{"body": body, "user": {"login": "github-actions[bot]", "type": "Bot"}}])
+    trusted_markers, _ = latest_receipt(
+        [{"body": body, "user": {"login": "github-actions[bot]", "type": "Bot"}}]
+    )
     assert trusted_markers and trusted_markers["MERGLBOT_REVIEW_HEAD_SHA"] == "abc123"
-    spoofed_markers, _ = latest_receipt([{"body": body, "user": {"login": "octocat", "type": "User"}}])
+    spoofed_markers, _ = latest_receipt(
+        [{"body": body, "user": {"login": "octocat", "type": "User"}}]
+    )
     assert spoofed_markers is None
     failed = parse_markers(
         "\n".join(
@@ -166,7 +190,9 @@ def self_test() -> int:
     if status != "success" or verdict != "approved_for_closeout":
         blockers.append("review_not_approved_for_closeout")
     assert blockers == ["review_not_approved_for_closeout"]
-    assert expected_run_url("https://github.enterprise.example/o/r/pull/42", "123") == "https://github.enterprise.example/o/r/actions/runs/123"
+    assert expected_run_url("https://github.enterprise.example/o/r/pull/42", "123") == (
+        "https://github.enterprise.example/o/r/actions/runs/123"
+    )
     assert ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml" in PR_ASSISTANT_WORKFLOW_PATHS
     assert ".github/workflows/merglbot-pr-v3-on-demand.yml" in PR_ASSISTANT_WORKFLOW_PATHS
     print(json.dumps({"ok": True, "self_test": "passed"}))
