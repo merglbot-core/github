@@ -62,11 +62,15 @@ case may cause automatic PR/issue mutation retries.
 Manual apply validation can pass a `pr_allowlist` plus `approval_note` or
 `approval_issue_url`; the workflow records those values in the receipt and only
 acts on the allowlisted PRs. `pr_allowlist` accepts comma- or whitespace-separated
-`owner/repo#number` tokens or GitHub PR URLs; the approval note/packet must record
-approver identity, timestamp, approved scope, authorized run or commit, and
-expected action per PR. For `post_change_validation=true`, the workflow fails
-closed unless `pr_allowlist` is non-empty or the approval note explicitly says
-`approval_scope=full_queue`.
+`owner/repo#number` tokens or GitHub PR URLs. For
+`post_change_validation=true`, the workflow fails closed unless all of the
+following hold: `pr_allowlist` is non-empty or the approval material explicitly
+contains `approval_scope=full_queue`; `approval_note` or `approval_issue_url` is
+present; and the approval material covers the current workflow SHA or run ID. If
+`approval_issue_url` is used, the referenced packet must contain the approval
+scope and covered workflow SHA or run ID in a durable form. Approval material
+must also record approver identity, timestamp, approved scope, and expected
+action per PR.
 
 ## Merge Gate
 

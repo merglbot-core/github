@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -276,19 +276,36 @@ def parse_pr_allowlist(raw: str) -> set[tuple[str, int]]:
     return allowed
 
 
+def fetch_approval_issue_material(approval_issue_url: str) -> str:
+    if not approval_issue_url:
+        return ""
+    parsed = urlparse(approval_issue_url)
+    if parsed.netloc != "github.com":
+        raise GhError("approval_issue_url must be a github.com issue or pull request URL")
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if len(parts) < 4 or parts[2] not in {"issues", "pull"}:
+        raise GhError("approval_issue_url must point to a GitHub issue or pull request")
+    owner, repo, _, number = parts[:4]
+    issue = gh_api_json(f"repos/{owner}/{repo}/issues/{number}")
+    comments = gh_api_json(f"repos/{owner}/{repo}/issues/{number}/comments?per_page=100")
+    material = [issue.get("title", ""), issue.get("body", "") or ""]
+    material.extend(comment.get("body", "") or "" for comment in comments)
+    return "\n".join(material)
+
+
 def validate_apply_approval(mode: str, pr_allowlist: set[tuple[str, int]], approval_note: str, approval_issue_url: str) -> None:
     if mode != "apply":
         return
-    normalized = approval_note.lower()
-    explicit_approval_lane = bool(pr_allowlist or approval_issue_url or "post_change_validation=true" in normalized)
+    approval_material = "\n".join([approval_note, fetch_approval_issue_material(approval_issue_url)]).lower()
+    explicit_approval_lane = bool(pr_allowlist or approval_issue_url or "post_change_validation=true" in approval_material)
     if not explicit_approval_lane:
         return
     if not approval_note and not approval_issue_url:
         raise GhError("apply approval requires approval_note or approval_issue_url")
-    if not pr_allowlist and "approval_scope=full_queue" not in normalized:
+    if not pr_allowlist and "approval_scope=full_queue" not in approval_material:
         raise GhError("apply approval without pr_allowlist requires approval_scope=full_queue")
-    missing = [marker for marker in ["approved_by=", "approved_at="] if marker not in normalized]
-    if "authorized_sha=" not in normalized and "authorized_run=" not in normalized and not approval_issue_url:
+    missing = [marker for marker in ["approved_by=", "approved_at="] if marker not in approval_material]
+    if "authorized_sha=" not in approval_material and "authorized_run=" not in approval_material:
         missing.append("authorized_sha= or authorized_run=")
     if missing:
         raise GhError("apply approval metadata missing: " + ", ".join(missing))
