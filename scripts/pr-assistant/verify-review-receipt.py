@@ -37,9 +37,13 @@ def parse_markers(body: str) -> dict[str, str]:
     return {key.strip(): value.strip() for key, value in MARKER_RE.findall(body or "")}
 
 
-def latest_receipt(comments: list[dict[str, Any]]) -> tuple[dict[str, str] | None, str | None]:
+def latest_receipt(
+    comments: list[dict[str, Any]],
+) -> tuple[dict[str, str] | None, str | None]:
     for comment in reversed(comments):
-        user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+        user = comment.get("user")
+        if not isinstance(user, dict):
+            continue
         if user.get("login") != "github-actions[bot]" or user.get("type") != "Bot":
             continue
         body = str(comment.get("body") or "")
@@ -57,7 +61,9 @@ def expected_run_url(pr_url: str, run_id: str) -> str:
 
 
 def verify(repo: str, pr_number: int) -> dict[str, Any]:
-    pr = gh_json(["pr", "view", str(pr_number), "--repo", repo, "--json", "headRefOid,url,state"])
+    pr = gh_json(
+        ["pr", "view", str(pr_number), "--repo", repo, "--json", "headRefOid,url,state"]
+    )
     head_sha = str(pr.get("headRefOid") or "")
     comments_pages = gh_json(
         [
@@ -87,7 +93,9 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
     run_id = markers.get("MERGLBOT_RUN_ID", "")
     run_url = markers.get("MERGLBOT_RUN_URL", "")
 
-    current_head_match = bool(head_sha and review_head_sha and head_sha == review_head_sha)
+    current_head_match = bool(
+        head_sha and review_head_sha and head_sha == review_head_sha
+    )
     if not current_head_match:
         blockers.append("merglbot_review_head_sha_mismatch")
     if schema_version != "1":
@@ -190,8 +198,13 @@ def self_test() -> int:
     assert expected_run_url("https://github.enterprise.example/o/r/pull/42", "123") == (
         "https://github.enterprise.example/o/r/actions/runs/123"
     )
-    assert ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml" in PR_ASSISTANT_WORKFLOW_PATHS
-    assert ".github/workflows/merglbot-pr-v3-on-demand.yml" in PR_ASSISTANT_WORKFLOW_PATHS
+    assert (
+        ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml"
+        in PR_ASSISTANT_WORKFLOW_PATHS
+    )
+    assert (
+        ".github/workflows/merglbot-pr-v3-on-demand.yml" in PR_ASSISTANT_WORKFLOW_PATHS
+    )
     print(json.dumps({"ok": True, "self_test": "passed"}))
     return 0
 
