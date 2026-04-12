@@ -196,8 +196,8 @@ jobs:
           if [ "$COMMENT_REPORT" = "true" ]; then
             ARGS+=(--comment-report)
           fi
-          if [ "$SLACK_NOTIFY" = "true" ]; then
-            ARGS+=(--slack-notify --slack-webhook-url "$SLACK_DEPENDABOT_WEBHOOK_URL")
+          if [ "$SLACK_NOTIFY" = "true" ] && [ -n "${SLACK_DEPENDABOT_WEBHOOK_URL:-}" ]; then
+            ARGS+=(--slack-notify)
           fi
 
           mkdir -p reports/ent-dependabot-weekly
@@ -214,7 +214,7 @@ jobs:
           SLACK_DEPENDABOT_WEBHOOK_URL: ${{ secrets.SLACK_DEPENDABOT_WEBHOOK_URL }}
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          set -euo pipefail
+          set -u
           if [ -f reports/ent-dependabot-weekly/ent_dependabot_weekly_receipt.json ]; then
             exit 0
           fi
@@ -224,6 +224,7 @@ jobs:
           python3 - <<'PY'
           import json
           import os
+          import sys
           from urllib.request import Request, urlopen
 
           payload = {
@@ -232,14 +233,17 @@ jobs:
                   f"Run: {os.environ.get('GITHUB_RUN_URL', 'not available')}"
               )
           }
-          request = Request(
-              os.environ["SLACK_DEPENDABOT_WEBHOOK_URL"],
-              data=json.dumps(payload).encode("utf-8"),
-              headers={"Content-Type": "application/json"},
-              method="POST",
-          )
-          with urlopen(request, timeout=15) as response:
-              response.read()
+          try:
+              request = Request(
+                  os.environ["SLACK_DEPENDABOT_WEBHOOK_URL"],
+                  data=json.dumps(payload).encode("utf-8"),
+                  headers={"Content-Type": "application/json"},
+                  method="POST",
+              )
+              with urlopen(request, timeout=15) as response:
+                  response.read()
+          except Exception:
+              sys.exit(0)
           PY
 
       - name: Upload weekly receipt artifacts

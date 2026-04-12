@@ -29,6 +29,7 @@ MERGLBOT_REVIEW_WAIT_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REVIEW_WAIT_SE
 MERGLBOT_REVIEW_POLL_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REVIEW_POLL_SECONDS", "60"))
 REBASE_WAIT_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REBASE_WAIT_SECONDS", "600"))
 REBASE_POLL_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REBASE_POLL_SECONDS", "60"))
+OPEN_ITEM_LIST_LIMIT = 1000
 
 DEPENDENCY_FILE_PATTERNS = [
     re.compile(pattern)
@@ -247,7 +248,7 @@ def list_open_prs(repo: str) -> list[dict[str, Any]]:
             "--state",
             "open",
             "--limit",
-            "200",
+            str(OPEN_ITEM_LIST_LIMIT),
             "--json",
             "number,title,url,author,headRefOid,isDraft,mergeStateStatus,updatedAt",
         ]
@@ -256,7 +257,7 @@ def list_open_prs(repo: str) -> list[dict[str, Any]]:
 
 
 def list_open_issues(repo: str) -> list[dict[str, Any]]:
-    data = gh_json(["issue", "list", "--repo", repo, "--state", "open", "--limit", "200", "--json", "number,title,url,author,updatedAt"])
+    data = gh_json(["issue", "list", "--repo", repo, "--state", "open", "--limit", str(OPEN_ITEM_LIST_LIMIT), "--json", "number,title,url,author,updatedAt"])
     return list(data)
 
 
@@ -1044,7 +1045,6 @@ def main() -> int:
     parser.add_argument("--comment-report", action="store_true")
     parser.add_argument("--tracking-issue", default="")
     parser.add_argument("--slack-notify", action="store_true")
-    parser.add_argument("--slack-webhook-url", default=os.environ.get("SLACK_DEPENDABOT_WEBHOOK_URL", ""))
     parser.add_argument("--pr-allowlist", default="")
     parser.add_argument("--approval-note", default="")
     parser.add_argument("--approval-issue-url", default="")
@@ -1101,7 +1101,7 @@ def main() -> int:
             workflow_url=args.workflow_url,
         )
         if args.slack_notify:
-            report["slack_delivery"] = post_slack_report(args.slack_webhook_url, report)
+            report["slack_delivery"] = post_slack_report(os.environ.get("SLACK_DEPENDABOT_WEBHOOK_URL", ""), report)
             if not report["slack_delivery"].get("ok"):
                 report["ok"] = False
                 report["final_verdict"] = "ENT_DEPENDABOT_WEEKLY_CLOSEOUT_BLOCKED"
@@ -1124,7 +1124,7 @@ def main() -> int:
             "remaining_blockers": [str(exc)],
         }
         if args.slack_notify:
-            failure["slack_delivery"] = post_slack_report(args.slack_webhook_url, failure)
+            failure["slack_delivery"] = post_slack_report(os.environ.get("SLACK_DEPENDABOT_WEBHOOK_URL", ""), failure)
         write_json(args.output_dir / "ent_dependabot_weekly_receipt.json", failure)
         print(json.dumps(failure, sort_keys=True))
         return 1
