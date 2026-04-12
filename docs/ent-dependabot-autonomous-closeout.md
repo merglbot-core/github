@@ -82,9 +82,9 @@ approver identity, timestamp, approved scope, and expected action per PR.
 
 Manual `workflow_dispatch` exposes a bounded 10-input surface. It includes
 `approval_issue_url` and `comment_report`; when `comment_report=true`, the report
-is posted to the default tracking issue `merglbot-public/docs#636`. Custom
-tracking issue routing remains available through the reusable `workflow_call`
-interface.
+is posted to the default tracking issue `merglbot-public/docs#636`. Reusable
+`workflow_call` callers keep the same default fallback when `tracking_issue` is
+omitted, and can still override routing with an explicit `tracking_issue` value.
 
 ## Merge Gate
 

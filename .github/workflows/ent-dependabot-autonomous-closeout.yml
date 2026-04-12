@@ -148,7 +148,7 @@ jobs:
           INPUT_MAX_PRS_PER_REPO: ${{ inputs.max_prs_per_repo || 0 }}
           INPUT_ALLOW_POLICY_ALIGNMENT: ${{ inputs.allow_policy_alignment }}
           INPUT_COMMENT_REPORT: ${{ inputs.comment_report && 'true' || 'false' }}
-          INPUT_TRACKING_ISSUE: ${{ github.event_name == 'workflow_dispatch' && 'https://github.com/merglbot-public/docs/issues/636' || inputs.tracking_issue }}
+          INPUT_TRACKING_ISSUE: ${{ inputs.tracking_issue || 'https://github.com/merglbot-public/docs/issues/636' }}
           INPUT_SLACK_NOTIFY: ${{ inputs.slack_notify }}
           INPUT_PR_ALLOWLIST: ${{ inputs.pr_allowlist || '' }}
           INPUT_APPROVAL_NOTE: ${{ inputs.approval_note || '' }}
