@@ -112,10 +112,6 @@ def gh_api_json(endpoint: str, *extra: str) -> Any:
     return gh_json(["api", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28", endpoint, *extra])
 
 
-def gh_api_text(endpoint: str, *extra: str) -> str:
-    return run_cmd(["gh", "api", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28", endpoint, *extra]).stdout
-
-
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -230,9 +226,7 @@ def list_dependabot_prs(repo: str) -> list[PullRequest]:
 
 
 def pr_files(repo: str, number: int) -> list[str]:
-    proc = run_cmd(["gh", "pr", "diff", str(number), "--repo", repo, "--name-only"], check=False)
-    if proc.returncode != 0:
-        return []
+    proc = run_cmd(["gh", "pr", "diff", str(number), "--repo", repo, "--name-only"])
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
 
@@ -620,7 +614,18 @@ def process_repo(
         for pr in prs:
             if pr.number in seen_without_action:
                 continue
-            receipt = process_pr(pr, mode=mode, output_dir=output_dir, allow_policy_alignment=allow_policy_alignment, workflow_url=workflow_url)
+            try:
+                receipt = process_pr(pr, mode=mode, output_dir=output_dir, allow_policy_alignment=allow_policy_alignment, workflow_url=workflow_url)
+            except Exception as exc:
+                receipt = ItemReceipt(
+                    repo=pr.repo,
+                    pr_number=pr.number,
+                    url=pr.url,
+                    action="blocked",
+                    classification="BLOCKED_RUNTIME_ERROR",
+                    blockers=[f"process_pr_failed:{exc}"],
+                    head_sha=pr.head_sha,
+                )
             processed += 1
             key = receipt.action
             if key == "merged":

@@ -149,6 +149,7 @@ jobs:
             ARGS+=(--comment-report)
           fi
 
+          mkdir -p reports/ent-dependabot-weekly
           python3 scripts/dependabot/ent_dependabot_closeout.py "${ARGS[@]}" | tee reports/ent-dependabot-weekly/stdout.json
           {
             echo "## ENT Dependabot Autonomous Closeout"
