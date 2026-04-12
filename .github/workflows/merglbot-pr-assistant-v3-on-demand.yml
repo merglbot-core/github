@@ -1752,16 +1752,23 @@ jobs:
           }
 
           DOCUMENTATION_OBLIGATION_STATE="unknown"
+          SSOT_SYNC_DOCS_NONE="false"
+          if awk 'BEGIN{IGNORECASE=1; in_section=0} /^##[[:space:]]+SSOT Sync \(Docs\)/{in_section=1; next} /^##[[:space:]]/{in_section=0} in_section && $0 ~ /^[[:space:]]*None[[:space:]]*$/ {found=1} END{exit(found?0:1)}' final_review.txt 2>/dev/null; then
+            SSOT_SYNC_DOCS_NONE="true"
+          fi
           DOC_STATE_LINE="$(extract_zaver_review_field_line 'Documentation Obligation State' || true)"
           if [ -n "$DOC_STATE_LINE" ]; then
             DOCUMENTATION_OBLIGATION_STATE="$(normalize_machine_token "$(printf '%s' "$DOC_STATE_LINE" | sed -E 's/^Documentation Obligation State:[[:space:]]*//I')")"
-          elif awk 'BEGIN{IGNORECASE=1; in_section=0} /^##[[:space:]]+SSOT Sync \(Docs\)/{in_section=1; next} /^##[[:space:]]/{in_section=0} in_section && $0 ~ /^[[:space:]]*None[[:space:]]*$/ {found=1} END{exit(found?0:1)}' final_review.txt 2>/dev/null; then
+          elif [ "$SSOT_SYNC_DOCS_NONE" = "true" ]; then
             DOCUMENTATION_OBLIGATION_STATE="not_required"
           fi
           case "$DOCUMENTATION_OBLIGATION_STATE" in
             satisfied|not_required|missing|unknown) ;;
             *) DOCUMENTATION_OBLIGATION_STATE="unknown" ;;
           esac
+          if [ "$DOCUMENTATION_OBLIGATION_STATE" = "unknown" ] && [ "$SSOT_SYNC_DOCS_NONE" = "true" ]; then
+            DOCUMENTATION_OBLIGATION_STATE="not_required"
+          fi
 
           DOCS_FOLLOW_UP_HINT="none"
           DOCS_FOLLOW_UP_HINT_LINE="$(extract_final_review_field_line 'Docs Follow-Up Hint' || true)"
@@ -1817,6 +1824,13 @@ jobs:
               blocked_missing_authority) REVIEW_VERDICT="blocked_missing_authority" ;;
             esac
           fi
+          case "$DOCUMENTATION_OBLIGATION_STATE" in
+            satisfied|not_required) ;;
+            *)
+              echo "::warning::Unexpected DOCUMENTATION_OBLIGATION_STATE='${DOCUMENTATION_OBLIGATION_STATE}', blocking closeout approval."
+              REVIEW_VERDICT="blocked_missing_authority"
+              ;;
+          esac
           FOLLOW_UP_ID="pr-${PR_NUM}-review-${GITHUB_RUN_ID}"
           CLOSEOUT_MODE="human_merge_only"
           REVIEW_RECEIPT_SCHEMA_VERSION="1"
@@ -2246,6 +2260,7 @@ jobs:
             --arg medium_count "$MEDIUM_COUNT" \
             --arg low_count "$LOW_COUNT" \
             --arg verdict "$VERDICT" \
+            --arg review_verdict "$REVIEW_VERDICT" \
             --arg bugbot_count "$BUGBOT_COUNT" \
             --arg bugbot_sources "$BUGBOT_SOURCES" \
             --arg status "${JOB_STATUS:-unknown}" \
@@ -2305,7 +2320,7 @@ jobs:
                   head_sha: $head_sha,
                   run_id: $run_id,
                   run_url: $run_url,
-                  verdict: $verdict,
+                  verdict: $review_verdict,
                   status: $review_status,
                   diff_scope: $diff_scope,
                   pr_check_surface: $pr_check_surface
