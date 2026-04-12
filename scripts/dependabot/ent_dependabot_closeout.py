@@ -30,6 +30,53 @@ MERGLBOT_REVIEW_POLL_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REVIEW_POLL_SE
 REBASE_WAIT_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REBASE_WAIT_SECONDS", "600"))
 REBASE_POLL_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REBASE_POLL_SECONDS", "60"))
 
+DEPENDENCY_FILE_PATTERNS = [
+    re.compile(pattern)
+    for pattern in [
+        r"(^|/)package(-lock)?\.json$",
+        r"(^|/)npm-shrinkwrap\.json$",
+        r"(^|/)pnpm-lock\.yaml$",
+        r"(^|/)yarn\.lock$",
+        r"(^|/)bun\.lockb?$",
+        r"(^|/)requirements.*\.txt$",
+        r"(^|/)constraints.*\.txt$",
+        r"(^|/)pyproject\.toml$",
+        r"(^|/)poetry\.lock$",
+        r"(^|/)Pipfile(\.lock)?$",
+        r"(^|/)go\.(mod|sum)$",
+        r"(^|/)Gemfile(\.lock)?$",
+        r"(^|/)Cargo\.(toml|lock)$",
+        r"(^|/)composer\.(json|lock)$",
+        r"(^|/)pom\.xml$",
+        r"(^|/)build\.gradle(\.kts)?$",
+        r"(^|/)gradle\.lockfile$",
+        r"(^|/)packages\.lock\.json$",
+        r"(^|/)Directory\.Packages\.props$",
+        r"(^|/)global\.json$",
+    ]
+]
+
+SENSITIVE_FILE_PATTERNS = [
+    re.compile(pattern)
+    for pattern in [
+        r"^\.github/workflows/",
+        r"(^|/)Dockerfile$",
+        r"(^|/)docker-compose[^/]*\.ya?ml$",
+        r"(^|/)cloudbuild\.ya?ml$",
+        r"(^|/)deploy/",
+        r"(^|/)deployment/",
+        r"(^|/)k8s/",
+        r"(^|/)helm/",
+        r"(^|/)terraform/",
+        r"(^|/)infra/",
+        r"(^|/).*\.tf$",
+        r"(^|/)\.terraform\.lock\.hcl$",
+        r"(^|/)auth/",
+        r"(^|/)iam/",
+        r"(^|/)secrets?/",
+    ]
+]
+
 
 class GhError(RuntimeError):
     pass
@@ -187,6 +234,25 @@ def pr_files(repo: str, number: int) -> list[str]:
     if proc.returncode != 0:
         return []
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
+def is_dependency_file(path: str) -> bool:
+    return any(pattern.search(path) for pattern in DEPENDENCY_FILE_PATTERNS)
+
+
+def is_sensitive_file(path: str) -> bool:
+    return any(pattern.search(path) for pattern in SENSITIVE_FILE_PATTERNS)
+
+
+def classify_change_scope(files: list[str]) -> tuple[bool, list[str], list[str]]:
+    sensitive = [path for path in files if is_sensitive_file(path)]
+    unsupported = [path for path in files if not is_dependency_file(path)]
+    blockers: list[str] = []
+    if sensitive:
+        blockers.append("sensitive_file_scope:" + ",".join(sensitive))
+    if unsupported:
+        blockers.append("non_manifest_lockfile_scope:" + ",".join(unsupported))
+    return not blockers, blockers, [path for path in files if is_dependency_file(path)]
 
 
 def refresh_pr(repo: str, number: int) -> PullRequest:
@@ -375,41 +441,19 @@ def align_review_gate(repo: str, output_dir: Path, *, apply: bool) -> dict[str, 
             "before_snapshot": str(snapshot_path),
             "rollback": rollback,
         }
-    if not apply:
-        return {
-            "ok": True,
-            "repo": repo,
-            "branch": branch,
-            "changed": False,
-            "dry_run": True,
-            "before_snapshot": str(snapshot_path),
-            "intended_mutation": "set required_approving_review_count=0 for evidence-gated Dependabot lane",
-            "rollback": rollback,
-        }
-    endpoint = repo_endpoint(repo, f"branches/{quote(branch, safe='')}/protection/required_pull_request_reviews")
-    run_cmd(["gh", "api", endpoint, "-X", "PATCH", "-F", "required_approving_review_count=0", "-F", "dismiss_stale_reviews=true"])
-    after = branch_protection(repo, branch)
-    after_count = int(((after or {}).get("required_pull_request_reviews") or {}).get("required_approving_review_count") or 0)
-    if after_count != 0:
-        return {
-            "ok": False,
-            "repo": repo,
-            "branch": branch,
-            "changed": True,
-            "before_snapshot": str(snapshot_path),
-            "rollback": rollback,
-            "blockers": [f"post_verify_required_review_count={after_count}"],
-        }
-    write_json(output_dir / "policy" / repo.replace("/", "__") / f"{branch}-after.json", after)
+    # GitHub branch protection review requirements are repository/branch scoped.
+    # The weekly lane must not lower them unless a future ruleset integration can
+    # prove Dependabot-only scoping. Until then, classify this as a policy blocker.
     return {
-        "ok": True,
+        "ok": False,
         "repo": repo,
         "branch": branch,
-        "changed": True,
+        "changed": False,
         "before_snapshot": str(snapshot_path),
-        "post_verify": "passed",
+        "post_verify": "not_mutated",
         "rollback": rollback,
-        "reason": "Dependabot evidence-gated autonomous lane",
+        "blockers": ["review_required_no_dependabot_scoped_ruleset"],
+        "reason": "Repository-wide review requirements cannot be safely lowered for a Dependabot-only lane.",
     }
 
 
@@ -437,7 +481,7 @@ def close_comment(pr: PullRequest, classification: str, evidence: list[str], wor
             "",
             f"- Classification: `{classification}`",
             f"- Evidence: {'; '.join(evidence)}",
-            "- Reopen condition: reopen or create a new Dependabot PR if the dependency update is still needed on current main.",
+            f"- Reopen condition: reopen or create a new Dependabot PR if the dependency update is still needed on the current `{pr.base_ref}` branch.",
             f"- Workflow run: {workflow_url or 'not available'}",
         ]
     )
@@ -466,6 +510,13 @@ def process_pr(
         receipt.evidence.append("current PR diff has no changed files")
         if apply:
             receipt.comment_url = close_pr(pr.repo, pr.number, close_comment(pr, receipt.classification, receipt.evidence, workflow_url))
+        return receipt
+    scope_ok, scope_blockers, dependency_files = classify_change_scope(files)
+    receipt.evidence.append(f"changed_files={len(files)}")
+    receipt.evidence.append("dependency_files=" + ",".join(dependency_files))
+    if not scope_ok:
+        receipt.classification = "BLOCKED_CHANGE_SCOPE"
+        receipt.blockers.extend([f"change_scope:{blocker}" for blocker in scope_blockers])
         return receipt
 
     refreshed = refresh_pr(pr.repo, pr.number)
@@ -695,6 +746,9 @@ def self_test() -> int:
 | [`merglbot-public/docs`](https://github.com/merglbot-public/docs) | Docs | Markdown | Active |
 """
     assert parse_repository_map(sample) == ["merglbot-core/github", "merglbot-public/docs"]
+    assert classify_change_scope(["package-lock.json", "apps/web/package.json"])[0] is True
+    assert classify_change_scope([".github/workflows/ci.yml"])[0] is False
+    assert classify_change_scope(["terraform/main.tf"])[0] is False
     report = build_report(
         "dry-run",
         ["merglbot-core/github"],

@@ -16,6 +16,11 @@ canonical 42-repo Merglbot ENT scope from `merglbot-public/docs/REPOSITORY_MAP.m
 - `dry-run` scans and classifies Dependabot PRs without GitHub writes.
 - `apply` may close irrelevant Dependabot PRs, align bounded branch protection,
   and squash-merge PRs that satisfy every current-head gate.
+- Default merge eligibility is limited to manifest/lockfile dependency updates.
+  Dependabot PRs touching `.github/workflows/**`, reusable workflow wiring,
+  Dockerfiles, Terraform, deploy config, auth/IAM, secrets, runtime bootstrap,
+  or data/schema promotion surfaces are blocked for human checkpoint unless a
+  narrower canonical allowlist covers that exact file class.
 - Stale age alone is never a close reason.
 - The workflow does not deploy, run Terraform apply, mutate secrets, change
   default branches, or bypass branch protection.
@@ -24,6 +29,7 @@ canonical 42-repo Merglbot ENT scope from `merglbot-public/docs/REPOSITORY_MAP.m
 
 Every merged Dependabot PR must prove:
 
+- the changed files are manifest/lockfile-only dependency metadata,
 - required checks are green on the live head,
 - the latest Merglbot PR Assistant receipt is current-head and
   `approved_for_closeout`,
@@ -34,9 +40,10 @@ Every merged Dependabot PR must prove:
 ## Policy Alignment
 
 If required human review is the only blocker for an otherwise evidence-gated
-Dependabot PR, the workflow may align the review gate only after saving a
-branch-protection snapshot, recording rollback instructions, applying the
-mutation, and post-verifying the effective state through the GitHub API.
+Dependabot PR, the workflow may align the review gate only when the target
+ruleset is provably scoped to Dependabot-authored PRs. Repository-wide review
+requirements must not be lowered for this lane; if GitHub cannot prove scoped
+alignment, the PR is classified as `BLOCKED_POLICY`.
 
 ## Artifacts
 
