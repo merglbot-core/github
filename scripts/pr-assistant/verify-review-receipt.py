@@ -13,7 +13,6 @@ import re
 import subprocess
 from typing import Any
 
-
 MARKER_RE = re.compile(r"<!--\s*(MERGLBOT_[A-Z0-9_]+)\s*:\s*([\s\S]*?)\s*-->")
 PR_ASSISTANT_WORKFLOW_PATHS = {
     ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
@@ -58,9 +57,7 @@ def expected_run_url(pr_url: str, run_id: str) -> str:
 
 
 def verify(repo: str, pr_number: int) -> dict[str, Any]:
-    pr = gh_json(
-        ["pr", "view", str(pr_number), "--repo", repo, "--json", "headRefOid,url,state"]
-    )
+    pr = gh_json(["pr", "view", str(pr_number), "--repo", repo, "--json", "headRefOid,url,state"])
     head_sha = str(pr.get("headRefOid") or "")
     comments_pages = gh_json(
         [
