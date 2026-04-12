@@ -95,11 +95,11 @@ on:
         required: false
         type: boolean
         default: true
-      tracking_issue:
-        description: "Tracking issue URL"
+      comment_report:
+        description: "Post report to the default tracking issue"
         required: false
-        type: string
-        default: "https://github.com/merglbot-public/docs/issues/636"
+        type: boolean
+        default: false
       slack_notify:
         description: "Post the run telemetry summary to Slack"
         required: false
@@ -147,8 +147,8 @@ jobs:
           INPUT_MAX_PARALLEL_REPOS: ${{ inputs.max_parallel_repos || 3 }}
           INPUT_MAX_PRS_PER_REPO: ${{ inputs.max_prs_per_repo || 0 }}
           INPUT_ALLOW_POLICY_ALIGNMENT: ${{ inputs.allow_policy_alignment }}
-          INPUT_COMMENT_REPORT: ${{ github.event_name == 'workflow_dispatch' && inputs.tracking_issue != '' && 'true' || inputs.comment_report }}
-          INPUT_TRACKING_ISSUE: ${{ inputs.tracking_issue || 'https://github.com/merglbot-public/docs/issues/636' }}
+          INPUT_COMMENT_REPORT: ${{ inputs.comment_report && 'true' || 'false' }}
+          INPUT_TRACKING_ISSUE: ${{ github.event_name == 'workflow_dispatch' && 'https://github.com/merglbot-public/docs/issues/636' || inputs.tracking_issue }}
           INPUT_SLACK_NOTIFY: ${{ inputs.slack_notify }}
           INPUT_PR_ALLOWLIST: ${{ inputs.pr_allowlist || '' }}
           INPUT_APPROVAL_NOTE: ${{ inputs.approval_note || '' }}

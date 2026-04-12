@@ -80,6 +80,12 @@ come from the explicit `ENT_DEPENDABOT_TRUSTED_APPROVERS` policy list; the
 workflow actor is not trusted implicitly. Approval material must also record
 approver identity, timestamp, approved scope, and expected action per PR.
 
+Manual `workflow_dispatch` exposes a bounded 10-input surface. It includes
+`approval_issue_url` and `comment_report`; when `comment_report=true`, the report
+is posted to the default tracking issue `merglbot-public/docs#636`. Custom
+tracking issue routing remains available through the reusable `workflow_call`
+interface.
+
 ## Merge Gate
 
 Every merged Dependabot PR must prove:
