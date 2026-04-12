@@ -1108,8 +1108,16 @@ def self_test() -> int:
         ("merglbot-core/github", 1),
         ("merglbot-public/docs", 2),
     }
-    previous_env = {key: os.environ.get(key) for key in ["GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_ACTOR"]}
-    os.environ.update({"GITHUB_SHA": "abc", "GITHUB_RUN_ID": "12345", "GITHUB_ACTOR": "milhul6"})
+    previous_env = {
+        key: os.environ.get(key)
+        for key in ["GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_ACTOR", "GITHUB_TRIGGERING_ACTOR"]
+    }
+    os.environ.update({
+        "GITHUB_SHA": "abc",
+        "GITHUB_RUN_ID": "12345",
+        "GITHUB_ACTOR": "milhul6",
+        "GITHUB_TRIGGERING_ACTOR": "milhul6",
+    })
     try:
         validate_apply_approval(
             "apply",
