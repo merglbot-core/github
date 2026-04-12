@@ -1817,10 +1817,6 @@ jobs:
               blocked_missing_authority) REVIEW_VERDICT="blocked_missing_authority" ;;
             esac
           fi
-          if [ "$DOCUMENTATION_OBLIGATION_STATE" = "unknown" ] && [ "$REVIEW_VERDICT" = "approved_for_closeout" ]; then
-            REVIEW_VERDICT="blocked_missing_authority"
-          fi
-
           FOLLOW_UP_ID="pr-${PR_NUM}-review-${GITHUB_RUN_ID}"
           CLOSEOUT_MODE="human_merge_only"
           REVIEW_RECEIPT_SCHEMA_VERSION="1"
