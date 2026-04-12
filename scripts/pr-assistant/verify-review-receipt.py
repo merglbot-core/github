@@ -5,6 +5,9 @@ The script intentionally reads public GitHub PR/comment truth through `gh` and
 prints one JSON object. It does not mutate GitHub state.
 """
 
+# Managed rollout artifact copied into repositories with different Black configs.
+# fmt: off
+
 from __future__ import annotations
 
 import argparse
