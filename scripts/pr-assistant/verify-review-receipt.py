@@ -16,7 +16,10 @@ from typing import Any
 
 
 MARKER_RE = re.compile(r"<!--\s*(MERGLBOT_[A-Z0-9_]+)\s*:\s*([\s\S]*?)\s*-->")
-PR_ASSISTANT_WORKFLOW_PATH = ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml"
+PR_ASSISTANT_WORKFLOW_PATHS = {
+    ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
+    ".github/workflows/merglbot-pr-v3-on-demand.yml",
+}
 
 
 def gh_json(args: list[str]) -> Any:
@@ -103,7 +106,7 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
             run_path = str(run.get("path") or "")
         except Exception as exc:  # pragma: no cover - exercised through live CLI usage.
             blockers.append(f"review_run_lookup_failed:{exc}")
-        if run_path and run_path != PR_ASSISTANT_WORKFLOW_PATH:
+        if run_path and run_path not in PR_ASSISTANT_WORKFLOW_PATHS:
             blockers.append("review_run_not_from_pr_assistant_workflow")
 
     return {
@@ -164,6 +167,8 @@ def self_test() -> int:
         blockers.append("review_not_approved_for_closeout")
     assert blockers == ["review_not_approved_for_closeout"]
     assert expected_run_url("https://github.enterprise.example/o/r/pull/42", "123") == "https://github.enterprise.example/o/r/actions/runs/123"
+    assert ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml" in PR_ASSISTANT_WORKFLOW_PATHS
+    assert ".github/workflows/merglbot-pr-v3-on-demand.yml" in PR_ASSISTANT_WORKFLOW_PATHS
     print(json.dumps({"ok": True, "self_test": "passed"}))
     return 0
 
