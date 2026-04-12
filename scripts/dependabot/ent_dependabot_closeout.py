@@ -304,7 +304,11 @@ def validate_apply_approval(mode: str, pr_allowlist: set[tuple[str, int]], appro
         raise GhError("apply approval requires approval_note or approval_issue_url")
     if not pr_allowlist and "approval_scope=full_queue" not in approval_material:
         raise GhError("apply approval without pr_allowlist requires approval_scope=full_queue")
-    missing = [marker for marker in ["approved_by=", "approved_at="] if marker not in approval_material]
+    missing = [
+        marker
+        for marker in ["approved_by=", "approved_at=", "expected_action="]
+        if marker not in approval_material
+    ]
     if "authorized_sha=" not in approval_material and "authorized_run=" not in approval_material:
         missing.append("authorized_sha= or authorized_run=")
     if missing:

@@ -66,11 +66,11 @@ acts on the allowlisted PRs. `pr_allowlist` accepts comma- or whitespace-separat
 `post_change_validation=true`, the workflow fails closed unless all of the
 following hold: `pr_allowlist` is non-empty or the approval material explicitly
 contains `approval_scope=full_queue`; `approval_note` or `approval_issue_url` is
-present; and the approval material covers the current workflow SHA or run ID. If
-`approval_issue_url` is used, the referenced packet must contain the approval
-scope and covered workflow SHA or run ID in a durable form. Approval material
-must also record approver identity, timestamp, approved scope, and expected
-action per PR.
+present; the approval material covers the current workflow SHA or run ID; and
+the approval material contains `expected_action=`. If `approval_issue_url` is
+used, the referenced packet must contain the approval scope, expected action, and
+covered workflow SHA or run ID in a durable form. Approval material must also
+record approver identity, timestamp, approved scope, and expected action per PR.
 
 ## Merge Gate
 
