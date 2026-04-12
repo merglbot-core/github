@@ -11,6 +11,20 @@ status: "active"
 `ENT Dependabot Autonomous Closeout`, the reusable workflow that scans the
 canonical 42-repo Merglbot ENT scope from `merglbot-public/docs/REPOSITORY_MAP.md`.
 
+## Canonical SSOT Dependencies
+
+This repo-local guide describes the implementation in `merglbot-core/github`.
+Platform policy authority remains in `merglbot-public/docs`:
+
+- `ENT_DEPENDABOT_AUTONOMOUS_CLOSEOUT.md` defines the canonical weekly lane
+  contract, including lockfile/simple dependency-only scope and mixed-manifest
+  fail-closed behavior.
+- `SECURITY.md` defines the security boundary for current-head-safe scope
+  classification and no stale scope proof reuse.
+- `MERGLBOT_GITHUB_ACTIONS_GLOBAL_RULES.md` defines safe workflow input handling
+  through `env:` and the read-only classify -> act -> re-verify pattern for
+  autonomous workflow mutations.
+
 ## Runtime Contract
 
 - `dry-run` scans and classifies Dependabot PRs without GitHub writes.
