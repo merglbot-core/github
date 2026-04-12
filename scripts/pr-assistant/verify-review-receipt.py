@@ -16,6 +16,7 @@ from typing import Any
 
 
 MARKER_RE = re.compile(r"<!--\s*(MERGLBOT_[A-Z0-9_]+)\s*:\s*([\s\S]*?)\s*-->")
+PR_ASSISTANT_WORKFLOW_PATH = ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml"
 
 
 def gh_json(args: list[str]) -> Any:
@@ -40,6 +41,12 @@ def latest_receipt(comments: list[dict[str, Any]]) -> tuple[dict[str, str] | Non
         markers = parse_markers(body)
         return markers, str(comment.get("html_url") or comment.get("url") or "")
     return None, None
+
+
+def expected_run_url(pr_url: str, run_id: str) -> str:
+    if "/pull/" not in pr_url:
+        return ""
+    return f"{pr_url.split('/pull/', 1)[0]}/actions/runs/{run_id}"
 
 
 def verify(repo: str, pr_number: int) -> dict[str, Any]:
@@ -75,6 +82,8 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
         blockers.append("missing_or_invalid_review_status")
     if verdict not in {"approved_for_closeout", "changes_required", "blocked_missing_authority", "review_generation_failed"}:
         blockers.append("missing_or_invalid_review_verdict")
+    if status != "success" or verdict != "approved_for_closeout":
+        blockers.append("review_not_approved_for_closeout")
     if status == "success" and verdict != "approved_for_closeout":
         blockers.append("review_status_verdict_mismatch")
     if status == "failed" and verdict != "review_generation_failed":
@@ -85,8 +94,17 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
         blockers.append("missing_review_run_id")
     if not run_url:
         blockers.append("missing_review_run_url")
-    elif run_id and run_url != f"https://github.com/{repo}/actions/runs/{run_id}":
+    elif run_id and run_url != expected_run_url(str(pr.get("url") or ""), run_id):
         blockers.append("review_run_url_mismatch")
+    run_path = ""
+    if run_id:
+        try:
+            run = gh_json(["api", f"repos/{repo}/actions/runs/{run_id}"])
+            run_path = str(run.get("path") or "")
+        except Exception as exc:  # pragma: no cover - exercised through live CLI usage.
+            blockers.append(f"review_run_lookup_failed:{exc}")
+        if run_path and run_path != PR_ASSISTANT_WORKFLOW_PATH:
+            blockers.append("review_run_not_from_pr_assistant_workflow")
 
     return {
         "ok": len(blockers) == 0,
@@ -103,6 +121,7 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
         "comment_url": comment_url,
         "run_id": run_id or None,
         "run_url": run_url or None,
+        "run_path": run_path or None,
         "blockers": blockers,
     }
 
@@ -138,6 +157,13 @@ def self_test() -> int:
     )
     assert failed["MERGLBOT_REVIEW_VERDICT"] == "review_generation_failed"
     assert failed["MERGLBOT_REVIEW_STATUS"] == "failed"
+    blockers: list[str] = []
+    status = "blocked"
+    verdict = "changes_required"
+    if status != "success" or verdict != "approved_for_closeout":
+        blockers.append("review_not_approved_for_closeout")
+    assert blockers == ["review_not_approved_for_closeout"]
+    assert expected_run_url("https://github.enterprise.example/o/r/pull/42", "123") == "https://github.enterprise.example/o/r/actions/runs/123"
     print(json.dumps({"ok": True, "self_test": "passed"}))
     return 0
 

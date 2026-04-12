@@ -37,7 +37,12 @@ truth. Required markers are:
 - `MERGLBOT_RUN_URL`
 
 Use `scripts/pr-assistant/verify-review-receipt.py --repo <owner/repo> --pr
-<number>` to emit the JSON verifier contract for closeout lanes.
+<number>` to emit the JSON verifier contract for closeout lanes. The verifier
+also checks that `MERGLBOT_RUN_ID` belongs to the PR Assistant workflow path and
+validates `MERGLBOT_RUN_URL` against the PR URL host, so the contract works on
+GitHub Enterprise hosts without hard-coding `github.com`. `ok=true` is reserved
+for current-head `status=success` with `verdict=approved_for_closeout`; blocked
+or failed receipts remain parseable evidence but are not merge approval.
 
 For lighter review: `@merglbot review --light`
 
