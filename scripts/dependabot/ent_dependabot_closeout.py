@@ -38,8 +38,8 @@ DEPENDENCY_FILE_PATTERNS = [
         r"(^|/)pnpm-lock\.yaml$",
         r"(^|/)yarn\.lock$",
         r"(^|/)bun\.lockb?$",
-        r"(^|/)requirements.*\.txt$",
-        r"(^|/)constraints.*\.txt$",
+        r"(^|/)requirements[^/]*\.txt$",
+        r"(^|/)constraints[^/]*\.txt$",
         r"(^|/)poetry\.lock$",
         r"(^|/)Pipfile\.lock$",
         r"(^|/)go\.sum$",
@@ -516,7 +516,22 @@ def process_pr(
     if pr.is_draft:
         receipt.blockers.append("draft_pr")
         return receipt
+    refreshed = refresh_pr(pr.repo, pr.number)
+    receipt.head_sha = refreshed.head_sha
+    if refreshed.merge_state == "BEHIND":
+        receipt.evidence.append("PR was behind base; requested Dependabot rebase")
+        request_dependabot_rebase(pr.repo, pr.number, apply=apply)
+        refreshed = refresh_pr(pr.repo, pr.number)
+        receipt.head_sha = refreshed.head_sha
+
     files = pr_files(pr.repo, pr.number)
+    after_scope = refresh_pr(pr.repo, pr.number)
+    if after_scope.head_sha != refreshed.head_sha:
+        receipt.blockers.append("head_changed_during_scope_check")
+        receipt.head_sha = after_scope.head_sha
+        return receipt
+    refreshed = after_scope
+
     if not files:
         receipt.action = "would_close" if not apply else "closed"
         receipt.classification = "AUTO_CLOSE_EMPTY_DIFF"
@@ -531,14 +546,6 @@ def process_pr(
         receipt.classification = "BLOCKED_CHANGE_SCOPE"
         receipt.blockers.extend([f"change_scope:{blocker}" for blocker in scope_blockers])
         return receipt
-
-    refreshed = refresh_pr(pr.repo, pr.number)
-    receipt.head_sha = refreshed.head_sha
-    if refreshed.merge_state == "BEHIND":
-        receipt.evidence.append("PR was behind base; requested Dependabot rebase")
-        request_dependabot_rebase(pr.repo, pr.number, apply=apply)
-        refreshed = refresh_pr(pr.repo, pr.number)
-        receipt.head_sha = refreshed.head_sha
 
     checks_ok, checks, check_blockers = required_checks(pr.repo, pr.number)
     if not checks_ok:
@@ -772,6 +779,8 @@ def self_test() -> int:
     assert parse_repository_map(sample) == ["merglbot-core/github", "merglbot-public/docs"]
     assert classify_change_scope(["package-lock.json", "apps/web/yarn.lock"])[0] is True
     assert classify_change_scope(["apps/web/package.json"])[0] is False
+    assert classify_change_scope(["docs/requirements/design.txt"])[0] is False
+    assert classify_change_scope(["requirements-dev.txt"])[0] is True
     assert classify_change_scope([".github/workflows/ci.yml"])[0] is False
     assert classify_change_scope(["terraform/main.tf"])[0] is False
     report = build_report(
