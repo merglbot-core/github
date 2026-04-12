@@ -24,6 +24,21 @@ The review comment now also carries advisory docs metadata:
 
 These fields are soft review metadata only. They do not add a required check, they do not create a merge blocker, and `documentation_obligation_state` remains non-authoritative review output rather than docs-classifier truth.
 
+The review comment must also carry a visible **Merglbot Review Receipt** and
+matching hidden markers so autonomous closeout can prove current-head review
+truth. Required markers are:
+
+- `MERGLBOT_REVIEW_RECEIPT_SCHEMA_VERSION`
+- `MERGLBOT_REVIEW_HEAD_SHA`
+- `MERGLBOT_REVIEW_VERDICT`
+- `MERGLBOT_REVIEW_STATUS`
+- `MERGLBOT_PR_CHECK_SURFACE`
+- `MERGLBOT_RUN_ID`
+- `MERGLBOT_RUN_URL`
+
+Use `scripts/pr-assistant/verify-review-receipt.py --repo <owner/repo> --pr
+<number>` to emit the JSON verifier contract for closeout lanes.
+
 For lighter review: `@merglbot review --light`
 
 ---
