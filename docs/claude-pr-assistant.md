@@ -51,8 +51,10 @@ authority. If the generated review does not explicitly report
 `MERGLBOT_REVIEW_VERDICT=blocked_missing_authority` instead of approving
 closeout. The only normalization fallback is the explicit review section
 `SSOT Sync (Docs)` containing `None`; that machine-normalizes an otherwise
-`unknown` documentation state to `not_required` because the review already made
-the no-docs-obligation claim visible. The metrics artifact mirrors the same lowercase
+missing `Documentation Obligation State` field to `not_required` because the
+review already made the no-docs-obligation claim visible. If the machine field
+is present but invalid, the workflow must keep the fail-closed `unknown` state
+instead of treating it as `not_required`. The metrics artifact mirrors the same lowercase
 `review_receipt.verdict` value that appears in the visible review receipt and
 hidden markers, while the legacy top-level `verdict` field remains available
 for historical dashboards.
