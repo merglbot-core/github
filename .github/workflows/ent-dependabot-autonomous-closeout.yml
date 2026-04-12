@@ -95,11 +95,6 @@ on:
         required: false
         type: boolean
         default: true
-      comment_report:
-        description: "Post report to tracking issue"
-        required: false
-        type: boolean
-        default: false
       tracking_issue:
         description: "Tracking issue URL"
         required: false
@@ -116,6 +111,10 @@ on:
         type: string
       approval_note:
         description: "Human approval note recorded in the receipt"
+        required: false
+        type: string
+      approval_issue_url:
+        description: "Optional GitHub issue URL containing the apply approval packet"
         required: false
         type: string
 
@@ -148,7 +147,7 @@ jobs:
           INPUT_MAX_PARALLEL_REPOS: ${{ inputs.max_parallel_repos || 3 }}
           INPUT_MAX_PRS_PER_REPO: ${{ inputs.max_prs_per_repo || 0 }}
           INPUT_ALLOW_POLICY_ALIGNMENT: ${{ inputs.allow_policy_alignment }}
-          INPUT_COMMENT_REPORT: ${{ inputs.comment_report }}
+          INPUT_COMMENT_REPORT: ${{ github.event_name == 'workflow_dispatch' && inputs.tracking_issue != '' && 'true' || inputs.comment_report }}
           INPUT_TRACKING_ISSUE: ${{ inputs.tracking_issue || 'https://github.com/merglbot-public/docs/issues/636' }}
           INPUT_SLACK_NOTIFY: ${{ inputs.slack_notify }}
           INPUT_PR_ALLOWLIST: ${{ inputs.pr_allowlist || '' }}

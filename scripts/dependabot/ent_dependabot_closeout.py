@@ -1225,6 +1225,8 @@ def main() -> int:
         failure = {
             "ok": False,
             "final_verdict": "ENT_DEPENDABOT_WEEKLY_CLOSEOUT_BLOCKED",
+            "mode": args.mode,
+            "workflow_url": args.workflow_url,
             "generated_at": utc_now(),
             "error": str(exc),
             "slack_delivery": {"status": "not_requested"},
