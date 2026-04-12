@@ -276,9 +276,10 @@ def parse_pr_allowlist(raw: str) -> set[tuple[str, int]]:
     return allowed
 
 
-def fetch_approval_issue_material(approval_issue_url: str) -> str:
+def approval_packet_candidates(approval_note: str, approval_issue_url: str) -> list[str]:
+    candidates = [approval_note] if approval_note.strip() else []
     if not approval_issue_url:
-        return ""
+        return candidates
     parsed = urlparse(approval_issue_url)
     if parsed.netloc != "github.com":
         raise GhError("approval_issue_url must be a github.com issue or pull request URL")
@@ -288,31 +289,43 @@ def fetch_approval_issue_material(approval_issue_url: str) -> str:
     owner, repo, _, number = parts[:4]
     issue = gh_api_json(f"repos/{owner}/{repo}/issues/{number}")
     comments = gh_api_json(f"repos/{owner}/{repo}/issues/{number}/comments?per_page=100")
-    material = [issue.get("title", ""), issue.get("body", "") or ""]
-    material.extend(comment.get("body", "") or "" for comment in comments)
-    return "\n".join(material)
+    issue_body = issue.get("body", "") or ""
+    if issue_body.strip():
+        candidates.append(issue_body)
+    candidates.extend(
+        comment.get("body", "") or ""
+        for comment in comments
+        if (comment.get("body", "") or "").strip()
+    )
+    return candidates
 
 
 def validate_apply_approval(mode: str, pr_allowlist: set[tuple[str, int]], approval_note: str, approval_issue_url: str) -> None:
     if mode != "apply":
         return
-    approval_material = "\n".join([approval_note, fetch_approval_issue_material(approval_issue_url)]).lower()
-    explicit_approval_lane = bool(pr_allowlist or approval_issue_url or "post_change_validation=true" in approval_material)
+    packets = [packet.lower() for packet in approval_packet_candidates(approval_note, approval_issue_url)]
+    combined_material = "\n".join(packets)
+    explicit_approval_lane = bool(pr_allowlist or approval_issue_url or "post_change_validation=true" in combined_material)
     if not explicit_approval_lane:
         return
-    if not approval_note and not approval_issue_url:
+    if not packets:
         raise GhError("apply approval requires approval_note or approval_issue_url")
-    if not pr_allowlist and "approval_scope=full_queue" not in approval_material:
-        raise GhError("apply approval without pr_allowlist requires approval_scope=full_queue")
-    missing = [
-        marker
-        for marker in ["approved_by=", "approved_at=", "expected_action="]
-        if marker not in approval_material
-    ]
-    if "authorized_sha=" not in approval_material and "authorized_run=" not in approval_material:
-        missing.append("authorized_sha= or authorized_run=")
-    if missing:
-        raise GhError("apply approval metadata missing: " + ", ".join(missing))
+
+    def packet_missing_markers(packet: str) -> list[str]:
+        missing = [
+            marker
+            for marker in ["approved_by=", "approved_at=", "expected_action="]
+            if marker not in packet
+        ]
+        if not pr_allowlist and "approval_scope=full_queue" not in packet:
+            missing.append("approval_scope=full_queue")
+        if "authorized_sha=" not in packet and "authorized_run=" not in packet:
+            missing.append("authorized_sha= or authorized_run=")
+        return missing
+
+    if not any(not packet_missing_markers(packet) for packet in packets):
+        unique_missing = sorted({marker for packet in packets for marker in packet_missing_markers(packet)})
+        raise GhError("apply approval metadata missing from one complete packet: " + ", ".join(unique_missing))
 
 
 def pr_files(repo: str, number: int) -> list[str]:

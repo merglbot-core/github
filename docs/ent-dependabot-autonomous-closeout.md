@@ -69,8 +69,12 @@ contains `approval_scope=full_queue`; `approval_note` or `approval_issue_url` is
 present; the approval material covers the current workflow SHA or run ID; and
 the approval material contains `expected_action=`. If `approval_issue_url` is
 used, the referenced packet must contain the approval scope, expected action, and
-covered workflow SHA or run ID in a durable form. Approval material must also
-record approver identity, timestamp, approved scope, and expected action per PR.
+covered workflow SHA or run ID in a durable form. All required markers must
+appear in one coherent approval packet: the `approval_note`, the referenced
+issue body, or a single referenced issue comment. Markers spread across multiple
+historical comments do not satisfy the authorization gate. Approval material must
+also record approver identity, timestamp, approved scope, and expected action per
+PR.
 
 ## Merge Gate
 
