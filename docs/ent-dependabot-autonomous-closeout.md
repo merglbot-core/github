@@ -54,17 +54,19 @@ the Slack webhook configuration.
 Slack messages include the run status, scanned repo count, merged/closed/blocked
 Dependabot PR counts, remaining Dependabot and non-Dependabot PR totals, open
 issue totals, top blocker reasons, and the GitHub Actions run URL. The JSON
-artifact remains the authoritative receipt if Slack delivery fails. A Slack
-failure before mutations may block the run; a Slack failure after completed
-mutations must not cause automatic PR/issue mutation retries and should be
-reported as telemetry-degraded.
+artifact remains the authoritative receipt if Slack delivery fails. Slack is
+best-effort for the weekly workflow: missing Slack configuration is recorded as
+`not_configured`, POST failure is recorded as `telemetry_degraded`, and neither
+case may cause automatic PR/issue mutation retries.
 
 Manual apply validation can pass a `pr_allowlist` plus `approval_note` or
 `approval_issue_url`; the workflow records those values in the receipt and only
 acts on the allowlisted PRs. `pr_allowlist` accepts comma- or whitespace-separated
 `owner/repo#number` tokens or GitHub PR URLs; the approval note/packet must record
 approver identity, timestamp, approved scope, authorized run or commit, and
-expected action per PR.
+expected action per PR. For `post_change_validation=true`, the workflow fails
+closed unless `pr_allowlist` is non-empty or the approval note explicitly says
+`approval_scope=full_queue`.
 
 ## Merge Gate
 

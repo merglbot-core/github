@@ -276,6 +276,24 @@ def parse_pr_allowlist(raw: str) -> set[tuple[str, int]]:
     return allowed
 
 
+def validate_apply_approval(mode: str, pr_allowlist: set[tuple[str, int]], approval_note: str, approval_issue_url: str) -> None:
+    if mode != "apply":
+        return
+    normalized = approval_note.lower()
+    explicit_approval_lane = bool(pr_allowlist or approval_issue_url or "post_change_validation=true" in normalized)
+    if not explicit_approval_lane:
+        return
+    if not approval_note and not approval_issue_url:
+        raise GhError("apply approval requires approval_note or approval_issue_url")
+    if not pr_allowlist and "approval_scope=full_queue" not in normalized:
+        raise GhError("apply approval without pr_allowlist requires approval_scope=full_queue")
+    missing = [marker for marker in ["approved_by=", "approved_at="] if marker not in normalized]
+    if "authorized_sha=" not in normalized and "authorized_run=" not in normalized and not approval_issue_url:
+        missing.append("authorized_sha= or authorized_run=")
+    if missing:
+        raise GhError("apply approval metadata missing: " + ", ".join(missing))
+
+
 def pr_files(repo: str, number: int) -> list[str]:
     proc = run_cmd(["gh", "pr", "diff", str(number), "--repo", repo, "--name-only"])
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
@@ -919,6 +937,7 @@ def build_report(
             "approval_issue_url": approval_issue_url,
         },
         "slack_delivery": {"status": "not_requested"},
+        "telemetry_degraded": False,
         "repo_table": repo_table,
         "tracking_comment_url": tracking_comment_url,
         "telemetry_warnings": [warning for result in repo_results for warning in result.get("telemetry_warnings", [])],
@@ -959,7 +978,7 @@ def build_slack_payload(report: dict[str, Any], status: str) -> dict[str, Any]:
 
 def post_slack_report(webhook_url: str, report: dict[str, Any]) -> dict[str, Any]:
     if not webhook_url:
-        return {"status": "missing_webhook", "ok": False}
+        return {"status": "not_configured", "ok": True}
     payload = build_slack_payload(report, "ok" if report.get("ok") else "blocked")
     request = Request(
         webhook_url,
@@ -1020,6 +1039,12 @@ def self_test() -> int:
         ("merglbot-core/github", 1),
         ("merglbot-public/docs", 2),
     }
+    validate_apply_approval(
+        "apply",
+        {("merglbot-core/github", 1)},
+        "post_change_validation=true approved_by=milhul6 approved_at=2026-04-12T21:00:00Z authorized_sha=abc expected_action=merge",
+        "",
+    )
     assert report["remaining_dependabot_prs"] == 1
     assert "MERGLBOT" not in close_comment(
         PullRequest("o/r", 1, "x", "u", "dependabot[bot]", "a" * 40, "main", "dependabot/x", False, "CLEAN", utc_now()),
@@ -1060,6 +1085,7 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     try:
         pr_allowlist = parse_pr_allowlist(args.pr_allowlist)
+        validate_apply_approval(args.mode, pr_allowlist, args.approval_note, args.approval_issue_url)
         all_repos = load_repo_scope(args.scope_file)
         if args.repo_scope == "single_repo":
             if not args.single_repo:
@@ -1103,9 +1129,7 @@ def main() -> int:
         if args.slack_notify:
             report["slack_delivery"] = post_slack_report(os.environ.get("SLACK_DEPENDABOT_WEBHOOK_URL", ""), report)
             if not report["slack_delivery"].get("ok"):
-                report["ok"] = False
-                report["final_verdict"] = "ENT_DEPENDABOT_WEEKLY_CLOSEOUT_BLOCKED"
-                report["remaining_blockers"].append(f"slack_delivery:{report['slack_delivery'].get('status')}")
+                report["telemetry_degraded"] = True
         summary = markdown_summary(report)
         if args.comment_report and args.tracking_issue:
             report["tracking_comment_url"] = post_tracking_report(args.tracking_issue, report, summary)
