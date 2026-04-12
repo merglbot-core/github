@@ -1817,15 +1817,17 @@ jobs:
               blocked_missing_authority) REVIEW_VERDICT="blocked_missing_authority" ;;
             esac
           fi
-          if [ "$DOCUMENTATION_OBLIGATION_STATE" = "unknown" ] && [ "$REVIEW_VERDICT" = "approved_for_closeout" ]; then
-            REVIEW_VERDICT="blocked_missing_authority"
-          fi
-
           FOLLOW_UP_ID="pr-${PR_NUM}-review-${GITHUB_RUN_ID}"
           CLOSEOUT_MODE="human_merge_only"
+          REVIEW_RECEIPT_SCHEMA_VERSION="1"
+          REVIEW_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           PR_CHECK_SURFACE_STATE="$(tr -d '\r\n' < pr_check_surface_state.txt 2>/dev/null || true)"
           if [ -z "${PR_CHECK_SURFACE_STATE:-}" ]; then
             PR_CHECK_SURFACE_STATE="missing"
+          fi
+          REVIEW_STATUS="success"
+          if [ "$REVIEW_VERDICT" != "approved_for_closeout" ]; then
+            REVIEW_STATUS="blocked"
           fi
           
           echo "Building PR comment..."
@@ -1835,12 +1837,48 @@ jobs:
               echo "## 🤖 Merglbot PR Assistant v3.5.4"
               echo ""
               echo "❌ Review generation failed. Please check workflow logs."
+              echo ""
+              echo "### Merglbot Review Receipt"
+              echo ""
+              echo "| Field | Value |"
+              echo "|-------|-------|"
+              printf '%s\n' "| schema_version | \`$REVIEW_RECEIPT_SCHEMA_VERSION\` |"
+              printf '%s\n' "| head_sha | \`${PR_HEAD_SHA}\` |"
+              printf '%s\n' "| run_url | $REVIEW_RUN_URL |"
+              printf '%s\n' "| verdict | \`review_generation_failed\` |"
+              printf '%s\n' "| status | \`failed\` |"
+              printf '%s\n' "| diff_scope | \`$DIFF_SCOPE\` |"
+              printf '%s\n' "| pr_check_surface | \`$PR_CHECK_SURFACE_STATE\` |"
+              echo ""
+              echo "<!-- MERGLBOT_PR_ASSISTANT_V3 -->"
+              echo "<!-- MERGLBOT_REVIEW_RECEIPT_SCHEMA_VERSION: $REVIEW_RECEIPT_SCHEMA_VERSION -->"
+              echo "<!-- MERGLBOT_REVIEW_HEAD_SHA: $PR_HEAD_SHA -->"
+              echo "<!-- MERGLBOT_REVIEW_VERDICT: review_generation_failed -->"
+              echo "<!-- MERGLBOT_REVIEW_STATUS: failed -->"
+              echo "<!-- MERGLBOT_PR_CHECK_SURFACE: $PR_CHECK_SURFACE_STATE -->"
+              echo "<!-- MERGLBOT_RUN_ID: ${{ github.run_id }} -->"
+              echo "<!-- MERGLBOT_RUN_URL: $REVIEW_RUN_URL -->"
+              echo "<!-- MERGLBOT_DIFF_SCOPE: $DIFF_SCOPE -->"
             } > comment.md
           else
             {
               echo "## 🤖 Merglbot PR Assistant v3.5.4"
               echo ""
               cat final_review.txt
+              echo ""
+              echo "---"
+              echo ""
+              echo "### Merglbot Review Receipt"
+              echo ""
+              echo "| Field | Value |"
+              echo "|-------|-------|"
+              printf '%s\n' "| schema_version | \`$REVIEW_RECEIPT_SCHEMA_VERSION\` |"
+              printf '%s\n' "| head_sha | \`${PR_HEAD_SHA}\` |"
+              printf '%s\n' "| run_url | $REVIEW_RUN_URL |"
+              printf '%s\n' "| verdict | \`$REVIEW_VERDICT\` |"
+              printf '%s\n' "| status | \`$REVIEW_STATUS\` |"
+              printf '%s\n' "| diff_scope | \`$DIFF_SCOPE\` |"
+              printf '%s\n' "| pr_check_surface | \`$PR_CHECK_SURFACE_STATE\` |"
               echo ""
               echo "---"
               echo ""
@@ -1903,10 +1941,12 @@ jobs:
               echo "</details>"
               echo ""
               echo "<!-- MERGLBOT_PR_ASSISTANT_V3 -->"
+              echo "<!-- MERGLBOT_REVIEW_RECEIPT_SCHEMA_VERSION: $REVIEW_RECEIPT_SCHEMA_VERSION -->"
               echo "<!-- MERGLBOT_REVIEW_BOUNDARY: review_only -->"
               echo "<!-- MERGLBOT_FOLLOW_UP_ID: $FOLLOW_UP_ID -->"
               echo "<!-- MERGLBOT_REVIEW_HEAD_SHA: $PR_HEAD_SHA -->"
               echo "<!-- MERGLBOT_REVIEW_VERDICT: $REVIEW_VERDICT -->"
+              echo "<!-- MERGLBOT_REVIEW_STATUS: $REVIEW_STATUS -->"
               echo "<!-- MERGLBOT_DOCUMENTATION_OBLIGATION_STATE: $DOCUMENTATION_OBLIGATION_STATE -->"
               echo "<!-- MERGLBOT_DOCS_FOLLOW_UP_HINT: $DOCS_FOLLOW_UP_HINT -->"
               echo "<!-- MERGLBOT_SUGGESTED_DOCS_TARGETS: $SUGGESTED_DOCS_TARGETS_JSON -->"
@@ -1919,6 +1959,7 @@ jobs:
               echo "<!-- MERGLBOT_DIFF_SCOPE: $DIFF_SCOPE -->"
               echo "<!-- MERGLBOT_DIFF_RANGE: $DIFF_RANGE -->"
               echo "<!-- MERGLBOT_RUN_ID: ${{ github.run_id }} -->"
+              echo "<!-- MERGLBOT_RUN_URL: $REVIEW_RUN_URL -->"
               echo ""
               echo "---"
               echo ""
@@ -2168,6 +2209,14 @@ jobs:
           SYNTHESIS_USAGE_JSON="${SYNTHESIS_USAGE_JSON:-{}}"
 
           PR_AUTHOR="$(sed -n '1p' pr_author.txt 2>/dev/null || echo '')"
+          PR_HEAD_SHA="$(sed -n '1p' pr_head_sha.txt 2>/dev/null || echo '')"
+          DIFF_SCOPE="$(sed -n '1p' pr_diff_scope.txt 2>/dev/null || echo 'full')"
+          PR_CHECK_SURFACE_STATE="$(tr -d '\r\n' < pr_check_surface_state.txt 2>/dev/null || true)"
+          if [ -z "${PR_CHECK_SURFACE_STATE:-}" ]; then
+            PR_CHECK_SURFACE_STATE="missing"
+          fi
+          REVIEW_RECEIPT_SCHEMA_VERSION="1"
+          REVIEW_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}"
 
           ANTHROPIC_USAGE_JSON_SAFE="$(normalize_usage_json "$ANTHROPIC_USAGE_JSON")"
           OPENAI_USAGE_JSON_SAFE="$(normalize_usage_json "$OPENAI_USAGE_JSON")"
@@ -2201,6 +2250,11 @@ jobs:
             --arg bugbot_sources "$BUGBOT_SOURCES" \
             --arg status "${JOB_STATUS:-unknown}" \
             --arg review_status "$REVIEW_STATUS" \
+            --arg receipt_schema_version "$REVIEW_RECEIPT_SCHEMA_VERSION" \
+            --arg head_sha "$PR_HEAD_SHA" \
+            --arg run_url "$REVIEW_RUN_URL" \
+            --arg diff_scope "$DIFF_SCOPE" \
+            --arg pr_check_surface "$PR_CHECK_SURFACE_STATE" \
             --argjson anthropic_usage "$ANTHROPIC_USAGE_JSON_SAFE" \
             --argjson openai_usage "$OPENAI_USAGE_JSON_SAFE" \
             --argjson synthesis_usage "$SYNTHESIS_USAGE_JSON_SAFE" \
@@ -2246,6 +2300,16 @@ jobs:
                   low: ($low_count | toint)
                 },
                 verdict: $verdict,
+                review_receipt: {
+                  schema_version: $receipt_schema_version,
+                  head_sha: $head_sha,
+                  run_id: $run_id,
+                  run_url: $run_url,
+                  verdict: $verdict,
+                  status: $review_status,
+                  diff_scope: $diff_scope,
+                  pr_check_surface: $pr_check_surface
+                },
                 bugbot: {
                   source_count: ($bugbot_count | toint),
                   sources: $bugbot_sources

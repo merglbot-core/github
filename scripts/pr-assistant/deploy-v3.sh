@@ -63,6 +63,7 @@ else
 fi
 SOURCE_WORKFLOW="${WORKSPACE_ROOT}/merglbot-core/github/.github/workflows/merglbot-pr-assistant-v3-on-demand.yml"
 SOURCE_STEP1="${WORKSPACE_ROOT}/merglbot-core/github/scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh"
+SOURCE_VERIFIER="${WORKSPACE_ROOT}/merglbot-core/github/scripts/pr-assistant/verify-review-receipt.py"
 MANIFEST_TOOL="${WORKSPACE_ROOT}/merglbot-core/github/scripts/pr-assistant/repo-policy-manifest.py"
 MANIFEST_FILE="${WORKSPACE_ROOT}/merglbot-core/github/scripts/pr-assistant/repo-policy-manifest.json"
 TARGET_REPOS_FILE="${WORKSPACE_ROOT}/merglbot-core/github/scripts/pr-assistant/target-repos.txt"
@@ -74,6 +75,11 @@ fi
 
 if [ ! -f "$SOURCE_STEP1" ]; then
   echo "ERROR: Source Step1 script not found: $SOURCE_STEP1" >&2
+  exit 1
+fi
+
+if [ ! -f "$SOURCE_VERIFIER" ]; then
+  echo "ERROR: Source review receipt verifier not found: $SOURCE_VERIFIER" >&2
   exit 1
 fi
 
@@ -142,6 +148,7 @@ is_git_clean() {
 echo "Workspace: $WORKSPACE_ROOT"
 echo "Source:    $SOURCE_WORKFLOW"
 echo "Step1:     $SOURCE_STEP1"
+echo "Verifier:  $SOURCE_VERIFIER"
 echo "Mode:      $([ "$DRY_RUN" == "true" ] && echo "DRY RUN" || echo "APPLY")"
 echo "Force:     $FORCE"
 if [ -n "$ONLY_REPOS_RAW" ]; then
@@ -153,6 +160,7 @@ for repo in "${TARGET_REPOS[@]}"; do
   repo_dir="${WORKSPACE_ROOT}/${repo}"
   dest_workflow="${repo_dir}/.github/workflows/merglbot-pr-v3-on-demand.yml"
   dest_step1="${repo_dir}/scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh"
+  dest_verifier="${repo_dir}/scripts/pr-assistant/verify-review-receipt.py"
 
   if [ ! -d "$repo_dir" ]; then
     echo "⏭️  SKIP (missing dir): $repo"
@@ -173,15 +181,22 @@ for repo in "${TARGET_REPOS[@]}"; do
   if [ "$DRY_RUN" == "true" ]; then
     echo "DRY:  $repo -> $dest_workflow"
     echo "DRY:  $repo -> $dest_step1"
+    echo "DRY:  $repo -> $dest_verifier"
     continue
   fi
 
   mkdir -p "$(dirname "$dest_workflow")"
   mkdir -p "$(dirname "$dest_step1")"
+  mkdir -p "$(dirname "$dest_verifier")"
   cp "$SOURCE_WORKFLOW" "$dest_workflow"
   cp "$SOURCE_STEP1" "$dest_step1"
+  cp "$SOURCE_VERIFIER" "$dest_verifier"
   if ! chmod +x "$dest_step1"; then
     echo "ERROR: Failed to chmod +x: $dest_step1" >&2
+    exit 1
+  fi
+  if ! chmod +x "$dest_verifier"; then
+    echo "ERROR: Failed to chmod +x: $dest_verifier" >&2
     exit 1
   fi
   echo "✅    $repo"
