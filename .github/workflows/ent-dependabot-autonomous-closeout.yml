@@ -43,6 +43,26 @@ on:
         required: false
         type: string
         default: "https://github.com/merglbot-public/docs/issues/636"
+      slack_notify:
+        description: "Post the run telemetry summary to Slack via SLACK_DEPENDABOT_WEBHOOK_URL."
+        required: false
+        type: boolean
+        default: true
+      pr_allowlist:
+        description: "Optional comma/space/newline-separated owner/repo#PR or PR URLs approved for apply mode."
+        required: false
+        type: string
+        default: ""
+      approval_note:
+        description: "Human approval note recorded in the receipt for user-approved apply runs."
+        required: false
+        type: string
+        default: ""
+      approval_issue_url:
+        description: "Optional GitHub issue URL containing the apply approval packet."
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       mode:
@@ -65,11 +85,6 @@ on:
         description: "owner/repo when repo_scope=single_repo"
         required: false
         type: string
-      max_parallel_repos:
-        description: "Upper bound recorded in receipts; mutation lane remains repo-sequential"
-        required: false
-        type: number
-        default: 3
       max_prs_per_repo:
         description: "0 means unlimited"
         required: false
@@ -90,6 +105,19 @@ on:
         required: false
         type: string
         default: "https://github.com/merglbot-public/docs/issues/636"
+      slack_notify:
+        description: "Post the run telemetry summary to Slack"
+        required: false
+        type: boolean
+        default: true
+      pr_allowlist:
+        description: "Optional owner/repo#PR or PR URLs approved for apply mode"
+        required: false
+        type: string
+      approval_note:
+        description: "Human approval note recorded in the receipt"
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -122,6 +150,11 @@ jobs:
           INPUT_ALLOW_POLICY_ALIGNMENT: ${{ inputs.allow_policy_alignment }}
           INPUT_COMMENT_REPORT: ${{ inputs.comment_report }}
           INPUT_TRACKING_ISSUE: ${{ inputs.tracking_issue || 'https://github.com/merglbot-public/docs/issues/636' }}
+          INPUT_SLACK_NOTIFY: ${{ inputs.slack_notify }}
+          INPUT_PR_ALLOWLIST: ${{ inputs.pr_allowlist || '' }}
+          INPUT_APPROVAL_NOTE: ${{ inputs.approval_note || '' }}
+          INPUT_APPROVAL_ISSUE_URL: ${{ inputs.approval_issue_url || '' }}
+          SLACK_DEPENDABOT_WEBHOOK_URL: ${{ secrets.SLACK_DEPENDABOT_WEBHOOK_URL }}
           ENT_DEPENDABOT_REVIEW_WAIT_SECONDS: "1500"
           ENT_DEPENDABOT_REVIEW_POLL_SECONDS: "60"
           ENT_DEPENDABOT_REBASE_WAIT_SECONDS: "600"
@@ -137,6 +170,10 @@ jobs:
           ALLOW_POLICY_ALIGNMENT="$INPUT_ALLOW_POLICY_ALIGNMENT"
           COMMENT_REPORT="$INPUT_COMMENT_REPORT"
           TRACKING_ISSUE="$INPUT_TRACKING_ISSUE"
+          SLACK_NOTIFY="$INPUT_SLACK_NOTIFY"
+          PR_ALLOWLIST="$INPUT_PR_ALLOWLIST"
+          APPROVAL_NOTE="$INPUT_APPROVAL_NOTE"
+          APPROVAL_ISSUE_URL="$INPUT_APPROVAL_ISSUE_URL"
 
           ARGS=(
             --mode "$MODE"
@@ -145,6 +182,9 @@ jobs:
             --max-prs-per-repo "$MAX_PRS_PER_REPO"
             --output-dir "reports/ent-dependabot-weekly"
             --tracking-issue "$TRACKING_ISSUE"
+            --pr-allowlist "$PR_ALLOWLIST"
+            --approval-note "$APPROVAL_NOTE"
+            --approval-issue-url "$APPROVAL_ISSUE_URL"
           )
 
           if [ -n "$SINGLE_REPO" ]; then
@@ -156,6 +196,9 @@ jobs:
           if [ "$COMMENT_REPORT" = "true" ]; then
             ARGS+=(--comment-report)
           fi
+          if [ "$SLACK_NOTIFY" = "true" ]; then
+            ARGS+=(--slack-notify --slack-webhook-url "$SLACK_DEPENDABOT_WEBHOOK_URL")
+          fi
 
           mkdir -p reports/ent-dependabot-weekly
           python3 scripts/dependabot/ent_dependabot_closeout.py "${ARGS[@]}" | tee reports/ent-dependabot-weekly/stdout.json
@@ -164,6 +207,40 @@ jobs:
             echo ""
             cat reports/ent-dependabot-weekly/summary.md
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post Slack fallback if closeout crashes before receipt
+        if: failure() && inputs.slack_notify
+        env:
+          SLACK_DEPENDABOT_WEBHOOK_URL: ${{ secrets.SLACK_DEPENDABOT_WEBHOOK_URL }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -f reports/ent-dependabot-weekly/ent_dependabot_weekly_receipt.json ]; then
+            exit 0
+          fi
+          if [ -z "${SLACK_DEPENDABOT_WEBHOOK_URL:-}" ]; then
+            exit 0
+          fi
+          python3 - <<'PY'
+          import json
+          import os
+          from urllib.request import Request, urlopen
+
+          payload = {
+              "text": (
+                  "*ENT Dependabot Weekly Closeout* `workflow_failed_before_receipt`\n"
+                  f"Run: {os.environ.get('GITHUB_RUN_URL', 'not available')}"
+              )
+          }
+          request = Request(
+              os.environ["SLACK_DEPENDABOT_WEBHOOK_URL"],
+              data=json.dumps(payload).encode("utf-8"),
+              headers={"Content-Type": "application/json"},
+              method="POST",
+          )
+          with urlopen(request, timeout=15) as response:
+              response.read()
+          PY
 
       - name: Upload weekly receipt artifacts
         if: always()

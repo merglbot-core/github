@@ -42,6 +42,22 @@ Platform policy authority remains in `merglbot-public/docs`:
 - The workflow does not deploy, run Terraform apply, mutate secrets, change
   default branches, or bypass branch protection.
 
+## Slack Telemetry
+
+The reusable workflow posts a compact run summary to Slack when
+`slack_notify=true` and the `SLACK_DEPENDABOT_WEBHOOK_URL` secret is configured
+in `merglbot-core/github`. The secret value must never be printed or embedded in
+logs; channel routing is controlled by the Slack webhook configuration.
+
+Slack messages include the run status, scanned repo count, merged/closed/blocked
+Dependabot PR counts, remaining Dependabot and non-Dependabot PR totals, open
+issue totals, top blocker reasons, and the GitHub Actions run URL. The JSON
+artifact remains the authoritative receipt if Slack delivery fails.
+
+Manual apply validation can pass a `pr_allowlist` plus `approval_note` or
+`approval_issue_url`; the workflow records those values in the receipt and only
+acts on the allowlisted PRs.
+
 ## Merge Gate
 
 Every merged Dependabot PR must prove:

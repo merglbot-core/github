@@ -31,6 +31,19 @@ on:
         required: false
         type: number
         default: 0
+      slack_notify:
+        description: "Post telemetry to Slack"
+        required: false
+        type: boolean
+        default: true
+      pr_allowlist:
+        description: "Optional owner/repo#PR or PR URLs approved for manual apply mode"
+        required: false
+        type: string
+      approval_note:
+        description: "Human approval note or approval packet URL for manual apply mode"
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -56,4 +69,7 @@ jobs:
       allow_policy_alignment: true
       comment_report: true
       tracking_issue: "https://github.com/merglbot-public/docs/issues/636"
+      slack_notify: ${{ github.event_name == 'schedule' && true || inputs.slack_notify }}
+      pr_allowlist: ${{ github.event_name == 'schedule' && '' || inputs.pr_allowlist }}
+      approval_note: ${{ github.event_name == 'schedule' && 'scheduled weekly run' || inputs.approval_note }}
     secrets: inherit
