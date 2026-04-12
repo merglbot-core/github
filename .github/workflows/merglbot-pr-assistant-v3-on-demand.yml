@@ -1752,12 +1752,14 @@ jobs:
           }
 
           DOCUMENTATION_OBLIGATION_STATE="unknown"
+          DOCUMENTATION_OBLIGATION_STATE_EXPLICIT="false"
           SSOT_SYNC_DOCS_NONE="false"
           if awk 'BEGIN{IGNORECASE=1; in_section=0} /^##[[:space:]]+SSOT Sync \(Docs\)/{in_section=1; next} /^##[[:space:]]/{in_section=0} in_section && $0 ~ /^[[:space:]]*None[[:space:]]*$/ {found=1} END{exit(found?0:1)}' final_review.txt 2>/dev/null; then
             SSOT_SYNC_DOCS_NONE="true"
           fi
           DOC_STATE_LINE="$(extract_zaver_review_field_line 'Documentation Obligation State' || true)"
           if [ -n "$DOC_STATE_LINE" ]; then
+            DOCUMENTATION_OBLIGATION_STATE_EXPLICIT="true"
             DOCUMENTATION_OBLIGATION_STATE="$(normalize_machine_token "$(printf '%s' "$DOC_STATE_LINE" | sed -E 's/^Documentation Obligation State:[[:space:]]*//I')")"
           elif [ "$SSOT_SYNC_DOCS_NONE" = "true" ]; then
             DOCUMENTATION_OBLIGATION_STATE="not_required"
@@ -1766,7 +1768,7 @@ jobs:
             satisfied|not_required|missing|unknown) ;;
             *) DOCUMENTATION_OBLIGATION_STATE="unknown" ;;
           esac
-          if [ "$DOCUMENTATION_OBLIGATION_STATE" = "unknown" ] && [ "$SSOT_SYNC_DOCS_NONE" = "true" ]; then
+          if [ "$DOCUMENTATION_OBLIGATION_STATE_EXPLICIT" != "true" ] && [ "$DOCUMENTATION_OBLIGATION_STATE" = "unknown" ] && [ "$SSOT_SYNC_DOCS_NONE" = "true" ]; then
             DOCUMENTATION_OBLIGATION_STATE="not_required"
           fi
 
