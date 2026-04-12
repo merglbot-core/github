@@ -72,9 +72,12 @@ used, the referenced packet must contain the approval scope, expected action, an
 covered workflow SHA or run ID in a durable form. All required markers must
 appear in one coherent approval packet: the `approval_note`, the referenced
 issue body, or a single referenced issue comment. Markers spread across multiple
-historical comments do not satisfy the authorization gate. Approval material must
-also record approver identity, timestamp, approved scope, and expected action per
-PR.
+historical comments do not satisfy the authorization gate. `authorized_sha` or
+`authorized_run` must match the current workflow SHA or run ID, and approval
+packets loaded from `approval_issue_url` must come from a trusted approval repo
+and a trusted GitHub author whose login matches `approved_by`. Approval material
+must also record approver identity, timestamp, approved scope, and expected
+action per PR.
 
 ## Merge Gate
 

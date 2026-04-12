@@ -276,8 +276,12 @@ def parse_pr_allowlist(raw: str) -> set[tuple[str, int]]:
     return allowed
 
 
-def approval_packet_candidates(approval_note: str, approval_issue_url: str) -> list[str]:
-    candidates = [approval_note] if approval_note.strip() else []
+ApprovalPacket = tuple[str, str]
+
+
+def approval_packet_candidates(approval_note: str, approval_issue_url: str) -> list[ApprovalPacket]:
+    actor = os.environ.get("GITHUB_TRIGGERING_ACTOR") or os.environ.get("GITHUB_ACTOR") or ""
+    candidates: list[ApprovalPacket] = [(actor, approval_note)] if approval_note.strip() else []
     if not approval_issue_url:
         return candidates
     parsed = urlparse(approval_issue_url)
@@ -287,44 +291,80 @@ def approval_packet_candidates(approval_note: str, approval_issue_url: str) -> l
     if len(parts) < 4 or parts[2] not in {"issues", "pull"}:
         raise GhError("approval_issue_url must point to a GitHub issue or pull request")
     owner, repo, _, number = parts[:4]
+    repo_slug = f"{owner}/{repo}".lower()
+    trusted_repos = {
+        item.strip().lower()
+        for item in os.environ.get("ENT_DEPENDABOT_APPROVAL_REPOS", "merglbot-core/github,merglbot-public/docs").split(",")
+        if item.strip()
+    }
+    if repo_slug not in trusted_repos:
+        raise GhError(f"approval_issue_url must point to a trusted approval repo: {', '.join(sorted(trusted_repos))}")
     issue = gh_api_json(f"repos/{owner}/{repo}/issues/{number}")
     comments = gh_api_json(f"repos/{owner}/{repo}/issues/{number}/comments?per_page=100")
     issue_body = issue.get("body", "") or ""
+    issue_author = ((issue.get("user") or {}).get("login") or "").lower()
     if issue_body.strip():
-        candidates.append(issue_body)
-    candidates.extend(
-        comment.get("body", "") or ""
-        for comment in comments
-        if (comment.get("body", "") or "").strip()
-    )
+        candidates.append((issue_author, issue_body))
+    for comment in comments:
+        body = comment.get("body", "") or ""
+        if body.strip():
+            author = ((comment.get("user") or {}).get("login") or "").lower()
+            candidates.append((author, body))
     return candidates
+
+
+def parse_approval_packet_fields(packet: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for match in re.finditer(
+        r"(?im)(approved_by|approved_at|expected_action|approval_scope|authorized_sha|authorized_run)\s*=\s*`?([^`\s]+)",
+        packet,
+    ):
+        fields[match.group(1).lower()] = match.group(2).strip().strip("`")
+    return fields
 
 
 def validate_apply_approval(mode: str, pr_allowlist: set[tuple[str, int]], approval_note: str, approval_issue_url: str) -> None:
     if mode != "apply":
         return
-    packets = [packet.lower() for packet in approval_packet_candidates(approval_note, approval_issue_url)]
-    combined_material = "\n".join(packets)
+    packets = approval_packet_candidates(approval_note, approval_issue_url)
+    combined_material = "\n".join(packet.lower() for _, packet in packets)
     explicit_approval_lane = bool(pr_allowlist or approval_issue_url or "post_change_validation=true" in combined_material)
     if not explicit_approval_lane:
         return
     if not packets:
         raise GhError("apply approval requires approval_note or approval_issue_url")
 
-    def packet_missing_markers(packet: str) -> list[str]:
-        missing = [
-            marker
-            for marker in ["approved_by=", "approved_at=", "expected_action="]
-            if marker not in packet
-        ]
-        if not pr_allowlist and "approval_scope=full_queue" not in packet:
+    current_sha = os.environ.get("GITHUB_SHA", "").lower()
+    current_run = os.environ.get("GITHUB_RUN_ID", "")
+    trusted_approvers = {
+        item.strip().lower()
+        for item in os.environ.get("ENT_DEPENDABOT_TRUSTED_APPROVERS", "milhul6").split(",")
+        if item.strip()
+    }
+    trusted_approvers.update(
+        actor.lower()
+        for actor in [os.environ.get("GITHUB_ACTOR", ""), os.environ.get("GITHUB_TRIGGERING_ACTOR", "")]
+        if actor
+    )
+
+    def packet_missing_markers(author: str, packet: str) -> list[str]:
+        fields = parse_approval_packet_fields(packet)
+        missing = [marker for marker in ["approved_by", "approved_at", "expected_action"] if not fields.get(marker)]
+        approved_by = fields.get("approved_by", "").lower()
+        if not author or author.lower() not in trusted_approvers:
+            missing.append("trusted_author")
+        if approved_by and author and approved_by != author.lower():
+            missing.append("approved_by_matches_author")
+        if not pr_allowlist and fields.get("approval_scope", "").lower() != "full_queue":
             missing.append("approval_scope=full_queue")
-        if "authorized_sha=" not in packet and "authorized_run=" not in packet:
-            missing.append("authorized_sha= or authorized_run=")
+        sha_ok = bool(current_sha and fields.get("authorized_sha", "").lower() == current_sha)
+        run_ok = bool(current_run and fields.get("authorized_run", "") == current_run)
+        if not sha_ok and not run_ok:
+            missing.append("authorized_sha/current or authorized_run/current")
         return missing
 
-    if not any(not packet_missing_markers(packet) for packet in packets):
-        unique_missing = sorted({marker for packet in packets for marker in packet_missing_markers(packet)})
+    if not any(not packet_missing_markers(author, packet) for author, packet in packets):
+        unique_missing = sorted({marker for author, packet in packets for marker in packet_missing_markers(author, packet)})
         raise GhError("apply approval metadata missing from one complete packet: " + ", ".join(unique_missing))
 
 
@@ -1073,12 +1113,21 @@ def self_test() -> int:
         ("merglbot-core/github", 1),
         ("merglbot-public/docs", 2),
     }
-    validate_apply_approval(
-        "apply",
-        {("merglbot-core/github", 1)},
-        "post_change_validation=true approved_by=milhul6 approved_at=2026-04-12T21:00:00Z authorized_sha=abc expected_action=merge",
-        "",
-    )
+    previous_env = {key: os.environ.get(key) for key in ["GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_ACTOR"]}
+    os.environ.update({"GITHUB_SHA": "abc", "GITHUB_RUN_ID": "12345", "GITHUB_ACTOR": "milhul6"})
+    try:
+        validate_apply_approval(
+            "apply",
+            {("merglbot-core/github", 1)},
+            "post_change_validation=true approved_by=milhul6 approved_at=2026-04-12T21:00:00Z authorized_sha=abc expected_action=merge",
+            "",
+        )
+    finally:
+        for key, value in previous_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
     assert report["remaining_dependabot_prs"] == 1
     assert "MERGLBOT" not in close_comment(
         PullRequest("o/r", 1, "x", "u", "dependabot[bot]", "a" * 40, "main", "dependabot/x", False, "CLEAN", utc_now()),
