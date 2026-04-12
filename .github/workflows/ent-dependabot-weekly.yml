@@ -1,0 +1,59 @@
+name: ENT Dependabot Weekly Closeout
+
+on:
+  schedule:
+    # Sunday 13:00 UTC = 14:00 CET / 15:00 CEST for Europe/Prague.
+    - cron: "0 13 * * 0"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Use dry-run for manual validation; scheduled runs use apply."
+        required: true
+        type: choice
+        options:
+          - dry-run
+          - apply
+        default: dry-run
+      repo_scope:
+        description: "Scope selector"
+        required: true
+        type: choice
+        options:
+          - all
+          - single_repo
+        default: all
+      single_repo:
+        description: "owner/repo when repo_scope=single_repo"
+        required: false
+        type: string
+      max_prs_per_repo:
+        description: "0 means unlimited"
+        required: false
+        type: number
+        default: 0
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  issues: write
+  pull-requests: write
+  statuses: read
+
+concurrency:
+  group: ent-dependabot-weekly-closeout
+  cancel-in-progress: false
+
+jobs:
+  weekly-closeout:
+    uses: ./.github/workflows/ent-dependabot-autonomous-closeout.yml
+    with:
+      mode: ${{ github.event_name == 'schedule' && 'apply' || inputs.mode }}
+      repo_scope: ${{ github.event_name == 'schedule' && 'all' || inputs.repo_scope }}
+      single_repo: ${{ github.event_name == 'schedule' && '' || inputs.single_repo }}
+      max_parallel_repos: 3
+      max_prs_per_repo: ${{ inputs.max_prs_per_repo || 0 }}
+      allow_policy_alignment: true
+      comment_report: true
+      tracking_issue: "https://github.com/merglbot-public/docs/issues/636"
+    secrets: inherit

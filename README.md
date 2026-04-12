@@ -15,6 +15,8 @@ Shared GitHub Actions workflows that can be called from other repositories.
 
 **Available Workflows:**
 - [Browse all workflows in `.github/workflows/`](https://github.com/merglbot-core/github/tree/main/.github/workflows)
+- `ent-dependabot-weekly.yml` - scheduled weekly ENT Dependabot closeout
+- `ent-dependabot-autonomous-closeout.yml` - reusable evidence-gated Dependabot closeout workflow
 
 **Usage Example:**
 ```yaml

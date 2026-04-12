@@ -1,0 +1,174 @@
+name: ENT Dependabot Autonomous Closeout
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "Execution mode: dry-run does not write; apply may close/merge/policy-align."
+        required: false
+        type: string
+        default: dry-run
+      repo_scope:
+        description: "Scope selector: all, cohort, or single_repo."
+        required: false
+        type: string
+        default: all
+      single_repo:
+        description: "owner/repo when repo_scope=single_repo."
+        required: false
+        type: string
+        default: ""
+      max_parallel_repos:
+        description: "Upper bound recorded in receipts; mutation lane remains repo-sequential."
+        required: false
+        type: number
+        default: 3
+      max_prs_per_repo:
+        description: "0 means unlimited."
+        required: false
+        type: number
+        default: 0
+      allow_policy_alignment:
+        description: "Allow bounded branch-protection review-gate alignment with snapshots."
+        required: false
+        type: boolean
+        default: true
+      comment_report:
+        description: "Post the weekly report to the tracking issue."
+        required: false
+        type: boolean
+        default: false
+      tracking_issue:
+        description: "Tracking issue URL for weekly receipts."
+        required: false
+        type: string
+        default: "https://github.com/merglbot-public/docs/issues/636"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Execution mode"
+        required: true
+        type: choice
+        options:
+          - dry-run
+          - apply
+        default: dry-run
+      repo_scope:
+        description: "Scope selector"
+        required: true
+        type: choice
+        options:
+          - all
+          - single_repo
+        default: all
+      single_repo:
+        description: "owner/repo when repo_scope=single_repo"
+        required: false
+        type: string
+      max_parallel_repos:
+        description: "Upper bound recorded in receipts; mutation lane remains repo-sequential"
+        required: false
+        type: number
+        default: 3
+      max_prs_per_repo:
+        description: "0 means unlimited"
+        required: false
+        type: number
+        default: 0
+      allow_policy_alignment:
+        description: "Allow bounded branch-protection review-gate alignment"
+        required: false
+        type: boolean
+        default: true
+      comment_report:
+        description: "Post report to tracking issue"
+        required: false
+        type: boolean
+        default: false
+      tracking_issue:
+        description: "Tracking issue URL"
+        required: false
+        type: string
+        default: "https://github.com/merglbot-public/docs/issues/636"
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  issues: write
+  pull-requests: write
+  statuses: read
+
+concurrency:
+  group: ent-dependabot-autonomous-closeout-${{ github.event_name }}-${{ inputs.mode || 'dry-run' }}-${{ inputs.repo_scope || 'all' }}-${{ inputs.single_repo || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  closeout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Checkout github control plane
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Run ENT Dependabot autonomous closeout
+        env:
+          GH_TOKEN: ${{ secrets.ENTERPRISE_GITHUB_TOKEN || github.token }}
+          INPUT_MODE: ${{ inputs.mode || 'dry-run' }}
+          INPUT_REPO_SCOPE: ${{ inputs.repo_scope || 'all' }}
+          INPUT_SINGLE_REPO: ${{ inputs.single_repo || '' }}
+          INPUT_MAX_PARALLEL_REPOS: ${{ inputs.max_parallel_repos || 3 }}
+          INPUT_MAX_PRS_PER_REPO: ${{ inputs.max_prs_per_repo || 0 }}
+          INPUT_ALLOW_POLICY_ALIGNMENT: ${{ inputs.allow_policy_alignment }}
+          INPUT_COMMENT_REPORT: ${{ inputs.comment_report }}
+          INPUT_TRACKING_ISSUE: ${{ inputs.tracking_issue || 'https://github.com/merglbot-public/docs/issues/636' }}
+          ENT_DEPENDABOT_REVIEW_WAIT_SECONDS: "1500"
+          ENT_DEPENDABOT_REVIEW_POLL_SECONDS: "60"
+          ENT_DEPENDABOT_REBASE_WAIT_SECONDS: "600"
+          ENT_DEPENDABOT_REBASE_POLL_SECONDS: "60"
+        run: |
+          set -euo pipefail
+
+          MODE="$INPUT_MODE"
+          REPO_SCOPE="$INPUT_REPO_SCOPE"
+          SINGLE_REPO="$INPUT_SINGLE_REPO"
+          MAX_PARALLEL_REPOS="$INPUT_MAX_PARALLEL_REPOS"
+          MAX_PRS_PER_REPO="$INPUT_MAX_PRS_PER_REPO"
+          ALLOW_POLICY_ALIGNMENT="$INPUT_ALLOW_POLICY_ALIGNMENT"
+          COMMENT_REPORT="$INPUT_COMMENT_REPORT"
+          TRACKING_ISSUE="$INPUT_TRACKING_ISSUE"
+
+          ARGS=(
+            --mode "$MODE"
+            --repo-scope "$REPO_SCOPE"
+            --max-parallel-repos "$MAX_PARALLEL_REPOS"
+            --max-prs-per-repo "$MAX_PRS_PER_REPO"
+            --output-dir "reports/ent-dependabot-weekly"
+            --tracking-issue "$TRACKING_ISSUE"
+          )
+
+          if [ -n "$SINGLE_REPO" ]; then
+            ARGS+=(--single-repo "$SINGLE_REPO")
+          fi
+          if [ "$ALLOW_POLICY_ALIGNMENT" = "true" ]; then
+            ARGS+=(--allow-policy-alignment)
+          fi
+          if [ "$COMMENT_REPORT" = "true" ]; then
+            ARGS+=(--comment-report)
+          fi
+
+          mkdir -p reports/ent-dependabot-weekly
+          python3 scripts/dependabot/ent_dependabot_closeout.py "${ARGS[@]}" | tee reports/ent-dependabot-weekly/stdout.json
+          {
+            echo "## ENT Dependabot Autonomous Closeout"
+            echo ""
+            cat reports/ent-dependabot-weekly/summary.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload weekly receipt artifacts
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: ent-dependabot-weekly-${{ github.run_id }}
+          path: reports/ent-dependabot-weekly/
+          retention-days: 90
