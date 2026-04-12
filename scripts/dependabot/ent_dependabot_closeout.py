@@ -750,6 +750,8 @@ def process_repo(
 
         took_action = False
         for pr in prs:
+            if pr.number in seen_without_action:
+                continue
             if pr_allowlist and (pr.repo, pr.number) not in pr_allowlist:
                 repo_result["skipped_by_allowlist"].append(
                     {
@@ -762,8 +764,6 @@ def process_repo(
                     }
                 )
                 seen_without_action.add(pr.number)
-                continue
-            if pr.number in seen_without_action:
                 continue
             try:
                 receipt = process_pr(pr, mode=mode, output_dir=output_dir, allow_policy_alignment=allow_policy_alignment, workflow_url=workflow_url)
