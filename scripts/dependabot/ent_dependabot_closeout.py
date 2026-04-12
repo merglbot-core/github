@@ -266,7 +266,7 @@ def parse_pr_allowlist(raw: str) -> set[tuple[str, int]]:
         return allowed
     tokens = [part.strip() for part in re.split(r"[\s,]+", raw) if part.strip()]
     for token in tokens:
-        match = re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)$", token)
+        match = re.search(r"(?:https?://)?github\.com/([^/]+/[^/]+)/pull/(\d+)(?:[/?#].*)?$", token)
         if not match:
             match = re.search(r"^([^#\s]+/[^#\s]+)#(\d+)$", token)
         if not match:
@@ -932,7 +932,11 @@ def build_report(
 def build_slack_payload(report: dict[str, Any], status: str) -> dict[str, Any]:
     top_blockers = report.get("top_blocker_reasons") or []
     blocker_text = ", ".join(f"{item['reason']}={item['count']}" for item in top_blockers[:5]) or "none"
+    runtime_blockers = report.get("remaining_blockers") or []
+    if runtime_blockers:
+        blocker_text = ", ".join(str(item) for item in runtime_blockers[:5])
     workflow_url = report.get("workflow_url") or "not available"
+    error_line = f"\nError: `{report['error']}`" if report.get("error") else ""
     summary = (
         f"*ENT Dependabot Weekly Closeout* `{status}`\n"
         f"Mode: `{report.get('mode', 'unknown')}` | Repos: `{report.get('repos_scanned', 0)}`\n"
@@ -947,6 +951,7 @@ def build_slack_payload(report: dict[str, Any], status: str) -> dict[str, Any]:
         f"`{report.get('open_issues_total', 0)}` issues\n"
         f"Top blockers: {blocker_text}\n"
         f"Run: {workflow_url}"
+        f"{error_line}"
     )
     return {"text": summary}
 
