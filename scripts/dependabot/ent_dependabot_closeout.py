@@ -19,7 +19,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
+from urllib.request import Request, urlopen
 
 
 DEPENDABOT_LOGINS = {"dependabot[bot]", "app/dependabot"}
@@ -28,6 +29,7 @@ MERGLBOT_REVIEW_WAIT_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REVIEW_WAIT_SE
 MERGLBOT_REVIEW_POLL_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REVIEW_POLL_SECONDS", "60"))
 REBASE_WAIT_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REBASE_WAIT_SECONDS", "600"))
 REBASE_POLL_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REBASE_POLL_SECONDS", "60"))
+OPEN_ITEM_LIST_LIMIT = 1000
 
 DEPENDENCY_FILE_PATTERNS = [
     re.compile(pattern)
@@ -234,6 +236,131 @@ def list_dependabot_prs(repo: str) -> list[PullRequest]:
             )
         )
     return prs
+
+
+def list_open_prs(repo: str) -> list[dict[str, Any]]:
+    data = gh_json(
+        [
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--limit",
+            str(OPEN_ITEM_LIST_LIMIT),
+            "--json",
+            "number,title,url,author,headRefOid,isDraft,mergeStateStatus,updatedAt",
+        ]
+    )
+    return list(data)
+
+
+def list_open_issues(repo: str) -> list[dict[str, Any]]:
+    data = gh_json(["issue", "list", "--repo", repo, "--state", "open", "--limit", str(OPEN_ITEM_LIST_LIMIT), "--json", "number,title,url,author,updatedAt"])
+    return list(data)
+
+
+def parse_pr_allowlist(raw: str) -> set[tuple[str, int]]:
+    allowed: set[tuple[str, int]] = set()
+    if not raw.strip():
+        return allowed
+    tokens = [part.strip() for part in re.split(r"[\s,]+", raw) if part.strip()]
+    for token in tokens:
+        match = re.search(r"(?:https?://)?github\.com/([^/]+/[^/]+)/pull/(\d+)(?:[/?#].*)?$", token)
+        if not match:
+            match = re.search(r"^([^#\s]+/[^#\s]+)#(\d+)$", token)
+        if not match:
+            raise GhError(f"invalid pr_allowlist token: {token}")
+        allowed.add((match.group(1), int(match.group(2))))
+    return allowed
+
+
+ApprovalPacket = tuple[str, str]
+
+
+def approval_packet_candidates(approval_note: str, approval_issue_url: str) -> list[ApprovalPacket]:
+    actor = os.environ.get("GITHUB_TRIGGERING_ACTOR") or os.environ.get("GITHUB_ACTOR") or ""
+    candidates: list[ApprovalPacket] = [(actor, approval_note)] if approval_note.strip() else []
+    if not approval_issue_url:
+        return candidates
+    parsed = urlparse(approval_issue_url)
+    if parsed.netloc != "github.com":
+        raise GhError("approval_issue_url must be a github.com issue or pull request URL")
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if len(parts) < 4 or parts[2] not in {"issues", "pull"}:
+        raise GhError("approval_issue_url must point to a GitHub issue or pull request")
+    owner, repo, _, number = parts[:4]
+    repo_slug = f"{owner}/{repo}".lower()
+    trusted_repos = {
+        item.strip().lower()
+        for item in os.environ.get("ENT_DEPENDABOT_APPROVAL_REPOS", "merglbot-core/github,merglbot-public/docs").split(",")
+        if item.strip()
+    }
+    if repo_slug not in trusted_repos:
+        raise GhError(f"approval_issue_url must point to a trusted approval repo: {', '.join(sorted(trusted_repos))}")
+    issue = gh_api_json(f"repos/{owner}/{repo}/issues/{number}")
+    comments = gh_api_json(f"repos/{owner}/{repo}/issues/{number}/comments?per_page=100")
+    issue_body = issue.get("body", "") or ""
+    issue_author = ((issue.get("user") or {}).get("login") or "").lower()
+    if issue_body.strip():
+        candidates.append((issue_author, issue_body))
+    for comment in comments:
+        body = comment.get("body", "") or ""
+        if body.strip():
+            author = ((comment.get("user") or {}).get("login") or "").lower()
+            candidates.append((author, body))
+    return candidates
+
+
+def parse_approval_packet_fields(packet: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for match in re.finditer(
+        r"(?im)(approved_by|approved_at|expected_action|approval_scope|authorized_sha|authorized_run)\s*=\s*`?([^`\s]+)",
+        packet,
+    ):
+        fields[match.group(1).lower()] = match.group(2).strip().strip("`")
+    return fields
+
+
+def validate_apply_approval(mode: str, pr_allowlist: set[tuple[str, int]], approval_note: str, approval_issue_url: str) -> None:
+    if mode != "apply":
+        return
+    packets = approval_packet_candidates(approval_note, approval_issue_url)
+    combined_material = "\n".join(packet.lower() for _, packet in packets)
+    explicit_approval_lane = bool(pr_allowlist or approval_issue_url or "post_change_validation=true" in combined_material)
+    if not explicit_approval_lane:
+        return
+    if not packets:
+        raise GhError("apply approval requires approval_note or approval_issue_url")
+
+    current_sha = os.environ.get("GITHUB_SHA", "").lower()
+    current_run = os.environ.get("GITHUB_RUN_ID", "")
+    trusted_approvers = {
+        item.strip().lower()
+        for item in os.environ.get("ENT_DEPENDABOT_TRUSTED_APPROVERS", "milhul6").split(",")
+        if item.strip()
+    }
+
+    def packet_missing_markers(author: str, packet: str) -> list[str]:
+        fields = parse_approval_packet_fields(packet)
+        missing = [marker for marker in ["approved_by", "approved_at", "expected_action"] if not fields.get(marker)]
+        approved_by = fields.get("approved_by", "").lower()
+        if not author or author.lower() not in trusted_approvers:
+            missing.append("trusted_author")
+        if approved_by and author and approved_by != author.lower():
+            missing.append("approved_by_matches_author")
+        if not pr_allowlist and fields.get("approval_scope", "").lower() != "full_queue":
+            missing.append("approval_scope=full_queue")
+        sha_ok = bool(current_sha and fields.get("authorized_sha", "").lower() == current_sha)
+        run_ok = bool(current_run and fields.get("authorized_run", "") == current_run)
+        if not sha_ok and not run_ok:
+            missing.append("authorized_sha/current or authorized_run/current")
+        return missing
+
+    if not any(not packet_missing_markers(author, packet) for author, packet in packets):
+        unique_missing = sorted({marker for author, packet in packets for marker in packet_missing_markers(author, packet)})
+        raise GhError("apply approval metadata missing from one complete packet: " + ", ".join(unique_missing))
 
 
 def pr_files(repo: str, number: int) -> list[str]:
@@ -626,17 +753,52 @@ def process_repo(
     max_prs_per_repo: int,
     allow_policy_alignment: bool,
     workflow_url: str,
+    pr_allowlist: set[tuple[str, int]],
 ) -> dict[str, Any]:
+    telemetry_warnings: list[str] = []
+    try:
+        open_prs = list_open_prs(repo)
+    except Exception as exc:
+        return {
+            "repo": repo,
+            "ok": False,
+            "open_prs_before": 0,
+            "open_issues_before": 0,
+            "dependabot_prs_before": 0,
+            "non_dependabot_prs_before": 0,
+            "merged": [],
+            "closed": [],
+            "blocked": [],
+            "would_merge": [],
+            "would_close": [],
+            "skipped_by_allowlist": [],
+            "warnings": [f"list_open_prs_failed:{exc}"],
+        }
+    try:
+        open_issues = list_open_issues(repo)
+    except Exception as exc:
+        open_issues = []
+        telemetry_warnings.append(f"list_open_issues_failed:{exc}")
+    open_dependabot_prs = [
+        item
+        for item in open_prs
+        if ((item.get("author") or {}).get("login") or "") in DEPENDABOT_LOGINS
+    ]
     repo_result: dict[str, Any] = {
         "repo": repo,
         "ok": True,
-        "dependabot_prs_before": 0,
+        "open_prs_before": len(open_prs),
+        "open_issues_before": len(open_issues),
+        "dependabot_prs_before": len(open_dependabot_prs),
+        "non_dependabot_prs_before": len(open_prs) - len(open_dependabot_prs),
         "merged": [],
         "closed": [],
         "blocked": [],
         "would_merge": [],
         "would_close": [],
+        "skipped_by_allowlist": [],
         "warnings": [],
+        "telemetry_warnings": telemetry_warnings,
     }
     processed = 0
     seen_without_action: set[int] = set()
@@ -658,6 +820,19 @@ def process_repo(
         took_action = False
         for pr in prs:
             if pr.number in seen_without_action:
+                continue
+            if pr_allowlist and (pr.repo, pr.number) not in pr_allowlist:
+                repo_result["skipped_by_allowlist"].append(
+                    {
+                        "repo": pr.repo,
+                        "pr_number": pr.number,
+                        "url": pr.url,
+                        "action": "skipped",
+                        "classification": "SKIPPED_NOT_IN_USER_APPROVED_ALLOWLIST",
+                        "head_sha": pr.head_sha,
+                    }
+                )
+                seen_without_action.add(pr.number)
                 continue
             try:
                 receipt = process_pr(pr, mode=mode, output_dir=output_dir, allow_policy_alignment=allow_policy_alignment, workflow_url=workflow_url)
@@ -723,70 +898,169 @@ def post_tracking_report(tracking_issue: str, report: dict[str, Any], summary_ma
 def markdown_summary(report: dict[str, Any]) -> str:
     lines = [
         f"- Mode: `{report['mode']}`",
+        f"- Status: `{report['final_verdict']}`",
         f"- Repos scanned: `{report['repos_scanned']}`",
+        f"- Open PRs: `{report['open_prs_total']}` (`{report['open_dependabot_prs_total']}` Dependabot / `{report['open_non_dependabot_prs_total']}` non-Dependabot)",
+        f"- Open issues: `{report['open_issues_total']}`",
         f"- Dependabot PRs before: `{report['dependabot_prs_before']}`",
         f"- Merged: `{len(report['merged_prs'])}`",
         f"- Closed: `{len(report['closed_prs'])}`",
         f"- Blocked: `{len(report['blocked_prs'])}`",
+        f"- Telemetry warnings: `{len(report.get('telemetry_warnings', []))}`",
+        f"- Slack delivery: `{report.get('slack_delivery', {}).get('status', 'not_requested')}`",
         "",
-        "| Repo | Before | Merged | Closed | Blocked | Would merge | Would close |",
-        "|---|---:|---:|---:|---:|---:|---:|",
+        "| Repo | PRs | Dependabot | Non-Dependabot | Issues | Merged | Closed | Blocked | Would merge | Would close | Skipped |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in report["repo_table"]:
         lines.append(
-            "| {repo} | {before} | {merged} | {closed} | {blocked} | {would_merge} | {would_close} |".format(
+            "| {repo} | {open_prs} | {before} | {non_dependabot} | {issues} | {merged} | {closed} | {blocked} | {would_merge} | {would_close} | {skipped} |".format(
                 repo=row["repo"],
+                open_prs=row["open_prs_before"],
                 before=row["dependabot_prs_before"],
+                non_dependabot=row["non_dependabot_prs_before"],
+                issues=row["open_issues_before"],
                 merged=row["merged"],
                 closed=row["closed"],
                 blocked=row["blocked"],
                 would_merge=row["would_merge"],
                 would_close=row["would_close"],
+                skipped=row["skipped_by_allowlist"],
             )
         )
     return "\n".join(lines)
 
 
-def build_report(mode: str, repos: list[str], repo_results: list[dict[str, Any]], tracking_comment_url: str | None = None) -> dict[str, Any]:
+def blocker_summary(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    for item in items:
+        for blocker in item.get("blockers", []):
+            key = str(blocker).split(":", 1)[0]
+            counts[key] = counts.get(key, 0) + 1
+    return [{"reason": key, "count": value} for key, value in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))[:10]]
+
+
+def build_report(
+    mode: str,
+    repos: list[str],
+    repo_results: list[dict[str, Any]],
+    *,
+    pr_allowlist: set[tuple[str, int]],
+    approval_note: str,
+    approval_issue_url: str,
+    workflow_url: str,
+    tracking_comment_url: str | None = None,
+) -> dict[str, Any]:
     merged = [item for result in repo_results for item in result.get("merged", [])]
     closed = [item for result in repo_results for item in result.get("closed", [])]
     blocked = [item for result in repo_results for item in result.get("blocked", [])]
     would_merge = [item for result in repo_results for item in result.get("would_merge", [])]
     would_close = [item for result in repo_results for item in result.get("would_close", [])]
+    skipped_by_allowlist = [item for result in repo_results for item in result.get("skipped_by_allowlist", [])]
     repo_table = [
         {
             "repo": result["repo"],
+            "open_prs_before": result["open_prs_before"],
+            "open_issues_before": result["open_issues_before"],
             "dependabot_prs_before": result["dependabot_prs_before"],
+            "non_dependabot_prs_before": result["non_dependabot_prs_before"],
             "merged": len(result.get("merged", [])),
             "closed": len(result.get("closed", [])),
             "blocked": len(result.get("blocked", [])),
             "would_merge": len(result.get("would_merge", [])),
             "would_close": len(result.get("would_close", [])),
+            "skipped_by_allowlist": len(result.get("skipped_by_allowlist", [])),
             "warnings": result.get("warnings", []),
+            "telemetry_warnings": result.get("telemetry_warnings", []),
         }
         for result in repo_results
     ]
+    open_prs_total = sum(row["open_prs_before"] for row in repo_table)
+    open_dependabot_prs_total = sum(row["dependabot_prs_before"] for row in repo_table)
     report = {
         "ok": True,
         "final_verdict": "ENT_DEPENDABOT_WEEKLY_CLOSEOUT_COMPLETE",
         "generated_at": utc_now(),
         "mode": mode,
+        "workflow_url": workflow_url,
         "repos_scanned": len(repos),
-        "dependabot_prs_before": sum(row["dependabot_prs_before"] for row in repo_table),
+        "open_prs_total": open_prs_total,
+        "open_dependabot_prs_total": open_dependabot_prs_total,
+        "open_non_dependabot_prs_total": open_prs_total - open_dependabot_prs_total,
+        "open_issues_total": sum(row["open_issues_before"] for row in repo_table),
+        "dependabot_prs_before": open_dependabot_prs_total,
         "merged_prs": merged,
         "closed_prs": closed,
         "blocked_prs": blocked,
         "would_merge_prs": would_merge,
         "would_close_prs": would_close,
-        "remaining_dependabot_prs": len(blocked) + (len(would_merge) if mode == "dry-run" else 0) + (len(would_close) if mode == "dry-run" else 0),
+        "skipped_by_allowlist_prs": skipped_by_allowlist,
+        "remaining_dependabot_prs": len(blocked)
+        + len(skipped_by_allowlist)
+        + (len(would_merge) if mode == "dry-run" else 0)
+        + (len(would_close) if mode == "dry-run" else 0),
+        "top_blocker_reasons": blocker_summary(blocked),
+        "approval": {
+            "pr_allowlist": [f"{repo}#{number}" for repo, number in sorted(pr_allowlist)],
+            "approval_note": approval_note,
+            "approval_issue_url": approval_issue_url,
+        },
+        "slack_delivery": {"status": "not_requested"},
+        "telemetry_degraded": False,
         "repo_table": repo_table,
         "tracking_comment_url": tracking_comment_url,
+        "telemetry_warnings": [warning for result in repo_results for warning in result.get("telemetry_warnings", [])],
         "remaining_blockers": [warning for result in repo_results for warning in result.get("warnings", [])],
     }
     if report["remaining_blockers"]:
         report["ok"] = False
         report["final_verdict"] = "ENT_DEPENDABOT_WEEKLY_CLOSEOUT_BLOCKED"
     return report
+
+
+def build_slack_payload(report: dict[str, Any], status: str) -> dict[str, Any]:
+    top_blockers = report.get("top_blocker_reasons") or []
+    blocker_text = ", ".join(f"{item['reason']}={item['count']}" for item in top_blockers[:5]) or "none"
+    runtime_blockers = report.get("remaining_blockers") or []
+    if runtime_blockers:
+        blocker_text = ", ".join(str(item) for item in runtime_blockers[:5])
+    workflow_url = report.get("workflow_url") or "not available"
+    error_line = f"\nError: `{report['error']}`" if report.get("error") else ""
+    summary = (
+        f"*ENT Dependabot Weekly Closeout* `{status}`\n"
+        f"Mode: `{report.get('mode', 'unknown')}` | Repos: `{report.get('repos_scanned', 0)}`\n"
+        f"Dependabot PRs: `{report.get('dependabot_prs_before', 0)}` before, "
+        f"`{len(report.get('merged_prs', []))}` merged, "
+        f"`{len(report.get('closed_prs', []))}` closed, "
+        f"`{len(report.get('blocked_prs', []))}` blocked, "
+        f"`{report.get('remaining_dependabot_prs', 0)}` remaining\n"
+        f"Open backlog: `{report.get('open_prs_total', 0)}` PRs "
+        f"(`{report.get('open_dependabot_prs_total', 0)}` Dependabot / "
+        f"`{report.get('open_non_dependabot_prs_total', 0)}` non-Dependabot), "
+        f"`{report.get('open_issues_total', 0)}` issues\n"
+        f"Top blockers: {blocker_text}\n"
+        f"Run: {workflow_url}"
+        f"{error_line}"
+    )
+    return {"text": summary}
+
+
+def post_slack_report(webhook_url: str, report: dict[str, Any]) -> dict[str, Any]:
+    if not webhook_url:
+        return {"status": "not_configured", "ok": True}
+    payload = build_slack_payload(report, "ok" if report.get("ok") else "blocked")
+    request = Request(
+        webhook_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=15) as response:
+            body = response.read().decode("utf-8", errors="replace")
+            return {"status": "sent", "ok": 200 <= response.status < 300, "http_status": response.status, "response": body[:120]}
+    except Exception as exc:
+        return {"status": "post_failed", "ok": False, "error": exc.__class__.__name__}
 
 
 def self_test() -> int:
@@ -809,7 +1083,10 @@ def self_test() -> int:
             {
                 "repo": "merglbot-core/github",
                 "ok": True,
+                "open_prs_before": 2,
+                "open_issues_before": 3,
                 "dependabot_prs_before": 1,
+                "non_dependabot_prs_before": 1,
                 "merged": [],
                 "closed": [],
                 "blocked": [],
@@ -818,9 +1095,42 @@ def self_test() -> int:
                 "warnings": [],
             }
         ],
+        pr_allowlist=set(),
+        approval_note="",
+        approval_issue_url="",
+        workflow_url="https://github.com/o/r/actions/runs/1",
     )
     assert report["repos_scanned"] == 1
     assert report["dependabot_prs_before"] == 1
+    assert report["open_non_dependabot_prs_total"] == 1
+    assert build_slack_payload(report, "ok")["text"].count("Dependabot") >= 2
+    assert parse_pr_allowlist("merglbot-core/github#1 https://github.com/merglbot-public/docs/pull/2") == {
+        ("merglbot-core/github", 1),
+        ("merglbot-public/docs", 2),
+    }
+    previous_env = {
+        key: os.environ.get(key)
+        for key in ["GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_ACTOR", "GITHUB_TRIGGERING_ACTOR"]
+    }
+    os.environ.update({
+        "GITHUB_SHA": "abc",
+        "GITHUB_RUN_ID": "12345",
+        "GITHUB_ACTOR": "milhul6",
+        "GITHUB_TRIGGERING_ACTOR": "milhul6",
+    })
+    try:
+        validate_apply_approval(
+            "apply",
+            {("merglbot-core/github", 1)},
+            "post_change_validation=true approved_by=milhul6 approved_at=2026-04-12T21:00:00Z authorized_sha=abc expected_action=merge",
+            "",
+        )
+    finally:
+        for key, value in previous_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
     assert report["remaining_dependabot_prs"] == 1
     assert "MERGLBOT" not in close_comment(
         PullRequest("o/r", 1, "x", "u", "dependabot[bot]", "a" * 40, "main", "dependabot/x", False, "CLEAN", utc_now()),
@@ -845,6 +1155,10 @@ def main() -> int:
     parser.add_argument("--allow-policy-alignment", action="store_true")
     parser.add_argument("--comment-report", action="store_true")
     parser.add_argument("--tracking-issue", default="")
+    parser.add_argument("--slack-notify", action="store_true")
+    parser.add_argument("--pr-allowlist", default="")
+    parser.add_argument("--approval-note", default="")
+    parser.add_argument("--approval-issue-url", default="")
     parser.add_argument("--workflow-url", default=os.environ.get("GITHUB_SERVER_URL", "") + "/" + os.environ.get("GITHUB_REPOSITORY", "") + "/actions/runs/" + os.environ.get("GITHUB_RUN_ID", ""))
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
@@ -856,6 +1170,8 @@ def main() -> int:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     try:
+        pr_allowlist = parse_pr_allowlist(args.pr_allowlist)
+        validate_apply_approval(args.mode, pr_allowlist, args.approval_note, args.approval_issue_url)
         all_repos = load_repo_scope(args.scope_file)
         if args.repo_scope == "single_repo":
             if not args.single_repo:
@@ -884,9 +1200,22 @@ def main() -> int:
                     max_prs_per_repo=args.max_prs_per_repo,
                     allow_policy_alignment=args.allow_policy_alignment,
                     workflow_url=args.workflow_url,
+                    pr_allowlist=pr_allowlist,
                 )
             )
-        report = build_report(args.mode, repos, repo_results)
+        report = build_report(
+            args.mode,
+            repos,
+            repo_results,
+            pr_allowlist=pr_allowlist,
+            approval_note=args.approval_note,
+            approval_issue_url=args.approval_issue_url,
+            workflow_url=args.workflow_url,
+        )
+        if args.slack_notify:
+            report["slack_delivery"] = post_slack_report(os.environ.get("SLACK_DEPENDABOT_WEBHOOK_URL", ""), report)
+            if not report["slack_delivery"].get("ok"):
+                report["telemetry_degraded"] = True
         summary = markdown_summary(report)
         if args.comment_report and args.tracking_issue:
             report["tracking_comment_url"] = post_tracking_report(args.tracking_issue, report, summary)
@@ -899,10 +1228,15 @@ def main() -> int:
         failure = {
             "ok": False,
             "final_verdict": "ENT_DEPENDABOT_WEEKLY_CLOSEOUT_BLOCKED",
+            "mode": args.mode,
+            "workflow_url": args.workflow_url,
             "generated_at": utc_now(),
             "error": str(exc),
+            "slack_delivery": {"status": "not_requested"},
             "remaining_blockers": [str(exc)],
         }
+        if args.slack_notify:
+            failure["slack_delivery"] = post_slack_report(os.environ.get("SLACK_DEPENDABOT_WEBHOOK_URL", ""), failure)
         write_json(args.output_dir / "ent_dependabot_weekly_receipt.json", failure)
         print(json.dumps(failure, sort_keys=True))
         return 1

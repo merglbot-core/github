@@ -42,6 +42,50 @@ Platform policy authority remains in `merglbot-public/docs`:
 - The workflow does not deploy, run Terraform apply, mutate secrets, change
   default branches, or bypass branch protection.
 
+## Slack Telemetry
+
+The reusable workflow posts a compact run summary to Slack when
+`slack_notify=true` and the `SLACK_DEPENDABOT_WEBHOOK_URL` secret is configured
+as a GitHub Actions repository secret in `merglbot-core/github`, or as an
+organization secret explicitly scoped only to `merglbot-core/github`. The secret
+value must never be printed or embedded in logs; channel routing is controlled by
+the Slack webhook configuration.
+
+Slack messages include the run status, scanned repo count, merged/closed/blocked
+Dependabot PR counts, remaining Dependabot and non-Dependabot PR totals, open
+issue totals, top blocker reasons, and the GitHub Actions run URL. The JSON
+artifact remains the authoritative receipt if Slack delivery fails. Slack is
+best-effort for the weekly workflow: missing Slack configuration is recorded as
+`not_configured`, POST failure is recorded as `telemetry_degraded`, and neither
+case may cause automatic PR/issue mutation retries.
+
+Manual apply validation can pass a `pr_allowlist` plus `approval_note` or
+`approval_issue_url`; the workflow records those values in the receipt and only
+acts on the allowlisted PRs. `pr_allowlist` accepts comma- or whitespace-separated
+`owner/repo#number` tokens or GitHub PR URLs. For
+`post_change_validation=true`, the workflow fails closed unless all of the
+following hold: `pr_allowlist` is non-empty or the approval material explicitly
+contains `approval_scope=full_queue`; `approval_note` or `approval_issue_url` is
+present; the approval material covers the current workflow SHA or run ID; and
+the approval material contains `expected_action=`. If `approval_issue_url` is
+used, the referenced packet must contain the approval scope, expected action, and
+covered workflow SHA or run ID in a durable form. All required markers must
+appear in one coherent approval packet: the `approval_note`, the referenced
+issue body, or a single referenced issue comment. Markers spread across multiple
+historical comments do not satisfy the authorization gate. `authorized_sha` or
+`authorized_run` must match the current workflow SHA or run ID, and approval
+packets loaded from `approval_issue_url` must come from a trusted approval repo
+and a trusted GitHub author whose login matches `approved_by`. Trusted approvers
+come from the explicit `ENT_DEPENDABOT_TRUSTED_APPROVERS` policy list; the
+workflow actor is not trusted implicitly. Approval material must also record
+approver identity, timestamp, approved scope, and expected action per PR.
+
+Manual `workflow_dispatch` exposes a bounded 10-input surface. It includes
+`approval_issue_url` and `comment_report`; when `comment_report=true`, the report
+is posted to the default tracking issue `merglbot-public/docs#636`. Reusable
+`workflow_call` callers keep the same default fallback when `tracking_issue` is
+omitted, and can still override routing with an explicit `tracking_issue` value.
+
 ## Merge Gate
 
 Every merged Dependabot PR must prove:
