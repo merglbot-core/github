@@ -341,11 +341,6 @@ def validate_apply_approval(mode: str, pr_allowlist: set[tuple[str, int]], appro
         for item in os.environ.get("ENT_DEPENDABOT_TRUSTED_APPROVERS", "milhul6").split(",")
         if item.strip()
     }
-    trusted_approvers.update(
-        actor.lower()
-        for actor in [os.environ.get("GITHUB_ACTOR", ""), os.environ.get("GITHUB_TRIGGERING_ACTOR", "")]
-        if actor
-    )
 
     def packet_missing_markers(author: str, packet: str) -> list[str]:
         fields = parse_approval_packet_fields(packet)

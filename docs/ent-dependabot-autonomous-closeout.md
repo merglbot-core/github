@@ -75,9 +75,10 @@ issue body, or a single referenced issue comment. Markers spread across multiple
 historical comments do not satisfy the authorization gate. `authorized_sha` or
 `authorized_run` must match the current workflow SHA or run ID, and approval
 packets loaded from `approval_issue_url` must come from a trusted approval repo
-and a trusted GitHub author whose login matches `approved_by`. Approval material
-must also record approver identity, timestamp, approved scope, and expected
-action per PR.
+and a trusted GitHub author whose login matches `approved_by`. Trusted approvers
+come from the explicit `ENT_DEPENDABOT_TRUSTED_APPROVERS` policy list; the
+workflow actor is not trusted implicitly. Approval material must also record
+approver identity, timestamp, approved scope, and expected action per PR.
 
 ## Merge Gate
 
