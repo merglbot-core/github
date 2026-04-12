@@ -500,6 +500,32 @@ def close_comment(pr: PullRequest, classification: str, evidence: list[str], wor
     )
 
 
+def validate_file_scope_for_current_head(pr: PullRequest, receipt: ItemReceipt) -> tuple[bool, PullRequest]:
+    expected = refresh_pr(pr.repo, pr.number)
+    receipt.head_sha = expected.head_sha
+    files = pr_files(pr.repo, pr.number)
+    after_scope = refresh_pr(pr.repo, pr.number)
+    if after_scope.head_sha != expected.head_sha:
+        receipt.blockers.append("head_changed_during_scope_check")
+        receipt.head_sha = after_scope.head_sha
+        return False, after_scope
+
+    if not files:
+        receipt.action = "would_close"
+        receipt.classification = "AUTO_CLOSE_EMPTY_DIFF"
+        receipt.evidence.append("current PR diff has no changed files")
+        return False, after_scope
+
+    scope_ok, scope_blockers, dependency_files = classify_change_scope(files)
+    receipt.evidence.append(f"changed_files={len(files)}")
+    receipt.evidence.append("dependency_files=" + ",".join(dependency_files))
+    if not scope_ok:
+        receipt.classification = "BLOCKED_CHANGE_SCOPE"
+        receipt.blockers.extend([f"change_scope:{blocker}" for blocker in scope_blockers])
+        return False, after_scope
+    return True, after_scope
+
+
 def process_pr(
     pr: PullRequest,
     *,
@@ -516,36 +542,30 @@ def process_pr(
     if pr.is_draft:
         receipt.blockers.append("draft_pr")
         return receipt
-    refreshed = refresh_pr(pr.repo, pr.number)
-    receipt.head_sha = refreshed.head_sha
-    if refreshed.merge_state == "BEHIND":
-        receipt.evidence.append("PR was behind base; requested Dependabot rebase")
-        request_dependabot_rebase(pr.repo, pr.number, apply=apply)
-        refreshed = refresh_pr(pr.repo, pr.number)
-        receipt.head_sha = refreshed.head_sha
-
-    files = pr_files(pr.repo, pr.number)
-    after_scope = refresh_pr(pr.repo, pr.number)
-    if after_scope.head_sha != refreshed.head_sha:
-        receipt.blockers.append("head_changed_during_scope_check")
-        receipt.head_sha = after_scope.head_sha
-        return receipt
-    refreshed = after_scope
-
-    if not files:
-        receipt.action = "would_close" if not apply else "closed"
-        receipt.classification = "AUTO_CLOSE_EMPTY_DIFF"
-        receipt.evidence.append("current PR diff has no changed files")
+    scope_ok, refreshed = validate_file_scope_for_current_head(pr, receipt)
+    if receipt.classification == "AUTO_CLOSE_EMPTY_DIFF":
         if apply:
+            receipt.action = "closed"
             receipt.comment_url = close_pr(pr.repo, pr.number, close_comment(pr, receipt.classification, receipt.evidence, workflow_url))
         return receipt
-    scope_ok, scope_blockers, dependency_files = classify_change_scope(files)
-    receipt.evidence.append(f"changed_files={len(files)}")
-    receipt.evidence.append("dependency_files=" + ",".join(dependency_files))
     if not scope_ok:
-        receipt.classification = "BLOCKED_CHANGE_SCOPE"
-        receipt.blockers.extend([f"change_scope:{blocker}" for blocker in scope_blockers])
         return receipt
+
+    if refreshed.merge_state == "BEHIND":
+        receipt.evidence.append("PR was behind base after scope validation; requested Dependabot rebase")
+        request_dependabot_rebase(pr.repo, pr.number, apply=apply)
+        rebased = refresh_pr(pr.repo, pr.number)
+        if rebased.head_sha != refreshed.head_sha:
+            scope_ok, refreshed = validate_file_scope_for_current_head(rebased, receipt)
+            if receipt.classification == "AUTO_CLOSE_EMPTY_DIFF":
+                if apply:
+                    receipt.action = "closed"
+                    receipt.comment_url = close_pr(pr.repo, pr.number, close_comment(rebased, receipt.classification, receipt.evidence, workflow_url))
+                return receipt
+            if not scope_ok:
+                return receipt
+        else:
+            refreshed = rebased
 
     checks_ok, checks, check_blockers = required_checks(pr.repo, pr.number)
     if not checks_ok:
