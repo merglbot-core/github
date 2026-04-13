@@ -10,13 +10,15 @@ from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import contextmanager
 import json
 import os
 import re
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -24,12 +26,15 @@ from urllib.request import Request, urlopen
 
 
 DEPENDABOT_LOGINS = {"dependabot[bot]", "app/dependabot"}
+OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 REPOSITORY_RE = re.compile(r"\[`([^`]+/[^`]+)`\]\(https://github.com/[^)]+\).*\|\s*Active\s*\|")
 MERGLBOT_REVIEW_WAIT_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REVIEW_WAIT_SECONDS", "1500"))
 MERGLBOT_REVIEW_POLL_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REVIEW_POLL_SECONDS", "60"))
 REBASE_WAIT_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REBASE_WAIT_SECONDS", "600"))
 REBASE_POLL_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REBASE_POLL_SECONDS", "60"))
 OPEN_ITEM_LIST_LIMIT = 1000
+APP_TOKEN_CACHE: dict[str, tuple[str, datetime]] = {}
+REPO_LOCAL_SCOPE_FILE = Path(__file__).with_name("ent_repository_scope.txt")
 
 DEPENDENCY_FILE_PATTERNS = [
     re.compile(pattern)
@@ -99,6 +104,120 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def base64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def github_app_auth_configured() -> bool:
+    app_id_present = bool(os.environ.get("ENT_DEPENDABOT_APP_ID"))
+    key_present = bool(os.environ.get("ENT_DEPENDABOT_APP_PRIVATE_KEY"))
+    if app_id_present != key_present:
+        raise GhError("ENT_DEPENDABOT_APP_ID and ENT_DEPENDABOT_APP_PRIVATE_KEY must be configured together")
+    return app_id_present and key_present
+
+
+def github_app_private_key() -> str:
+    key = os.environ.get("ENT_DEPENDABOT_APP_PRIVATE_KEY", "")
+    if "\\n" in key and "\n" not in key:
+        key = key.replace("\\n", "\n")
+    return key
+
+
+def github_app_jwt() -> str:
+    app_id = os.environ.get("ENT_DEPENDABOT_APP_ID", "").strip()
+    key = github_app_private_key()
+    if not app_id or not key:
+        raise GhError("ENT_DEPENDABOT_APP_ID and ENT_DEPENDABOT_APP_PRIVATE_KEY are required for GitHub App auth")
+    try:
+        int(app_id)
+    except ValueError as exc:
+        raise GhError("ENT_DEPENDABOT_APP_ID must be the numeric GitHub App ID") from exc
+    now = int(time.time())
+    header = {"alg": "RS256", "typ": "JWT"}
+    payload = {"iat": now - 60, "exp": now + 540, "iss": app_id}
+    signing_input = f"{base64url(json.dumps(header, separators=(',', ':')).encode())}.{base64url(json.dumps(payload, separators=(',', ':')).encode())}"
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=True) as key_file:
+        key_file.write(key)
+        key_file.flush()
+        os.chmod(key_file.name, 0o600)
+        proc = subprocess.run(
+            ["openssl", "dgst", "-sha256", "-sign", key_file.name],
+            check=False,
+            input=signing_input.encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    if proc.returncode != 0:
+        raise GhError(proc.stderr.decode("utf-8", errors="replace") or "openssl signing failed")
+    return f"{signing_input}.{base64url(proc.stdout)}"
+
+
+def github_api_direct(endpoint: str, token: str, *, method: str = "GET", payload: dict[str, Any] | None = None) -> Any:
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = Request(
+        f"https://api.github.com/{endpoint.lstrip('/')}",
+        data=data,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": "merglbot-ent-dependabot-closeout",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        method=method,
+    )
+    try:
+        with urlopen(request, timeout=30) as response:
+            body = response.read().decode("utf-8")
+            return json.loads(body or "null")
+    except Exception as exc:
+        raise GhError(f"GitHub App API request failed for {endpoint}: {exc}") from exc
+
+
+def installation_id_for_owner(owner: str, jwt: str) -> int:
+    for endpoint in (f"orgs/{owner}/installation", f"users/{owner}/installation"):
+        try:
+            installation = github_api_direct(endpoint, jwt)
+            installation_id = installation.get("id")
+            if installation_id:
+                return int(installation_id)
+        except GhError as exc:
+            if "HTTP Error 404" in str(exc):
+                continue
+            raise
+    raise GhError(f"GitHub App is not installed for owner {owner}")
+
+
+def installation_token_for_owner(owner: str) -> str:
+    cached = APP_TOKEN_CACHE.get(owner)
+    if cached and cached[1] > datetime.now(timezone.utc) + timedelta(minutes=5):
+        return cached[0]
+    jwt = github_app_jwt()
+    installation_id = installation_id_for_owner(owner, jwt)
+    token_payload = github_api_direct(f"app/installations/{installation_id}/access_tokens", jwt, method="POST", payload={})
+    token = token_payload.get("token")
+    expires_at = token_payload.get("expires_at")
+    if not token or not expires_at:
+        raise GhError(f"GitHub App installation token response missing token for {owner}")
+    expires = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+    APP_TOKEN_CACHE[owner] = (token, expires)
+    return token
+
+
+@contextmanager
+def gh_token_for_repo(repo: str):
+    previous = os.environ.get("GH_TOKEN")
+    if github_app_auth_configured():
+        os.environ["GH_TOKEN"] = installation_token_for_owner(repo.split("/", 1)[0])
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("GH_TOKEN", None)
+        else:
+            os.environ["GH_TOKEN"] = previous
+
+
 def run_cmd(args: list[str], *, check: bool = True, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
     proc = subprocess.run(
         args,
@@ -130,34 +249,50 @@ def write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def parse_repository_map(text: str) -> list[str]:
+def parse_repository_map(text: str, *, allow_plain_lines: bool = False) -> list[str]:
     repos: list[str] = []
     for line in text.splitlines():
         match = REPOSITORY_RE.search(line)
-        if match:
+        if match and OWNER_REPO_RE.fullmatch(match.group(1)):
             repos.append(match.group(1))
+            continue
+        stripped = line.strip()
+        if allow_plain_lines and OWNER_REPO_RE.fullmatch(stripped):
+            repos.append(stripped)
     return sorted(dict.fromkeys(repos))
 
 
 def fetch_repository_map() -> str:
-    content = gh_api_json("repos/merglbot-public/docs/contents/REPOSITORY_MAP.md?ref=main")
+    with gh_token_for_repo("merglbot-public/docs"):
+        content = gh_api_json("repos/merglbot-public/docs/contents/REPOSITORY_MAP.md?ref=main")
     encoded = content.get("content")
     if not encoded:
         raise GhError("REPOSITORY_MAP.md content missing from GitHub API response")
     return base64.b64decode(encoded).decode("utf-8")
 
 
-def load_repo_scope(scope_file: Path | None) -> list[str]:
+def load_repo_scope(scope_file: Path | None, *, use_repo_local_default: bool = False) -> list[str]:
     if scope_file and scope_file.exists():
         text = scope_file.read_text(encoding="utf-8")
+    elif use_repo_local_default:
+        text = REPO_LOCAL_SCOPE_FILE.read_text(encoding="utf-8")
     else:
         text = fetch_repository_map()
-    repos = parse_repository_map(text)
+    repos = parse_repository_map(text, allow_plain_lines=bool(scope_file or use_repo_local_default))
     if len(repos) != 42:
         raise GhError(f"expected 42 in-scope active repositories, got {len(repos)}")
     if any(repo.startswith("Merglevsky-cz/") or repo.startswith("merglevsky-cz/") for repo in repos):
         raise GhError("out-of-scope Merglevsky-cz repository appeared in scope")
     return repos
+
+
+def load_single_repo_scope(scope_file: Path | None) -> list[str]:
+    # In GitHub Actions, never trust a branch-local mirror as the authoritative
+    # boundary. Local diagnostics can use the repo-local mirror to avoid
+    # unnecessary cross-repo token requirements.
+    if os.environ.get("GITHUB_ACTIONS") == "true" or scope_file:
+        return load_repo_scope(scope_file)
+    return load_repo_scope(scope_file, use_repo_local_default=True)
 
 
 def repo_endpoint(repo: str, suffix: str) -> str:
@@ -299,8 +434,9 @@ def approval_packet_candidates(approval_note: str, approval_issue_url: str) -> l
     }
     if repo_slug not in trusted_repos:
         raise GhError(f"approval_issue_url must point to a trusted approval repo: {', '.join(sorted(trusted_repos))}")
-    issue = gh_api_json(f"repos/{owner}/{repo}/issues/{number}")
-    comments = gh_api_json(f"repos/{owner}/{repo}/issues/{number}/comments?per_page=100")
+    with gh_token_for_repo(f"{owner}/{repo}"):
+        issue = gh_api_json(f"repos/{owner}/{repo}/issues/{number}")
+        comments = gh_api_json(f"repos/{owner}/{repo}/issues/{number}/comments?per_page=100")
     issue_body = issue.get("body", "") or ""
     issue_author = ((issue.get("user") or {}).get("login") or "").lower()
     if issue_body.strip():
@@ -892,7 +1028,8 @@ def post_tracking_report(tracking_issue: str, report: dict[str, Any], summary_ma
             "</details>",
         ]
     )
-    return post_comment_with_stdin(repo, number, body)
+    with gh_token_for_repo(repo):
+        return post_comment_with_stdin(repo, number, body)
 
 
 def markdown_summary(report: dict[str, Any]) -> str:
@@ -1068,8 +1205,16 @@ def self_test() -> int:
 | [`merglbot-core/github`](https://github.com/merglbot-core/github) | Shared | GitHub Actions | Active |
 | [`merglbot-denatura/denatura-btf-data`](https://github.com/merglbot-denatura/denatura-btf-data) | Old | Python | Archived |
 | [`merglbot-public/docs`](https://github.com/merglbot-public/docs) | Docs | Markdown | Active |
+https://github.com/Merglevsky-cz/example
+some/local/path
+merglbot-core/agents-orchestrator
 """
     assert parse_repository_map(sample) == ["merglbot-core/github", "merglbot-public/docs"]
+    assert parse_repository_map(sample, allow_plain_lines=True) == [
+        "merglbot-core/agents-orchestrator",
+        "merglbot-core/github",
+        "merglbot-public/docs",
+    ]
     assert classify_change_scope(["package-lock.json", "apps/web/yarn.lock"])[0] is True
     assert classify_change_scope(["apps/web/package.json"])[0] is False
     assert classify_change_scope(["docs/requirements/design.txt"])[0] is False
@@ -1108,6 +1253,29 @@ def self_test() -> int:
         ("merglbot-core/github", 1),
         ("merglbot-public/docs", 2),
     }
+    previous_app_env = {
+        key: os.environ.get(key)
+        for key in ["ENT_DEPENDABOT_APP_ID", "ENT_DEPENDABOT_APP_PRIVATE_KEY"]
+    }
+    try:
+        os.environ.pop("ENT_DEPENDABOT_APP_ID", None)
+        os.environ.pop("ENT_DEPENDABOT_APP_PRIVATE_KEY", None)
+        assert github_app_auth_configured() is False
+        os.environ["ENT_DEPENDABOT_APP_ID"] = "123"
+        try:
+            github_app_auth_configured()
+            raise AssertionError("partial GitHub App auth env should fail closed")
+        except GhError:
+            pass
+        os.environ["ENT_DEPENDABOT_APP_PRIVATE_KEY"] = "-----BEGIN KEY-----\\nabc\\n-----END KEY-----"
+        assert github_app_auth_configured() is True
+        assert "\nabc\n" in github_app_private_key()
+    finally:
+        for key, value in previous_app_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
     previous_env = {
         key: os.environ.get(key)
         for key in ["GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_ACTOR", "GITHUB_TRIGGERING_ACTOR"]
@@ -1172,10 +1340,10 @@ def main() -> int:
     try:
         pr_allowlist = parse_pr_allowlist(args.pr_allowlist)
         validate_apply_approval(args.mode, pr_allowlist, args.approval_note, args.approval_issue_url)
-        all_repos = load_repo_scope(args.scope_file)
         if args.repo_scope == "single_repo":
             if not args.single_repo:
                 raise GhError("--single-repo is required with --repo-scope single_repo")
+            all_repos = load_single_repo_scope(args.scope_file)
             repos = [args.single_repo]
             missing = set(repos) - set(all_repos)
             if missing:
@@ -1183,26 +1351,34 @@ def main() -> int:
         elif args.repo_scope == "cohort":
             if not args.cohort_file:
                 raise GhError("--cohort-file is required with --repo-scope cohort")
-            repos = [line.strip() for line in args.cohort_file.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")]
+            all_repos = load_repo_scope(args.scope_file)
+            repos = parse_repository_map(args.cohort_file.read_text(encoding="utf-8"), allow_plain_lines=True)
             missing = set(repos) - set(all_repos)
             if missing:
                 raise GhError(f"cohort contains repos outside 42-repo scope: {', '.join(sorted(missing))}")
+            owners = {repo.split("/", 1)[0] for repo in repos}
+            if len(owners) > 1 and not github_app_auth_configured():
+                raise GhError("GitHub App auth is required for multi-owner cohort runs")
         else:
+            if not github_app_auth_configured():
+                raise GhError("GitHub App auth is required for ENT all-repo runs")
+            all_repos = load_repo_scope(args.scope_file)
             repos = all_repos
 
         repo_results = []
         for repo in repos:
-            repo_results.append(
-                process_repo(
-                    repo,
-                    mode=args.mode,
-                    output_dir=args.output_dir,
-                    max_prs_per_repo=args.max_prs_per_repo,
-                    allow_policy_alignment=args.allow_policy_alignment,
-                    workflow_url=args.workflow_url,
-                    pr_allowlist=pr_allowlist,
+            with gh_token_for_repo(repo):
+                repo_results.append(
+                    process_repo(
+                        repo,
+                        mode=args.mode,
+                        output_dir=args.output_dir,
+                        max_prs_per_repo=args.max_prs_per_repo,
+                        allow_policy_alignment=args.allow_policy_alignment,
+                        workflow_url=args.workflow_url,
+                        pr_allowlist=pr_allowlist,
+                    )
                 )
-            )
         report = build_report(
             args.mode,
             repos,
