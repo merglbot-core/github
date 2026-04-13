@@ -21,11 +21,12 @@ on:
         options:
           - all
           - single_repo
-        default: all
+        default: single_repo
       single_repo:
-        description: "owner/repo when repo_scope=single_repo"
+        description: "owner/repo when repo_scope=single_repo; defaults to safe docs smoke"
         required: false
         type: string
+        default: merglbot-public/docs
       max_prs_per_repo:
         description: "0 means unlimited"
         required: false
@@ -42,6 +43,10 @@ on:
         type: string
       approval_note:
         description: "Human approval note or approval packet URL for manual apply mode"
+        required: false
+        type: string
+      approval_issue_url:
+        description: "Optional GitHub issue URL containing the apply approval packet"
         required: false
         type: string
 
@@ -61,15 +66,16 @@ jobs:
   weekly-closeout:
     uses: ./.github/workflows/ent-dependabot-autonomous-closeout.yml
     with:
-      mode: ${{ github.event_name == 'schedule' && 'apply' || inputs.mode }}
-      repo_scope: ${{ github.event_name == 'schedule' && 'all' || inputs.repo_scope }}
-      single_repo: ${{ github.event_name == 'schedule' && '' || inputs.single_repo }}
+      mode: ${{ github.event_name == 'schedule' && 'apply' || github.event.inputs.mode || 'dry-run' }}
+      repo_scope: ${{ github.event_name == 'schedule' && 'all' || github.event.inputs.repo_scope || 'single_repo' }}
+      single_repo: ${{ github.event.inputs.single_repo || '' }}
       max_parallel_repos: 3
-      max_prs_per_repo: ${{ inputs.max_prs_per_repo || 0 }}
+      max_prs_per_repo: ${{ fromJSON(github.event_name == 'schedule' && '0' || github.event.inputs.max_prs_per_repo || '0') }}
       allow_policy_alignment: true
       comment_report: true
       tracking_issue: "https://github.com/merglbot-public/docs/issues/636"
-      slack_notify: ${{ github.event_name == 'schedule' && true || inputs.slack_notify }}
-      pr_allowlist: ${{ github.event_name == 'schedule' && '' || inputs.pr_allowlist }}
-      approval_note: ${{ github.event_name == 'schedule' && 'scheduled weekly run' || inputs.approval_note }}
+      slack_notify: ${{ github.event_name == 'schedule' && true || fromJSON(github.event.inputs.slack_notify || 'true') }}
+      pr_allowlist: ${{ github.event.inputs.pr_allowlist || '' }}
+      approval_note: ${{ github.event_name == 'schedule' && 'scheduled weekly run' || github.event.inputs.approval_note || '' }}
+      approval_issue_url: ${{ github.event.inputs.approval_issue_url || '' }}
     secrets: inherit

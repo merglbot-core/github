@@ -153,6 +153,8 @@ jobs:
           INPUT_PR_ALLOWLIST: ${{ inputs.pr_allowlist || '' }}
           INPUT_APPROVAL_NOTE: ${{ inputs.approval_note || '' }}
           INPUT_APPROVAL_ISSUE_URL: ${{ inputs.approval_issue_url || '' }}
+          ENT_DEPENDABOT_APP_ID: ${{ secrets.ENT_DEPENDABOT_APP_ID }}
+          ENT_DEPENDABOT_APP_PRIVATE_KEY: ${{ secrets.ENT_DEPENDABOT_APP_PRIVATE_KEY }}
           SLACK_DEPENDABOT_WEBHOOK_URL: ${{ secrets.SLACK_DEPENDABOT_WEBHOOK_URL }}
           ENT_DEPENDABOT_REVIEW_WAIT_SECONDS: "1500"
           ENT_DEPENDABOT_REVIEW_POLL_SECONDS: "60"

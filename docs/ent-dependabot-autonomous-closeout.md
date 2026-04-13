@@ -41,6 +41,23 @@ Platform policy authority remains in `merglbot-public/docs`:
 - Stale age alone is never a close reason.
 - The workflow does not deploy, run Terraform apply, mutate secrets, change
   default branches, or bypass branch protection.
+- Cross-org GitHub API authority should come from the GitHub App secrets
+  `ENT_DEPENDABOT_APP_ID` and `ENT_DEPENDABOT_APP_PRIVATE_KEY`. The engine mints
+  short-lived installation tokens per repository owner and fails closed when the
+  app is not installed for a target owner. `ENTERPRISE_GITHUB_TOKEN` remains only
+  a legacy fallback for non-ENT/single-owner tests.
+- Local `single_repo` diagnostics validate against the repo-local
+  `scripts/dependabot/ent_repository_scope.txt` mirror to stay inside the
+  canonical 42-repo boundary without unnecessary cross-repo auth. GitHub Actions
+  `single_repo` runs validate against canonical remote `REPOSITORY_MAP.md` on
+  `main`, and `all` plus multi-owner `cohort` runs require GitHub App auth.
+- Canonical GitHub App setup and permission authority lives in
+  `merglbot-public/docs/ENT_DEPENDABOT_GITHUB_APP_SETUP.md`; repo-local setup
+  docs are implementation mirrors only.
+- Secret naming and no-log policy authority lives in
+  `merglbot-public/docs/MERGLBOT_SECRETS_NAMING_AND_LOGGING.md`; workflows and
+  scripts may report secret names or configured/not-configured booleans, never
+  secret values.
 
 ## Slack Telemetry
 
@@ -80,7 +97,10 @@ come from the explicit `ENT_DEPENDABOT_TRUSTED_APPROVERS` policy list; the
 workflow actor is not trusted implicitly. Approval material must also record
 approver identity, timestamp, approved scope, and expected action per PR.
 
-Manual `workflow_dispatch` exposes a bounded 10-input surface. It includes
+Manual `workflow_dispatch` defaults to `repo_scope=single_repo` and
+`single_repo=merglbot-public/docs`, so a default manual run is a safe dry-run
+smoke rather than an ENT-wide execution. It exposes a bounded 10-input surface.
+It includes
 `approval_issue_url` and `comment_report`; when `comment_report=true`, the report
 is posted to the default tracking issue `merglbot-public/docs#636`. Reusable
 `workflow_call` callers keep the same default fallback when `tracking_issue` is
