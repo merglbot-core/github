@@ -84,6 +84,7 @@ on:
         value: ${{ jobs.build.outputs.scan_passed }}
 
 permissions:
+  actions: read
   contents: read
   packages: write
   id-token: write
