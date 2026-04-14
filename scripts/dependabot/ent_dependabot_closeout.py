@@ -785,8 +785,8 @@ def request_update_branch(repo: str, number: int, expected_head_sha: str, *, app
     latest = refresh_pr(repo, number)
     while time.time() <= deadline:
         time.sleep(min(REBASE_POLL_SECONDS, max(0, deadline - time.time())))
-        current = refresh_pr(repo, number).head_sha
         latest = refresh_pr(repo, number)
+        current = latest.head_sha
         if current != expected_head_sha or latest.merge_state != "BEHIND":
             return {
                 "ok": True,
