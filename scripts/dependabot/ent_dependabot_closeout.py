@@ -649,10 +649,13 @@ def validate_npm_manifest_payloads(
         if not isinstance(old, dict) or not isinstance(new, dict):
             blockers.append(f"manifest_dependency_section_not_object:{path}:{key}")
             continue
+        if set(old) != set(new):
+            blockers.append(f"manifest_dependency_name_set_changed:{path}:{key}")
+            continue
         invalid_values = [
             dep
-            for dep, value in new.items()
-            if not isinstance(dep, str) or not isinstance(value, str)
+            for dep in sorted(old)
+            if not isinstance(dep, str) or not isinstance(old.get(dep), str) or not isinstance(new.get(dep), str)
         ]
         if invalid_values:
             blockers.append(f"manifest_dependency_values_not_strings:{path}:{key}:{','.join(sorted(invalid_values))}")
@@ -681,12 +684,12 @@ def validate_npm_manifest_dependency_only(
 
 def parse_uses_ref(line: str) -> tuple[str, str] | None:
     stripped = line.strip()
-    if not stripped.startswith("uses:"):
+    match = re.match(r"^-?\s*uses:\s*['\"]?(.+?)@([^'\"\s#]+)", stripped)
+    if not match:
         return None
-    value = stripped.split(":", 1)[1].strip().strip("'\"")
-    if value.startswith("./") or "@" not in value:
+    target, ref = match.group(1), match.group(2)
+    if target.startswith("./"):
         return None
-    target, ref = value.rsplit("@", 1)
     if not target or not ref:
         return None
     return target, ref
@@ -1739,11 +1742,18 @@ merglbot-core/agents-orchestrator
     )[0] is False
     assert validate_npm_manifest_payloads(
         {"dependencies": {"a": "^1.0.0"}},
+        {"dependencies": {"a": "^1.1.0", "b": "^1.0.0"}},
+        "package.json",
+        ["package.json", "package-lock.json"],
+    )[0] is False
+    assert validate_npm_manifest_payloads(
+        {"dependencies": {"a": "^1.0.0"}},
         {"dependencies": {"a": "^1.1.0"}},
         "package.json",
         ["package.json"],
     )[0] is False
     assert parse_uses_ref("      uses: actions/checkout@v6") == ("actions/checkout", "v6")
+    assert parse_uses_ref("      - uses: actions/setup-node@v6") == ("actions/setup-node", "v6")
     assert parse_uses_ref("      run: echo nope") is None
     assert validate_workflow_ref_only_text(
         "jobs:\n  x:\n    uses: owner/repo/.github/workflows/ci.yml@old\n",
