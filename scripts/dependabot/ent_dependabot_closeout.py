@@ -36,6 +36,8 @@ REBASE_POLL_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REBASE_POLL_SECONDS", "
 OPEN_ITEM_LIST_LIMIT = 1000
 APP_TOKEN_CACHE: dict[str, tuple[str, datetime]] = {}
 REPO_LOCAL_SCOPE_FILE = Path(__file__).with_name("ent_repository_scope.txt")
+MERGE_READY_STATES = {"CLEAN", "HAS_HOOKS"}
+MERGE_REVIEW_GATE_STATE = "REVIEW_REQUIRED"
 
 DEPENDENCY_FILE_PATTERNS = [
     re.compile(pattern)
@@ -353,6 +355,15 @@ class ItemReceipt:
     merglbot_dispatch: dict[str, Any] | None = None
     update_branch: dict[str, Any] | None = None
     post_merge: dict[str, Any] | None = None
+
+
+def reject_if_head_changed(receipt: ItemReceipt, refreshed: PullRequest, blocker: str) -> bool:
+    """Fail closed when a refreshed PR snapshot no longer matches reviewed head."""
+    if refreshed.head_sha == receipt.head_sha:
+        return False
+    receipt.blockers.append(blocker)
+    receipt.head_sha = refreshed.head_sha
+    return True
 
 
 def list_dependabot_prs(repo: str) -> list[PullRequest]:
@@ -981,20 +992,27 @@ def process_pr(
         return receipt
 
     refreshed = refresh_pr(pr.repo, pr.number)
-    if refreshed.head_sha != receipt.head_sha:
-        receipt.blockers.append("head_changed_after_review")
-        receipt.head_sha = refreshed.head_sha
+    if reject_if_head_changed(receipt, refreshed, "head_changed_after_review"):
         return receipt
 
-    if refreshed.merge_state == "REVIEW_REQUIRED" and allow_policy_alignment:
+    if refreshed.merge_state == MERGE_REVIEW_GATE_STATE and allow_policy_alignment:
         alignment = align_review_gate(pr.repo, output_dir, apply=apply)
         receipt.evidence.append(f"policy_alignment={alignment.get('ok')}")
         if not alignment.get("ok"):
             receipt.blockers.extend([f"policy_alignment:{blocker}" for blocker in alignment.get("blockers", [])])
             write_json(output_dir / "policy" / f"{pr.repo.replace('/', '__')}-failed.json", alignment)
             return receipt
-    elif refreshed.merge_state == "REVIEW_REQUIRED":
+        refreshed = refresh_pr(pr.repo, pr.number)
+        if reject_if_head_changed(receipt, refreshed, "head_changed_after_policy_alignment"):
+            return receipt
+    elif refreshed.merge_state == MERGE_REVIEW_GATE_STATE:
+        receipt.classification = "BLOCKED_MERGE_STATE"
         receipt.blockers.append("review_required_policy_alignment_disabled")
+        return receipt
+
+    if refreshed.merge_state not in MERGE_READY_STATES:
+        receipt.classification = "BLOCKED_MERGE_STATE"
+        receipt.blockers.append(f"merge_state:{refreshed.merge_state}")
         return receipt
 
     if not apply:
@@ -1354,6 +1372,8 @@ merglbot-core/agents-orchestrator
     assert classify_change_scope(["requirements-dev.txt"])[0] is True
     assert classify_change_scope([".github/workflows/ci.yml"])[0] is False
     assert classify_change_scope(["terraform/main.tf"])[0] is False
+    assert "DIRTY" not in MERGE_READY_STATES
+    assert MERGE_REVIEW_GATE_STATE not in MERGE_READY_STATES
     report = build_report(
         "dry-run",
         ["merglbot-core/github"],
