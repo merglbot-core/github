@@ -46,6 +46,16 @@ Platform policy authority remains in `merglbot-public/docs`:
   short-lived installation tokens per repository owner and fails closed when the
   app is not installed for a target owner. `ENTERPRISE_GITHUB_TOKEN` remains only
   a legacy fallback for non-ENT/single-owner tests.
+- Missing or stale Merglbot evidence is remediated through the target repo's
+  active `Merglbot PR Assistant v3 (On-Demand Multi-Model)` workflow via
+  `workflow_dispatch` on the PR head ref with `expected_head_sha`. The legacy
+  `@merglbot review --light` comment path is not used by the ENT weekly apply
+  lane because GitHub App comments do not carry a trusted author association.
+- Behind PRs are updated through GitHub's pull request `update-branch` API with
+  `expected_head_sha`. The lane no longer relies on `@dependabot rebase`
+  comments, because Dependabot rejects that command from actors without push
+  access semantics. After any update-branch change, every gate is recomputed on
+  the new head.
 - Local `single_repo` diagnostics validate against the repo-local
   `scripts/dependabot/ent_repository_scope.txt` mirror to stay inside the
   canonical 42-repo boundary without unnecessary cross-repo auth. GitHub Actions
@@ -113,7 +123,9 @@ Every merged Dependabot PR must prove:
 - the changed files are manifest/lockfile-only dependency metadata,
 - required checks are green on the live head,
 - the latest Merglbot PR Assistant receipt is current-head and
-  `approved_for_closeout`,
+  `approved_for_closeout`; if the receipt was missing or stale, the closeout
+  engine must have triggered a head-bound `workflow_dispatch` review and then
+  verified the emitted receipt markers,
 - Cursor Bugbot has a current-head pass when available, or the receipt records
   that Cursor was absent/neutral/skipping and not required,
 - the merge uses squash with `--match-head-commit`.
@@ -134,6 +146,10 @@ Each run writes:
 - `ent_dependabot_repo_results.json`
 - `summary.md`
 - branch-protection snapshots under `policy/` when alignment is evaluated
+
+Per-PR receipts include the Merglbot dispatch method/ref/head SHA when a review
+dispatch was needed, and include update-branch API evidence when a PR started
+behind its base branch.
 
 The weekly caller posts the human summary and machine receipt to the cleanup
 steady-state tracking issue.
