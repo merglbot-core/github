@@ -357,6 +357,15 @@ class ItemReceipt:
     post_merge: dict[str, Any] | None = None
 
 
+def reject_if_head_changed(receipt: ItemReceipt, refreshed: PullRequest, blocker: str) -> bool:
+    """Fail closed when a refreshed PR snapshot no longer matches reviewed head."""
+    if refreshed.head_sha == receipt.head_sha:
+        return False
+    receipt.blockers.append(blocker)
+    receipt.head_sha = refreshed.head_sha
+    return True
+
+
 def list_dependabot_prs(repo: str) -> list[PullRequest]:
     data = gh_json(
         [
@@ -983,9 +992,7 @@ def process_pr(
         return receipt
 
     refreshed = refresh_pr(pr.repo, pr.number)
-    if refreshed.head_sha != receipt.head_sha:
-        receipt.blockers.append("head_changed_after_review")
-        receipt.head_sha = refreshed.head_sha
+    if reject_if_head_changed(receipt, refreshed, "head_changed_after_review"):
         return receipt
 
     if refreshed.merge_state == MERGE_REVIEW_GATE_STATE and allow_policy_alignment:
@@ -996,9 +1003,7 @@ def process_pr(
             write_json(output_dir / "policy" / f"{pr.repo.replace('/', '__')}-failed.json", alignment)
             return receipt
         refreshed = refresh_pr(pr.repo, pr.number)
-        if refreshed.head_sha != receipt.head_sha:
-            receipt.blockers.append("head_changed_after_policy_alignment")
-            receipt.head_sha = refreshed.head_sha
+        if reject_if_head_changed(receipt, refreshed, "head_changed_after_policy_alignment"):
             return receipt
     elif refreshed.merge_state == MERGE_REVIEW_GATE_STATE:
         receipt.classification = "BLOCKED_MERGE_STATE"
