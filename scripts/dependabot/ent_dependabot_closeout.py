@@ -1001,6 +1001,7 @@ def process_pr(
             receipt.head_sha = refreshed.head_sha
             return receipt
     elif refreshed.merge_state == MERGE_REVIEW_GATE_STATE:
+        receipt.classification = "BLOCKED_MERGE_STATE"
         receipt.blockers.append("review_required_policy_alignment_disabled")
         return receipt
 
