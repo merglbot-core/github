@@ -996,6 +996,10 @@ def process_pr(
             write_json(output_dir / "policy" / f"{pr.repo.replace('/', '__')}-failed.json", alignment)
             return receipt
         refreshed = refresh_pr(pr.repo, pr.number)
+        if refreshed.head_sha != receipt.head_sha:
+            receipt.blockers.append("head_changed_after_policy_alignment")
+            receipt.head_sha = refreshed.head_sha
+            return receipt
     elif refreshed.merge_state == MERGE_REVIEW_GATE_STATE:
         receipt.blockers.append("review_required_policy_alignment_disabled")
         return receipt
