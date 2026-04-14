@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import base64
 from contextlib import contextmanager
+import difflib
 import json
 import os
 import re
@@ -38,6 +39,22 @@ APP_TOKEN_CACHE: dict[str, tuple[str, datetime]] = {}
 REPO_LOCAL_SCOPE_FILE = Path(__file__).with_name("ent_repository_scope.txt")
 MERGE_READY_STATES = {"CLEAN", "HAS_HOOKS"}
 MERGE_REVIEW_GATE_STATE = "REVIEW_REQUIRED"
+DEFAULT_VALIDATOR_PROFILE = "maximum_autonomy_v2"
+VALIDATOR_PROFILES = {"strict_lockfile_v1", DEFAULT_VALIDATOR_PROFILE}
+PACKAGE_JSON_DEPENDENCY_KEYS = {
+    "dependencies",
+    "devDependencies",
+    "optionalDependencies",
+    "peerDependencies",
+}
+PACKAGE_JSON_LOCKFILE_NAMES = {
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "bun.lock",
+    "bun.lockb",
+}
 
 DEPENDENCY_FILE_PATTERNS = [
     re.compile(pattern)
@@ -331,6 +348,7 @@ class PullRequest:
     url: str
     author: str
     head_sha: str
+    base_sha: str
     base_ref: str
     head_ref: str
     is_draft: bool
@@ -355,6 +373,12 @@ class ItemReceipt:
     merglbot_dispatch: dict[str, Any] | None = None
     update_branch: dict[str, Any] | None = None
     post_merge: dict[str, Any] | None = None
+    validated_scope_class: str | None = None
+    scope_validator_evidence: list[str] = field(default_factory=list)
+    would_dispatch_merglbot_review: bool = False
+    would_update_branch: bool = False
+    superseded_by: str | None = None
+    close_reopen_condition: str | None = None
 
 
 def reject_if_head_changed(receipt: ItemReceipt, refreshed: PullRequest, blocker: str) -> bool:
@@ -378,7 +402,7 @@ def list_dependabot_prs(repo: str) -> list[PullRequest]:
             "--limit",
             "100",
             "--json",
-            "number,title,url,author,headRefOid,baseRefName,headRefName,isDraft,mergeStateStatus,updatedAt",
+            "number,title,url,author,headRefOid,baseRefOid,baseRefName,headRefName,isDraft,mergeStateStatus,updatedAt",
         ]
     )
     prs: list[PullRequest] = []
@@ -394,6 +418,7 @@ def list_dependabot_prs(repo: str) -> list[PullRequest]:
                 url=str(item.get("url") or ""),
                 author=author,
                 head_sha=str(item.get("headRefOid") or ""),
+                base_sha=str(item.get("baseRefOid") or ""),
                 base_ref=str(item.get("baseRefName") or "main"),
                 head_ref=str(item.get("headRefName") or ""),
                 is_draft=bool(item.get("isDraft")),
@@ -535,6 +560,32 @@ def pr_files(repo: str, number: int) -> list[str]:
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
 
 
+def repo_file_text(repo: str, path: str, ref: str) -> str | None:
+    endpoint = repo_endpoint(repo, f"contents/{quote(path, safe='/')}?ref={quote(ref, safe='')}")
+    proc = run_cmd(
+        [
+            "gh",
+            "api",
+            "-H",
+            "Accept: application/vnd.github+json",
+            "-H",
+            "X-GitHub-Api-Version: 2022-11-28",
+            endpoint,
+        ],
+        check=False,
+    )
+    if proc.returncode != 0:
+        combined = f"{proc.stderr}\n{proc.stdout}"
+        if "404" in combined or "Not Found" in combined:
+            return None
+        raise GhError(proc.stderr.strip() or proc.stdout.strip() or f"gh api {endpoint} failed")
+    payload = json.loads(proc.stdout or "{}")
+    encoded = payload.get("content") if isinstance(payload, dict) else None
+    if not encoded:
+        return None
+    return base64.b64decode(str(encoded).encode("utf-8")).decode("utf-8")
+
+
 def is_dependency_file(path: str) -> bool:
     return any(pattern.search(path) for pattern in DEPENDENCY_FILE_PATTERNS)
 
@@ -545,6 +596,198 @@ def is_mixed_purpose_manifest(path: str) -> bool:
 
 def is_sensitive_file(path: str) -> bool:
     return any(pattern.search(path) for pattern in SENSITIVE_FILE_PATTERNS)
+
+
+def is_npm_manifest(path: str) -> bool:
+    return path.endswith("package.json")
+
+
+def is_workflow_file(path: str) -> bool:
+    return path.startswith(".github/workflows/") and path.endswith((".yml", ".yaml"))
+
+
+def sibling_lockfiles(path: str, files: list[str]) -> list[str]:
+    parent = path.rsplit("/", 1)[0] if "/" in path else ""
+    candidates = {
+        f"{parent}/{name}" if parent else name
+        for name in PACKAGE_JSON_LOCKFILE_NAMES
+    }
+    return sorted(candidates.intersection(files))
+
+
+def parse_json_file(repo: str, path: str, ref: str) -> dict[str, Any] | None:
+    text = repo_file_text(repo, path, ref)
+    if text is None:
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise GhError(f"{repo}:{path}@{ref} is not valid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise GhError(f"{repo}:{path}@{ref} is not a JSON object")
+    return payload
+
+
+def validate_npm_manifest_payloads(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    path: str,
+    files: list[str],
+) -> tuple[bool, list[str], list[str]]:
+    blockers: list[str] = []
+    evidence: list[str] = []
+    changed_keys = sorted(key for key in set(before) | set(after) if before.get(key) != after.get(key))
+    dependency_keys = [key for key in changed_keys if key in PACKAGE_JSON_DEPENDENCY_KEYS]
+    non_dependency_keys = [key for key in changed_keys if key not in PACKAGE_JSON_DEPENDENCY_KEYS]
+    if non_dependency_keys:
+        blockers.append(f"manifest_non_dependency_keys:{path}:{','.join(non_dependency_keys)}")
+    if not dependency_keys:
+        blockers.append(f"manifest_no_dependency_section_change:{path}")
+    for key in dependency_keys:
+        old = before.get(key) or {}
+        new = after.get(key) or {}
+        if not isinstance(old, dict) or not isinstance(new, dict):
+            blockers.append(f"manifest_dependency_section_not_object:{path}:{key}")
+            continue
+        invalid_values = [
+            dep
+            for dep, value in new.items()
+            if not isinstance(dep, str) or not isinstance(value, str)
+        ]
+        if invalid_values:
+            blockers.append(f"manifest_dependency_values_not_strings:{path}:{key}:{','.join(sorted(invalid_values))}")
+    locks = sibling_lockfiles(path, files)
+    if not locks:
+        blockers.append(f"manifest_without_matching_lockfile:{path}")
+    evidence.append(f"manifest_dependency_keys={','.join(dependency_keys) or 'none'}")
+    evidence.append(f"manifest_lockfiles={','.join(locks) or 'none'}")
+    return not blockers, blockers, evidence
+
+
+def validate_npm_manifest_dependency_only(
+    repo: str,
+    path: str,
+    *,
+    base_sha: str,
+    head_sha: str,
+    files: list[str],
+) -> tuple[bool, list[str], list[str]]:
+    before = parse_json_file(repo, path, base_sha)
+    after = parse_json_file(repo, path, head_sha)
+    if before is None or after is None:
+        return False, [f"manifest_missing_at_ref:{path}"], []
+    return validate_npm_manifest_payloads(before, after, path, files)
+
+
+def parse_uses_ref(line: str) -> tuple[str, str] | None:
+    stripped = line.strip()
+    if not stripped.startswith("uses:"):
+        return None
+    value = stripped.split(":", 1)[1].strip().strip("'\"")
+    if value.startswith("./") or "@" not in value:
+        return None
+    target, ref = value.rsplit("@", 1)
+    if not target or not ref:
+        return None
+    return target, ref
+
+
+def validate_workflow_ref_only_text(before: str, after: str, path: str) -> tuple[bool, list[str], list[str]]:
+    blockers: list[str] = []
+    evidence: list[str] = []
+    changed_refs = 0
+    before_lines = before.splitlines()
+    after_lines = after.splitlines()
+    matcher = difflib.SequenceMatcher(a=before_lines, b=after_lines, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        if tag != "replace" or (i2 - i1) != (j2 - j1):
+            blockers.append(f"workflow_structural_change:{path}")
+            continue
+        for old, new in zip(before_lines[i1:i2], after_lines[j1:j2], strict=True):
+            old_ref = parse_uses_ref(old)
+            new_ref = parse_uses_ref(new)
+            if not old_ref or not new_ref:
+                blockers.append(f"workflow_non_uses_change:{path}")
+                continue
+            if old_ref[0] != new_ref[0]:
+                blockers.append(f"workflow_uses_target_changed:{path}:{old_ref[0]}->{new_ref[0]}")
+                continue
+            if old_ref[1] == new_ref[1]:
+                blockers.append(f"workflow_uses_ref_unchanged:{path}:{old_ref[0]}")
+                continue
+            changed_refs += 1
+            evidence.append(f"workflow_uses_ref_bump:{path}:{old_ref[0]}:{old_ref[1]}->{new_ref[1]}")
+    if changed_refs == 0:
+        blockers.append(f"workflow_no_uses_ref_bump:{path}")
+    return not blockers, blockers, evidence
+
+
+def validate_workflow_ref_only(repo: str, path: str, *, base_sha: str, head_sha: str) -> tuple[bool, list[str], list[str]]:
+    before = repo_file_text(repo, path, base_sha)
+    after = repo_file_text(repo, path, head_sha)
+    if before is None or after is None:
+        return False, [f"workflow_missing_at_ref:{path}"], []
+    return validate_workflow_ref_only_text(before, after, path)
+
+
+def validate_change_scope(
+    repo: str,
+    number: int,
+    files: list[str],
+    *,
+    base_sha: str,
+    head_sha: str,
+    validator_profile: str,
+) -> tuple[bool, list[str], list[str], str, list[str]]:
+    if validator_profile not in VALIDATOR_PROFILES:
+        raise GhError(f"unknown validator_profile: {validator_profile}")
+    if validator_profile == "strict_lockfile_v1":
+        ok, blockers, dependency_files = classify_change_scope(files)
+        return ok, blockers, dependency_files, "LOCKFILE_ONLY" if ok else "BLOCKED_CHANGE_SCOPE", []
+
+    blockers: list[str] = []
+    evidence: list[str] = [f"validator_profile={validator_profile}"]
+    dependency_files: list[str] = []
+    classes: set[str] = set()
+    for path in files:
+        if is_dependency_file(path):
+            dependency_files.append(path)
+            classes.add("LOCKFILE_ONLY")
+            continue
+        if is_npm_manifest(path):
+            ok, item_blockers, item_evidence = validate_npm_manifest_dependency_only(
+                repo,
+                path,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                files=files,
+            )
+            evidence.extend(item_evidence)
+            if ok:
+                classes.add("VALIDATED_MANIFEST_DEP_ONLY")
+            else:
+                blockers.extend(f"manifest_content_validation:{blocker}" for blocker in item_blockers)
+            continue
+        if is_workflow_file(path):
+            ok, item_blockers, item_evidence = validate_workflow_ref_only(repo, path, base_sha=base_sha, head_sha=head_sha)
+            evidence.extend(item_evidence)
+            if ok:
+                classes.add("VALIDATED_WORKFLOW_REF_ONLY")
+            else:
+                blockers.extend(f"workflow_content_validation:{blocker}" for blocker in item_blockers)
+            continue
+        if is_sensitive_file(path):
+            blockers.append(f"sensitive_file_scope:{path}")
+            continue
+        if is_mixed_purpose_manifest(path):
+            blockers.append(f"mixed_manifest_validator_unavailable:{path}")
+            continue
+        blockers.append(f"non_manifest_lockfile_scope:{path}")
+    if blockers:
+        return False, blockers, dependency_files, "BLOCKED_SCOPE_CONTENT_VALIDATION", evidence
+    return True, [], dependency_files, "+".join(sorted(classes)) or "NO_CHANGE", evidence
 
 
 def classify_change_scope(files: list[str]) -> tuple[bool, list[str], list[str]]:
@@ -570,7 +813,7 @@ def refresh_pr(repo: str, number: int) -> PullRequest:
             "--repo",
             repo,
             "--json",
-            "number,title,url,author,headRefOid,baseRefName,headRefName,isDraft,mergeStateStatus,updatedAt,state",
+            "number,title,url,author,headRefOid,baseRefOid,baseRefName,headRefName,isDraft,mergeStateStatus,updatedAt,state",
         ]
     )
     if item.get("state") != "OPEN":
@@ -583,6 +826,7 @@ def refresh_pr(repo: str, number: int) -> PullRequest:
         url=str(item.get("url") or ""),
         author=author,
         head_sha=str(item.get("headRefOid") or ""),
+        base_sha=str(item.get("baseRefOid") or ""),
         base_ref=str(item.get("baseRefName") or "main"),
         head_ref=str(item.get("headRefName") or ""),
         is_draft=bool(item.get("isDraft")),
@@ -899,7 +1143,7 @@ def close_comment(pr: PullRequest, classification: str, evidence: list[str], wor
     )
 
 
-def validate_file_scope_for_current_head(pr: PullRequest, receipt: ItemReceipt) -> tuple[bool, PullRequest]:
+def validate_file_scope_for_current_head(pr: PullRequest, receipt: ItemReceipt, *, validator_profile: str) -> tuple[bool, PullRequest]:
     expected = refresh_pr(pr.repo, pr.number)
     receipt.head_sha = expected.head_sha
     files = pr_files(pr.repo, pr.number)
@@ -915,11 +1159,20 @@ def validate_file_scope_for_current_head(pr: PullRequest, receipt: ItemReceipt) 
         receipt.evidence.append("current PR diff has no changed files")
         return False, after_scope
 
-    scope_ok, scope_blockers, dependency_files = classify_change_scope(files)
+    scope_ok, scope_blockers, dependency_files, scope_class, scope_evidence = validate_change_scope(
+        pr.repo,
+        pr.number,
+        files,
+        base_sha=after_scope.base_sha,
+        head_sha=after_scope.head_sha,
+        validator_profile=validator_profile,
+    )
+    receipt.validated_scope_class = scope_class
+    receipt.scope_validator_evidence.extend(scope_evidence)
     receipt.evidence.append(f"changed_files={len(files)}")
     receipt.evidence.append("dependency_files=" + ",".join(dependency_files))
     if not scope_ok:
-        receipt.classification = "BLOCKED_CHANGE_SCOPE"
+        receipt.classification = scope_class if scope_class.startswith("BLOCKED_") else "BLOCKED_CHANGE_SCOPE"
         receipt.blockers.extend([f"change_scope:{blocker}" for blocker in scope_blockers])
         return False, after_scope
     return True, after_scope
@@ -932,6 +1185,7 @@ def process_pr(
     output_dir: Path,
     allow_policy_alignment: bool,
     workflow_url: str,
+    validator_profile: str,
 ) -> ItemReceipt:
     apply = mode == "apply"
     receipt = ItemReceipt(repo=pr.repo, pr_number=pr.number, url=pr.url, action="blocked", classification="BLOCKED", head_sha=pr.head_sha)
@@ -941,7 +1195,7 @@ def process_pr(
     if pr.is_draft:
         receipt.blockers.append("draft_pr")
         return receipt
-    scope_ok, refreshed = validate_file_scope_for_current_head(pr, receipt)
+    scope_ok, refreshed = validate_file_scope_for_current_head(pr, receipt, validator_profile=validator_profile)
     if receipt.classification == "AUTO_CLOSE_EMPTY_DIFF":
         if apply:
             receipt.action = "closed"
@@ -951,6 +1205,13 @@ def process_pr(
         return receipt
 
     if refreshed.merge_state == "BEHIND":
+        if not apply:
+            receipt.action = "would_update_branch"
+            receipt.classification = "WOULD_UPDATE_BRANCH_THEN_REVALIDATE"
+            receipt.would_update_branch = True
+            receipt.update_branch = request_update_branch(pr.repo, pr.number, refreshed.head_sha, apply=False)
+            receipt.evidence.append("PR is behind base; apply would call update-branch API with expected_head_sha and revalidate")
+            return receipt
         receipt.evidence.append("PR was behind base after scope validation; requested update-branch API")
         update_branch = request_update_branch(pr.repo, pr.number, refreshed.head_sha, apply=apply)
         receipt.update_branch = update_branch
@@ -959,7 +1220,7 @@ def process_pr(
             receipt.blockers.extend([f"update_branch:{blocker}" for blocker in update_branch.get("blockers", [])])
             return receipt
         refreshed = refresh_pr(pr.repo, pr.number)
-        scope_ok, refreshed = validate_file_scope_for_current_head(refreshed, receipt)
+        scope_ok, refreshed = validate_file_scope_for_current_head(refreshed, receipt, validator_profile=validator_profile)
         if receipt.classification == "AUTO_CLOSE_EMPTY_DIFF":
             if apply:
                 receipt.action = "closed"
@@ -982,6 +1243,12 @@ def process_pr(
     receipt.merglbot_receipt = merglbot
     receipt.merglbot_dispatch = merglbot.get("dispatch")
     if not merglbot.get("ok"):
+        if not apply:
+            receipt.action = "would_dispatch_review"
+            receipt.classification = "WOULD_DISPATCH_MERGLBOT_REVIEW"
+            receipt.would_dispatch_merglbot_review = True
+            receipt.evidence.append("Merglbot receipt is missing or stale; apply would dispatch a head-bound workflow review and revalidate")
+            return receipt
         receipt.blockers.extend([f"merglbot:{blocker}" for blocker in merglbot.get("blockers", [])])
         return receipt
 
@@ -1041,6 +1308,7 @@ def process_repo(
     allow_policy_alignment: bool,
     workflow_url: str,
     pr_allowlist: set[tuple[str, int]],
+    validator_profile: str,
 ) -> dict[str, Any]:
     telemetry_warnings: list[str] = []
     try:
@@ -1058,6 +1326,8 @@ def process_repo(
             "blocked": [],
             "would_merge": [],
             "would_close": [],
+            "would_update_branch": [],
+            "would_dispatch_review": [],
             "skipped_by_allowlist": [],
             "warnings": [f"list_open_prs_failed:{exc}"],
         }
@@ -1083,6 +1353,8 @@ def process_repo(
         "blocked": [],
         "would_merge": [],
         "would_close": [],
+        "would_update_branch": [],
+        "would_dispatch_review": [],
         "skipped_by_allowlist": [],
         "warnings": [],
         "telemetry_warnings": telemetry_warnings,
@@ -1122,7 +1394,14 @@ def process_repo(
                 seen_without_action.add(pr.number)
                 continue
             try:
-                receipt = process_pr(pr, mode=mode, output_dir=output_dir, allow_policy_alignment=allow_policy_alignment, workflow_url=workflow_url)
+                receipt = process_pr(
+                    pr,
+                    mode=mode,
+                    output_dir=output_dir,
+                    allow_policy_alignment=allow_policy_alignment,
+                    workflow_url=workflow_url,
+                    validator_profile=validator_profile,
+                )
             except GhError as exc:
                 receipt = ItemReceipt(
                     repo=pr.repo,
@@ -1147,6 +1426,10 @@ def process_repo(
                 repo_result["would_merge"].append(receipt.__dict__)
             elif key == "would_close":
                 repo_result["would_close"].append(receipt.__dict__)
+            elif key == "would_update_branch":
+                repo_result["would_update_branch"].append(receipt.__dict__)
+            elif key == "would_dispatch_review":
+                repo_result["would_dispatch_review"].append(receipt.__dict__)
             else:
                 repo_result["blocked"].append(receipt.__dict__)
             seen_without_action.add(pr.number)
@@ -1186,6 +1469,7 @@ def post_tracking_report(tracking_issue: str, report: dict[str, Any], summary_ma
 def markdown_summary(report: dict[str, Any]) -> str:
     lines = [
         f"- Mode: `{report['mode']}`",
+        f"- Validator profile: `{report.get('validator_profile', DEFAULT_VALIDATOR_PROFILE)}`",
         f"- Status: `{report['final_verdict']}`",
         f"- Repos scanned: `{report['repos_scanned']}`",
         f"- Open PRs: `{report['open_prs_total']}` (`{report['open_dependabot_prs_total']}` Dependabot / `{report['open_non_dependabot_prs_total']}` non-Dependabot)",
@@ -1194,15 +1478,17 @@ def markdown_summary(report: dict[str, Any]) -> str:
         f"- Merged: `{len(report['merged_prs'])}`",
         f"- Closed: `{len(report['closed_prs'])}`",
         f"- Blocked: `{len(report['blocked_prs'])}`",
+        f"- Would update branch: `{len(report.get('would_update_branch_prs', []))}`",
+        f"- Would dispatch Merglbot review: `{len(report.get('would_dispatch_review_prs', []))}`",
         f"- Telemetry warnings: `{len(report.get('telemetry_warnings', []))}`",
         f"- Slack delivery: `{report.get('slack_delivery', {}).get('status', 'not_requested')}`",
         "",
-        "| Repo | PRs | Dependabot | Non-Dependabot | Issues | Merged | Closed | Blocked | Would merge | Would close | Skipped |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Repo | PRs | Dependabot | Non-Dependabot | Issues | Merged | Closed | Blocked | Would merge | Would close | Would update | Would review | Skipped |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in report["repo_table"]:
         lines.append(
-            "| {repo} | {open_prs} | {before} | {non_dependabot} | {issues} | {merged} | {closed} | {blocked} | {would_merge} | {would_close} | {skipped} |".format(
+            "| {repo} | {open_prs} | {before} | {non_dependabot} | {issues} | {merged} | {closed} | {blocked} | {would_merge} | {would_close} | {would_update} | {would_review} | {skipped} |".format(
                 repo=row["repo"],
                 open_prs=row["open_prs_before"],
                 before=row["dependabot_prs_before"],
@@ -1213,6 +1499,8 @@ def markdown_summary(report: dict[str, Any]) -> str:
                 blocked=row["blocked"],
                 would_merge=row["would_merge"],
                 would_close=row["would_close"],
+                would_update=row.get("would_update_branch", 0),
+                would_review=row.get("would_dispatch_review", 0),
                 skipped=row["skipped_by_allowlist"],
             )
         )
@@ -1237,6 +1525,7 @@ def build_report(
     approval_note: str,
     approval_issue_url: str,
     workflow_url: str,
+    validator_profile: str,
     tracking_comment_url: str | None = None,
 ) -> dict[str, Any]:
     merged = [item for result in repo_results for item in result.get("merged", [])]
@@ -1244,6 +1533,8 @@ def build_report(
     blocked = [item for result in repo_results for item in result.get("blocked", [])]
     would_merge = [item for result in repo_results for item in result.get("would_merge", [])]
     would_close = [item for result in repo_results for item in result.get("would_close", [])]
+    would_update_branch = [item for result in repo_results for item in result.get("would_update_branch", [])]
+    would_dispatch_review = [item for result in repo_results for item in result.get("would_dispatch_review", [])]
     skipped_by_allowlist = [item for result in repo_results for item in result.get("skipped_by_allowlist", [])]
     repo_table = [
         {
@@ -1257,6 +1548,8 @@ def build_report(
             "blocked": len(result.get("blocked", [])),
             "would_merge": len(result.get("would_merge", [])),
             "would_close": len(result.get("would_close", [])),
+            "would_update_branch": len(result.get("would_update_branch", [])),
+            "would_dispatch_review": len(result.get("would_dispatch_review", [])),
             "skipped_by_allowlist": len(result.get("skipped_by_allowlist", [])),
             "warnings": result.get("warnings", []),
             "telemetry_warnings": result.get("telemetry_warnings", []),
@@ -1270,6 +1563,7 @@ def build_report(
         "final_verdict": "ENT_DEPENDABOT_WEEKLY_CLOSEOUT_COMPLETE",
         "generated_at": utc_now(),
         "mode": mode,
+        "validator_profile": validator_profile,
         "workflow_url": workflow_url,
         "repos_scanned": len(repos),
         "open_prs_total": open_prs_total,
@@ -1282,11 +1576,15 @@ def build_report(
         "blocked_prs": blocked,
         "would_merge_prs": would_merge,
         "would_close_prs": would_close,
+        "would_update_branch_prs": would_update_branch,
+        "would_dispatch_review_prs": would_dispatch_review,
         "skipped_by_allowlist_prs": skipped_by_allowlist,
         "remaining_dependabot_prs": len(blocked)
         + len(skipped_by_allowlist)
         + (len(would_merge) if mode == "dry-run" else 0)
-        + (len(would_close) if mode == "dry-run" else 0),
+        + (len(would_close) if mode == "dry-run" else 0)
+        + (len(would_update_branch) if mode == "dry-run" else 0)
+        + (len(would_dispatch_review) if mode == "dry-run" else 0),
         "top_blocker_reasons": blocker_summary(blocked),
         "approval": {
             "pr_allowlist": [f"{repo}#{number}" for repo, number in sorted(pr_allowlist)],
@@ -1316,11 +1614,13 @@ def build_slack_payload(report: dict[str, Any], status: str) -> dict[str, Any]:
     error_line = f"\nError: `{report['error']}`" if report.get("error") else ""
     summary = (
         f"*ENT Dependabot Weekly Closeout* `{status}`\n"
-        f"Mode: `{report.get('mode', 'unknown')}` | Repos: `{report.get('repos_scanned', 0)}`\n"
+        f"Mode: `{report.get('mode', 'unknown')}` | Validator: `{report.get('validator_profile', DEFAULT_VALIDATOR_PROFILE)}` | Repos: `{report.get('repos_scanned', 0)}`\n"
         f"Dependabot PRs: `{report.get('dependabot_prs_before', 0)}` before, "
         f"`{len(report.get('merged_prs', []))}` merged, "
         f"`{len(report.get('closed_prs', []))}` closed, "
         f"`{len(report.get('blocked_prs', []))}` blocked, "
+        f"`{len(report.get('would_update_branch_prs', []))}` would-update, "
+        f"`{len(report.get('would_dispatch_review_prs', []))}` would-review, "
         f"`{report.get('remaining_dependabot_prs', 0)}` remaining\n"
         f"Open backlog: `{report.get('open_prs_total', 0)}` PRs "
         f"(`{report.get('open_dependabot_prs_total', 0)}` Dependabot / "
@@ -1390,6 +1690,8 @@ merglbot-core/agents-orchestrator
                 "blocked": [],
                 "would_merge": [{"repo": "merglbot-core/github", "pr_number": 1}],
                 "would_close": [],
+                "would_update_branch": [],
+                "would_dispatch_review": [],
                 "warnings": [],
             }
         ],
@@ -1397,6 +1699,7 @@ merglbot-core/agents-orchestrator
         approval_note="",
         approval_issue_url="",
         workflow_url="https://github.com/o/r/actions/runs/1",
+        validator_profile=DEFAULT_VALIDATOR_PROFILE,
     )
     assert report["repos_scanned"] == 1
     assert report["dependabot_prs_before"] == 1
@@ -1414,6 +1717,44 @@ merglbot-core/agents-orchestrator
         "expected_head_sha": "a" * 40,
     }
     assert request_update_branch("merglbot-core/github", 1, "b" * 40, apply=False)["blockers"] == ["update_branch_required"]
+    assert validate_change_scope(
+        "merglbot-core/github",
+        1,
+        ["package-lock.json"],
+        base_sha="a" * 40,
+        head_sha="b" * 40,
+        validator_profile=DEFAULT_VALIDATOR_PROFILE,
+    )[0] is True
+    assert validate_npm_manifest_payloads(
+        {"dependencies": {"a": "^1.0.0"}, "scripts": {"test": "x"}},
+        {"dependencies": {"a": "^1.1.0"}, "scripts": {"test": "x"}},
+        "package.json",
+        ["package.json", "package-lock.json"],
+    )[0] is True
+    assert validate_npm_manifest_payloads(
+        {"dependencies": {"a": "^1.0.0"}, "scripts": {"test": "x"}},
+        {"dependencies": {"a": "^1.1.0"}, "scripts": {"test": "y"}},
+        "package.json",
+        ["package.json", "package-lock.json"],
+    )[0] is False
+    assert validate_npm_manifest_payloads(
+        {"dependencies": {"a": "^1.0.0"}},
+        {"dependencies": {"a": "^1.1.0"}},
+        "package.json",
+        ["package.json"],
+    )[0] is False
+    assert parse_uses_ref("      uses: actions/checkout@v6") == ("actions/checkout", "v6")
+    assert parse_uses_ref("      run: echo nope") is None
+    assert validate_workflow_ref_only_text(
+        "jobs:\n  x:\n    uses: owner/repo/.github/workflows/ci.yml@old\n",
+        "jobs:\n  x:\n    uses: owner/repo/.github/workflows/ci.yml@new\n",
+        ".github/workflows/ci.yml",
+    )[0] is True
+    assert validate_workflow_ref_only_text(
+        "jobs:\n  x:\n    uses: owner/repo/.github/workflows/ci.yml@old\n",
+        "jobs:\n  x:\n    run: echo nope\n",
+        ".github/workflows/ci.yml",
+    )[0] is False
     previous_app_env = {
         key: os.environ.get(key)
         for key in ["ENT_DEPENDABOT_APP_ID", "ENT_DEPENDABOT_APP_PRIVATE_KEY"]
@@ -1462,7 +1803,7 @@ merglbot-core/agents-orchestrator
                 os.environ[key] = value
     assert report["remaining_dependabot_prs"] == 1
     assert "MERGLBOT" not in close_comment(
-        PullRequest("o/r", 1, "x", "u", "dependabot[bot]", "a" * 40, "main", "dependabot/x", False, "CLEAN", utc_now()),
+        PullRequest("o/r", 1, "x", "u", "dependabot[bot]", "a" * 40, "b" * 40, "main", "dependabot/x", False, "CLEAN", utc_now()),
         "AUTO_CLOSE_EMPTY_DIFF",
         ["empty diff"],
         "https://github.com/o/r/actions/runs/1",
@@ -1488,6 +1829,7 @@ def main() -> int:
     parser.add_argument("--pr-allowlist", default="")
     parser.add_argument("--approval-note", default="")
     parser.add_argument("--approval-issue-url", default="")
+    parser.add_argument("--validator-profile", choices=sorted(VALIDATOR_PROFILES), default=DEFAULT_VALIDATOR_PROFILE)
     parser.add_argument("--workflow-url", default=os.environ.get("GITHUB_SERVER_URL", "") + "/" + os.environ.get("GITHUB_REPOSITORY", "") + "/actions/runs/" + os.environ.get("GITHUB_RUN_ID", ""))
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
@@ -1538,6 +1880,7 @@ def main() -> int:
                         allow_policy_alignment=args.allow_policy_alignment,
                         workflow_url=args.workflow_url,
                         pr_allowlist=pr_allowlist,
+                        validator_profile=args.validator_profile,
                     )
                 )
         report = build_report(
@@ -1548,6 +1891,7 @@ def main() -> int:
             approval_note=args.approval_note,
             approval_issue_url=args.approval_issue_url,
             workflow_url=args.workflow_url,
+            validator_profile=args.validator_profile,
         )
         if args.slack_notify:
             report["slack_delivery"] = post_slack_report(os.environ.get("SLACK_DEPENDABOT_WEBHOOK_URL", ""), report)
@@ -1566,6 +1910,7 @@ def main() -> int:
             "ok": False,
             "final_verdict": "ENT_DEPENDABOT_WEEKLY_CLOSEOUT_BLOCKED",
             "mode": args.mode,
+            "validator_profile": args.validator_profile,
             "workflow_url": args.workflow_url,
             "generated_at": utc_now(),
             "error": str(exc),

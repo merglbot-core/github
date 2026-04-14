@@ -30,12 +30,16 @@ Platform policy authority remains in `merglbot-public/docs`:
 - `dry-run` scans and classifies Dependabot PRs without GitHub writes.
 - `apply` may close irrelevant Dependabot PRs, align bounded branch protection,
   and squash-merge PRs that satisfy every current-head gate.
-- Default merge eligibility is limited to lockfiles and simple dependency-only
-  metadata files. Mixed-purpose manifests such as `package.json`,
-  `pyproject.toml`, `pom.xml`, `build.gradle(.kts)`, `go.mod`, or `global.json`
-  are blocked until a content-aware validator proves dependency-only hunks.
-  Dependabot PRs touching `.github/workflows/**`, reusable workflow wiring,
-  Dockerfiles, Terraform, deploy config, auth/IAM, secrets, runtime bootstrap,
+- Default merge eligibility uses `validator_profile=maximum_autonomy_v2`.
+  Lockfile-only updates remain merge-eligible. `package.json` is merge-eligible
+  only when the validator proves that the diff changes dependency version ranges
+  under `dependencies`, `devDependencies`, `optionalDependencies`, or
+  `peerDependencies` and a sibling lockfile changed in the same PR.
+- `.github/workflows/**` remains sensitive by default, but Dependabot PRs that
+  only bump `uses:` refs to the same action/reusable workflow target can be
+  treated as `VALIDATED_WORKFLOW_REF_ONLY`. Trigger, permission, env, shell,
+  secret, deploy, matrix, conditional, or job topology changes remain blocked.
+- Terraform, Dockerfiles, deploy config, auth/IAM, secrets, runtime bootstrap,
   or data/schema promotion surfaces are blocked for human checkpoint unless a
   narrower canonical allowlist covers that exact file class.
 - Stale age alone is never a close reason.
@@ -115,12 +119,15 @@ It includes
 is posted to the default tracking issue `merglbot-public/docs#636`. Reusable
 `workflow_call` callers keep the same default fallback when `tracking_issue` is
 omitted, and can still override routing with an explicit `tracking_issue` value.
+Reusable callers may pass `validator_profile`; manual dispatch uses the default
+`maximum_autonomy_v2` profile to stay within GitHub's 10-input limit.
 
 ## Merge Gate
 
 Every merged Dependabot PR must prove:
 
-- the changed files are manifest/lockfile-only dependency metadata,
+- the changed files are lockfile-only, `VALIDATED_MANIFEST_DEP_ONLY`, or
+  `VALIDATED_WORKFLOW_REF_ONLY`,
 - required checks are green on the live head,
 - the latest Merglbot PR Assistant receipt is current-head and
   `approved_for_closeout`; if the receipt was missing or stale, the closeout
@@ -149,7 +156,10 @@ Each run writes:
 
 Per-PR receipts include the Merglbot dispatch method/ref/head SHA when a review
 dispatch was needed, and include update-branch API evidence when a PR started
-behind its base branch.
+behind its base branch. v2 receipts also include `validated_scope_class`,
+`scope_validator_evidence`, `would_dispatch_merglbot_review`,
+`would_update_branch`, `superseded_by`, and `close_reopen_condition` when
+applicable.
 
 The weekly caller posts the human summary and machine receipt to the cleanup
 steady-state tracking issue.
