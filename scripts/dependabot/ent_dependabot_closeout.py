@@ -26,6 +26,7 @@ from urllib.request import Request, urlopen
 
 
 DEPENDABOT_LOGINS = {"dependabot[bot]", "app/dependabot"}
+MERGLBOT_REVIEW_WORKFLOW_NAME = "Merglbot PR Assistant v3 (On-Demand Multi-Model)"
 OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 REPOSITORY_RE = re.compile(r"\[`([^`]+/[^`]+)`\]\(https://github.com/[^)]+\).*\|\s*Active\s*\|")
 MERGLBOT_REVIEW_WAIT_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REVIEW_WAIT_SECONDS", "1500"))
@@ -244,6 +245,23 @@ def gh_api_json(endpoint: str, *extra: str) -> Any:
     return gh_json(["api", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28", endpoint, *extra])
 
 
+def gh_api_json_with_input(endpoint: str, payload: dict[str, Any], *extra: str, method: str = "POST", check: bool = True) -> tuple[int, Any, str]:
+    proc = run_cmd(
+        ["gh", "api", "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28", endpoint, "-X", method, "--input", "-", *extra],
+        check=False,
+        input_text=json.dumps(payload),
+    )
+    if check and proc.returncode != 0:
+        raise GhError(proc.stderr.strip() or proc.stdout.strip() or f"gh api {endpoint} failed")
+    parsed: Any = None
+    if proc.stdout.strip():
+        try:
+            parsed = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            parsed = proc.stdout.strip()
+    return proc.returncode, parsed, proc.stderr.strip()
+
+
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -332,6 +350,8 @@ class ItemReceipt:
     comment_url: str | None = None
     cursor_status: str | None = None
     merglbot_receipt: dict[str, Any] | None = None
+    merglbot_dispatch: dict[str, Any] | None = None
+    update_branch: dict[str, Any] | None = None
     post_merge: dict[str, Any] | None = None
 
 
@@ -630,26 +650,101 @@ def verify_merglbot(repo: str, number: int) -> dict[str, Any]:
     return payload
 
 
-def trigger_merglbot_review(repo: str, number: int) -> str:
-    proc = run_cmd(["gh", "pr", "comment", str(number), "--repo", repo, "--body", "@merglbot review --light"])
-    return proc.stdout.strip()
+def merglbot_dispatch_inputs(number: int, head_sha: str) -> dict[str, str]:
+    return {
+        "pr_number": str(number),
+        "review_mode": "light",
+        "include_retro": "false",
+        "diff_scope": "auto",
+        "expected_head_sha": head_sha,
+    }
 
 
-def wait_for_merglbot(repo: str, number: int, *, apply: bool) -> dict[str, Any]:
+def find_merglbot_review_workflow(repo: str) -> dict[str, Any]:
+    workflows = gh_api_json(repo_endpoint(repo, "actions/workflows?per_page=100"))
+    for workflow in workflows.get("workflows", []):
+        if workflow.get("name") == MERGLBOT_REVIEW_WORKFLOW_NAME and workflow.get("state") == "active":
+            return workflow
+    for workflow in workflows.get("workflows", []):
+        if workflow.get("name") == MERGLBOT_REVIEW_WORKFLOW_NAME:
+            return workflow
+    raise GhError(f"merglbot_review_workflow_missing:{MERGLBOT_REVIEW_WORKFLOW_NAME}")
+
+
+def latest_merglbot_dispatch_run(repo: str, workflow_id: int | str, head_ref: str, head_sha: str) -> dict[str, Any] | None:
+    encoded_ref = quote(head_ref, safe="")
+    runs = gh_api_json(repo_endpoint(repo, f"actions/workflows/{workflow_id}/runs?event=workflow_dispatch&branch={encoded_ref}&per_page=10"))
+    for run in runs.get("workflow_runs", []):
+        if run.get("head_sha") == head_sha:
+            return {
+                "id": run.get("id"),
+                "status": run.get("status"),
+                "conclusion": run.get("conclusion"),
+                "html_url": run.get("html_url"),
+                "head_sha": run.get("head_sha"),
+                "head_branch": run.get("head_branch"),
+            }
+    return None
+
+
+def trigger_merglbot_review(repo: str, number: int, head_ref: str, head_sha: str) -> dict[str, Any]:
+    workflow = find_merglbot_review_workflow(repo)
+    workflow_id = workflow.get("id") or workflow.get("path")
+    if not workflow_id:
+        raise GhError("merglbot_review_workflow_id_missing")
+    payload = {
+        "ref": head_ref,
+        "inputs": merglbot_dispatch_inputs(number, head_sha),
+    }
+    endpoint = repo_endpoint(repo, f"actions/workflows/{workflow_id}/dispatches")
+    gh_api_json_with_input(endpoint, payload, method="POST")
+    run: dict[str, Any] | None = None
+    deadline = time.time() + min(MERGLBOT_REVIEW_POLL_SECONDS * 2, 120)
+    while time.time() <= deadline:
+        time.sleep(5)
+        run = latest_merglbot_dispatch_run(repo, workflow_id, head_ref, head_sha)
+        if run:
+            break
+    return {
+        "method": "workflow_dispatch",
+        "workflow_name": workflow.get("name"),
+        "workflow_id": workflow_id,
+        "workflow_path": workflow.get("path"),
+        "ref": head_ref,
+        "head_sha": head_sha,
+        "run_url": None if not run else run.get("html_url"),
+        "run_id": None if not run else run.get("id"),
+    }
+
+
+def wait_for_merglbot(repo: str, number: int, head_ref: str, head_sha: str, *, apply: bool) -> dict[str, Any]:
     first = verify_merglbot(repo, number)
     if first.get("ok"):
         return first
     if not apply:
         return first
-    trigger_merglbot_review(repo, number)
+    try:
+        dispatch = trigger_merglbot_review(repo, number, head_ref, head_sha)
+    except GhError as exc:
+        return {
+            "ok": False,
+            "blockers": [f"merglbot_workflow_dispatch_failed:{str(exc)}"],
+            "dispatch": {
+                "method": "workflow_dispatch",
+                "ref": head_ref,
+                "head_sha": head_sha,
+            },
+        }
     deadline = time.time() + MERGLBOT_REVIEW_WAIT_SECONDS
     latest = first
     while time.time() <= deadline:
         time.sleep(min(MERGLBOT_REVIEW_POLL_SECONDS, max(0, deadline - time.time())))
         latest = verify_merglbot(repo, number)
+        latest["dispatch"] = dispatch
         if latest.get("ok"):
             return latest
     latest.setdefault("blockers", []).append("merglbot_review_poll_timeout")
+    latest["dispatch"] = dispatch
     return latest
 
 
@@ -668,17 +763,48 @@ def close_pr(repo: str, number: int, body: str) -> str:
     return comment_url
 
 
-def request_dependabot_rebase(repo: str, number: int, *, apply: bool) -> None:
+def request_update_branch(repo: str, number: int, expected_head_sha: str, *, apply: bool) -> dict[str, Any]:
     if not apply:
-        return
-    post_comment_with_stdin(repo, number, "@dependabot rebase")
+        return {
+            "ok": False,
+            "method": "update_branch_api",
+            "blockers": ["update_branch_required"],
+            "initial_head_sha": expected_head_sha,
+            "dry_run": True,
+        }
+    endpoint = repo_endpoint(repo, f"pulls/{number}/update-branch")
+    code, payload, stderr = gh_api_json_with_input(endpoint, {"expected_head_sha": expected_head_sha}, method="PUT", check=False)
+    if code != 0:
+        return {
+            "ok": False,
+            "method": "update_branch_api",
+            "blockers": [stderr or "update_branch_api_failed"],
+            "initial_head_sha": expected_head_sha,
+        }
     deadline = time.time() + REBASE_WAIT_SECONDS
-    initial = refresh_pr(repo, number).head_sha
+    latest = refresh_pr(repo, number)
     while time.time() <= deadline:
         time.sleep(min(REBASE_POLL_SECONDS, max(0, deadline - time.time())))
         current = refresh_pr(repo, number).head_sha
-        if current != initial:
-            return
+        latest = refresh_pr(repo, number)
+        if current != expected_head_sha or latest.merge_state != "BEHIND":
+            return {
+                "ok": True,
+                "method": "update_branch_api",
+                "initial_head_sha": expected_head_sha,
+                "final_head_sha": latest.head_sha,
+                "final_merge_state": latest.merge_state,
+                "response": payload,
+            }
+    return {
+        "ok": False,
+        "method": "update_branch_api",
+        "blockers": ["update_branch_poll_timeout"],
+        "initial_head_sha": expected_head_sha,
+        "final_head_sha": latest.head_sha,
+        "final_merge_state": latest.merge_state,
+        "response": payload,
+    }
 
 
 def default_branch(repo: str) -> str:
@@ -814,20 +940,26 @@ def process_pr(
         return receipt
 
     if refreshed.merge_state == "BEHIND":
-        receipt.evidence.append("PR was behind base after scope validation; requested Dependabot rebase")
-        request_dependabot_rebase(pr.repo, pr.number, apply=apply)
-        rebased = refresh_pr(pr.repo, pr.number)
-        if rebased.head_sha != refreshed.head_sha:
-            scope_ok, refreshed = validate_file_scope_for_current_head(rebased, receipt)
-            if receipt.classification == "AUTO_CLOSE_EMPTY_DIFF":
-                if apply:
-                    receipt.action = "closed"
-                    receipt.comment_url = close_pr(pr.repo, pr.number, close_comment(rebased, receipt.classification, receipt.evidence, workflow_url))
-                return receipt
-            if not scope_ok:
-                return receipt
-        else:
-            refreshed = rebased
+        receipt.evidence.append("PR was behind base after scope validation; requested update-branch API")
+        update_branch = request_update_branch(pr.repo, pr.number, refreshed.head_sha, apply=apply)
+        receipt.update_branch = update_branch
+        if not update_branch.get("ok"):
+            receipt.classification = "BLOCKED_UPDATE_BRANCH"
+            receipt.blockers.extend([f"update_branch:{blocker}" for blocker in update_branch.get("blockers", [])])
+            return receipt
+        refreshed = refresh_pr(pr.repo, pr.number)
+        scope_ok, refreshed = validate_file_scope_for_current_head(refreshed, receipt)
+        if receipt.classification == "AUTO_CLOSE_EMPTY_DIFF":
+            if apply:
+                receipt.action = "closed"
+                receipt.comment_url = close_pr(pr.repo, pr.number, close_comment(refreshed, receipt.classification, receipt.evidence, workflow_url))
+            return receipt
+        if not scope_ok:
+            return receipt
+        if refreshed.merge_state == "BEHIND":
+            receipt.classification = "BLOCKED_UPDATE_BRANCH"
+            receipt.blockers.append("update_branch:still_behind_after_update")
+            return receipt
 
     checks_ok, checks, check_blockers = required_checks(pr.repo, pr.number)
     if not checks_ok:
@@ -835,8 +967,9 @@ def process_pr(
         receipt.evidence.append(f"required_checks={len(checks)}")
         return receipt
 
-    merglbot = wait_for_merglbot(pr.repo, pr.number, apply=apply)
+    merglbot = wait_for_merglbot(pr.repo, pr.number, refreshed.head_ref, refreshed.head_sha, apply=apply)
     receipt.merglbot_receipt = merglbot
+    receipt.merglbot_dispatch = merglbot.get("dispatch")
     if not merglbot.get("ok"):
         receipt.blockers.extend([f"merglbot:{blocker}" for blocker in merglbot.get("blockers", [])])
         return receipt
@@ -1253,6 +1386,14 @@ merglbot-core/agents-orchestrator
         ("merglbot-core/github", 1),
         ("merglbot-public/docs", 2),
     }
+    assert merglbot_dispatch_inputs(7, "a" * 40) == {
+        "pr_number": "7",
+        "review_mode": "light",
+        "include_retro": "false",
+        "diff_scope": "auto",
+        "expected_head_sha": "a" * 40,
+    }
+    assert request_update_branch("merglbot-core/github", 1, "b" * 40, apply=False)["blockers"] == ["update_branch_required"]
     previous_app_env = {
         key: os.environ.get(key)
         for key in ["ENT_DEPENDABOT_APP_ID", "ENT_DEPENDABOT_APP_PRIVATE_KEY"]
