@@ -248,7 +248,11 @@ jobs:
           EOF
           )
           
-          echo "provenance=$PROVENANCE" >> $GITHUB_OUTPUT
+          {
+            echo "provenance<<PROVENANCE_EOF"
+            echo "$PROVENANCE"
+            echo "PROVENANCE_EOF"
+          } >> "$GITHUB_OUTPUT"
           echo "$PROVENANCE" > provenance.json
 
       - name: Upload SLSA Provenance
