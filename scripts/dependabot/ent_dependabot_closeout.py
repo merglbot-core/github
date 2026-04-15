@@ -40,6 +40,12 @@ TRACKING_RECEIPT_ITEM_LIMIT = 10
 TRACKING_RECEIPT_TEXT_LIMIT = 240
 APP_TOKEN_CACHE: dict[str, tuple[str, datetime]] = {}
 REPO_LOCAL_SCOPE_FILE = Path(__file__).with_name("ent_repository_scope.txt")
+CURRENT_REPO_ENV = "ENT_DEPENDABOT_CURRENT_REPO"
+BAD_CREDENTIAL_MARKERS = (
+    "HTTP 401",
+    "Bad credentials",
+    "Requires authentication",
+)
 MERGE_READY_STATES = {"CLEAN", "HAS_HOOKS"}
 MERGE_REVIEW_GATE_STATE = "REVIEW_REQUIRED"
 TERMINAL_MERGLBOT_REVIEW_BLOCKERS = {"review_not_approved_for_closeout"}
@@ -228,14 +234,38 @@ def installation_token_for_owner(owner: str) -> str:
     return token
 
 
+def bad_credentials_seen(text: str) -> bool:
+    return any(marker in text for marker in BAD_CREDENTIAL_MARKERS)
+
+
+def invalidate_app_token_for_owner(owner: str) -> None:
+    APP_TOKEN_CACHE.pop(owner, None)
+
+
+def refresh_current_repo_token() -> bool:
+    repo = os.environ.get(CURRENT_REPO_ENV, "")
+    if not repo or "/" not in repo or not github_app_auth_configured():
+        return False
+    owner = repo.split("/", 1)[0]
+    invalidate_app_token_for_owner(owner)
+    os.environ["GH_TOKEN"] = installation_token_for_owner(owner)
+    return True
+
+
 @contextmanager
 def gh_token_for_repo(repo: str):
     previous = os.environ.get("GH_TOKEN")
+    previous_repo = os.environ.get(CURRENT_REPO_ENV)
     if github_app_auth_configured():
         os.environ["GH_TOKEN"] = installation_token_for_owner(repo.split("/", 1)[0])
+    os.environ[CURRENT_REPO_ENV] = repo
     try:
         yield
     finally:
+        if previous_repo is None:
+            os.environ.pop(CURRENT_REPO_ENV, None)
+        else:
+            os.environ[CURRENT_REPO_ENV] = previous_repo
         if previous is None:
             os.environ.pop("GH_TOKEN", None)
         else:
@@ -251,6 +281,15 @@ def run_cmd(args: list[str], *, check: bool = True, input_text: str | None = Non
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+    if proc.returncode != 0 and bad_credentials_seen(f"{proc.stderr}\n{proc.stdout}") and refresh_current_repo_token():
+        proc = subprocess.run(
+            args,
+            check=False,
+            text=True,
+            input=input_text,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
     if check and proc.returncode != 0:
         raise GhError(proc.stderr.strip() or proc.stdout.strip() or f"{' '.join(args)} failed")
     return proc
@@ -383,6 +422,7 @@ class ItemReceipt:
     would_update_branch: bool = False
     superseded_by: str | None = None
     close_reopen_condition: str | None = None
+    required_check_diagnostics: list[dict[str, Any]] = field(default_factory=list)
 
 
 def reject_if_head_changed(receipt: ItemReceipt, refreshed: PullRequest, blocker: str) -> bool:
@@ -562,6 +602,156 @@ def validate_apply_approval(mode: str, pr_allowlist: set[tuple[str, int]], appro
 def pr_files(repo: str, number: int) -> list[str]:
     proc = run_cmd(["gh", "pr", "diff", str(number), "--repo", repo, "--name-only"])
     return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
+@dataclass(frozen=True)
+class DependabotUpdate:
+    dependency: str
+    from_version: str
+    to_version: str
+    path_hint: str = ""
+
+
+def normalize_dependency_name(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def normalize_path_hint(value: str) -> str:
+    cleaned = value.strip().strip(".")
+    cleaned = re.sub(r"^(?:the\s+)?", "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip("/")
+    return cleaned.lower()
+
+
+def parse_dependabot_update_title(title: str) -> DependabotUpdate | None:
+    match = re.search(r"^Bump\s+(.+?)\s+from\s+([^\s]+)\s+to\s+([^\s]+)(?:\s+in\s+(.+))?$", title.strip(), re.IGNORECASE)
+    if not match:
+        return None
+    return DependabotUpdate(
+        dependency=normalize_dependency_name(match.group(1)),
+        from_version=match.group(2).strip(),
+        to_version=match.group(3).strip().rstrip(","),
+        path_hint=normalize_path_hint(match.group(4) or ""),
+    )
+
+
+def comparable_version_parts(version: str) -> tuple[int, ...] | None:
+    cleaned = version.strip().lstrip("vV")
+    numbers = re.findall(r"\d+", cleaned)
+    if not numbers:
+        return None
+    return tuple(int(part) for part in numbers[:8])
+
+
+def compare_versions(left: str, right: str) -> int | None:
+    left_parts = comparable_version_parts(left)
+    right_parts = comparable_version_parts(right)
+    if left_parts is None or right_parts is None:
+        return None
+    max_len = max(len(left_parts), len(right_parts))
+    padded_left = left_parts + (0,) * (max_len - len(left_parts))
+    padded_right = right_parts + (0,) * (max_len - len(right_parts))
+    return (padded_left > padded_right) - (padded_left < padded_right)
+
+
+def is_exact_stable_version_for_autoclose(version: str) -> bool:
+    return re.fullmatch(r"v?\d+(?:\.\d+){0,4}", version.strip()) is not None
+
+
+def package_json_dependency_version(payload: dict[str, Any], dependency: str) -> str | None:
+    dependency_key = normalize_dependency_name(dependency)
+    for section_name in PACKAGE_JSON_DEPENDENCY_KEYS:
+        section = payload.get(section_name) or {}
+        if not isinstance(section, dict):
+            continue
+        for name, version in section.items():
+            if normalize_dependency_name(str(name)) == dependency_key:
+                return str(version)
+    return None
+
+
+def same_dependabot_update_family(left: DependabotUpdate, right: DependabotUpdate) -> bool:
+    if left.dependency != right.dependency:
+        return False
+    return bool(left.path_hint and right.path_hint and left.path_hint == right.path_hint)
+
+
+def classify_close_candidate(
+    pr: PullRequest,
+    files: list[str],
+    sibling_prs: list[PullRequest],
+) -> tuple[str, list[str], str | None, str | None] | None:
+    update = parse_dependabot_update_title(pr.title)
+    if not files:
+        return (
+            "AUTO_CLOSE_EMPTY_DIFF",
+            ["current PR diff has no changed files"],
+            None,
+            f"Reopen or create a new Dependabot PR if the dependency update is still needed on the current `{pr.base_ref}` branch.",
+        )
+    if not update:
+        return None
+
+    for sibling in sibling_prs:
+        if sibling.number == pr.number:
+            continue
+        sibling_update = parse_dependabot_update_title(sibling.title)
+        if not sibling_update or not same_dependabot_update_family(update, sibling_update):
+            continue
+        version_cmp = compare_versions(sibling_update.to_version, update.to_version)
+        if version_cmp is not None and version_cmp > 0:
+            return (
+                "AUTO_CLOSE_OLDER_SIBLING",
+                [
+                    f"newer sibling PR exists: {sibling.url}",
+                    f"{update.dependency} target {update.to_version} is older than sibling target {sibling_update.to_version}",
+                ],
+                sibling.url,
+                f"Reopen only if newer sibling {sibling.url} is invalid and `{update.dependency}` still needs `{update.to_version}` specifically.",
+            )
+
+    package_manifests = [path for path in files if is_npm_manifest(path)]
+    for path in package_manifests:
+        manifest = parse_json_file(pr.repo, path, pr.base_sha)
+        if manifest is None:
+            return (
+                "AUTO_CLOSE_DEPENDENCY_ABSENT",
+                [f"{path} does not exist on base `{pr.base_ref}`"],
+                None,
+                f"Reopen only if `{path}` is restored and the Dependabot update still applies.",
+            )
+        current_version = package_json_dependency_version(manifest, update.dependency)
+        if current_version is None:
+            return (
+                "AUTO_CLOSE_DEPENDENCY_ABSENT",
+                [f"{update.dependency} is not present in {path} on base `{pr.base_ref}`"],
+                None,
+                f"Reopen only if `{update.dependency}` is reintroduced in `{path}` and still needs this update.",
+            )
+        if not is_exact_stable_version_for_autoclose(current_version) or not is_exact_stable_version_for_autoclose(update.to_version):
+            continue
+        version_cmp = compare_versions(current_version, update.to_version)
+        if version_cmp is not None and version_cmp >= 0:
+            return (
+                "AUTO_CLOSE_SUPERSEDED",
+                [
+                    f"{path} on base `{pr.base_ref}` already has {update.dependency} at {current_version}",
+                    f"PR target version is {update.to_version}",
+                ],
+                None,
+                f"Reopen only if `{path}` no longer contains `{update.dependency}` at `{current_version}` or newer.",
+            )
+
+    for path in [item for item in files if is_workflow_file(item)]:
+        if repo_file_text(pr.repo, path, pr.base_sha) is None:
+            return (
+                "AUTO_CLOSE_REPO_OR_PATH_DEPRECATED",
+                [f"{path} no longer exists on base `{pr.base_ref}`"],
+                None,
+                f"Reopen only if `{path}` is restored and still needs the Dependabot workflow ref update.",
+            )
+
+    return None
 
 
 def repo_file_text(repo: str, path: str, ref: str) -> str | None:
@@ -842,7 +1032,49 @@ def refresh_pr(repo: str, number: int) -> PullRequest:
     )
 
 
-def required_checks(repo: str, number: int) -> tuple[bool, list[dict[str, Any]], list[str]]:
+def classify_required_check_blocker(check: dict[str, Any]) -> dict[str, Any]:
+    name = str(check.get("name") or "unknown")
+    bucket = str(check.get("bucket") or check.get("state") or "unknown").lower()
+    state = str(check.get("state") or "").lower()
+    normalized = name.lower()
+    if bucket == "pass":
+        reason = "pass"
+        category = "ok"
+    elif bucket in {"fail", "failure", "cancelled", "timed_out", "action_required"} or state in {"failure", "error", "cancelled", "timed_out"}:
+        reason = f"check_failed_real:{name}:{bucket or state}"
+        category = "check_failed_real"
+    elif bucket in {"pending", "expected", "waiting"}:
+        if "codeql" in normalized or normalized.startswith("analyze "):
+            reason = f"required_check_drift:pending_codeql_or_analysis:{name}"
+            category = "stale_or_pending_analysis_context"
+        elif "gitleaks" in normalized or "secret" in normalized:
+            reason = f"required_check_drift:pending_security_context:{name}"
+            category = "stale_or_pending_security_context"
+        else:
+            reason = f"required_check_drift:pending_never_emits_or_slow:{name}"
+            category = "pending_or_never_emits"
+    elif bucket in {"skipping", "skipped", "neutral"}:
+        if "codeql" in normalized or normalized.startswith("analyze "):
+            reason = f"required_check_drift:skipped_codeql_or_analysis:{name}"
+            category = "skipped_analysis_context"
+        else:
+            reason = f"required_check_drift:skipped_or_neutral:{name}"
+            category = "skipped_or_neutral"
+    else:
+        reason = f"required_check_unknown_state:{name}:{bucket or state}"
+        category = "unknown_required_check_state"
+    return {
+        "name": name,
+        "bucket": bucket,
+        "state": state,
+        "category": category,
+        "reason": reason,
+        "completed_at": check.get("completedAt"),
+        "link": check.get("link"),
+    }
+
+
+def required_checks(repo: str, number: int) -> tuple[bool, list[dict[str, Any]], list[str], list[dict[str, Any]]]:
     proc = run_cmd(
         [
             "gh",
@@ -858,14 +1090,12 @@ def required_checks(repo: str, number: int) -> tuple[bool, list[dict[str, Any]],
         check=False,
     )
     if proc.returncode != 0:
-        return False, [], [proc.stderr.strip() or "required_checks_lookup_failed"]
+        reason = proc.stderr.strip() or "required_checks_lookup_failed"
+        return False, [], [reason], [{"category": "lookup_failed", "reason": reason}]
     checks = json.loads(proc.stdout or "[]")
-    blockers = [
-        f"{check.get('name')}:{check.get('bucket') or check.get('state')}"
-        for check in checks
-        if check.get("bucket") != "pass"
-    ]
-    return len(blockers) == 0, checks, blockers
+    diagnostics = [classify_required_check_blocker(check) for check in checks if check.get("bucket") != "pass"]
+    blockers = [str(item["reason"]) for item in diagnostics]
+    return len(blockers) == 0, checks, blockers, diagnostics
 
 
 def all_checks(repo: str, number: int) -> list[dict[str, Any]]:
@@ -1011,9 +1241,18 @@ def wait_for_merglbot(repo: str, number: int, head_ref: str, head_sha: str, *, a
     try:
         dispatch = trigger_merglbot_review(repo, number, head_ref, head_sha)
     except GhError as exc:
+        message = str(exc)
+        if "merglbot_review_workflow_missing" in message:
+            blocker = "repo_enrollment:merglbot_workflow_dispatch_missing"
+        elif "workflow_dispatch" in message and "trigger" in message:
+            blocker = "repo_enrollment:merglbot_workflow_dispatch_missing"
+        elif "403" in message or "Resource not accessible" in message:
+            blocker = "app_capability:actions_write_missing_or_denied"
+        else:
+            blocker = f"merglbot_workflow_dispatch_failed:{message}"
         return {
             "ok": False,
-            "blockers": [f"merglbot_workflow_dispatch_failed:{str(exc)}"],
+            "blockers": [blocker],
             "dispatch": {
                 "method": "workflow_dispatch",
                 "ref": head_ref,
@@ -1162,20 +1401,26 @@ def merge_pr(repo: str, number: int, head_sha: str) -> dict[str, Any]:
     }
 
 
-def close_comment(pr: PullRequest, classification: str, evidence: list[str], workflow_url: str) -> str:
+def close_comment(pr: PullRequest, classification: str, evidence: list[str], workflow_url: str, reopen_condition: str | None = None) -> str:
     return "\n".join(
         [
             "Dependabot PR closed by ENT weekly autonomous closeout.",
             "",
             f"- Classification: `{classification}`",
             f"- Evidence: {'; '.join(evidence)}",
-            f"- Reopen condition: reopen or create a new Dependabot PR if the dependency update is still needed on the current `{pr.base_ref}` branch.",
+            f"- Reopen condition: {reopen_condition or f'reopen or create a new Dependabot PR if the dependency update is still needed on the current `{pr.base_ref}` branch.'}",
             f"- Workflow run: {workflow_url or 'not available'}",
         ]
     )
 
 
-def validate_file_scope_for_current_head(pr: PullRequest, receipt: ItemReceipt, *, validator_profile: str) -> tuple[bool, PullRequest]:
+def validate_file_scope_for_current_head(
+    pr: PullRequest,
+    receipt: ItemReceipt,
+    *,
+    validator_profile: str,
+    sibling_prs: list[PullRequest],
+) -> tuple[bool, PullRequest]:
     expected = refresh_pr(pr.repo, pr.number)
     receipt.head_sha = expected.head_sha
     files = pr_files(pr.repo, pr.number)
@@ -1185,10 +1430,14 @@ def validate_file_scope_for_current_head(pr: PullRequest, receipt: ItemReceipt, 
         receipt.head_sha = after_scope.head_sha
         return False, after_scope
 
-    if not files:
+    close_candidate = classify_close_candidate(pr, files, sibling_prs)
+    if close_candidate:
+        classification, evidence, successor_url, reopen_condition = close_candidate
         receipt.action = "would_close"
-        receipt.classification = "AUTO_CLOSE_EMPTY_DIFF"
-        receipt.evidence.append("current PR diff has no changed files")
+        receipt.classification = classification
+        receipt.evidence.extend(evidence)
+        receipt.superseded_by = successor_url
+        receipt.close_reopen_condition = reopen_condition
         return False, after_scope
 
     scope_ok, scope_blockers, dependency_files, scope_class, scope_evidence = validate_change_scope(
@@ -1218,6 +1467,7 @@ def process_pr(
     allow_policy_alignment: bool,
     workflow_url: str,
     validator_profile: str,
+    sibling_prs: list[PullRequest],
 ) -> ItemReceipt:
     apply = mode == "apply"
     receipt = ItemReceipt(repo=pr.repo, pr_number=pr.number, url=pr.url, action="blocked", classification="BLOCKED", head_sha=pr.head_sha)
@@ -1227,11 +1477,15 @@ def process_pr(
     if pr.is_draft:
         receipt.blockers.append("draft_pr")
         return receipt
-    scope_ok, refreshed = validate_file_scope_for_current_head(pr, receipt, validator_profile=validator_profile)
-    if receipt.classification == "AUTO_CLOSE_EMPTY_DIFF":
+    scope_ok, refreshed = validate_file_scope_for_current_head(pr, receipt, validator_profile=validator_profile, sibling_prs=sibling_prs)
+    if receipt.action == "would_close":
         if apply:
             receipt.action = "closed"
-            receipt.comment_url = close_pr(pr.repo, pr.number, close_comment(pr, receipt.classification, receipt.evidence, workflow_url))
+            receipt.comment_url = close_pr(
+                pr.repo,
+                pr.number,
+                close_comment(pr, receipt.classification, receipt.evidence, workflow_url, receipt.close_reopen_condition),
+            )
         return receipt
     if not scope_ok:
         return receipt
@@ -1252,11 +1506,20 @@ def process_pr(
             receipt.blockers.extend([f"update_branch:{blocker}" for blocker in update_branch.get("blockers", [])])
             return receipt
         refreshed = refresh_pr(pr.repo, pr.number)
-        scope_ok, refreshed = validate_file_scope_for_current_head(refreshed, receipt, validator_profile=validator_profile)
-        if receipt.classification == "AUTO_CLOSE_EMPTY_DIFF":
+        scope_ok, refreshed = validate_file_scope_for_current_head(
+            refreshed,
+            receipt,
+            validator_profile=validator_profile,
+            sibling_prs=sibling_prs,
+        )
+        if receipt.action == "would_close":
             if apply:
                 receipt.action = "closed"
-                receipt.comment_url = close_pr(pr.repo, pr.number, close_comment(refreshed, receipt.classification, receipt.evidence, workflow_url))
+                receipt.comment_url = close_pr(
+                    pr.repo,
+                    pr.number,
+                    close_comment(refreshed, receipt.classification, receipt.evidence, workflow_url, receipt.close_reopen_condition),
+                )
             return receipt
         if not scope_ok:
             return receipt
@@ -1265,7 +1528,8 @@ def process_pr(
             receipt.blockers.append("update_branch:still_behind_after_update")
             return receipt
 
-    checks_ok, checks, check_blockers = required_checks(pr.repo, pr.number)
+    checks_ok, checks, check_blockers, check_diagnostics = required_checks(pr.repo, pr.number)
+    receipt.required_check_diagnostics.extend(check_diagnostics)
     if not checks_ok:
         receipt.blockers.extend([f"required_check:{blocker}" for blocker in check_blockers])
         receipt.evidence.append(f"required_checks={len(checks)}")
@@ -1276,11 +1540,20 @@ def process_pr(
     receipt.merglbot_dispatch = merglbot.get("dispatch")
     if not merglbot.get("ok"):
         if not apply:
+            if is_current_head_merglbot_terminal_blocker(merglbot, refreshed.head_sha):
+                receipt.classification = "BLOCKED_MERGLBOT_CHANGES_REQUIRED"
+                receipt.evidence.append("Merglbot current-head review is terminal and not approved for closeout")
+                receipt.blockers.extend([f"merglbot:{blocker}" for blocker in merglbot.get("blockers", [])])
+                return receipt
             receipt.action = "would_dispatch_review"
             receipt.classification = "WOULD_DISPATCH_MERGLBOT_REVIEW"
             receipt.would_dispatch_merglbot_review = True
             receipt.evidence.append("Merglbot receipt is missing or stale; apply would dispatch a head-bound workflow review and revalidate")
             return receipt
+        verdict = str(merglbot.get("verdict") or "").lower()
+        if verdict in {"changes_required", "blocked", "needs_work"} or "review_not_approved_for_closeout" in [str(item) for item in merglbot.get("blockers", [])]:
+            receipt.classification = "BLOCKED_MERGLBOT_CHANGES_REQUIRED"
+            receipt.evidence.append("Merglbot current-head review returned changes_required or non-approved closeout verdict")
         receipt.blockers.extend([f"merglbot:{blocker}" for blocker in merglbot.get("blockers", [])])
         return receipt
 
@@ -1433,6 +1706,7 @@ def process_repo(
                     allow_policy_alignment=allow_policy_alignment,
                     workflow_url=workflow_url,
                     validator_profile=validator_profile,
+                    sibling_prs=prs,
                 )
             except GhError as exc:
                 receipt = ItemReceipt(
@@ -1901,6 +2175,71 @@ merglbot-core/agents-orchestrator
         "a" * 40,
     ) is False
     assert request_update_branch("merglbot-core/github", 1, "b" * 40, apply=False)["blockers"] == ["update_branch_required"]
+    assert bad_credentials_seen("GraphQL: Bad credentials") is True
+    APP_TOKEN_CACHE["example"] = ("token", datetime.now(timezone.utc) + timedelta(hours=1))
+    invalidate_app_token_for_owner("example")
+    assert "example" not in APP_TOKEN_CACHE
+    assert parse_dependabot_update_title("Bump lodash from 4.17.20 to 4.17.21 in /apps/web") == DependabotUpdate(
+        dependency="lodash",
+        from_version="4.17.20",
+        to_version="4.17.21",
+        path_hint="apps/web",
+    )
+    assert compare_versions("^4.17.21", "4.17.20") == 1
+    assert compare_versions("v1.2.0", "1.2") == 0
+    assert is_exact_stable_version_for_autoclose("4.17.21") is True
+    assert is_exact_stable_version_for_autoclose("^4.17.21") is False
+    assert is_exact_stable_version_for_autoclose("4.17.21-beta.1") is False
+    assert package_json_dependency_version({"dependencies": {"Lodash": "^4.17.21"}}, "lodash") == "^4.17.21"
+    older = PullRequest(
+        "o/r",
+        1,
+        "Bump lodash from 4.17.19 to 4.17.20 in /apps/web",
+        "https://github.com/o/r/pull/1",
+        "dependabot[bot]",
+        "a" * 40,
+        "b" * 40,
+        "main",
+        "dependabot/npm_and_yarn/apps/web/lodash-4.17.20",
+        False,
+        "CLEAN",
+        utc_now(),
+    )
+    newer = PullRequest(
+        "o/r",
+        2,
+        "Bump lodash from 4.17.20 to 4.17.21 in /apps/web",
+        "https://github.com/o/r/pull/2",
+        "dependabot[bot]",
+        "c" * 40,
+        "b" * 40,
+        "main",
+        "dependabot/npm_and_yarn/apps/web/lodash-4.17.21",
+        False,
+        "CLEAN",
+        utc_now(),
+    )
+    close_candidate = classify_close_candidate(older, ["apps/web/package-lock.json"], [older, newer])
+    assert close_candidate is not None
+    assert close_candidate[0] == "AUTO_CLOSE_OLDER_SIBLING"
+    no_path_older = PullRequest(
+        "o/r",
+        3,
+        "Bump lodash from 4.17.19 to 4.17.20",
+        "https://github.com/o/r/pull/3",
+        "dependabot[bot]",
+        "d" * 40,
+        "b" * 40,
+        "main",
+        "dependabot/npm_and_yarn/lodash-4.17.20",
+        False,
+        "CLEAN",
+        utc_now(),
+    )
+    assert classify_close_candidate(no_path_older, ["package-lock.json"], [no_path_older, newer]) is None
+    assert classify_required_check_blocker({"name": "Analyze (actions)", "bucket": "pending"})["category"] == "stale_or_pending_analysis_context"
+    assert classify_required_check_blocker({"name": "ci", "bucket": "fail"})["category"] == "check_failed_real"
+    assert classify_required_check_blocker({"name": "codeql / Analyze (javascript)", "bucket": "skipping"})["category"] == "skipped_analysis_context"
     assert validate_change_scope(
         "merglbot-core/github",
         1,
