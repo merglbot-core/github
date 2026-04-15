@@ -940,7 +940,7 @@ def is_current_head_merglbot_terminal_blocker(payload: dict[str, Any], head_sha:
     ]
     if verdict in {"approved_for_closeout", "approved"} and status == "success":
         return False
-    return bool(terminal_blockers) or verdict in {"changes_required", "blocked", "needs_work"} or status in {"blocked", "failure"}
+    return bool(terminal_blockers) or verdict in {"changes_required", "blocked", "needs_work"} or status in {"blocked", "failed"}
 
 
 def find_merglbot_review_workflow(repo: str) -> dict[str, Any]:
@@ -1878,6 +1878,17 @@ merglbot-core/agents-orchestrator
         },
         "a" * 40,
     ) is False
+    assert is_current_head_merglbot_terminal_blocker(
+        {
+            "ok": False,
+            "review_head_sha": "a" * 40,
+            "current_head_match": True,
+            "verdict": "",
+            "status": "failed",
+            "blockers": [],
+        },
+        "a" * 40,
+    ) is True
     assert is_current_head_merglbot_terminal_blocker(
         {
             "ok": True,
