@@ -330,6 +330,7 @@ jobs:
               --project=merglbot-artifacts \
               --attestor="$ATTESTOR" \
               --artifact-url="$IMAGE_DIGEST" \
+              --sort-by="~createTime" \
               --format="value(name)" \
               --limit=1)"
             ATTESTATION_ID="$(printf '%s\n' "$ATTESTATION_ID_RAW" | tr -d '\r' | awk 'NF { print; exit }')"
