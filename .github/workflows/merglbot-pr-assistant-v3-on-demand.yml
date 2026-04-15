@@ -1719,15 +1719,26 @@ jobs:
             local field_name="$1"
             awk -v field_name="$field_name" '
               BEGIN { IGNORECASE = 1; in_zaver = 0 }
-              /^##[[:space:]]+Zaver[[:space:]]*$/ { in_zaver = 1; next }
               /^##[[:space:]]+/ {
+                header = $0
+                gsub(/^[#[:space:]]+/, "", header)
+                gsub(/[*_`[:space:]]/, "", header)
+                if (tolower(header) == "zaver" || tolower(header) == "závěr") {
+                  in_zaver = 1
+                  next
+                }
                 if (in_zaver) {
                   exit
                 }
               }
-              in_zaver && tolower($0) ~ ("^" tolower(field_name) ":[[:space:]]*") {
-                print
-                exit
+              in_zaver {
+                line = $0
+                gsub(/^[[:space:]>-]*/, "", line)
+                gsub(/[*_`]/, "", line)
+                if (tolower(line) ~ ("^" tolower(field_name) ":[[:space:]]*")) {
+                  print line
+                  exit
+                }
               }
             ' final_review.txt 2>/dev/null || true
           }
@@ -1740,7 +1751,18 @@ jobs:
               printf '%s\n' "$zaver_line"
               return 0
             fi
-            grep -im1 "^${field_name}:" final_review.txt 2>/dev/null || true
+            awk -v field_name="$field_name" '
+              BEGIN { IGNORECASE = 1 }
+              {
+                line = $0
+                gsub(/^[[:space:]>-]*/, "", line)
+                gsub(/[*_`]/, "", line)
+                if (tolower(line) ~ ("^" tolower(field_name) ":[[:space:]]*")) {
+                  print line
+                  exit
+                }
+              }
+            ' final_review.txt 2>/dev/null || true
           }
 
           normalize_machine_token() {
@@ -2184,7 +2206,22 @@ jobs:
           LOW_COUNT=$(count_section_checkboxes "Low Priority")
           
           VERDICT="UNKNOWN"
-          VERDICT_LINE=$(grep -im1 '^Verdict:' final_review.txt 2>/dev/null || true)
+          extract_review_field_line() {
+            local field_name="$1"
+            awk -v field_name="$field_name" '
+              BEGIN { IGNORECASE = 1 }
+              {
+                line = $0
+                gsub(/^[[:space:]>-]*/, "", line)
+                gsub(/[*_`]/, "", line)
+                if (tolower(line) ~ ("^" tolower(field_name) ":[[:space:]]*")) {
+                  print line
+                  exit
+                }
+              }
+            ' final_review.txt 2>/dev/null || true
+          }
+          VERDICT_LINE=$(extract_review_field_line 'Verdict' || true)
           if [ -n "$VERDICT_LINE" ]; then
             VERDICT_VALUE_RAW=$(printf '%s' "$VERDICT_LINE" | sed -E 's/^Verdict:[[:space:]]*//I')
             VERDICT_VALUE_CLEAN="$(printf '%s' "$VERDICT_VALUE_RAW" | tr -d '\r' | tr '_' ' ' | sed -E 's/[`*]+//g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
