@@ -94,6 +94,12 @@ jobs:
     name: Build, Scan & Push Image
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+      id-token: write
+      security-events: write
     outputs:
       digest: ${{ steps.build.outputs.digest }}
       tag: ${{ steps.meta.outputs.version }}
@@ -246,8 +252,18 @@ jobs:
           }
           EOF
           )
-          
-          echo "provenance=$PROVENANCE" >> $GITHUB_OUTPUT
+
+          PROVENANCE_DELIMITER="PROVENANCE_EOF_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}_$(date +%s%N)"
+          if printf '%s\n' "$PROVENANCE" | grep -Fxq "$PROVENANCE_DELIMITER"; then
+            echo "::error::Generated provenance output delimiter collided with provenance content."
+            exit 1
+          fi
+
+          {
+            printf 'provenance<<%s\n' "$PROVENANCE_DELIMITER"
+            echo "$PROVENANCE"
+            printf '%s\n' "$PROVENANCE_DELIMITER"
+          } >> "$GITHUB_OUTPUT"
           echo "$PROVENANCE" > provenance.json
 
       - name: Upload SLSA Provenance
@@ -295,47 +311,64 @@ jobs:
 
       - name: Create Binary Authorization Attestation
         id: attest
+        shell: bash
         run: |
+          set -euo pipefail
+
           IMAGE_DIGEST="${{ inputs.registry }}/${{ inputs.image_name }}@${{ needs.build.outputs.digest }}"
           ATTESTOR="projects/merglbot-artifacts/attestors/merglbot-build-attestor"
           
           echo "Creating attestation for: $IMAGE_DIGEST"
           
-          # Create attestation using gcloud
-          gcloud container binauthz attestations sign-and-create \
+          # sign-and-create does not reliably surface the occurrence name on stdout,
+          # so only use a scoped list lookup when creation succeeded but stdout is empty.
+          set +e
+          ATTESTATION_ID_RAW="$(gcloud container binauthz attestations sign-and-create \
             --project=merglbot-artifacts \
             --artifact-url="$IMAGE_DIGEST" \
             --attestor="$ATTESTOR" \
-            --keyversion="projects/merglbot-artifacts/locations/europe-west1/keyRings/binary-auth-keyring/cryptoKeys/attestor-signing-key/cryptoKeyVersions/1"
-          
-          # Get attestation ID
-          ATTESTATION_ID=$(gcloud container binauthz attestations list \
-            --project=merglbot-artifacts \
-            --attestor="$ATTESTOR" \
-            --artifact-url="$IMAGE_DIGEST" \
-            --format="value(name)" \
-            --limit=1)
-          
-          echo "attestation_id=$ATTESTATION_ID" >> $GITHUB_OUTPUT
-          
-          echo "## Binary Authorization Attestation" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ **Attestation Created**" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image:** \`$IMAGE_DIGEST\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Attestor:** \`$ATTESTOR\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Attestation ID:** \`$ATTESTATION_ID\`" >> $GITHUB_STEP_SUMMARY
+            --keyversion="projects/merglbot-artifacts/locations/europe-west1/keyRings/binary-auth-keyring/cryptoKeys/attestor-signing-key/cryptoKeyVersions/1" \
+            --format="value(name)")"
+          SIGN_AND_CREATE_STATUS=$?
+          set -e
+          ATTESTATION_ID="$(printf '%s\n' "$ATTESTATION_ID_RAW" | tr -d '\r' | awk 'NF { print; exit }')"
 
-      - name: Verify Attestation
-        run: |
-          IMAGE_DIGEST="${{ inputs.registry }}/${{ inputs.image_name }}@${{ needs.build.outputs.digest }}"
+          NEEDS_ATTESTATION_LIST=0
+          if [ "$SIGN_AND_CREATE_STATUS" -ne 0 ]; then
+            echo "::error::sign-and-create exited with status ${SIGN_AND_CREATE_STATUS}; refusing attestations list fallback after failed creation."
+            exit "$SIGN_AND_CREATE_STATUS"
+          elif [ -z "$ATTESTATION_ID" ]; then
+            echo "sign-and-create returned no attestation name; falling back to attestations list"
+            NEEDS_ATTESTATION_LIST=1
+          fi
+
+          if [ "$NEEDS_ATTESTATION_LIST" -eq 1 ]; then
+            ATTESTATION_ID_RAW="$(gcloud container binauthz attestations list \
+              --project=merglbot-artifacts \
+              --attestor="$ATTESTOR" \
+              --artifact-url="$IMAGE_DIGEST" \
+              --sort-by="~createTime" \
+              --format="value(name)" \
+              --limit=1)"
+            ATTESTATION_ID="$(printf '%s\n' "$ATTESTATION_ID_RAW" | tr -d '\r' | awk 'NF { print; exit }')"
+          fi
+
+          if [ -z "$ATTESTATION_ID" ]; then
+            echo "::error::Binary Authorization attestation ID was empty after sign-and-create and attestations list fallback."
+            exit 1
+          fi
           
-          # Verify the attestation exists
-          gcloud container binauthz attestations list \
-            --project=merglbot-artifacts \
-            --attestor="projects/merglbot-artifacts/attestors/merglbot-build-attestor" \
-            --artifact-url="$IMAGE_DIGEST" \
-            --format="table(name,resourceUri)"
+          echo "attestation_id=$ATTESTATION_ID" >> "$GITHUB_OUTPUT"
+          
+          {
+            echo "## Binary Authorization Attestation"
+            echo ""
+            echo "✅ **Attestation Created**"
+            echo ""
+            echo "- **Image:** \`$IMAGE_DIGEST\`"
+            echo "- **Attestor:** \`$ATTESTOR\`"
+            echo "- **Attestation ID:** \`$ATTESTATION_ID\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   summary:
     name: Build Summary
