@@ -1734,7 +1734,7 @@ jobs:
               in_zaver {
                 line = $0
                 gsub(/^[[:space:]>-]*/, "", line)
-                gsub(/[*_`]/, "", line)
+                gsub(/[*`]/, "", line)
                 if (tolower(line) ~ ("^" tolower(field_name) ":[[:space:]]*")) {
                   print line
                   exit
@@ -1756,7 +1756,7 @@ jobs:
               {
                 line = $0
                 gsub(/^[[:space:]>-]*/, "", line)
-                gsub(/[*_`]/, "", line)
+                gsub(/[*`]/, "", line)
                 if (tolower(line) ~ ("^" tolower(field_name) ":[[:space:]]*")) {
                   print line
                   exit
@@ -2213,7 +2213,7 @@ jobs:
               {
                 line = $0
                 gsub(/^[[:space:]>-]*/, "", line)
-                gsub(/[*_`]/, "", line)
+                gsub(/[*`]/, "", line)
                 if (tolower(line) ~ ("^" tolower(field_name) ":[[:space:]]*")) {
                   print line
                   exit
