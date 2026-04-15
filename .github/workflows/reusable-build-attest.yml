@@ -316,16 +316,27 @@ jobs:
           
           # sign-and-create does not reliably surface the occurrence name on stdout,
           # so fall back to a scoped list lookup before writing workflow outputs.
+          set +e
           ATTESTATION_ID_RAW="$(gcloud container binauthz attestations sign-and-create \
             --project=merglbot-artifacts \
             --artifact-url="$IMAGE_DIGEST" \
             --attestor="$ATTESTOR" \
             --keyversion="projects/merglbot-artifacts/locations/europe-west1/keyRings/binary-auth-keyring/cryptoKeys/attestor-signing-key/cryptoKeyVersions/1" \
             --format="value(name)")"
+          SIGN_AND_CREATE_STATUS=$?
+          set -e
           ATTESTATION_ID="$(printf '%s\n' "$ATTESTATION_ID_RAW" | tr -d '\r' | awk 'NF { print; exit }')"
 
-          if [ -z "$ATTESTATION_ID" ]; then
+          NEEDS_ATTESTATION_LIST=0
+          if [ "$SIGN_AND_CREATE_STATUS" -ne 0 ]; then
+            echo "sign-and-create exited with status ${SIGN_AND_CREATE_STATUS}; falling back to attestations list"
+            NEEDS_ATTESTATION_LIST=1
+          elif [ -z "$ATTESTATION_ID" ]; then
             echo "sign-and-create returned no attestation name; falling back to attestations list"
+            NEEDS_ATTESTATION_LIST=1
+          fi
+
+          if [ "$NEEDS_ATTESTATION_LIST" -eq 1 ]; then
             ATTESTATION_ID_RAW="$(gcloud container binauthz attestations list \
               --project=merglbot-artifacts \
               --attestor="$ATTESTOR" \
