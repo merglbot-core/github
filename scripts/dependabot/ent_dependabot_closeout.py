@@ -921,6 +921,23 @@ def merglbot_dispatch_inputs(number: int, head_sha: str) -> dict[str, str]:
     }
 
 
+def is_current_head_merglbot_terminal_blocker(payload: dict[str, Any], head_sha: str) -> bool:
+    if payload.get("ok"):
+        return False
+    review_head = payload.get("review_head_sha") or payload.get("head_sha")
+    if review_head != head_sha:
+        return False
+    if payload.get("current_head_match") is False:
+        return False
+    verdict = str(payload.get("verdict") or "").strip().lower()
+    status = str(payload.get("status") or "").strip().lower()
+    blockers = payload.get("blockers")
+    has_blockers = isinstance(blockers, list) and len(blockers) > 0
+    if verdict in {"approved_for_closeout", "approved"} and status == "success":
+        return False
+    return has_blockers or verdict in {"changes_required", "blocked", "needs_work"} or status in {"blocked", "failure"}
+
+
 def find_merglbot_review_workflow(repo: str) -> dict[str, Any]:
     workflows = gh_api_json(repo_endpoint(repo, "actions/workflows?per_page=100"))
     for workflow in workflows.get("workflows", []):
@@ -982,6 +999,8 @@ def wait_for_merglbot(repo: str, number: int, head_ref: str, head_sha: str, *, a
     first = verify_merglbot(repo, number)
     if first.get("ok"):
         return first
+    if is_current_head_merglbot_terminal_blocker(first, head_sha):
+        return first
     if not apply:
         return first
     try:
@@ -1003,6 +1022,8 @@ def wait_for_merglbot(repo: str, number: int, head_ref: str, head_sha: str, *, a
         latest = verify_merglbot(repo, number)
         latest["dispatch"] = dispatch
         if latest.get("ok"):
+            return latest
+        if is_current_head_merglbot_terminal_blocker(latest, head_sha):
             return latest
     latest.setdefault("blockers", []).append("merglbot_review_poll_timeout")
     latest["dispatch"] = dispatch
@@ -1819,6 +1840,39 @@ merglbot-core/agents-orchestrator
         "diff_scope": "auto",
         "expected_head_sha": "a" * 40,
     }
+    assert is_current_head_merglbot_terminal_blocker(
+        {
+            "ok": False,
+            "review_head_sha": "a" * 40,
+            "current_head_match": True,
+            "verdict": "changes_required",
+            "status": "blocked",
+            "blockers": ["review_not_approved_for_closeout"],
+        },
+        "a" * 40,
+    ) is True
+    assert is_current_head_merglbot_terminal_blocker(
+        {
+            "ok": False,
+            "review_head_sha": "b" * 40,
+            "current_head_match": False,
+            "verdict": "changes_required",
+            "status": "blocked",
+            "blockers": ["review_not_approved_for_closeout"],
+        },
+        "a" * 40,
+    ) is False
+    assert is_current_head_merglbot_terminal_blocker(
+        {
+            "ok": True,
+            "review_head_sha": "a" * 40,
+            "current_head_match": True,
+            "verdict": "approved_for_closeout",
+            "status": "success",
+            "blockers": [],
+        },
+        "a" * 40,
+    ) is False
     assert request_update_branch("merglbot-core/github", 1, "b" * 40, apply=False)["blockers"] == ["update_branch_required"]
     assert validate_change_scope(
         "merglbot-core/github",
