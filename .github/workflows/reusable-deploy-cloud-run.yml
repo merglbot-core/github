@@ -186,7 +186,7 @@ jobs:
           ignore-unfixed: true
       
       - name: Upload Trivy results
-        uses: github/codeql-action/upload-sarif@89a39a4e59826350b863aa6b6252a07ad50cf83e  # v4
+        uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13  # v4
         if: ${{ always() && hashFiles('trivy-results.sarif') != '' }}
         continue-on-error: true  # Don't fail if SARIF upload has permission issues
         with:
@@ -220,7 +220,7 @@ jobs:
       
       # Container Security: Cosign Signing (Keyless with OIDC)
       - name: Install Cosign
-        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad  # v4.0.0
+        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003  # v4.1.1
       
       - name: Sign container image
         run: |

@@ -39,7 +39,7 @@ the in-scope organizations instead.
 
 Required:
 
-- `Actions`: read-only
+- `Actions`: read and write
 - `Checks`: read-only
 - `Commit statuses`: read-only
 - `Contents`: read and write
@@ -47,9 +47,12 @@ Required:
 - `Metadata`: read-only
 - `Pull requests`: read and write
 
-`Contents: read and write` is required for the merge-capable apply lane. Dry-run
-and close-only paths do not need contents writes, but the app identity must be
-able to perform an exact-head PR merge when all gates pass. Branch protection,
+`Actions: read and write` is required so the engine can trigger the target
+repo's Merglbot PR Assistant workflow through `workflow_dispatch`; issue-comment
+review triggers are not the ENT apply path. `Contents: read and write` is
+required for exact-head merges and GitHub's PR `update-branch` API. Dry-run and
+close-only paths do not need contents writes, but the app identity must be able
+to perform an exact-head PR merge when all gates pass. Branch protection,
 required checks, Merglbot current-head review, Cursor/no-bug evidence, and
 `--match-head-commit` remain mandatory.
 
