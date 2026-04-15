@@ -42,6 +42,7 @@ APP_TOKEN_CACHE: dict[str, tuple[str, datetime]] = {}
 REPO_LOCAL_SCOPE_FILE = Path(__file__).with_name("ent_repository_scope.txt")
 MERGE_READY_STATES = {"CLEAN", "HAS_HOOKS"}
 MERGE_REVIEW_GATE_STATE = "REVIEW_REQUIRED"
+TERMINAL_MERGLBOT_REVIEW_BLOCKERS = {"review_not_approved_for_closeout"}
 DEFAULT_VALIDATOR_PROFILE = "maximum_autonomy_v2"
 VALIDATOR_PROFILES = {"strict_lockfile_v1", DEFAULT_VALIDATOR_PROFILE}
 PACKAGE_JSON_DEPENDENCY_KEYS = {
@@ -932,10 +933,14 @@ def is_current_head_merglbot_terminal_blocker(payload: dict[str, Any], head_sha:
     verdict = str(payload.get("verdict") or "").strip().lower()
     status = str(payload.get("status") or "").strip().lower()
     blockers = payload.get("blockers")
-    has_blockers = isinstance(blockers, list) and len(blockers) > 0
+    terminal_blockers = [
+        str(blocker)
+        for blocker in (blockers if isinstance(blockers, list) else [])
+        if str(blocker) in TERMINAL_MERGLBOT_REVIEW_BLOCKERS
+    ]
     if verdict in {"approved_for_closeout", "approved"} and status == "success":
         return False
-    return has_blockers or verdict in {"changes_required", "blocked", "needs_work"} or status in {"blocked", "failure"}
+    return bool(terminal_blockers) or verdict in {"changes_required", "blocked", "needs_work"} or status in {"blocked", "failure"}
 
 
 def find_merglbot_review_workflow(repo: str) -> dict[str, Any]:
@@ -1859,6 +1864,17 @@ merglbot-core/agents-orchestrator
             "verdict": "changes_required",
             "status": "blocked",
             "blockers": ["review_not_approved_for_closeout"],
+        },
+        "a" * 40,
+    ) is False
+    assert is_current_head_merglbot_terminal_blocker(
+        {
+            "ok": False,
+            "review_head_sha": "a" * 40,
+            "current_head_match": True,
+            "verdict": "pending",
+            "status": "pending",
+            "blockers": ["review_pending"],
         },
         "a" * 40,
     ) is False
