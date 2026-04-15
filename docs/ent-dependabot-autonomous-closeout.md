@@ -43,6 +43,12 @@ Platform policy authority remains in `merglbot-public/docs`:
   or data/schema promotion surfaces are blocked for human checkpoint unless a
   narrower canonical allowlist covers that exact file class.
 - Stale age alone is never a close reason.
+- Deprecated, obsolete, empty, or superseded PRs may be auto-closed only when
+  the current run proves strong evidence: empty diff, dependency/path absent on
+  the base branch, base branch already carrying the same or newer dependency
+  version, or a newer sibling Dependabot PR for the same dependency/path.
+  Close comments must include evidence, successor/main proof when applicable,
+  workflow run URL, and a reopen condition.
 - The workflow does not deploy, run Terraform apply, mutate secrets, change
   default branches, or bypass branch protection.
 - Cross-org GitHub API authority should come from the GitHub App secrets
@@ -60,6 +66,10 @@ Platform policy authority remains in `merglbot-public/docs`:
   comments, because Dependabot rejects that command from actors without push
   access semantics. After any update-branch change, every gate is recomputed on
   the new head.
+- Installation tokens are minted per repository owner and retried once on
+  `401 Bad credentials` after invalidating the owner token cache. A second 401
+  is classified as an installation/capability blocker, not silently retried
+  indefinitely.
 - Local `single_repo` diagnostics validate against the repo-local
   `scripts/dependabot/ent_repository_scope.txt` mirror to stay inside the
   canonical 42-repo boundary without unnecessary cross-repo auth. GitHub Actions
@@ -159,7 +169,9 @@ dispatch was needed, and include update-branch API evidence when a PR started
 behind its base branch. v2 receipts also include `validated_scope_class`,
 `scope_validator_evidence`, `would_dispatch_merglbot_review`,
 `would_update_branch`, `superseded_by`, and `close_reopen_condition` when
-applicable.
+applicable. Remaining-queue v2 receipts also include
+`required_check_diagnostics`, separating pending/skipping context drift from
+real failed checks before any human or admin-healing lane acts on them.
 
 The weekly caller posts the human summary and machine receipt to the cleanup
 steady-state tracking issue.
