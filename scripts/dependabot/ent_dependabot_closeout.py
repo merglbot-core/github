@@ -51,6 +51,7 @@ MERGE_REVIEW_GATE_STATE = "REVIEW_REQUIRED"
 TERMINAL_MERGLBOT_REVIEW_BLOCKERS = {"review_not_approved_for_closeout"}
 DEFAULT_VALIDATOR_PROFILE = "maximum_autonomy_v2"
 VALIDATOR_PROFILES = {"strict_lockfile_v1", DEFAULT_VALIDATOR_PROFILE}
+MAX_FIX_LOOP_ITERATION_CAP = 10
 PACKAGE_JSON_DEPENDENCY_KEYS = {
     "dependencies",
     "devDependencies",
@@ -128,6 +129,24 @@ SENSITIVE_FILE_PATTERNS = [
 
 class GhError(RuntimeError):
     pass
+
+
+def fix_loop_control_errors(
+    *,
+    autonomous_fix_loop: bool,
+    orchestrator_fix_handoff: bool,
+    max_fix_iterations: int,
+    max_review_iterations: int,
+) -> list[str]:
+    """Return fail-closed configuration errors for the autonomous fix-loop lane."""
+    errors: list[str] = []
+    if not 1 <= max_fix_iterations <= MAX_FIX_LOOP_ITERATION_CAP:
+        errors.append(f"--max-fix-iterations must be 1..{MAX_FIX_LOOP_ITERATION_CAP}")
+    if not 1 <= max_review_iterations <= MAX_FIX_LOOP_ITERATION_CAP:
+        errors.append(f"--max-review-iterations must be 1..{MAX_FIX_LOOP_ITERATION_CAP}")
+    if orchestrator_fix_handoff and not autonomous_fix_loop:
+        errors.append("--orchestrator-fix-handoff requires --autonomous-fix-loop")
+    return errors
 
 
 def utc_now() -> str:
@@ -423,6 +442,15 @@ class ItemReceipt:
     superseded_by: str | None = None
     close_reopen_condition: str | None = None
     required_check_diagnostics: list[dict[str, Any]] = field(default_factory=list)
+    would_start_fix_loop: bool = False
+    would_heal_required_checks: bool = False
+    fix_iterations: int = 0
+    review_iterations: int = 0
+    fix_commits: list[str] = field(default_factory=list)
+    merglbot_findings_ledger: list[dict[str, Any]] = field(default_factory=list)
+    cursor_findings_ledger: list[dict[str, Any]] = field(default_factory=list)
+    ci_healing_actions: list[dict[str, Any]] = field(default_factory=list)
+    terminal_close_loop_verdict: str | None = None
 
 
 def reject_if_head_changed(receipt: ItemReceipt, refreshed: PullRequest, blocker: str) -> bool:
@@ -1098,6 +1126,57 @@ def required_checks(repo: str, number: int) -> tuple[bool, list[dict[str, Any]],
     return len(blockers) == 0, checks, blockers, diagnostics
 
 
+def required_check_healing_actions(diagnostics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Map required-check diagnostics to the next safe autonomous action.
+
+    This function only plans actions. The actual write-capable close-loop lane
+    must re-read PR head/check truth immediately before rerunning checks or
+    pushing fixes.
+    """
+    actions: list[dict[str, Any]] = []
+    for item in diagnostics:
+        category = str(item.get("category") or "")
+        name = str(item.get("name") or "unknown")
+        reason = str(item.get("reason") or "")
+        if category in {
+            "stale_or_pending_analysis_context",
+            "stale_or_pending_security_context",
+            "pending_or_never_emits",
+            "skipped_analysis_context",
+            "skipped_or_neutral",
+        }:
+            actions.append(
+                {
+                    "check": name,
+                    "action": "diagnose_or_rerun_required_check",
+                    "category": category,
+                    "reason": reason,
+                    "requires_snapshot": True,
+                }
+            )
+        elif category == "check_failed_real":
+            actions.append(
+                {
+                    "check": name,
+                    "action": "start_minimal_pr_branch_fix_loop",
+                    "category": category,
+                    "reason": reason,
+                    "requires_same_pr_branch": True,
+                }
+            )
+        else:
+            actions.append(
+                {
+                    "check": name,
+                    "action": "classify_before_mutation",
+                    "category": category,
+                    "reason": reason,
+                    "fail_closed": True,
+                }
+            )
+    return actions
+
+
 def all_checks(repo: str, number: int) -> list[dict[str, Any]]:
     proc = run_cmd(
         [
@@ -1171,6 +1250,58 @@ def is_current_head_merglbot_terminal_blocker(payload: dict[str, Any], head_sha:
     if verdict in {"approved_for_closeout", "approved"} and status == "success":
         return False
     return bool(terminal_blockers) or verdict in {"changes_required", "blocked", "needs_work"} or status in {"blocked", "failed"}
+
+
+def merglbot_findings_ledger(payload: dict[str, Any], head_sha: str) -> list[dict[str, Any]]:
+    """Build an audit ledger entry from the latest current-head Merglbot receipt."""
+    blockers = payload.get("blockers")
+    blocker_list = blockers if isinstance(blockers, list) else []
+    return [
+        {
+            "source": "merglbot",
+            "head_sha": head_sha,
+            "review_head_sha": payload.get("review_head_sha") or payload.get("head_sha"),
+            "verdict": payload.get("verdict"),
+            "status": payload.get("status"),
+            "comment_url": payload.get("comment_url"),
+            "blockers": [str(item) for item in blocker_list],
+            "next_action": "minimal_same_branch_fix_then_rerun_merglbot",
+        }
+    ]
+
+
+def cursor_findings_ledger(status: str | None, head_sha: str | None) -> list[dict[str, Any]]:
+    """Build Cursor Bugbot ledger entries only when the current head is not clean."""
+    if not status:
+        return []
+    if status in {"cursor_pass", "cursor_absent_not_required", "cursor_no_current_bug_signal"}:
+        return []
+    return [
+        {
+            "source": "cursor",
+            "head_sha": head_sha,
+            "status": status,
+            "next_action": "minimal_same_branch_fix_then_rerun_cursor_or_recheck_current_head_summary",
+        }
+    ]
+
+
+def mark_fix_loop_candidate(
+    receipt: ItemReceipt,
+    *,
+    classification: str,
+    evidence: str,
+    max_fix_iterations: int,
+    max_review_iterations: int,
+) -> None:
+    """Mark a PR receipt as a safe candidate for the orchestrator fix loop."""
+    receipt.action = "would_start_fix_loop"
+    receipt.classification = classification
+    receipt.would_start_fix_loop = True
+    receipt.terminal_close_loop_verdict = "PENDING_AUTONOMOUS_FIX_LOOP"
+    receipt.evidence.append(evidence)
+    receipt.evidence.append(f"max_fix_iterations={max_fix_iterations}")
+    receipt.evidence.append(f"max_review_iterations={max_review_iterations}")
 
 
 def find_merglbot_review_workflow(repo: str) -> dict[str, Any]:
@@ -1468,6 +1599,9 @@ def process_pr(
     workflow_url: str,
     validator_profile: str,
     sibling_prs: list[PullRequest],
+    autonomous_fix_loop: bool,
+    max_fix_iterations: int,
+    max_review_iterations: int,
 ) -> ItemReceipt:
     apply = mode == "apply"
     receipt = ItemReceipt(repo=pr.repo, pr_number=pr.number, url=pr.url, action="blocked", classification="BLOCKED", head_sha=pr.head_sha)
@@ -1531,6 +1665,25 @@ def process_pr(
     checks_ok, checks, check_blockers, check_diagnostics = required_checks(pr.repo, pr.number)
     receipt.required_check_diagnostics.extend(check_diagnostics)
     if not checks_ok:
+        receipt.ci_healing_actions.extend(required_check_healing_actions(check_diagnostics))
+        if not apply and autonomous_fix_loop:
+            receipt.would_heal_required_checks = True
+            if any(item.get("action") == "start_minimal_pr_branch_fix_loop" for item in receipt.ci_healing_actions):
+                mark_fix_loop_candidate(
+                    receipt,
+                    classification="WOULD_START_AUTONOMOUS_FIX_LOOP",
+                    evidence="Required checks include real failures; close-loop lane should apply a minimal same-branch fix and rerun gates.",
+                    max_fix_iterations=max_fix_iterations,
+                    max_review_iterations=max_review_iterations,
+                )
+            else:
+                receipt.action = "would_heal_required_checks"
+                receipt.classification = "WOULD_HEAL_REQUIRED_CHECKS"
+                receipt.terminal_close_loop_verdict = "PENDING_REQUIRED_CHECK_HEALING"
+                receipt.evidence.append("Required checks appear stale/pending/skipped; close-loop lane should rerun/diagnose before treating as a hard blocker.")
+            receipt.blockers.extend([f"required_check:{blocker}" for blocker in check_blockers])
+            receipt.evidence.append(f"required_checks={len(checks)}")
+            return receipt
         receipt.blockers.extend([f"required_check:{blocker}" for blocker in check_blockers])
         receipt.evidence.append(f"required_checks={len(checks)}")
         return receipt
@@ -1541,6 +1694,17 @@ def process_pr(
     if not merglbot.get("ok"):
         if not apply:
             if is_current_head_merglbot_terminal_blocker(merglbot, refreshed.head_sha):
+                receipt.merglbot_findings_ledger.extend(merglbot_findings_ledger(merglbot, refreshed.head_sha))
+                if autonomous_fix_loop:
+                    mark_fix_loop_candidate(
+                        receipt,
+                        classification="WOULD_START_AUTONOMOUS_FIX_LOOP",
+                        evidence="Merglbot current-head review is terminal and not approved; close-loop lane should apply a minimal same-branch fix and rerun Merglbot.",
+                        max_fix_iterations=max_fix_iterations,
+                        max_review_iterations=max_review_iterations,
+                    )
+                    receipt.blockers.extend([f"merglbot:{blocker}" for blocker in merglbot.get("blockers", [])])
+                    return receipt
                 receipt.classification = "BLOCKED_MERGLBOT_CHANGES_REQUIRED"
                 receipt.evidence.append("Merglbot current-head review is terminal and not approved for closeout")
                 receipt.blockers.extend([f"merglbot:{blocker}" for blocker in merglbot.get("blockers", [])])
@@ -1554,12 +1718,24 @@ def process_pr(
         if verdict in {"changes_required", "blocked", "needs_work"} or "review_not_approved_for_closeout" in [str(item) for item in merglbot.get("blockers", [])]:
             receipt.classification = "BLOCKED_MERGLBOT_CHANGES_REQUIRED"
             receipt.evidence.append("Merglbot current-head review returned changes_required or non-approved closeout verdict")
+            receipt.merglbot_findings_ledger.extend(merglbot_findings_ledger(merglbot, refreshed.head_sha))
         receipt.blockers.extend([f"merglbot:{blocker}" for blocker in merglbot.get("blockers", [])])
         return receipt
 
     cursor_ok, cursor = cursor_status(pr.repo, pr.number)
     receipt.cursor_status = cursor
     if not cursor_ok:
+        receipt.cursor_findings_ledger.extend(cursor_findings_ledger(cursor, refreshed.head_sha))
+        if not apply and autonomous_fix_loop:
+            mark_fix_loop_candidate(
+                receipt,
+                classification="WOULD_START_AUTONOMOUS_FIX_LOOP",
+                evidence="Cursor current-head signal is blocking; close-loop lane should apply a minimal same-branch fix and rerun/recheck Cursor.",
+                max_fix_iterations=max_fix_iterations,
+                max_review_iterations=max_review_iterations,
+            )
+            receipt.blockers.append(cursor)
+            return receipt
         receipt.blockers.append(cursor)
         return receipt
 
@@ -1614,6 +1790,9 @@ def process_repo(
     workflow_url: str,
     pr_allowlist: set[tuple[str, int]],
     validator_profile: str,
+    autonomous_fix_loop: bool,
+    max_fix_iterations: int,
+    max_review_iterations: int,
 ) -> dict[str, Any]:
     telemetry_warnings: list[str] = []
     try:
@@ -1633,6 +1812,8 @@ def process_repo(
             "would_close": [],
             "would_update_branch": [],
             "would_dispatch_review": [],
+            "would_start_fix_loop": [],
+            "would_heal_required_checks": [],
             "skipped_by_allowlist": [],
             "warnings": [f"list_open_prs_failed:{exc}"],
         }
@@ -1660,6 +1841,8 @@ def process_repo(
         "would_close": [],
         "would_update_branch": [],
         "would_dispatch_review": [],
+        "would_start_fix_loop": [],
+        "would_heal_required_checks": [],
         "skipped_by_allowlist": [],
         "warnings": [],
         "telemetry_warnings": telemetry_warnings,
@@ -1707,6 +1890,9 @@ def process_repo(
                     workflow_url=workflow_url,
                     validator_profile=validator_profile,
                     sibling_prs=prs,
+                    autonomous_fix_loop=autonomous_fix_loop,
+                    max_fix_iterations=max_fix_iterations,
+                    max_review_iterations=max_review_iterations,
                 )
             except GhError as exc:
                 receipt = ItemReceipt(
@@ -1736,6 +1922,10 @@ def process_repo(
                 repo_result["would_update_branch"].append(receipt.__dict__)
             elif key == "would_dispatch_review":
                 repo_result["would_dispatch_review"].append(receipt.__dict__)
+            elif key == "would_start_fix_loop":
+                repo_result["would_start_fix_loop"].append(receipt.__dict__)
+            elif key == "would_heal_required_checks":
+                repo_result["would_heal_required_checks"].append(receipt.__dict__)
             else:
                 repo_result["blocked"].append(receipt.__dict__)
             seen_without_action.add(pr.number)
@@ -1780,6 +1970,8 @@ def tracking_comment_receipt(report: dict[str, Any], *, minimal: bool = False) -
         "would_close_count": len(report.get("would_close_prs", [])),
         "would_update_branch_count": len(report.get("would_update_branch_prs", [])),
         "would_dispatch_review_count": len(report.get("would_dispatch_review_prs", [])),
+        "would_start_fix_loop_count": len(report.get("would_start_fix_loop_prs", [])),
+        "would_heal_required_checks_count": len(report.get("would_heal_required_checks_prs", [])),
         "remaining_dependabot_prs": report.get("remaining_dependabot_prs"),
         "top_blocker_reasons": report.get("top_blocker_reasons", [])[:TRACKING_RECEIPT_ITEM_LIMIT],
         "telemetry_warnings_count": len(report.get("telemetry_warnings", [])),
@@ -1870,15 +2062,17 @@ def markdown_summary(report: dict[str, Any]) -> str:
         f"- Blocked: `{len(report['blocked_prs'])}`",
         f"- Would update branch: `{len(report.get('would_update_branch_prs', []))}`",
         f"- Would dispatch Merglbot review: `{len(report.get('would_dispatch_review_prs', []))}`",
+        f"- Would start autonomous fix loop: `{len(report.get('would_start_fix_loop_prs', []))}`",
+        f"- Would heal required checks: `{len(report.get('would_heal_required_checks_prs', []))}`",
         f"- Telemetry warnings: `{len(report.get('telemetry_warnings', []))}`",
         f"- Slack delivery: `{report.get('slack_delivery', {}).get('status', 'not_requested')}`",
         "",
-        "| Repo | PRs | Dependabot | Non-Dependabot | Issues | Merged | Closed | Blocked | Would merge | Would close | Would update | Would review | Skipped |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Repo | PRs | Dependabot | Non-Dependabot | Issues | Merged | Closed | Blocked | Would merge | Would close | Would update | Would review | Would fix | Would heal checks | Skipped |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in report["repo_table"]:
         lines.append(
-            "| {repo} | {open_prs} | {before} | {non_dependabot} | {issues} | {merged} | {closed} | {blocked} | {would_merge} | {would_close} | {would_update} | {would_review} | {skipped} |".format(
+            "| {repo} | {open_prs} | {before} | {non_dependabot} | {issues} | {merged} | {closed} | {blocked} | {would_merge} | {would_close} | {would_update} | {would_review} | {would_fix} | {would_heal_checks} | {skipped} |".format(
                 repo=row["repo"],
                 open_prs=row["open_prs_before"],
                 before=row["dependabot_prs_before"],
@@ -1891,6 +2085,8 @@ def markdown_summary(report: dict[str, Any]) -> str:
                 would_close=row["would_close"],
                 would_update=row.get("would_update_branch", 0),
                 would_review=row.get("would_dispatch_review", 0),
+                would_fix=row.get("would_start_fix_loop", 0),
+                would_heal_checks=row.get("would_heal_required_checks", 0),
                 skipped=row["skipped_by_allowlist"],
             )
         )
@@ -1925,6 +2121,8 @@ def build_report(
     would_close = [item for result in repo_results for item in result.get("would_close", [])]
     would_update_branch = [item for result in repo_results for item in result.get("would_update_branch", [])]
     would_dispatch_review = [item for result in repo_results for item in result.get("would_dispatch_review", [])]
+    would_start_fix_loop = [item for result in repo_results for item in result.get("would_start_fix_loop", [])]
+    would_heal_required_checks = [item for result in repo_results for item in result.get("would_heal_required_checks", [])]
     skipped_by_allowlist = [item for result in repo_results for item in result.get("skipped_by_allowlist", [])]
     repo_table = [
         {
@@ -1940,6 +2138,8 @@ def build_report(
             "would_close": len(result.get("would_close", [])),
             "would_update_branch": len(result.get("would_update_branch", [])),
             "would_dispatch_review": len(result.get("would_dispatch_review", [])),
+            "would_start_fix_loop": len(result.get("would_start_fix_loop", [])),
+            "would_heal_required_checks": len(result.get("would_heal_required_checks", [])),
             "skipped_by_allowlist": len(result.get("skipped_by_allowlist", [])),
             "warnings": result.get("warnings", []),
             "telemetry_warnings": result.get("telemetry_warnings", []),
@@ -1968,13 +2168,17 @@ def build_report(
         "would_close_prs": would_close,
         "would_update_branch_prs": would_update_branch,
         "would_dispatch_review_prs": would_dispatch_review,
+        "would_start_fix_loop_prs": would_start_fix_loop,
+        "would_heal_required_checks_prs": would_heal_required_checks,
         "skipped_by_allowlist_prs": skipped_by_allowlist,
         "remaining_dependabot_prs": len(blocked)
         + len(skipped_by_allowlist)
         + (len(would_merge) if mode == "dry-run" else 0)
         + (len(would_close) if mode == "dry-run" else 0)
         + (len(would_update_branch) if mode == "dry-run" else 0)
-        + (len(would_dispatch_review) if mode == "dry-run" else 0),
+        + (len(would_dispatch_review) if mode == "dry-run" else 0)
+        + (len(would_start_fix_loop) if mode == "dry-run" else 0)
+        + (len(would_heal_required_checks) if mode == "dry-run" else 0),
         "top_blocker_reasons": blocker_summary(blocked),
         "approval": {
             "pr_allowlist": [f"{repo}#{number}" for repo, number in sorted(pr_allowlist)],
@@ -2011,6 +2215,8 @@ def build_slack_payload(report: dict[str, Any], status: str) -> dict[str, Any]:
         f"`{len(report.get('blocked_prs', []))}` blocked, "
         f"`{len(report.get('would_update_branch_prs', []))}` would-update, "
         f"`{len(report.get('would_dispatch_review_prs', []))}` would-review, "
+        f"`{len(report.get('would_start_fix_loop_prs', []))}` would-fix, "
+        f"`{len(report.get('would_heal_required_checks_prs', []))}` would-heal-checks, "
         f"`{report.get('remaining_dependabot_prs', 0)}` remaining\n"
         f"Open backlog: `{report.get('open_prs_total', 0)}` PRs "
         f"(`{report.get('open_dependabot_prs_total', 0)}` Dependabot / "
@@ -2240,6 +2446,54 @@ merglbot-core/agents-orchestrator
     assert classify_required_check_blocker({"name": "Analyze (actions)", "bucket": "pending"})["category"] == "stale_or_pending_analysis_context"
     assert classify_required_check_blocker({"name": "ci", "bucket": "fail"})["category"] == "check_failed_real"
     assert classify_required_check_blocker({"name": "codeql / Analyze (javascript)", "bucket": "skipping"})["category"] == "skipped_analysis_context"
+    healing = required_check_healing_actions([
+        classify_required_check_blocker({"name": "ci", "bucket": "fail"}),
+        classify_required_check_blocker({"name": "Analyze (actions)", "bucket": "pending"}),
+    ])
+    assert healing[0]["action"] == "start_minimal_pr_branch_fix_loop"
+    assert healing[1]["action"] == "diagnose_or_rerun_required_check"
+    ledger = merglbot_findings_ledger(
+        {
+            "ok": False,
+            "review_head_sha": "a" * 40,
+            "current_head_match": True,
+            "verdict": "changes_required",
+            "status": "blocked",
+            "comment_url": "https://github.com/o/r/pull/1#issuecomment-1",
+            "blockers": ["review_not_approved_for_closeout"],
+        },
+        "a" * 40,
+    )
+    assert ledger[0]["next_action"] == "minimal_same_branch_fix_then_rerun_merglbot"
+    fix_receipt = ItemReceipt("o/r", 1, "u", "blocked", "BLOCKED", head_sha="a" * 40)
+    mark_fix_loop_candidate(
+        fix_receipt,
+        classification="WOULD_START_AUTONOMOUS_FIX_LOOP",
+        evidence="test",
+        max_fix_iterations=5,
+        max_review_iterations=5,
+    )
+    assert fix_receipt.action == "would_start_fix_loop"
+    assert fix_receipt.would_start_fix_loop is True
+    assert fix_receipt.terminal_close_loop_verdict == "PENDING_AUTONOMOUS_FIX_LOOP"
+    assert not fix_loop_control_errors(
+        autonomous_fix_loop=True,
+        orchestrator_fix_handoff=True,
+        max_fix_iterations=5,
+        max_review_iterations=5,
+    )
+    assert "--max-fix-iterations must be 1..10" in fix_loop_control_errors(
+        autonomous_fix_loop=True,
+        orchestrator_fix_handoff=True,
+        max_fix_iterations=999,
+        max_review_iterations=5,
+    )
+    assert "--orchestrator-fix-handoff requires --autonomous-fix-loop" in fix_loop_control_errors(
+        autonomous_fix_loop=False,
+        orchestrator_fix_handoff=True,
+        max_fix_iterations=5,
+        max_review_iterations=5,
+    )
     assert validate_change_scope(
         "merglbot-core/github",
         1,
@@ -2360,6 +2614,11 @@ def main() -> int:
     parser.add_argument("--approval-note", default="")
     parser.add_argument("--approval-issue-url", default="")
     parser.add_argument("--validator-profile", choices=sorted(VALIDATOR_PROFILES), default=DEFAULT_VALIDATOR_PROFILE)
+    parser.add_argument("--autonomous-fix-loop", action="store_true")
+    parser.add_argument("--orchestrator-fix-handoff", action="store_true")
+    parser.add_argument("--max-fix-iterations", type=int, default=5)
+    parser.add_argument("--max-review-iterations", type=int, default=5)
+    parser.add_argument("--fix-profile", choices=["dependabot_safe_v1"], default="dependabot_safe_v1")
     parser.add_argument("--workflow-url", default=os.environ.get("GITHUB_SERVER_URL", "") + "/" + os.environ.get("GITHUB_REPOSITORY", "") + "/actions/runs/" + os.environ.get("GITHUB_RUN_ID", ""))
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
@@ -2368,6 +2627,14 @@ def main() -> int:
         return self_test()
     if not args.mode:
         parser.error("--mode is required unless --self-test is used")
+    fix_loop_errors = fix_loop_control_errors(
+        autonomous_fix_loop=args.autonomous_fix_loop,
+        orchestrator_fix_handoff=args.orchestrator_fix_handoff,
+        max_fix_iterations=args.max_fix_iterations,
+        max_review_iterations=args.max_review_iterations,
+    )
+    if fix_loop_errors:
+        parser.error("; ".join(fix_loop_errors))
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -2411,6 +2678,9 @@ def main() -> int:
                         workflow_url=args.workflow_url,
                         pr_allowlist=pr_allowlist,
                         validator_profile=args.validator_profile,
+                        autonomous_fix_loop=args.autonomous_fix_loop,
+                        max_fix_iterations=args.max_fix_iterations,
+                        max_review_iterations=args.max_review_iterations,
                     )
                 )
         report = build_report(
@@ -2423,6 +2693,14 @@ def main() -> int:
             workflow_url=args.workflow_url,
             validator_profile=args.validator_profile,
         )
+        report["autonomous_fix_loop"] = {
+            "enabled": bool(args.autonomous_fix_loop),
+            "orchestrator_fix_handoff": bool(args.orchestrator_fix_handoff),
+            "fix_profile": args.fix_profile,
+            "max_fix_iterations": args.max_fix_iterations,
+            "max_review_iterations": args.max_review_iterations,
+            "contract": "Autonomous PR Close-Loop v1 + MERGLBOT_PR_REVIEW_AUTONOMOUS_AUTOMERGE_V1",
+        }
         if args.slack_notify:
             report["slack_delivery"] = post_slack_report(os.environ.get("SLACK_DEPENDABOT_WEBHOOK_URL", ""), report)
             if not report["slack_delivery"].get("ok"):
