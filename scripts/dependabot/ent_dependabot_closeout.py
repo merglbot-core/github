@@ -35,6 +35,9 @@ MERGLBOT_REVIEW_POLL_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REVIEW_POLL_SE
 REBASE_WAIT_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REBASE_WAIT_SECONDS", "600"))
 REBASE_POLL_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REBASE_POLL_SECONDS", "60"))
 OPEN_ITEM_LIST_LIMIT = 1000
+TRACKING_COMMENT_MAX_CHARS = 60000
+TRACKING_RECEIPT_ITEM_LIMIT = 10
+TRACKING_RECEIPT_TEXT_LIMIT = 240
 APP_TOKEN_CACHE: dict[str, tuple[str, datetime]] = {}
 REPO_LOCAL_SCOPE_FILE = Path(__file__).with_name("ent_repository_scope.txt")
 MERGE_READY_STATES = {"CLEAN", "HAS_HOOKS"}
@@ -1443,6 +1446,104 @@ def process_repo(
             return repo_result
 
 
+def truncate_tracking_text(value: Any, limit: int = TRACKING_RECEIPT_TEXT_LIMIT) -> str:
+    text = str(value)
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)] + "..."
+
+
+def tracking_comment_receipt(report: dict[str, Any], *, minimal: bool = False) -> dict[str, Any]:
+    """Return a compact receipt that fits GitHub issue comment limits.
+
+    The full machine receipt is preserved as the workflow artifact. Tracking
+    issue comments are an index/summary surface and must not be able to fail the
+    closeout after merge/close actions have already completed.
+    """
+    receipt = {
+        "ok": report.get("ok"),
+        "final_verdict": report.get("final_verdict"),
+        "generated_at": report.get("generated_at"),
+        "mode": report.get("mode"),
+        "validator_profile": report.get("validator_profile", DEFAULT_VALIDATOR_PROFILE),
+        "workflow_url": report.get("workflow_url"),
+        "repos_scanned": report.get("repos_scanned"),
+        "open_prs_total": report.get("open_prs_total"),
+        "open_dependabot_prs_total": report.get("open_dependabot_prs_total"),
+        "open_non_dependabot_prs_total": report.get("open_non_dependabot_prs_total"),
+        "open_issues_total": report.get("open_issues_total"),
+        "dependabot_prs_before": report.get("dependabot_prs_before"),
+        "merged_count": len(report.get("merged_prs", [])),
+        "closed_count": len(report.get("closed_prs", [])),
+        "blocked_count": len(report.get("blocked_prs", [])),
+        "would_merge_count": len(report.get("would_merge_prs", [])),
+        "would_close_count": len(report.get("would_close_prs", [])),
+        "would_update_branch_count": len(report.get("would_update_branch_prs", [])),
+        "would_dispatch_review_count": len(report.get("would_dispatch_review_prs", [])),
+        "remaining_dependabot_prs": report.get("remaining_dependabot_prs"),
+        "top_blocker_reasons": report.get("top_blocker_reasons", [])[:TRACKING_RECEIPT_ITEM_LIMIT],
+        "telemetry_warnings_count": len(report.get("telemetry_warnings", [])),
+        "remaining_blockers_count": len(report.get("remaining_blockers", [])),
+        "artifact_note": "Full receipt is available in the workflow artifact ent-dependabot-weekly-<run_id>.",
+    }
+    if not minimal:
+        receipt["remaining_blockers_sample"] = [
+            truncate_tracking_text(blocker)
+            for blocker in report.get("remaining_blockers", [])[:TRACKING_RECEIPT_ITEM_LIMIT]
+        ]
+    return receipt
+
+
+def build_tracking_comment_body(report: dict[str, Any], summary_markdown: str) -> str:
+    def render(receipt: dict[str, Any], summary: str, note: str) -> str:
+        return "\n".join(
+            [
+                "## ENT Dependabot Weekly Autonomous Closeout",
+                "",
+                summary,
+                "",
+                note,
+                "",
+                "<details><summary>Compact machine receipt</summary>",
+                "",
+                "```json",
+                json.dumps(receipt, indent=2, sort_keys=True),
+                "```",
+                "",
+                "</details>",
+                "",
+                "Full per-PR and per-repo receipts are stored in the workflow artifact.",
+            ]
+        )
+
+    body = render(
+        tracking_comment_receipt(report),
+        summary_markdown,
+        "",
+    )
+    if len(body) <= TRACKING_COMMENT_MAX_CHARS:
+        return body
+
+    compact_summary = "\n".join(summary_markdown.splitlines()[:18])
+    body = render(
+        tracking_comment_receipt(report),
+        compact_summary,
+        "_Summary table omitted because the full comment exceeded the GitHub issue comment limit._",
+    )
+    if len(body) <= TRACKING_COMMENT_MAX_CHARS:
+        return body
+
+    minimal_summary = "\n".join(summary_markdown.splitlines()[:8])
+    body = render(
+        tracking_comment_receipt(report, minimal=True),
+        minimal_summary,
+        "_Summary and receipt details were compacted to keep this comment under the GitHub issue comment limit._",
+    )
+    if len(body) <= TRACKING_COMMENT_MAX_CHARS:
+        return body
+    raise GhError("tracking_comment_body_exceeds_limit_after_compaction")
+
+
 def post_tracking_report(tracking_issue: str, report: dict[str, Any], summary_markdown: str) -> str | None:
     if not tracking_issue:
         return None
@@ -1450,21 +1551,7 @@ def post_tracking_report(tracking_issue: str, report: dict[str, Any], summary_ma
     if not match:
         raise GhError(f"invalid tracking issue URL: {tracking_issue}")
     repo, number = match.group(1), int(match.group(2))
-    body = "\n".join(
-        [
-            "## ENT Dependabot Weekly Autonomous Closeout",
-            "",
-            summary_markdown,
-            "",
-            "<details><summary>Machine receipt</summary>",
-            "",
-            "```json",
-            json.dumps(report, indent=2, sort_keys=True),
-            "```",
-            "",
-            "</details>",
-        ]
-    )
+    body = build_tracking_comment_body(report, summary_markdown)
     with gh_token_for_repo(repo):
         return post_comment_with_stdin(repo, number, body)
 
@@ -1708,6 +1795,19 @@ merglbot-core/agents-orchestrator
     assert report["dependabot_prs_before"] == 1
     assert report["open_non_dependabot_prs_total"] == 1
     assert build_slack_payload(report, "ok")["text"].count("Dependabot") >= 2
+    large_report = dict(report)
+    large_report["blocked_prs"] = [
+        {"repo": "merglbot-core/github", "pr_number": number, "blockers": ["sample"], "evidence": ["x" * 200]}
+        for number in range(400)
+    ]
+    large_report["remaining_blockers"] = ["b" * 1000 for _ in range(400)]
+    compact_body = build_tracking_comment_body(large_report, markdown_summary(large_report))
+    assert len(compact_body) <= TRACKING_COMMENT_MAX_CHARS
+    assert "Full per-PR and per-repo receipts are stored in the workflow artifact." in compact_body
+    compact_receipt_text = json.dumps(tracking_comment_receipt(large_report))
+    assert "blocked_count" in compact_receipt_text
+    assert "remaining_blockers_count" in compact_receipt_text
+    assert len(tracking_comment_receipt(large_report)["remaining_blockers_sample"]) == TRACKING_RECEIPT_ITEM_LIMIT
     assert parse_pr_allowlist("merglbot-core/github#1 https://github.com/merglbot-public/docs/pull/2") == {
         ("merglbot-core/github", 1),
         ("merglbot-public/docs", 2),
@@ -1907,12 +2007,18 @@ def main() -> int:
             report["slack_delivery"] = post_slack_report(os.environ.get("SLACK_DEPENDABOT_WEBHOOK_URL", ""), report)
             if not report["slack_delivery"].get("ok"):
                 report["telemetry_degraded"] = True
-        summary = markdown_summary(report)
-        if args.comment_report and args.tracking_issue:
-            report["tracking_comment_url"] = post_tracking_report(args.tracking_issue, report, summary)
         write_json(args.output_dir / "ent_dependabot_weekly_receipt.json", report)
         write_json(args.output_dir / "ent_dependabot_repo_results.json", repo_results)
+        summary = markdown_summary(report)
         (args.output_dir / "summary.md").write_text(summary + "\n", encoding="utf-8")
+        if args.comment_report and args.tracking_issue:
+            try:
+                report["tracking_comment_url"] = post_tracking_report(args.tracking_issue, report, summary)
+            except GhError as exc:
+                report["telemetry_degraded"] = True
+                report.setdefault("telemetry_warnings", []).append(f"tracking_comment_failed:{exc}")
+            write_json(args.output_dir / "ent_dependabot_weekly_receipt.json", report)
+            (args.output_dir / "summary.md").write_text(markdown_summary(report) + "\n", encoding="utf-8")
         print(json.dumps(report, sort_keys=True))
         return 0 if report["ok"] else 1
     except Exception as exc:
