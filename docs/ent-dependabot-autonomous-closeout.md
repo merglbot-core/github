@@ -47,6 +47,10 @@ Platform policy authority remains in `merglbot-public/docs`:
   the current run proves strong evidence: empty diff, dependency/path absent on
   the base branch, base branch already carrying the same or newer dependency
   version, or a newer sibling Dependabot PR for the same dependency/path.
+  Version-range specifiers such as `^`, `~`, `<`, `>`, or pre-release tags do
+  not prove that the update is already carried on `main`; those cases fail
+  closed. Sibling supersession also requires an unambiguous matching path hint,
+  so monorepo PRs are not closed solely by dependency name.
   Close comments must include evidence, successor/main proof when applicable,
   workflow run URL, and a reopen condition.
 - The workflow does not deploy, run Terraform apply, mutate secrets, change

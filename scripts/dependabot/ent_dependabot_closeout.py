@@ -654,6 +654,10 @@ def compare_versions(left: str, right: str) -> int | None:
     return (padded_left > padded_right) - (padded_left < padded_right)
 
 
+def is_exact_stable_version_for_autoclose(version: str) -> bool:
+    return re.fullmatch(r"v?\d+(?:\.\d+){0,4}", version.strip()) is not None
+
+
 def package_json_dependency_version(payload: dict[str, Any], dependency: str) -> str | None:
     dependency_key = normalize_dependency_name(dependency)
     for section_name in PACKAGE_JSON_DEPENDENCY_KEYS:
@@ -669,9 +673,7 @@ def package_json_dependency_version(payload: dict[str, Any], dependency: str) ->
 def same_dependabot_update_family(left: DependabotUpdate, right: DependabotUpdate) -> bool:
     if left.dependency != right.dependency:
         return False
-    if left.path_hint and right.path_hint and left.path_hint != right.path_hint:
-        return False
-    return True
+    return bool(left.path_hint and right.path_hint and left.path_hint == right.path_hint)
 
 
 def classify_close_candidate(
@@ -726,6 +728,8 @@ def classify_close_candidate(
                 None,
                 f"Reopen only if `{update.dependency}` is reintroduced in `{path}` and still needs this update.",
             )
+        if not is_exact_stable_version_for_autoclose(current_version) or not is_exact_stable_version_for_autoclose(update.to_version):
+            continue
         version_cmp = compare_versions(current_version, update.to_version)
         if version_cmp is not None and version_cmp >= 0:
             return (
@@ -2183,6 +2187,9 @@ merglbot-core/agents-orchestrator
     )
     assert compare_versions("^4.17.21", "4.17.20") == 1
     assert compare_versions("v1.2.0", "1.2") == 0
+    assert is_exact_stable_version_for_autoclose("4.17.21") is True
+    assert is_exact_stable_version_for_autoclose("^4.17.21") is False
+    assert is_exact_stable_version_for_autoclose("4.17.21-beta.1") is False
     assert package_json_dependency_version({"dependencies": {"Lodash": "^4.17.21"}}, "lodash") == "^4.17.21"
     older = PullRequest(
         "o/r",
@@ -2215,6 +2222,21 @@ merglbot-core/agents-orchestrator
     close_candidate = classify_close_candidate(older, ["apps/web/package-lock.json"], [older, newer])
     assert close_candidate is not None
     assert close_candidate[0] == "AUTO_CLOSE_OLDER_SIBLING"
+    no_path_older = PullRequest(
+        "o/r",
+        3,
+        "Bump lodash from 4.17.19 to 4.17.20",
+        "https://github.com/o/r/pull/3",
+        "dependabot[bot]",
+        "d" * 40,
+        "b" * 40,
+        "main",
+        "dependabot/npm_and_yarn/lodash-4.17.20",
+        False,
+        "CLEAN",
+        utc_now(),
+    )
+    assert classify_close_candidate(no_path_older, ["package-lock.json"], [no_path_older, newer]) is None
     assert classify_required_check_blocker({"name": "Analyze (actions)", "bucket": "pending"})["category"] == "stale_or_pending_analysis_context"
     assert classify_required_check_blocker({"name": "ci", "bucket": "fail"})["category"] == "check_failed_real"
     assert classify_required_check_blocker({"name": "codeql / Analyze (javascript)", "bucket": "skipping"})["category"] == "skipped_analysis_context"
