@@ -252,11 +252,17 @@ jobs:
           }
           EOF
           )
-          
+
+          PROVENANCE_DELIMITER="PROVENANCE_EOF_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}_$(date +%s%N)"
+          if printf '%s\n' "$PROVENANCE" | grep -Fxq "$PROVENANCE_DELIMITER"; then
+            echo "::error::Generated provenance output delimiter collided with provenance content."
+            exit 1
+          fi
+
           {
-            echo "provenance<<PROVENANCE_EOF"
+            printf 'provenance<<%s\n' "$PROVENANCE_DELIMITER"
             echo "$PROVENANCE"
-            echo "PROVENANCE_EOF"
+            printf '%s\n' "$PROVENANCE_DELIMITER"
           } >> "$GITHUB_OUTPUT"
           echo "$PROVENANCE" > provenance.json
 
@@ -315,7 +321,7 @@ jobs:
           echo "Creating attestation for: $IMAGE_DIGEST"
           
           # sign-and-create does not reliably surface the occurrence name on stdout,
-          # so fall back to a scoped list lookup before writing workflow outputs.
+          # so only use a scoped list lookup when creation succeeded but stdout is empty.
           set +e
           ATTESTATION_ID_RAW="$(gcloud container binauthz attestations sign-and-create \
             --project=merglbot-artifacts \
@@ -329,8 +335,8 @@ jobs:
 
           NEEDS_ATTESTATION_LIST=0
           if [ "$SIGN_AND_CREATE_STATUS" -ne 0 ]; then
-            echo "sign-and-create exited with status ${SIGN_AND_CREATE_STATUS}; falling back to attestations list"
-            NEEDS_ATTESTATION_LIST=1
+            echo "::error::sign-and-create exited with status ${SIGN_AND_CREATE_STATUS}; refusing attestations list fallback after failed creation."
+            exit "$SIGN_AND_CREATE_STATUS"
           elif [ -z "$ATTESTATION_ID" ]; then
             echo "sign-and-create returned no attestation name; falling back to attestations list"
             NEEDS_ATTESTATION_LIST=1
