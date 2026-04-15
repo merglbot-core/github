@@ -65,6 +65,16 @@ Platform policy authority remains in `merglbot-public/docs`:
   `workflow_dispatch` on the PR head ref with `expected_head_sha`. The legacy
   `@merglbot review --light` comment path is not used by the ENT weekly apply
   lane because GitHub App comments do not carry a trusted author association.
+- When `autonomous_fix_loop=true`, current-head Merglbot `changes_required`,
+  Cursor blockers, and real CI failures are not treated as final closeout
+  blockers in dry-run. They are classified as `WOULD_START_AUTONOMOUS_FIX_LOOP`
+  or `WOULD_HEAL_REQUIRED_CHECKS` with a findings ledger and the expected
+  prompt-library close-loop contract. The write-capable fix loop is deliberately
+  a separate orchestrator lane: it may push only minimal commits to the existing
+  Dependabot branch, must rerun Merglbot/Cursor/current-head gates after every
+  new head, and may merge only through squash `--match-head-commit` after
+  post-fix approval. This follows `Autonomous PR Close-Loop v1` and
+  `MERGLBOT_PR_REVIEW_AUTONOMOUS_AUTOMERGE_V1`.
 - Behind PRs are updated through GitHub's pull request `update-branch` API with
   `expected_head_sha`. The lane no longer relies on `@dependabot rebase`
   comments, because Dependabot rejects that command from actors without push
@@ -135,6 +145,12 @@ is posted to the default tracking issue `merglbot-public/docs#636`. Reusable
 omitted, and can still override routing with an explicit `tracking_issue` value.
 Reusable callers may pass `validator_profile`; manual dispatch uses the default
 `maximum_autonomy_v2` profile to stay within GitHub's 10-input limit.
+Reusable callers may also enable `autonomous_fix_loop`,
+`orchestrator_fix_handoff`, `max_fix_iterations`, `max_review_iterations`, and
+`fix_profile=dependabot_safe_v1` when they want a planning receipt for the
+orchestrator PR close-loop waves. Those inputs are intentionally kept off manual
+`workflow_dispatch` to preserve GitHub's 10-input limit and do not by themselves
+perform semantic code edits inside GitHub Actions.
 
 ## Merge Gate
 
@@ -150,6 +166,11 @@ Every merged Dependabot PR must prove:
 - Cursor Bugbot has a current-head pass when available, or the receipt records
   that Cursor was absent/neutral/skipping and not required,
 - the merge uses squash with `--match-head-commit`.
+
+If a close-loop lane pushed a fix commit, the final merge gate must additionally
+prove that the newest Merglbot receipt covers the post-fix head and that the
+stale-findings ledger was closed by a new head or a documented false-positive
+rationale. Same-head "no new findings" is not sufficient.
 
 ## Policy Alignment
 
