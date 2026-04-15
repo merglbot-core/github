@@ -51,6 +51,7 @@ MERGE_REVIEW_GATE_STATE = "REVIEW_REQUIRED"
 TERMINAL_MERGLBOT_REVIEW_BLOCKERS = {"review_not_approved_for_closeout"}
 DEFAULT_VALIDATOR_PROFILE = "maximum_autonomy_v2"
 VALIDATOR_PROFILES = {"strict_lockfile_v1", DEFAULT_VALIDATOR_PROFILE}
+MAX_FIX_LOOP_ITERATION_CAP = 10
 PACKAGE_JSON_DEPENDENCY_KEYS = {
     "dependencies",
     "devDependencies",
@@ -128,6 +129,23 @@ SENSITIVE_FILE_PATTERNS = [
 
 class GhError(RuntimeError):
     pass
+
+
+def fix_loop_control_errors(
+    *,
+    autonomous_fix_loop: bool,
+    orchestrator_fix_handoff: bool,
+    max_fix_iterations: int,
+    max_review_iterations: int,
+) -> list[str]:
+    errors: list[str] = []
+    if not 1 <= max_fix_iterations <= MAX_FIX_LOOP_ITERATION_CAP:
+        errors.append(f"--max-fix-iterations must be 1..{MAX_FIX_LOOP_ITERATION_CAP}")
+    if not 1 <= max_review_iterations <= MAX_FIX_LOOP_ITERATION_CAP:
+        errors.append(f"--max-review-iterations must be 1..{MAX_FIX_LOOP_ITERATION_CAP}")
+    if orchestrator_fix_handoff and not autonomous_fix_loop:
+        errors.append("--orchestrator-fix-handoff requires --autonomous-fix-loop")
+    return errors
 
 
 def utc_now() -> str:
@@ -2454,6 +2472,24 @@ merglbot-core/agents-orchestrator
     assert fix_receipt.action == "would_start_fix_loop"
     assert fix_receipt.would_start_fix_loop is True
     assert fix_receipt.terminal_close_loop_verdict == "PENDING_AUTONOMOUS_FIX_LOOP"
+    assert not fix_loop_control_errors(
+        autonomous_fix_loop=True,
+        orchestrator_fix_handoff=True,
+        max_fix_iterations=5,
+        max_review_iterations=5,
+    )
+    assert "--max-fix-iterations must be 1..10" in fix_loop_control_errors(
+        autonomous_fix_loop=True,
+        orchestrator_fix_handoff=True,
+        max_fix_iterations=999,
+        max_review_iterations=5,
+    )
+    assert "--orchestrator-fix-handoff requires --autonomous-fix-loop" in fix_loop_control_errors(
+        autonomous_fix_loop=False,
+        orchestrator_fix_handoff=True,
+        max_fix_iterations=5,
+        max_review_iterations=5,
+    )
     assert validate_change_scope(
         "merglbot-core/github",
         1,
@@ -2587,6 +2623,14 @@ def main() -> int:
         return self_test()
     if not args.mode:
         parser.error("--mode is required unless --self-test is used")
+    fix_loop_errors = fix_loop_control_errors(
+        autonomous_fix_loop=args.autonomous_fix_loop,
+        orchestrator_fix_handoff=args.orchestrator_fix_handoff,
+        max_fix_iterations=args.max_fix_iterations,
+        max_review_iterations=args.max_review_iterations,
+    )
+    if fix_loop_errors:
+        parser.error("; ".join(fix_loop_errors))
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     try:
