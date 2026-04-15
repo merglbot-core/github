@@ -63,6 +63,11 @@ on:
         required: false
         type: string
         default: ""
+      validator_profile:
+        description: "Scope validator profile: maximum_autonomy_v2 enables dependency-only manifest and workflow ref-only validators."
+        required: false
+        type: string
+        default: maximum_autonomy_v2
   workflow_dispatch:
     inputs:
       mode:
@@ -153,6 +158,7 @@ jobs:
           INPUT_PR_ALLOWLIST: ${{ inputs.pr_allowlist || '' }}
           INPUT_APPROVAL_NOTE: ${{ inputs.approval_note || '' }}
           INPUT_APPROVAL_ISSUE_URL: ${{ inputs.approval_issue_url || '' }}
+          INPUT_VALIDATOR_PROFILE: ${{ inputs.validator_profile || 'maximum_autonomy_v2' }}
           ENT_DEPENDABOT_APP_ID: ${{ secrets.ENT_DEPENDABOT_APP_ID }}
           ENT_DEPENDABOT_APP_PRIVATE_KEY: ${{ secrets.ENT_DEPENDABOT_APP_PRIVATE_KEY }}
           SLACK_DEPENDABOT_WEBHOOK_URL: ${{ secrets.SLACK_DEPENDABOT_WEBHOOK_URL }}
@@ -175,6 +181,7 @@ jobs:
           PR_ALLOWLIST="$INPUT_PR_ALLOWLIST"
           APPROVAL_NOTE="$INPUT_APPROVAL_NOTE"
           APPROVAL_ISSUE_URL="$INPUT_APPROVAL_ISSUE_URL"
+          VALIDATOR_PROFILE="$INPUT_VALIDATOR_PROFILE"
 
           ARGS=(
             --mode "$MODE"
@@ -186,6 +193,7 @@ jobs:
             --pr-allowlist "$PR_ALLOWLIST"
             --approval-note "$APPROVAL_NOTE"
             --approval-issue-url "$APPROVAL_ISSUE_URL"
+            --validator-profile "$VALIDATOR_PROFILE"
           )
 
           if [ -n "$SINGLE_REPO" ]; then

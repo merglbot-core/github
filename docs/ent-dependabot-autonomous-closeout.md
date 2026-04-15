@@ -30,12 +30,16 @@ Platform policy authority remains in `merglbot-public/docs`:
 - `dry-run` scans and classifies Dependabot PRs without GitHub writes.
 - `apply` may close irrelevant Dependabot PRs, align bounded branch protection,
   and squash-merge PRs that satisfy every current-head gate.
-- Default merge eligibility is limited to lockfiles and simple dependency-only
-  metadata files. Mixed-purpose manifests such as `package.json`,
-  `pyproject.toml`, `pom.xml`, `build.gradle(.kts)`, `go.mod`, or `global.json`
-  are blocked until a content-aware validator proves dependency-only hunks.
-  Dependabot PRs touching `.github/workflows/**`, reusable workflow wiring,
-  Dockerfiles, Terraform, deploy config, auth/IAM, secrets, runtime bootstrap,
+- Default merge eligibility uses `validator_profile=maximum_autonomy_v2`.
+  Lockfile-only updates remain merge-eligible. `package.json` is merge-eligible
+  only when the validator proves that the diff changes dependency version ranges
+  under `dependencies`, `devDependencies`, `optionalDependencies`, or
+  `peerDependencies` and a sibling lockfile changed in the same PR.
+- `.github/workflows/**` remains sensitive by default, but Dependabot PRs that
+  only bump `uses:` refs to the same action/reusable workflow target can be
+  treated as `VALIDATED_WORKFLOW_REF_ONLY`. Trigger, permission, env, shell,
+  secret, deploy, matrix, conditional, or job topology changes remain blocked.
+- Terraform, Dockerfiles, deploy config, auth/IAM, secrets, runtime bootstrap,
   or data/schema promotion surfaces are blocked for human checkpoint unless a
   narrower canonical allowlist covers that exact file class.
 - Stale age alone is never a close reason.
@@ -46,6 +50,16 @@ Platform policy authority remains in `merglbot-public/docs`:
   short-lived installation tokens per repository owner and fails closed when the
   app is not installed for a target owner. `ENTERPRISE_GITHUB_TOKEN` remains only
   a legacy fallback for non-ENT/single-owner tests.
+- Missing or stale Merglbot evidence is remediated through the target repo's
+  active `Merglbot PR Assistant v3 (On-Demand Multi-Model)` workflow via
+  `workflow_dispatch` on the PR head ref with `expected_head_sha`. The legacy
+  `@merglbot review --light` comment path is not used by the ENT weekly apply
+  lane because GitHub App comments do not carry a trusted author association.
+- Behind PRs are updated through GitHub's pull request `update-branch` API with
+  `expected_head_sha`. The lane no longer relies on `@dependabot rebase`
+  comments, because Dependabot rejects that command from actors without push
+  access semantics. After any update-branch change, every gate is recomputed on
+  the new head.
 - Local `single_repo` diagnostics validate against the repo-local
   `scripts/dependabot/ent_repository_scope.txt` mirror to stay inside the
   canonical 42-repo boundary without unnecessary cross-repo auth. GitHub Actions
@@ -105,15 +119,20 @@ It includes
 is posted to the default tracking issue `merglbot-public/docs#636`. Reusable
 `workflow_call` callers keep the same default fallback when `tracking_issue` is
 omitted, and can still override routing with an explicit `tracking_issue` value.
+Reusable callers may pass `validator_profile`; manual dispatch uses the default
+`maximum_autonomy_v2` profile to stay within GitHub's 10-input limit.
 
 ## Merge Gate
 
 Every merged Dependabot PR must prove:
 
-- the changed files are manifest/lockfile-only dependency metadata,
+- the changed files are lockfile-only, `VALIDATED_MANIFEST_DEP_ONLY`, or
+  `VALIDATED_WORKFLOW_REF_ONLY`,
 - required checks are green on the live head,
 - the latest Merglbot PR Assistant receipt is current-head and
-  `approved_for_closeout`,
+  `approved_for_closeout`; if the receipt was missing or stale, the closeout
+  engine must have triggered a head-bound `workflow_dispatch` review and then
+  verified the emitted receipt markers,
 - Cursor Bugbot has a current-head pass when available, or the receipt records
   that Cursor was absent/neutral/skipping and not required,
 - the merge uses squash with `--match-head-commit`.
@@ -134,6 +153,13 @@ Each run writes:
 - `ent_dependabot_repo_results.json`
 - `summary.md`
 - branch-protection snapshots under `policy/` when alignment is evaluated
+
+Per-PR receipts include the Merglbot dispatch method/ref/head SHA when a review
+dispatch was needed, and include update-branch API evidence when a PR started
+behind its base branch. v2 receipts also include `validated_scope_class`,
+`scope_validator_evidence`, `would_dispatch_merglbot_review`,
+`would_update_branch`, `superseded_by`, and `close_reopen_condition` when
+applicable.
 
 The weekly caller posts the human summary and machine receipt to the cleanup
 steady-state tracking issue.
