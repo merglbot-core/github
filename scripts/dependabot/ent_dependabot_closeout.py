@@ -138,6 +138,7 @@ def fix_loop_control_errors(
     max_fix_iterations: int,
     max_review_iterations: int,
 ) -> list[str]:
+    """Return fail-closed configuration errors for the autonomous fix-loop lane."""
     errors: list[str] = []
     if not 1 <= max_fix_iterations <= MAX_FIX_LOOP_ITERATION_CAP:
         errors.append(f"--max-fix-iterations must be 1..{MAX_FIX_LOOP_ITERATION_CAP}")
@@ -1252,6 +1253,7 @@ def is_current_head_merglbot_terminal_blocker(payload: dict[str, Any], head_sha:
 
 
 def merglbot_findings_ledger(payload: dict[str, Any], head_sha: str) -> list[dict[str, Any]]:
+    """Build an audit ledger entry from the latest current-head Merglbot receipt."""
     blockers = payload.get("blockers")
     blocker_list = blockers if isinstance(blockers, list) else []
     return [
@@ -1269,6 +1271,7 @@ def merglbot_findings_ledger(payload: dict[str, Any], head_sha: str) -> list[dic
 
 
 def cursor_findings_ledger(status: str | None, head_sha: str | None) -> list[dict[str, Any]]:
+    """Build Cursor Bugbot ledger entries only when the current head is not clean."""
     if not status:
         return []
     if status in {"cursor_pass", "cursor_absent_not_required", "cursor_no_current_bug_signal"}:
@@ -1291,6 +1294,7 @@ def mark_fix_loop_candidate(
     max_fix_iterations: int,
     max_review_iterations: int,
 ) -> None:
+    """Mark a PR receipt as a safe candidate for the orchestrator fix loop."""
     receipt.action = "would_start_fix_loop"
     receipt.classification = classification
     receipt.would_start_fix_loop = True
