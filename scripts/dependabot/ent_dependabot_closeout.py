@@ -52,6 +52,30 @@ TERMINAL_MERGLBOT_REVIEW_BLOCKERS = {"review_not_approved_for_closeout"}
 DEFAULT_VALIDATOR_PROFILE = "maximum_autonomy_v2"
 VALIDATOR_PROFILES = {"strict_lockfile_v1", DEFAULT_VALIDATOR_PROFILE}
 MAX_FIX_LOOP_ITERATION_CAP = 10
+
+# Canonical required-check taxonomy for the ENT Dependabot closeout.
+# Maps the orchestrator's abstract taxonomy names to the concrete
+# classification categories emitted by classify_required_check_blocker().
+REQUIRED_CHECK_TAXONOMY = {
+    "rerunnable_check": {
+        "stale_or_pending_analysis_context",
+        "stale_or_pending_security_context",
+        "pending_or_never_emits",
+        "skipped_analysis_context",
+        "skipped_or_neutral",
+    },
+    "stale_required_context": {
+        "stale_or_pending_analysis_context",
+        "stale_or_pending_security_context",
+    },
+    "missing_workflow_enrollment": set(),  # blocker string: repo_enrollment:merglbot_workflow_dispatch_missing
+    "real_ci_failure": {
+        "check_failed_real",
+    },
+    "policy_required_but_never_emits": {
+        "pending_or_never_emits",
+    },
+}
 PACKAGE_JSON_DEPENDENCY_KEYS = {
     "dependencies",
     "devDependencies",
