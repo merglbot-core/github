@@ -226,6 +226,20 @@ jobs:
                   continue
               print(f"  {org}: ✅ App installed (installation_id={inst['id']}, repository_selection={sel})")
 
+          # Print App's own client_id for governance (public identifier, not a secret)
+          req_app = urllib.request.Request(
+              "https://api.github.com/app",
+              headers={
+                  "Authorization": f"Bearer {bearer}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "User-Agent": "merglbot-ent-scope-refresh",
+              },
+          )
+          with urllib.request.urlopen(req_app, timeout=30) as resp:
+              app_info = json.loads(resp.read())
+          print(f"::notice ::App identity: slug={app_info.get('slug')}, app_id={app_info.get('id')}, client_id={app_info.get('client_id')}")
+
           # Also list installations in orgs OUTSIDE the allowlist (should be empty)
           out_of_scope = set(by_org.keys()) - allowed_orgs
           if out_of_scope:
