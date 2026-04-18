@@ -184,9 +184,9 @@ jobs:
           import jwt  # PyJWT
 
           app_id = os.environ["APP_ID"]
-          key = os.environ["APP_PEM"]
+          pem = os.environ["APP_PEM"]
           iat = int(time.time()) - 30
-          token = jwt.encode({"iat": iat, "exp": iat + 540, "iss": app_id}, key, algorithm="RS256")
+          token = jwt.encode({"iat": iat, "exp": iat + 540, "iss": app_id}, pem, algorithm="RS256")
 
           req = urllib.request.Request(
               "https://api.github.com/app/installations?per_page=100",
