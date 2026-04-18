@@ -172,7 +172,7 @@ jobs:
       - name: Verify App installation on every allowed org (JWT-based)
         env:
           APP_ID: ${{ secrets.ENT_DEPENDABOT_APP_ID }}
-          APP_PRIVATE_KEY: ${{ secrets.ENT_DEPENDABOT_APP_PRIVATE_KEY }}
+          APP_PEM: ${{ secrets.ENT_DEPENDABOT_APP_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           # Generate App-level JWT and call /app/installations (App scope: lists ALL
@@ -184,7 +184,7 @@ jobs:
           import jwt  # PyJWT
 
           app_id = os.environ["APP_ID"]
-          key = os.environ["APP_PRIVATE_KEY"]
+          key = os.environ["APP_PEM"]
           iat = int(time.time()) - 30
           token = jwt.encode({"iat": iat, "exp": iat + 540, "iss": app_id}, key, algorithm="RS256")
 
