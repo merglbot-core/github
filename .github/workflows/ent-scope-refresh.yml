@@ -26,6 +26,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      pull-requests: read
     outputs:
       scope_json: ${{ steps.resolve.outputs.scope_json }}
       repo_count: ${{ steps.resolve.outputs.repo_count }}
@@ -148,6 +149,8 @@ jobs:
           branch="merglbot/ent-scope-refresh-$(date -u +%Y%m%dT%H%M%SZ)"
           git config user.email "merglbot-ent-dependabot-closeout[bot]@users.noreply.github.com"
           git config user.name "merglbot-ent-dependabot-closeout[bot]"
+          # Use App installation token for push (default github-actions[bot] token can't push)
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git checkout -b "$branch"
           git add scripts/dependabot/ent_repository_scope.txt scripts/pr-assistant/target-repos.txt
           git commit -m "chore(ent-scope): weekly regeneration of scope SSOT files
