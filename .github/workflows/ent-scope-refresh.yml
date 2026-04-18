@@ -1,0 +1,187 @@
+name: ENT Scope Refresh (SSOT auto-regeneration)
+
+on:
+  # Weekly Monday 07:00 UTC = 09:00 CEST / 08:00 CET.
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Print diffs but do not open PRs."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ent-scope-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh ENT scope files from ENT_ORG_ALLOWLIST.md
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      scope_json: ${{ steps.resolve.outputs.scope_json }}
+      repo_count: ${{ steps.resolve.outputs.repo_count }}
+      drift_detected: ${{ steps.diff.outputs.drift_detected }}
+    steps:
+      - name: Checkout merglbot-core/github (self)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Get installation token for merglbot-public (read docs)
+        id: public_token
+        uses: actions/create-github-app-token@9c4b0d96b0d11a3f2f9b27b5fa1e0e2e3bd16cd4  # v2.1.5 (SHA pin; bump via governance PR)
+        with:
+          app-id: ${{ secrets.ENT_DEPENDABOT_APP_ID }}
+          private-key: ${{ secrets.ENT_DEPENDABOT_APP_PRIVATE_KEY }}
+          owner: merglbot-public
+          repositories: docs
+
+      - name: Fetch canonical ENT_ORG_ALLOWLIST.md from merglbot-public/docs@main
+        env:
+          GH_TOKEN: ${{ steps.public_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p .ent-scope
+          gh api /repos/merglbot-public/docs/contents/ENT_ORG_ALLOWLIST.md \
+            --jq '.content' | base64 -d > .ent-scope/ENT_ORG_ALLOWLIST.md
+          echo "Fetched ENT_ORG_ALLOWLIST.md $(wc -l < .ent-scope/ENT_ORG_ALLOWLIST.md) lines"
+
+      - name: Get app token for all allowlisted orgs (read-only repos:read)
+        id: all_orgs_token
+        uses: actions/create-github-app-token@9c4b0d96b0d11a3f2f9b27b5fa1e0e2e3bd16cd4  # v2.1.5
+        with:
+          app-id: ${{ secrets.ENT_DEPENDABOT_APP_ID }}
+          private-key: ${{ secrets.ENT_DEPENDABOT_APP_PRIVATE_KEY }}
+          owner: merglbot-core
+
+      - name: Resolve ENT scope via API
+        id: resolve
+        env:
+          GH_TOKEN: ${{ steps.all_orgs_token.outputs.token }}
+          ALLOWLIST_FILE: ${{ github.workspace }}/.ent-scope/ENT_ORG_ALLOWLIST.md
+        run: |
+          set -euo pipefail
+          bash scripts/ent-scope/resolve-ent-scope.sh > .ent-scope/scope.json
+          repo_count=$(jq '.repo_count' .ent-scope/scope.json)
+          echo "repo_count=$repo_count" >> "$GITHUB_OUTPUT"
+          {
+            echo 'scope_json<<ENDSCOPE'
+            cat .ent-scope/scope.json
+            echo 'ENDSCOPE'
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved $repo_count repos"
+
+      - name: Regenerate downstream SSOT files
+        id: regen
+        env:
+          SCOPE_JSON: ${{ github.workspace }}/.ent-scope/scope.json
+        run: |
+          set -euo pipefail
+          # Regenerate ent_repository_scope.txt
+          python3 <<'PY'
+          import json, pathlib
+          scope = json.load(open('.ent-scope/scope.json'))
+          path = pathlib.Path('scripts/dependabot/ent_repository_scope.txt')
+          header = [
+              "# Repo-local mirror regenerated from merglbot-public/docs/ENT_ORG_ALLOWLIST.md",
+              "# by ent-scope-refresh.yml. DO NOT hand-edit; changes are overwritten weekly.",
+              "# Canonical scope source: merglbot-public/docs/ENT_ORG_ALLOWLIST.md + live org scan.",
+              "",
+          ]
+          repos = sorted(r['full_name'] for r in scope['repos'])
+          path.write_text("\n".join(header + repos) + "\n")
+          print(f"wrote {len(repos)} repos to {path}")
+          PY
+          # Regenerate target-repos.txt (excludes merglbot-core/github which deploy-v3.sh must not self-deploy)
+          python3 <<'PY'
+          import json, pathlib
+          scope = json.load(open('.ent-scope/scope.json'))
+          path = pathlib.Path('scripts/pr-assistant/target-repos.txt')
+          header = [
+              "# Platform scope (exclude Merglevsky-cz entirely).",
+              "# One repo per line. Regenerated weekly from merglbot-public/docs/ENT_ORG_ALLOWLIST.md",
+              "# via ent-scope-refresh.yml. DO NOT hand-edit; changes are overwritten.",
+              "# Used by:",
+              "# - deploy-v3.sh (copy PR Assistant workflow)",
+              "# - improvement digest (cross-repo metrics)",
+              "# Excludes merglbot-core/github (canonical workflow source; do not deploy copy into itself).",
+              "",
+          ]
+          repos = sorted(r['full_name'] for r in scope['repos'] if r['full_name'] != 'merglbot-core/github')
+          path.write_text("\n".join(header + repos) + "\n")
+          print(f"wrote {len(repos)} repos to {path}")
+          PY
+
+      - name: Detect drift + upload artifact
+        id: diff
+        run: |
+          set -euo pipefail
+          if git diff --quiet scripts/dependabot/ent_repository_scope.txt scripts/pr-assistant/target-repos.txt; then
+            echo "drift_detected=false" >> "$GITHUB_OUTPUT"
+            echo "No drift; SSOT files already current."
+          else
+            echo "drift_detected=true" >> "$GITHUB_OUTPUT"
+            echo "Drift detected in SSOT files:"
+            git --no-pager diff --stat scripts/dependabot/ent_repository_scope.txt scripts/pr-assistant/target-repos.txt
+          fi
+
+      - name: Upload scope artifact
+        uses: actions/upload-artifact@de65e23aa2b7e23d713bb51fbfcb6d502f8667d8  # v5.0.0
+        with:
+          name: ent-scope
+          path: .ent-scope/
+          retention-days: 90
+
+      - name: Open PR if drift detected (not dry-run)
+        if: steps.diff.outputs.drift_detected == 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ steps.all_orgs_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          branch="merglbot/ent-scope-refresh-$(date -u +%Y%m%dT%H%M%SZ)"
+          git config user.email "merglbot-ent-dependabot-closeout[bot]@users.noreply.github.com"
+          git config user.name "merglbot-ent-dependabot-closeout[bot]"
+          git checkout -b "$branch"
+          git add scripts/dependabot/ent_repository_scope.txt scripts/pr-assistant/target-repos.txt
+          git commit -m "chore(ent-scope): weekly regeneration of scope SSOT files
+
+          Auto-regenerated by ent-scope-refresh.yml from merglbot-public/docs/ENT_ORG_ALLOWLIST.md
+          via resolve-ent-scope.sh. Includes all non-archived, non-fork repositories in the 12
+          allowed merglbot-* orgs (total: $(jq '.repo_count' .ent-scope/scope.json) repos).
+
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          git push -u origin "$branch"
+          gh pr create --repo "${{ github.repository }}" --head "$branch" --title "chore(ent-scope): weekly SSOT regeneration" \
+            --body "Auto-generated by [ent-scope-refresh.yml](.github/workflows/ent-scope-refresh.yml) run [#${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). Regenerates \`scripts/dependabot/ent_repository_scope.txt\` and \`scripts/pr-assistant/target-repos.txt\` from [ENT_ORG_ALLOWLIST.md](https://github.com/merglbot-public/docs/blob/main/ENT_ORG_ALLOWLIST.md) + live org scan. Merges autonomously via standard close-loop if CI green."
+
+      - name: Verify App installation on every allowed org
+        env:
+          GH_TOKEN: ${{ steps.all_orgs_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          missing=0
+          jq -r '.allowed_orgs[]' .ent-scope/scope.json | while read -r org; do
+            installations=$(gh api "/orgs/$org/installations" --jq '.installations[] | select(.app_slug=="merglbot-ent-dependabot-closeout") | {id, repo: .repository_selection}' 2>/dev/null || true)
+            if [[ -z "$installations" ]]; then
+              echo "::warning ::$org does not have merglbot-ent-dependabot-closeout installed. Human action required: install App via GitHub UI with Repository access=All."
+              missing=$((missing + 1))
+              continue
+            fi
+            sel=$(echo "$installations" | jq -r '.repo')
+            if [[ "$sel" != "all" ]]; then
+              echo "::warning ::$org App installation is '$sel' (should be 'all'). Human action required: update scope in App settings."
+              missing=$((missing + 1))
+              continue
+            fi
+            echo "  $org: ✅ App installed with repository_selection=all"
+          done
+          if [[ "$missing" -gt 0 ]]; then
+            echo "::warning ::$missing org(s) need human-action remediation; see above."
+          fi

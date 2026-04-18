@@ -2,8 +2,10 @@ name: ENT Dependabot Weekly Closeout
 
 on:
   schedule:
-    # Sunday 13:00 UTC = 14:00 CET / 15:00 CEST for Europe/Prague.
-    - cron: "0 13 * * 0"
+    # Monday 07:30 UTC = 08:30 CET / 09:30 CEST for Europe/Prague.
+    # Scheduled 30 minutes after ent-scope-refresh.yml (Monday 07:00 UTC) so
+    # this run uses the freshest ent_repository_scope.txt SSOT file.
+    - cron: "30 7 * * 1"
   workflow_dispatch:
     inputs:
       mode:
