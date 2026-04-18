@@ -34,7 +34,7 @@ jobs:
 
       - name: Get installation token (all allowed orgs)
         id: app_token
-        uses: actions/create-github-app-token@9c4b0d96b0d11a3f2f9b27b5fa1e0e2e3bd16cd4  # v2.1.5
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3  # v3.1.1
         with:
           app-id: ${{ secrets.ENT_DEPENDABOT_APP_ID }}
           private-key: ${{ secrets.ENT_DEPENDABOT_APP_PRIVATE_KEY }}
