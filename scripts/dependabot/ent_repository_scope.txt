@@ -18,6 +18,7 @@ merglbot-core/tf-modules-
 merglbot-denatura/denatura-fb-viz
 merglbot-denatura/marketing-planning
 merglbot-denatura/marketing_actions_detector
+merglbot-extractors/abra-flexi-extractor
 merglbot-extractors/denatura-additional-costs-extractor
 merglbot-extractors/denatura-shoptet-export-extractor
 merglbot-extractors/facebook-extractor
