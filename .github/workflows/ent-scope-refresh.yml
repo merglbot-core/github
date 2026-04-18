@@ -41,7 +41,7 @@ jobs:
         id: public_token
         uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3  # v3.1.1 (SHA pin; bump via governance PR)
         with:
-          app-id: ${{ secrets.ENT_DEPENDABOT_APP_ID }}
+          client-id: ${{ secrets.ENT_DEPENDABOT_APP_CLIENT_ID }}
           private-key: ${{ secrets.ENT_DEPENDABOT_APP_PRIVATE_KEY }}
           owner: merglbot-public
           repositories: docs
@@ -60,7 +60,7 @@ jobs:
         id: all_orgs_token
         uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3  # v3.1.1
         with:
-          app-id: ${{ secrets.ENT_DEPENDABOT_APP_ID }}
+          client-id: ${{ secrets.ENT_DEPENDABOT_APP_CLIENT_ID }}
           private-key: ${{ secrets.ENT_DEPENDABOT_APP_PRIVATE_KEY }}
           owner: merglbot-core
 
@@ -225,6 +225,20 @@ jobs:
                   selected_scope += 1
                   continue
               print(f"  {org}: ✅ App installed (installation_id={inst['id']}, repository_selection={sel})")
+
+          # Print App's own client_id for governance (public identifier, not a secret)
+          req_app = urllib.request.Request(
+              "https://api.github.com/app",
+              headers={
+                  "Authorization": f"Bearer {bearer}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "User-Agent": "merglbot-ent-scope-refresh",
+              },
+          )
+          with urllib.request.urlopen(req_app, timeout=30) as resp:
+              app_info = json.loads(resp.read())
+          print(f"::notice ::App identity: slug={app_info.get('slug')}, app_id={app_info.get('id')}, client_id={app_info.get('client_id')}")
 
           # Also list installations in orgs OUTSIDE the allowlist (should be empty)
           out_of_scope = set(by_org.keys()) - allowed_orgs
