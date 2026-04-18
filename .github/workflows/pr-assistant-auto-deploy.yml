@@ -34,6 +34,15 @@ jobs:
         with:
           persist-credentials: false  # App token used for push, not github-actions[bot]
 
+      - name: Get installation token for merglbot-public (docs read)
+        id: public_token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3  # v3.1.1
+        with:
+          app-id: ${{ secrets.ENT_DEPENDABOT_APP_ID }}
+          private-key: ${{ secrets.ENT_DEPENDABOT_APP_PRIVATE_KEY }}
+          owner: merglbot-public
+          repositories: docs
+
       - name: Get installation token (all allowed orgs)
         id: app_token
         uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3  # v3.1.1
@@ -44,7 +53,7 @@ jobs:
 
       - name: Fetch canonical ENT_ORG_ALLOWLIST.md
         env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          GH_TOKEN: ${{ steps.public_token.outputs.token }}
         run: |
           set -euo pipefail
           mkdir -p .ent-scope
