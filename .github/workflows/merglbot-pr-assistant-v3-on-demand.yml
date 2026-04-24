@@ -118,11 +118,20 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+    # v3/v4 conflict guard:
+    # - Skip when PR Assistant v4 is the promoted command owner for this repo
+    #   (repo/org var MERGLBOT_PR_ASSISTANT_V3_DISABLED=true).
+    # - Skip when the trigger is @merglbot review-v4 (v4 canary owns that command).
+    # - Otherwise respond to @merglbot review as before.
     if: |
-      (github.event_name == 'issue_comment' && 
-       github.event.issue.pull_request && 
-       contains(github.event.comment.body, '@merglbot review')) ||
-      github.event_name == 'workflow_dispatch'
+      vars.MERGLBOT_PR_ASSISTANT_V3_DISABLED != 'true' &&
+      (
+        (github.event_name == 'issue_comment' &&
+         github.event.issue.pull_request &&
+         contains(github.event.comment.body, '@merglbot review') &&
+         !contains(github.event.comment.body, '@merglbot review-v4')) ||
+        github.event_name == 'workflow_dispatch'
+      )
     outputs:
       pr_number: ${{ steps.get_pr.outputs.pr_number }}
       should_run: ${{ steps.get_pr.outputs.should_run }}
