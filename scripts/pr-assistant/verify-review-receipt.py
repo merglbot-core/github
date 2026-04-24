@@ -44,18 +44,23 @@ def parse_markers(body: str) -> dict[str, str]:
 
 def normalize_machine_token(value: str) -> str:
     normalized = value.strip().lower().replace(" ", "_")
-    normalized = re.sub(r"[^a-z_]+", "", normalized)
+    normalized = re.sub(r"[^a-z0-9_]+", "", normalized)
     normalized = re.sub(r"_+", "_", normalized).strip("_")
     return normalized
 
 
+def normalize_heading(value: str) -> str:
+    heading = re.sub(r"^[#\s]+", "", value.strip())
+    heading = re.sub(r"[*_`\s]+", "", heading)
+    return heading.lower()
+
+
 def extract_zaver_field(body: str, field_name: str) -> str:
     in_zaver = False
-    field_prefix = f"{field_name.lower()}:"
     for raw_line in (body or "").splitlines():
         line = raw_line.strip()
         if SECTION_HEADER_RE.match(line):
-            if ZAVER_HEADER_RE.match(line):
+            if ZAVER_HEADER_RE.match(f"## {normalize_heading(line)}"):
                 in_zaver = True
                 continue
             if in_zaver:
@@ -63,8 +68,9 @@ def extract_zaver_field(body: str, field_name: str) -> str:
         if not in_zaver:
             continue
         cleaned = re.sub(r"^[\s>\-]*", "", line).replace("*", "").replace("`", "")
-        if cleaned.lower().startswith(field_prefix):
-            return normalize_machine_token(cleaned.split(":", 1)[1])
+        parts = cleaned.split(":", 1)
+        if len(parts) == 2 and parts[0].strip().lower() == field_name.lower():
+            return normalize_machine_token(parts[1])
     return ""
 
 
@@ -216,7 +222,7 @@ def self_test() -> int:
     assert spoofed_markers is None
     mismatched_body = "\n".join(
         [
-            "## Zaver",
+            "## **Zaver**",
             "Verdict: approved_for_closeout",
             "",
             "<!-- MERGLBOT_PR_ASSISTANT_V3 -->",
