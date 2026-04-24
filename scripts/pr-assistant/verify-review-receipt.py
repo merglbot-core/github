@@ -60,7 +60,8 @@ def extract_zaver_field(body: str, field_name: str) -> str:
     for raw_line in (body or "").splitlines():
         line = raw_line.strip()
         if SECTION_HEADER_RE.match(line):
-            if ZAVER_HEADER_RE.match(f"## {normalize_heading(line)}"):
+            heading = normalize_heading(line)
+            if heading in ("zaver", "závěr"):
                 in_zaver = True
                 continue
             if in_zaver:
