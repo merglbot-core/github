@@ -1743,9 +1743,12 @@ jobs:
               in_zaver {
                 line = $0
                 gsub(/^[[:space:]>-]*/, "", line)
-                gsub(/[*`]/, "", line)
-                if (tolower(line) ~ ("^" tolower(field_name) ":[[:space:]]*")) {
-                  print line
+                n = split(line, parts, ":")
+                field_label = parts[1]
+                gsub(/[*_`]/, "", field_label)
+                if (n >= 2 && tolower(field_label) == tolower(field_name)) {
+                  sub(/^[^:]*:[[:space:]]*/, "", line)
+                  print field_name ": " line
                   exit
                 }
               }
@@ -1765,9 +1768,12 @@ jobs:
               {
                 line = $0
                 gsub(/^[[:space:]>-]*/, "", line)
-                gsub(/[*`]/, "", line)
-                if (tolower(line) ~ ("^" tolower(field_name) ":[[:space:]]*")) {
-                  print line
+                n = split(line, parts, ":")
+                field_label = parts[1]
+                gsub(/[*_`]/, "", field_label)
+                if (n >= 2 && tolower(field_label) == tolower(field_name)) {
+                  sub(/^[^:]*:[[:space:]]*/, "", line)
+                  print field_name ": " line
                   exit
                 }
               }
@@ -1777,7 +1783,7 @@ jobs:
           normalize_machine_token() {
             printf '%s' "$1" \
               | tr '[:upper:]' '[:lower:]' \
-              | tr ' ' '_' \
+              | sed -E 's/[[:space:]-]+/_/g' \
               | tr -d '\r' \
               | sed -E 's/[^a-z0-9_]+//g; s/^_+//; s/_+$//; s/_{2,}/_/g'
           }
@@ -1858,10 +1864,18 @@ jobs:
             esac
           fi
           case "$DOCUMENTATION_OBLIGATION_STATE" in
-            satisfied|not_required|unknown) ;;
+            satisfied|not_required) ;;
+            missing|unknown)
+              if [ "$REVIEW_VERDICT" = "approved_for_closeout" ]; then
+                REVIEW_VERDICT="blocked_missing_authority"
+              fi
+              ;;
             *)
               echo "::warning::Unexpected DOCUMENTATION_OBLIGATION_STATE='${DOCUMENTATION_OBLIGATION_STATE}', normalizing to unknown advisory metadata."
               DOCUMENTATION_OBLIGATION_STATE="unknown"
+              if [ "$REVIEW_VERDICT" = "approved_for_closeout" ]; then
+                REVIEW_VERDICT="blocked_missing_authority"
+              fi
               ;;
           esac
           FOLLOW_UP_ID="pr-${PR_NUM}-review-${GITHUB_RUN_ID}"
@@ -2218,13 +2232,30 @@ jobs:
           extract_review_field_line() {
             local field_name="$1"
             awk -v field_name="$field_name" '
-              BEGIN { IGNORECASE = 1 }
+              BEGIN { IGNORECASE = 1; in_zaver = 0 }
+              /^##[[:space:]]+/ {
+                header = $0
+                gsub(/^[#[:space:]]+/, "", header)
+                gsub(/[*_`[:space:]]/, "", header)
+                if (tolower(header) == "zaver" || tolower(header) == "závěr") {
+                  in_zaver = 1
+                  next
+                }
+                if (in_zaver) {
+                  exit
+                }
+                next
+              }
               {
+                if (!in_zaver) next
                 line = $0
                 gsub(/^[[:space:]>-]*/, "", line)
-                gsub(/[*`]/, "", line)
-                if (tolower(line) ~ ("^" tolower(field_name) ":[[:space:]]*")) {
-                  print line
+                n = split(line, parts, ":")
+                field_label = parts[1]
+                gsub(/[*_`]/, "", field_label)
+                if (n >= 2 && tolower(field_label) == tolower(field_name)) {
+                  sub(/^[^:]*:[[:space:]]*/, "", line)
+                  print field_name ": " line
                   exit
                 }
               }
@@ -2390,7 +2421,7 @@ jobs:
       - name: Upload Metrics Artifact
         if: always() && steps.context.outputs.skip_review != 'true'
         continue-on-error: true
-        # Verify pin: gh api repos/actions/upload-artifact/git/ref/tags/v4.6.2 --jq .object.sha
+        # Verify pin: gh api repos/actions/upload-artifact/git/ref/tags/v7.0.0 --jq .object.sha
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
           name: review-metrics-${{ env.PR_NUMBER }}-${{ github.run_id }}

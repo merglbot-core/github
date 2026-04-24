@@ -43,7 +43,7 @@ def parse_markers(body: str) -> dict[str, str]:
 
 
 def normalize_machine_token(value: str) -> str:
-    normalized = value.strip().lower().replace(" ", "_")
+    normalized = value.strip().lower().replace(" ", "_").replace("-", "_")
     normalized = MACHINE_TOKEN_STRIP_RE.sub("", normalized)
     normalized = re.sub(r"_+", "_", normalized).strip("_")
     return normalized
@@ -67,9 +67,14 @@ def extract_zaver_field(body: str, field_name: str) -> str:
                 break
         if not in_zaver:
             continue
-        cleaned = re.sub(r"^[\s>\-]*", "", line).replace("*", "").replace("`", "")
+        cleaned = re.sub(r"^[\s>\-]*", "", line)
         parts = cleaned.split(":", 1)
-        if len(parts) == 2 and parts[0].strip().lower() == field_name.lower():
+        field_key = (
+            parts[0].replace("*", "").replace("_", "").replace("`", "").strip()
+            if parts
+            else ""
+        )
+        if len(parts) == 2 and field_key.lower() == field_name.lower():
             return normalize_machine_token(parts[1])
     return ""
 
@@ -217,6 +222,11 @@ def self_test() -> int:
     assert trusted_markers and trusted_markers["MERGLBOT_REVIEW_HEAD_SHA"] == "abc123"
     assert extract_zaver_field(trusted_body, "Verdict") == ""
     assert normalize_machine_token("Review V4 Failed!") == "review_v4_failed"
+    assert normalize_machine_token("approved-for-closeout") == "approved_for_closeout"
+    assert (
+        extract_zaver_field("## Zaver\n_Verdict_: approved-for-closeout", "Verdict")
+        == "approved_for_closeout"
+    )
     spoofed_markers, _, _ = latest_receipt(
         [{"body": body, "user": {"login": "octocat", "type": "User"}}]
     )
