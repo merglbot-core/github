@@ -231,7 +231,10 @@ def self_test() -> int:
     )
     assert extract_zaver_field(mismatched_body, "Verdict") == "approved_for_closeout"
     mismatched_markers = parse_markers(mismatched_body)
-    assert mismatched_markers["MERGLBOT_REVIEW_VERDICT"] != extract_zaver_field(mismatched_body, "Verdict")
+    assert mismatched_markers["MERGLBOT_REVIEW_VERDICT"] != extract_zaver_field(
+        mismatched_body,
+        "Verdict",
+    )
     failed = parse_markers(
         "\n".join(
             [
