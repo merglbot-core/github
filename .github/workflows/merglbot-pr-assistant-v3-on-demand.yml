@@ -1788,7 +1788,7 @@ jobs:
           if awk 'BEGIN{IGNORECASE=1; in_section=0} /^##[[:space:]]+SSOT Sync \(Docs\)/{in_section=1; next} /^##[[:space:]]/{in_section=0} in_section && $0 ~ /^[[:space:]]*None[[:space:]]*$/ {found=1} END{exit(found?0:1)}' final_review.txt 2>/dev/null; then
             SSOT_SYNC_DOCS_NONE="true"
           fi
-          DOC_STATE_LINE="$(extract_zaver_review_field_line 'Documentation Obligation State' || true)"
+          DOC_STATE_LINE="$(extract_final_review_field_line 'Documentation Obligation State' || true)"
           if [ -n "$DOC_STATE_LINE" ]; then
             DOCUMENTATION_OBLIGATION_STATE_EXPLICIT="true"
             DOCUMENTATION_OBLIGATION_STATE="$(normalize_machine_token "$(printf '%s' "$DOC_STATE_LINE" | sed -E 's/^Documentation Obligation State:[[:space:]]*//I')")"
@@ -1848,7 +1848,7 @@ jobs:
           fi
 
           REVIEW_VERDICT="blocked_missing_authority"
-          VERDICT_LINE="$(extract_zaver_review_field_line 'Verdict' || true)"
+          VERDICT_LINE="$(extract_final_review_field_line 'Verdict' || true)"
           if [ -n "$VERDICT_LINE" ]; then
             REVIEW_VERDICT_RAW="$(normalize_machine_token "$(printf '%s' "$VERDICT_LINE" | sed -E 's/^Verdict:[[:space:]]*//I')")"
             case "$REVIEW_VERDICT_RAW" in
