@@ -134,6 +134,7 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
     pr_check_surface = markers.get("MERGLBOT_PR_CHECK_SURFACE", "")
     run_id = markers.get("MERGLBOT_RUN_ID", "")
     run_url = markers.get("MERGLBOT_RUN_URL", "")
+    docs_state = markers.get("MERGLBOT_DOCUMENTATION_OBLIGATION_STATE", "")
 
     current_head_match = bool(
         head_sha and review_head_sha and head_sha == review_head_sha
@@ -153,7 +154,17 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
     if verdict not in valid_verdicts:
         blockers.append("missing_or_invalid_review_verdict")
     visible_verdict = extract_zaver_field(receipt_body, "Verdict")
-    if visible_verdict in valid_verdicts and verdict and visible_verdict != verdict:
+    policy_override_mismatch = (
+        visible_verdict == "approved_for_closeout"
+        and verdict == "blocked_missing_authority"
+        and docs_state in {"missing", "unknown"}
+    )
+    if (
+        visible_verdict in valid_verdicts
+        and verdict
+        and visible_verdict != verdict
+        and not policy_override_mismatch
+    ):
         blockers.append("review_visible_verdict_marker_mismatch")
     if status != "success" or verdict != "approved_for_closeout":
         blockers.append("review_not_approved_for_closeout")
@@ -238,14 +249,13 @@ def self_test() -> int:
             "",
             "<!-- MERGLBOT_PR_ASSISTANT_V3 -->",
             "<!-- MERGLBOT_REVIEW_VERDICT: blocked_missing_authority -->",
+            "<!-- MERGLBOT_DOCUMENTATION_OBLIGATION_STATE: unknown -->",
         ]
     )
     assert extract_zaver_field(mismatched_body, "Verdict") == "approved_for_closeout"
     mismatched_markers = parse_markers(mismatched_body)
-    assert mismatched_markers["MERGLBOT_REVIEW_VERDICT"] != extract_zaver_field(
-        mismatched_body,
-        "Verdict",
-    )
+    assert mismatched_markers["MERGLBOT_REVIEW_VERDICT"] == "blocked_missing_authority"
+    assert mismatched_markers["MERGLBOT_DOCUMENTATION_OBLIGATION_STATE"] == "unknown"
     failed = parse_markers(
         "\n".join(
             [

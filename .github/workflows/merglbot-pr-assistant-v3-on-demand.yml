@@ -1702,7 +1702,7 @@ jobs:
 
           ANTHROPIC_CONFIG_DESC="temperature=0.2"
           case "$ANTHROPIC_MODEL_FINAL" in
-            claude-opus-4-7|claude-opus-4-6|claude-sonnet-4-6)
+            claude-opus-4-7)
               ANTHROPIC_CONFIG_DESC="adaptive thinking, effort=max"
               ;;
             skipped)
@@ -1745,26 +1745,7 @@ jobs:
 
           extract_final_review_field_line() {
             local field_name="$1"
-            local zaver_line
-            zaver_line="$(extract_zaver_review_field_line "$field_name" || true)"
-            if [ -n "$zaver_line" ]; then
-              printf '%s\n' "$zaver_line"
-              return 0
-            fi
-            awk -v field_name="$field_name" '
-              {
-                line = $0
-                gsub(/^[[:space:]>-]*/, "", line)
-                n = split(line, parts, ":")
-                field_label = parts[1]
-                gsub(/[*_`]/, "", field_label)
-                if (n >= 2 && tolower(field_label) == tolower(field_name)) {
-                  sub(/^[^:]*:[[:space:]]*/, "", line)
-                  print field_name ": " line
-                  exit
-                }
-              }
-            ' final_review.txt
+            extract_zaver_review_field_line "$field_name"
           }
 
           normalize_machine_token() {
