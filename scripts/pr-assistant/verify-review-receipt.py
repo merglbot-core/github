@@ -19,6 +19,7 @@ from typing import Any
 MARKER_RE = re.compile(r"<!--\s*(MERGLBOT_[A-Z0-9_]+)\s*:\s*([\s\S]*?)\s*-->")
 ZAVER_HEADER_RE = re.compile(r"^##\s+(?:Zaver|Závěr)\s*$", re.IGNORECASE)
 SECTION_HEADER_RE = re.compile(r"^##\s+")
+MACHINE_TOKEN_STRIP_RE = re.compile(r"[^a-z0-9_]+")
 PR_ASSISTANT_WORKFLOW_PATHS = {
     ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
     ".github/workflows/merglbot-pr-v3-on-demand.yml",
@@ -43,7 +44,7 @@ def parse_markers(body: str) -> dict[str, str]:
 
 def normalize_machine_token(value: str) -> str:
     normalized = value.strip().lower().replace(" ", "_")
-    normalized = re.sub(r"[^a-z0-9_]+", "", normalized)
+    normalized = MACHINE_TOKEN_STRIP_RE.sub("", normalized)
     normalized = re.sub(r"_+", "_", normalized).strip("_")
     return normalized
 
@@ -215,6 +216,7 @@ def self_test() -> int:
     )
     assert trusted_markers and trusted_markers["MERGLBOT_REVIEW_HEAD_SHA"] == "abc123"
     assert extract_zaver_field(trusted_body, "Verdict") == ""
+    assert normalize_machine_token("Review V4 Failed!") == "review_v4_failed"
     spoofed_markers, _, _ = latest_receipt(
         [{"body": body, "user": {"login": "octocat", "type": "User"}}]
     )
