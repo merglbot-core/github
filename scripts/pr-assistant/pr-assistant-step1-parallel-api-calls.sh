@@ -905,7 +905,7 @@ echo "Prompt size: $PROMPT_SIZE chars"
       echo "  → Trying Anthropic model: $MODEL_TO_TRY"
 
       case "$MODEL_TO_TRY" in
-        claude-opus-4-7|claude-opus-4-6|claude-sonnet-4-6)
+        claude-opus-4-7)
           jq -n \
             --arg model "$MODEL_TO_TRY" \
             --rawfile prompt "$FULL_PROMPT_FILE" \
