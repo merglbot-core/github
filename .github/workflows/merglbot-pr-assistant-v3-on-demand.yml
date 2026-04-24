@@ -2233,12 +2233,17 @@ jobs:
             local field_name="$1"
             awk -v field_name="$field_name" '
               BEGIN { IGNORECASE = 1; in_zaver = 0 }
-              /^##[[:space:]]+(Zaver|Závěr)[[:space:]]*$/ {
-                in_zaver = 1
-                next
-              }
-              /^##[[:space:]]/ {
-                if (in_zaver) exit
+              /^##[[:space:]]+/ {
+                header = $0
+                gsub(/^[#[:space:]]+/, "", header)
+                gsub(/[*_`[:space:]]/, "", header)
+                if (tolower(header) == "zaver" || tolower(header) == "závěr") {
+                  in_zaver = 1
+                  next
+                }
+                if (in_zaver) {
+                  exit
+                }
                 next
               }
               {
