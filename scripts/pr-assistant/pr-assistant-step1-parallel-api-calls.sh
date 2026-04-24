@@ -1541,7 +1541,7 @@ if [ -s anthropic_review.txt ] && ! grep -qx "API_ERROR" anthropic_review.txt 2>
 fi
 
 if [ "$OPENAI_OK" != "true" ] && [ "$ANTHROPIC_OK" != "true" ]; then
-  echo "WARN: Step 1 produced no usable output from OpenAI or Anthropic; proceeding with CI-only fallback in Step 3." >&2
+  echo "WARN: Step 1 produced no usable output from OpenAI or Anthropic; Step 3 will emit a fail-closed CI-only fallback review." >&2
 fi
 
 echo "========================================="
