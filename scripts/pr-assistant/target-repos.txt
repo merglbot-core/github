@@ -32,6 +32,7 @@ merglbot-denatura/denatura-fb-viz
 merglbot-denatura/marketing-planning
 merglbot-denatura/marketing_actions_detector
 
+merglbot-extractors/abra-flexi-extractor
 merglbot-extractors/denatura-additional-costs-extractor
 merglbot-extractors/denatura-shoptet-export-extractor
 merglbot-extractors/facebook-extractor
@@ -49,6 +50,7 @@ merglbot-proteinaco/abc_product_material_analysis
 merglbot-proteinaco/basket-analysis
 merglbot-proteinaco/btf-legacy-implementation
 merglbot-proteinaco/btf-viz
+merglbot-proteinaco/proteinaco-forecast-exporter
 merglbot-proteinaco/proteinaco-web
 merglbot-proteinaco/viz-api
 
