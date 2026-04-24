@@ -1744,9 +1744,9 @@ jobs:
                 line = $0
                 gsub(/^[[:space:]>-]*/, "", line)
                 n = split(line, parts, ":")
-                key = parts[1]
-                gsub(/[*_`]/, "", key)
-                if (n >= 2 && tolower(key) == tolower(field_name)) {
+                field_label = parts[1]
+                gsub(/[*_`]/, "", field_label)
+                if (n >= 2 && tolower(field_label) == tolower(field_name)) {
                   sub(/^[^:]*:[[:space:]]*/, "", line)
                   print field_name ": " line
                   exit
@@ -1769,9 +1769,9 @@ jobs:
                 line = $0
                 gsub(/^[[:space:]>-]*/, "", line)
                 n = split(line, parts, ":")
-                key = parts[1]
-                gsub(/[*_`]/, "", key)
-                if (n >= 2 && tolower(key) == tolower(field_name)) {
+                field_label = parts[1]
+                gsub(/[*_`]/, "", field_label)
+                if (n >= 2 && tolower(field_label) == tolower(field_name)) {
                   sub(/^[^:]*:[[:space:]]*/, "", line)
                   print field_name ": " line
                   exit
@@ -2246,9 +2246,9 @@ jobs:
                 line = $0
                 gsub(/^[[:space:]>-]*/, "", line)
                 n = split(line, parts, ":")
-                key = parts[1]
-                gsub(/[*_`]/, "", key)
-                if (n >= 2 && tolower(key) == tolower(field_name)) {
+                field_label = parts[1]
+                gsub(/[*_`]/, "", field_label)
+                if (n >= 2 && tolower(field_label) == tolower(field_name)) {
                   sub(/^[^:]*:[[:space:]]*/, "", line)
                   print field_name ": " line
                   exit
