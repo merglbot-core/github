@@ -375,13 +375,13 @@ jobs:
 
           PR_VIEW_FIELDS_WITH_CHECKS="title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles,statusCheckRollup"
           PR_VIEW_FIELDS_NO_CHECKS="title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles"
-          if gh pr view "$PR_NUM" --json "$PR_VIEW_FIELDS_WITH_CHECKS" > pr_metadata.json 2>pr_view_err.txt; then
+          if gh pr view "$PR_NUM" --repo "$REPOSITORY_SLUG" --json "$PR_VIEW_FIELDS_WITH_CHECKS" > pr_metadata.json 2>pr_view_err.txt; then
             rm -f pr_view_err.txt
           else
             echo "WARN: gh pr view with statusCheckRollup failed; retrying without checks (best-effort)." >&2
             if grep -Eqi 'statusCheckRollup|Cannot query field|Resource not accessible|forbidden' pr_view_err.txt 2>/dev/null; then
               head -n 30 pr_view_err.txt >&2 || true
-              gh pr view "$PR_NUM" --json "$PR_VIEW_FIELDS_NO_CHECKS" > pr_metadata.json
+              gh pr view "$PR_NUM" --repo "$REPOSITORY_SLUG" --json "$PR_VIEW_FIELDS_NO_CHECKS" > pr_metadata.json
             else
               echo "ERROR: gh pr view failed (unexpected). Aborting." >&2
               head -n 30 pr_view_err.txt >&2 || true
@@ -530,7 +530,9 @@ jobs:
           echo "PR_BASE_SHA=$PR_BASE_SHA" >> "$GITHUB_ENV"
           echo "PR_HEAD_SHA=$PR_HEAD_SHA" >> "$GITHUB_ENV"
 
-          gh pr view "$PR_NUM" --json files -q '.files[].path' > changed_files.txt 2>/dev/null || echo "" > changed_files.txt
+          gh api "repos/${REPOSITORY_SLUG}/pulls/${PR_NUM}/files" \
+            --paginate \
+            --jq '.[].filename' > changed_files.txt 2>/dev/null || echo "" > changed_files.txt
 
           gh api "repos/${REPOSITORY_SLUG}/issues/$PR_NUM/comments" --paginate > issue_comments.json 2>/dev/null || echo "[]" > issue_comments.json
 
@@ -1075,7 +1077,7 @@ jobs:
           OPENAI_SYNTHESIS_REASONING_EFFORT_USED="n/a"
 
           PR_TITLE=$(< pr_title.txt)
-          PR_BODY=$(python3 -c 'from pathlib import Path; import sys; s=Path("pr_body.txt").read_text(encoding="utf-8", errors="replace"); sys.stdout.write(s[:3000])')
+          PR_BODY=$(python3 -c 'from pathlib import Path; import sys; p=Path("pr_body.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:3000])')
 
           ANTHROPIC_REVIEW=""
           ANTHROPIC_OK="false"
@@ -2422,7 +2424,7 @@ jobs:
         if: always() && steps.context.outputs.skip_review != 'true'
         continue-on-error: true
         # Verify pin: gh api repos/actions/upload-artifact/git/ref/tags/v7.0.0 --jq .object.sha
-        # Expected tag object SHA (verified 2026-04-24): bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        # Expected tag object SHA: bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         # Compatibility: this workflow only uses stable name/path/retention-days inputs.
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         with:
