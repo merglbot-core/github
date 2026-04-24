@@ -1779,7 +1779,7 @@ jobs:
               | tr '[:upper:]' '[:lower:]' \
               | tr ' ' '_' \
               | tr -d '\r' \
-              | sed -E 's/[^a-z_]+//g; s/^_+//; s/_+$//; s/_{2,}/_/g'
+              | sed -E 's/[^a-z0-9_]+//g; s/^_+//; s/_+$//; s/_{2,}/_/g'
           }
 
           DOCUMENTATION_OBLIGATION_STATE="unknown"
