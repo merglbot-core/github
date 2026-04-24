@@ -17,6 +17,8 @@ import subprocess
 from typing import Any
 
 MARKER_RE = re.compile(r"<!--\s*(MERGLBOT_[A-Z0-9_]+)\s*:\s*([\s\S]*?)\s*-->")
+ZAVER_HEADER_RE = re.compile(r"^##\s+(?:Zaver|Závěr)\s*$", re.IGNORECASE)
+SECTION_HEADER_RE = re.compile(r"^##\s+")
 PR_ASSISTANT_WORKFLOW_PATHS = {
     ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
     ".github/workflows/merglbot-pr-v3-on-demand.yml",
@@ -40,9 +42,41 @@ def parse_markers(body: str) -> dict[str, str]:
     return {key.strip(): value.strip() for key, value in MARKER_RE.findall(body or "")}
 
 
+def normalize_machine_token(value: str) -> str:
+    normalized = value.strip().lower().replace(" ", "_")
+    normalized = re.sub(r"[^a-z0-9_]+", "", normalized)
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    return normalized
+
+
+def normalize_heading(value: str) -> str:
+    heading = re.sub(r"^[#\s]+", "", value.strip())
+    heading = re.sub(r"[*_`\s]+", "", heading)
+    return heading.lower()
+
+
+def extract_zaver_field(body: str, field_name: str) -> str:
+    in_zaver = False
+    for raw_line in (body or "").splitlines():
+        line = raw_line.strip()
+        if SECTION_HEADER_RE.match(line):
+            if ZAVER_HEADER_RE.match(f"## {normalize_heading(line)}"):
+                in_zaver = True
+                continue
+            if in_zaver:
+                break
+        if not in_zaver:
+            continue
+        cleaned = re.sub(r"^[\s>\-]*", "", line).replace("*", "").replace("`", "")
+        parts = cleaned.split(":", 1)
+        if len(parts) == 2 and parts[0].strip().lower() == field_name.lower():
+            return normalize_machine_token(parts[1])
+    return ""
+
+
 def latest_receipt(
     comments: list[dict[str, Any]],
-) -> tuple[dict[str, str] | None, str | None]:
+) -> tuple[dict[str, str] | None, str | None, str]:
     for comment in reversed(comments):
         user = comment.get("user")
         if not isinstance(user, dict):
@@ -53,8 +87,8 @@ def latest_receipt(
         if "<!-- MERGLBOT_PR_ASSISTANT_V3 -->" not in body:
             continue
         markers = parse_markers(body)
-        return markers, str(comment.get("html_url") or comment.get("url") or "")
-    return None, None
+        return markers, str(comment.get("html_url") or comment.get("url") or ""), body
+    return None, None, ""
 
 
 def expected_run_url(pr_url: str, run_id: str) -> str:
@@ -81,7 +115,7 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
         for page in (comments_pages if isinstance(comments_pages, list) else [])
         for item in (page if isinstance(page, list) else [page])
     ]
-    markers, comment_url = latest_receipt(comments)
+    markers, comment_url, receipt_body = latest_receipt(comments)
 
     blockers: list[str] = []
     if not markers:
@@ -113,6 +147,9 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
     }
     if verdict not in valid_verdicts:
         blockers.append("missing_or_invalid_review_verdict")
+    visible_verdict = extract_zaver_field(receipt_body, "Verdict")
+    if visible_verdict in valid_verdicts and verdict and visible_verdict != verdict:
+        blockers.append("review_visible_verdict_marker_mismatch")
     if status != "success" or verdict != "approved_for_closeout":
         blockers.append("review_not_approved_for_closeout")
     if status == "success" and verdict != "approved_for_closeout":
@@ -174,14 +211,27 @@ def self_test() -> int:
     assert markers["MERGLBOT_REVIEW_HEAD_SHA"] == "abc123"
     assert markers["MERGLBOT_REVIEW_STATUS"] == "success"
     assert markers["MERGLBOT_RUN_ID"] == "42"
-    trusted_markers, _ = latest_receipt(
+    trusted_markers, _, trusted_body = latest_receipt(
         [{"body": body, "user": {"login": "github-actions[bot]", "type": "Bot"}}]
     )
     assert trusted_markers and trusted_markers["MERGLBOT_REVIEW_HEAD_SHA"] == "abc123"
-    spoofed_markers, _ = latest_receipt(
+    assert extract_zaver_field(trusted_body, "Verdict") == ""
+    spoofed_markers, _, _ = latest_receipt(
         [{"body": body, "user": {"login": "octocat", "type": "User"}}]
     )
     assert spoofed_markers is None
+    mismatched_body = "\n".join(
+        [
+            "## **Zaver**",
+            "Verdict: approved_for_closeout",
+            "",
+            "<!-- MERGLBOT_PR_ASSISTANT_V3 -->",
+            "<!-- MERGLBOT_REVIEW_VERDICT: blocked_missing_authority -->",
+        ]
+    )
+    assert extract_zaver_field(mismatched_body, "Verdict") == "approved_for_closeout"
+    mismatched_markers = parse_markers(mismatched_body)
+    assert mismatched_markers["MERGLBOT_REVIEW_VERDICT"] != extract_zaver_field(mismatched_body, "Verdict")
     failed = parse_markers(
         "\n".join(
             [
