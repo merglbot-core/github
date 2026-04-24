@@ -603,7 +603,7 @@ jobs:
 
             if [ "$DIFF_SCOPE" != "delta" ]; then
               echo "Using FULL PR diff (base→head)."
-              gh pr diff "$PR_NUM" > pr_diff.txt
+              gh pr diff "$PR_NUM" --repo "$REPOSITORY_SLUG" > pr_diff.txt
             fi
 
             echo "$DIFF_SCOPE" > pr_diff_scope.txt
@@ -1728,58 +1728,12 @@ jobs:
 
           extract_zaver_review_field_line() {
             local field_name="$1"
-            awk -v field_name="$field_name" '
-              BEGIN { IGNORECASE = 1; in_zaver = 0 }
-              /^##[[:space:]]+/ {
-                header = $0
-                gsub(/^[#[:space:]]+/, "", header)
-                gsub(/[*_`[:space:]]/, "", header)
-                if (tolower(header) == "zaver" || tolower(header) == "závěr") {
-                  in_zaver = 1
-                  next
-                }
-                if (in_zaver) {
-                  exit
-                }
-              }
-              in_zaver {
-                line = $0
-                gsub(/^[[:space:]>-]*/, "", line)
-                n = split(line, parts, ":")
-                field_label = parts[1]
-                gsub(/[*_`]/, "", field_label)
-                if (n >= 2 && tolower(field_label) == tolower(field_name)) {
-                  sub(/^[^:]*:[[:space:]]*/, "", line)
-                  print field_name ": " line
-                  exit
-                }
-              }
-            ' final_review.txt 2>/dev/null || true
+            scripts/pr-assistant/extract-zaver-field.sh "$field_name" final_review.txt
           }
 
           extract_final_review_field_line() {
             local field_name="$1"
-            local zaver_line=""
-            zaver_line="$(extract_zaver_review_field_line "$field_name" || true)"
-            if [ -n "$zaver_line" ]; then
-              printf '%s\n' "$zaver_line"
-              return 0
-            fi
-            awk -v field_name="$field_name" '
-              BEGIN { IGNORECASE = 1 }
-              {
-                line = $0
-                gsub(/^[[:space:]>-]*/, "", line)
-                n = split(line, parts, ":")
-                field_label = parts[1]
-                gsub(/[*_`]/, "", field_label)
-                if (n >= 2 && tolower(field_label) == tolower(field_name)) {
-                  sub(/^[^:]*:[[:space:]]*/, "", line)
-                  print field_name ": " line
-                  exit
-                }
-              }
-            ' final_review.txt 2>/dev/null || true
+            extract_zaver_review_field_line "$field_name"
           }
 
           normalize_machine_token() {
@@ -2233,35 +2187,7 @@ jobs:
           VERDICT="UNKNOWN"
           extract_review_field_line() {
             local field_name="$1"
-            awk -v field_name="$field_name" '
-              BEGIN { IGNORECASE = 1; in_zaver = 0 }
-              /^##[[:space:]]+/ {
-                header = $0
-                gsub(/^[#[:space:]]+/, "", header)
-                gsub(/[*_`[:space:]]/, "", header)
-                if (tolower(header) == "zaver" || tolower(header) == "závěr") {
-                  in_zaver = 1
-                  next
-                }
-                if (in_zaver) {
-                  exit
-                }
-                next
-              }
-              {
-                if (!in_zaver) next
-                line = $0
-                gsub(/^[[:space:]>-]*/, "", line)
-                n = split(line, parts, ":")
-                field_label = parts[1]
-                gsub(/[*_`]/, "", field_label)
-                if (n >= 2 && tolower(field_label) == tolower(field_name)) {
-                  sub(/^[^:]*:[[:space:]]*/, "", line)
-                  print field_name ": " line
-                  exit
-                }
-              }
-            ' final_review.txt 2>/dev/null || true
+            scripts/pr-assistant/extract-zaver-field.sh "$field_name" final_review.txt
           }
           VERDICT_LINE=$(extract_review_field_line 'Verdict' || true)
           if [ -n "$VERDICT_LINE" ]; then
@@ -2423,10 +2349,10 @@ jobs:
       - name: Upload Metrics Artifact
         if: always() && steps.context.outputs.skip_review != 'true'
         continue-on-error: true
-        # Verify pin: gh api repos/actions/upload-artifact/git/ref/tags/v7.0.0 --jq .object.sha
-        # Expected tag object SHA: bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        # Verify pin: gh api repos/actions/upload-artifact/git/ref/tags/v7.0.1 --jq .object.sha
+        # Expected tag object SHA: 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         # Compatibility: this workflow only uses stable name/path/retention-days inputs.
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: review-metrics-${{ env.PR_NUMBER }}-${{ github.run_id }}
           path: metrics/
