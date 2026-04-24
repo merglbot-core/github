@@ -17,7 +17,7 @@ import subprocess
 from typing import Any
 
 MARKER_RE = re.compile(r"<!--\s*(MERGLBOT_[A-Z0-9_]+)\s*:\s*([\s\S]*?)\s*-->")
-SECTION_HEADER_RE = re.compile(r"^##\s+")
+SECTION_HEADER_RE = re.compile(r"^##+\s+")
 MACHINE_TOKEN_STRIP_RE = re.compile(r"[^a-z0-9_]+")
 PR_ASSISTANT_WORKFLOW_PATHS = {
     ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
@@ -42,7 +42,7 @@ def parse_markers(body: str) -> dict[str, str]:
 
 
 def normalize_machine_token(value: str) -> str:
-    normalized = value.strip().lower().replace(" ", "_").replace("-", "_")
+    normalized = re.sub(r"[\s-]+", "_", value.strip().lower())
     normalized = MACHINE_TOKEN_STRIP_RE.sub("", normalized)
     normalized = re.sub(r"_+", "_", normalized).strip("_")
     return normalized
@@ -67,7 +67,7 @@ def extract_zaver_field(body: str, field_name: str) -> str:
                 break
         if not in_zaver:
             continue
-        cleaned = re.sub(r"^[\s>\-]*", "", line)
+        cleaned = re.sub(r"^[\s>\-*+]*", "", line)
         parts = cleaned.split(":", 1)
         field_key = (
             parts[0].replace("*", "").replace("_", "").replace("`", "").strip()
@@ -154,17 +154,7 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
     if verdict not in valid_verdicts:
         blockers.append("missing_or_invalid_review_verdict")
     visible_verdict = extract_zaver_field(receipt_body, "Verdict")
-    policy_override_mismatch = (
-        visible_verdict == "approved_for_closeout"
-        and verdict == "blocked_missing_authority"
-        and docs_state in {"missing", "unknown"}
-    )
-    if (
-        visible_verdict in valid_verdicts
-        and verdict
-        and visible_verdict != verdict
-        and not policy_override_mismatch
-    ):
+    if visible_verdict in valid_verdicts and verdict and visible_verdict != verdict:
         blockers.append("review_visible_verdict_marker_mismatch")
     if status != "success" or verdict != "approved_for_closeout":
         blockers.append("review_not_approved_for_closeout")
@@ -234,8 +224,13 @@ def self_test() -> int:
     assert extract_zaver_field(trusted_body, "Verdict") == ""
     assert normalize_machine_token("Review V4 Failed!") == "review_v4_failed"
     assert normalize_machine_token("approved-for-closeout") == "approved_for_closeout"
+    assert normalize_machine_token("approved\tfor\ncloseout") == "approved_for_closeout"
     assert (
         extract_zaver_field("## Zaver\n_Verdict_: approved-for-closeout", "Verdict")
+        == "approved_for_closeout"
+    )
+    assert (
+        extract_zaver_field("### Zaver\n* _Verdict_ : approved-for-closeout", "Verdict")
         == "approved_for_closeout"
     )
     spoofed_markers, _, _ = latest_receipt(
@@ -254,8 +249,10 @@ def self_test() -> int:
     )
     assert extract_zaver_field(mismatched_body, "Verdict") == "approved_for_closeout"
     mismatched_markers = parse_markers(mismatched_body)
-    assert mismatched_markers["MERGLBOT_REVIEW_VERDICT"] == "blocked_missing_authority"
-    assert mismatched_markers["MERGLBOT_DOCUMENTATION_OBLIGATION_STATE"] == "unknown"
+    assert mismatched_markers["MERGLBOT_REVIEW_VERDICT"] != extract_zaver_field(
+        mismatched_body,
+        "Verdict",
+    )
     failed = parse_markers(
         "\n".join(
             [
