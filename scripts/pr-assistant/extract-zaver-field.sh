@@ -11,7 +11,7 @@ FIELD_NAME="$1"
 REVIEW_FILE="$2"
 
 awk -v field_name="$FIELD_NAME" '
-  BEGIN { IGNORECASE = 1; in_zaver = 0 }
+  BEGIN { in_zaver = 0 }
   /^##[[:space:]]+/ {
     header = $0
     gsub(/^[#[:space:]]+/, "", header)
@@ -38,4 +38,4 @@ awk -v field_name="$FIELD_NAME" '
       exit
     }
   }
-' "$REVIEW_FILE" 2>/dev/null || true
+' "$REVIEW_FILE"

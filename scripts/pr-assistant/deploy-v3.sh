@@ -197,7 +197,6 @@ for repo in "${TARGET_REPOS[@]}"; do
   mkdir -p "$(dirname "$dest_workflow")"
   mkdir -p "$(dirname "$dest_step1")"
   mkdir -p "$(dirname "$dest_verifier")"
-  mkdir -p "$(dirname "$dest_zaver_extractor")"
   cp "$SOURCE_WORKFLOW" "$dest_workflow"
   cp "$SOURCE_STEP1" "$dest_step1"
   cp "$SOURCE_VERIFIER" "$dest_verifier"
