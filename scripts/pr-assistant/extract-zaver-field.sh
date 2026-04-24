@@ -12,7 +12,7 @@ REVIEW_FILE="$2"
 
 awk -v field_name="$FIELD_NAME" '
   BEGIN { in_zaver = 0 }
-  /^##[[:space:]]+/ {
+  /^##+[[:space:]]+/ {
     header = $0
     gsub(/^[#[:space:]]+/, "", header)
     gsub(/[*_`[:space:]]/, "", header)
@@ -27,10 +27,11 @@ awk -v field_name="$FIELD_NAME" '
   }
   in_zaver {
     line = $0
-    gsub(/^[[:space:]>-]*/, "", line)
+    gsub(/^[[:space:]>*+-]*/, "", line)
     n = split(line, parts, ":")
     field_label = parts[1]
     gsub(/[*_`]/, "", field_label)
+    gsub(/^[[:space:]]+|[[:space:]]+$/, "", field_label)
     if (n >= 2 && tolower(field_label) == tolower(field_name)) {
       # Preserve any additional colons in the value; only remove the field label.
       sub(/^[^:]*:[[:space:]]*/, "", line)

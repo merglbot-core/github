@@ -1822,6 +1822,7 @@ jobs:
           fi
 
           REVIEW_VERDICT="blocked_missing_authority"
+          REVIEW_VERDICT_POLICY_OVERRIDE="false"
           VERDICT_LINE="$(extract_final_review_field_line 'Verdict' || true)"
           if [ -n "$VERDICT_LINE" ]; then
             REVIEW_VERDICT_RAW="$(normalize_machine_token "$(printf '%s' "$VERDICT_LINE" | sed -E 's/^Verdict:[[:space:]]*//I')")"
@@ -1836,6 +1837,7 @@ jobs:
             missing|unknown)
               if [ "$REVIEW_VERDICT" = "approved_for_closeout" ]; then
                 REVIEW_VERDICT="blocked_missing_authority"
+                REVIEW_VERDICT_POLICY_OVERRIDE="true"
               fi
               ;;
             *)
@@ -1843,9 +1845,45 @@ jobs:
               DOCUMENTATION_OBLIGATION_STATE="unknown"
               if [ "$REVIEW_VERDICT" = "approved_for_closeout" ]; then
                 REVIEW_VERDICT="blocked_missing_authority"
+                REVIEW_VERDICT_POLICY_OVERRIDE="true"
               fi
               ;;
           esac
+          if [ "$REVIEW_VERDICT_POLICY_OVERRIDE" = "true" ] && [ -s final_review.txt ]; then
+            REVIEW_VERDICT="$REVIEW_VERDICT" python3 - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          target = os.environ["REVIEW_VERDICT"]
+          path = Path("final_review.txt")
+          lines = path.read_text(encoding="utf-8").splitlines()
+          out = []
+          in_zaver = False
+          updated = False
+          for line in lines:
+              stripped = line.strip()
+              if re.match(r"^##+\s+", stripped):
+                  heading = re.sub(r"^[#\s]+", "", stripped)
+                  heading = re.sub(r"[*_`\s]+", "", heading).lower()
+                  if heading in {"zaver", "závěr"}:
+                      in_zaver = True
+                  elif in_zaver:
+                      in_zaver = False
+              if in_zaver and not updated:
+                  cleaned = re.sub(r"^[\s>\-*+]*", "", line)
+                  parts = cleaned.split(":", 1)
+                  field_label_clean = parts[0].replace("*", "").replace("_", "").replace("`", "").strip()
+                  if len(parts) == 2 and field_label_clean.lower() == "verdict":
+                      prefix = re.match(r"^([\s>\-*+]*)", line).group(1)
+                      out.append(f"{prefix}Verdict: {target}")
+                      updated = True
+                      continue
+              out.append(line)
+          if updated:
+              path.write_text("\n".join(out) + "\n", encoding="utf-8")
+          PY
+          fi
           FOLLOW_UP_ID="pr-${PR_NUM}-review-${GITHUB_RUN_ID}"
           CLOSEOUT_MODE="human_merge_only"
           REVIEW_RECEIPT_SCHEMA_VERSION="1"
