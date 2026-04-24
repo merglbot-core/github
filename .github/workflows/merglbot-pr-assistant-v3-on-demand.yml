@@ -3,7 +3,7 @@ name: Merglbot PR Assistant v3 (On-Demand Multi-Model)
 on:
   issue_comment:
     types: [created]
-  
+
   workflow_dispatch:
     inputs:
       pr_number:
@@ -219,14 +219,14 @@ jobs:
               REVIEW_MODE_OUT="light"
               echo "✅ Comment trigger for PR #$ISSUE_NUMBER (mode: LIGHT DEFAULT)"
             fi
-            
+
             if flag_present "--retro" || flag_present "--learn"; then
               INCLUDE_RETRO_OUT="true"
               echo "✅ Retro mode enabled (--retro/--learn)"
             else
               INCLUDE_RETRO_OUT="false"
             fi
-            
+
             if flag_present "--full-diff"; then
               DIFF_SCOPE_OUT="full"
               echo "✅ Diff scope: FULL (requested via --full-diff)"
@@ -239,7 +239,7 @@ jobs:
             echo "⚠️ Invalid include_retro value; defaulting to false"
             INCLUDE_RETRO_OUT="false"
           fi
-          
+
           {
             echo "pr_number=$PR_NUMBER_OUT"
             echo "should_run=true"
@@ -303,7 +303,7 @@ jobs:
     if: needs.check-trigger.outputs.should_run == 'true' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30  # Context gather + LLM calls; typical 10-20m
-    
+
     permissions:
       actions: read # required for GraphQL/REST checks context collection on stricter private-repo policies
       contents: read
@@ -318,7 +318,7 @@ jobs:
       DIFF_SCOPE_MODE: ${{ needs.check-trigger.outputs.diff_scope }}
       INCLUDE_RETRO: ${{ needs.check-trigger.outputs.include_retro }}
       REPOSITORY_SLUG: ${{ github.repository }}
-    
+
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -336,7 +336,7 @@ jobs:
               exit 1
             fi
           done
-      
+
       - name: Gather Full PR Context
         id: context
         env:
@@ -345,7 +345,7 @@ jobs:
           TRIGGER_COMMENT_ID: ${{ github.event.inputs.trigger_comment_id || needs.check-trigger.outputs.trigger_comment_id || '' }}
         run: |
           set -euo pipefail
-          
+
           DISPATCH_SOURCE="manual_dispatch"
           if [ -n "${TRIGGER_COMMENT_ID:-}" ] || [ -n "${EXPECTED_HEAD_SHA_INPUT:-}" ]; then
             DISPATCH_SOURCE="issue_comment_dispatch"
@@ -354,7 +354,7 @@ jobs:
           echo "========================================="
           echo "GATHERING PR CONTEXT"
           echo "========================================="
-          
+
           PR_NUM="${PR_NUMBER}"
           echo "PR Number: $PR_NUM"
           echo "Review Mode: ${REVIEW_MODE}"
@@ -372,7 +372,7 @@ jobs:
             echo "skip_reason=${SKIP_REASON:-}" >> "$GITHUB_OUTPUT"
           }
           trap 'cleanup_context_artifacts; write_skip_outputs' EXIT
-          
+
           PR_VIEW_FIELDS_WITH_CHECKS="title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles,statusCheckRollup"
           PR_VIEW_FIELDS_NO_CHECKS="title,body,author,baseRefName,headRefName,baseRefOid,headRefOid,labels,additions,deletions,changedFiles"
           if gh pr view "$PR_NUM" --json "$PR_VIEW_FIELDS_WITH_CHECKS" > pr_metadata.json 2>pr_view_err.txt; then
@@ -388,7 +388,7 @@ jobs:
               exit 1
             fi
           fi
-          
+
           PR_TITLE=$(jq -r '.title // "No title"' pr_metadata.json)
           PR_BODY=$(jq -r '.body // "No description"' pr_metadata.json)
           PR_AUTHOR=$(jq -r '.author.login // "unknown"' pr_metadata.json)
@@ -398,7 +398,7 @@ jobs:
           PR_BASE_SHA=$(jq -r '.baseRefOid // empty' pr_metadata.json)
           PR_HEAD_SHA=$(jq -r '.headRefOid // empty' pr_metadata.json)
           PR_HEAD_REF=$(jq -r '.headRefName // empty' pr_metadata.json)
-          
+
           echo "Title: $PR_TITLE"
           echo "Author: $PR_AUTHOR"
           echo "Changes: +$PR_ADDITIONS -$PR_DELETIONS in $PR_FILES files"
@@ -433,7 +433,7 @@ jobs:
               exit 1
             fi
           fi
-          
+
           # Use printf to avoid echo interpreting user-controlled content as flags (-n/-e)
           printf '%s\n' "$PR_TITLE" > pr_title.txt
           printf '%s\n' "$PR_BODY" > pr_body.txt
@@ -526,45 +526,45 @@ jobs:
           printf '%s\n' "$CHECKS_FAILED" > pr_checks_failed_count.txt
           printf '%s\n' "$CHECKS_PENDING" > pr_checks_pending_count.txt
           printf '%s\n' "$CHECKS_DATA_AVAILABLE" > pr_checks_data_available.txt
-          
+
           echo "PR_BASE_SHA=$PR_BASE_SHA" >> "$GITHUB_ENV"
           echo "PR_HEAD_SHA=$PR_HEAD_SHA" >> "$GITHUB_ENV"
-          
+
           gh pr view "$PR_NUM" --json files -q '.files[].path' > changed_files.txt 2>/dev/null || echo "" > changed_files.txt
-          
+
           gh api "repos/${REPOSITORY_SLUG}/issues/$PR_NUM/comments" --paginate > issue_comments.json 2>/dev/null || echo "[]" > issue_comments.json
-          
+
           echo "Detecting previous Merglbot review..."
           LAST_REVIEW_BODY=$(jq -r '[.[] | select(.user.login == "github-actions" or .user.login == "github-actions[bot]") | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .body // empty' issue_comments.json 2>/dev/null || echo "")
           LAST_REVIEW_CREATED_AT=$(jq -r '[.[] | select(.user.login == "github-actions" or .user.login == "github-actions[bot]") | select(.body | contains("<!-- MERGLBOT_PR_ASSISTANT_V3 -->"))] | sort_by(.created_at) | last | .created_at // empty' issue_comments.json 2>/dev/null || echo "")
-          
+
           if [ -z "$LAST_REVIEW_BODY" ]; then
             LAST_REVIEW_BODY=$(jq -r '[.[] | select(.user.login == "github-actions" or .user.login == "github-actions[bot]") | select(.body | contains("## 🤖 Merglbot PR Assistant v3"))] | sort_by(.created_at) | last | .body // empty' issue_comments.json 2>/dev/null || echo "")
             LAST_REVIEW_CREATED_AT=$(jq -r '[.[] | select(.user.login == "github-actions" or .user.login == "github-actions[bot]") | select(.body | contains("## 🤖 Merglbot PR Assistant v3"))] | sort_by(.created_at) | last | .created_at // empty' issue_comments.json 2>/dev/null || echo "")
           fi
-          
+
           printf '%s' "$LAST_REVIEW_BODY" > prev_merglbot_review.txt
           echo "$LAST_REVIEW_CREATED_AT" > prev_merglbot_review_created_at.txt
-          
+
           PREV_REVIEW_HEAD_SHA=""
           if [ -n "$LAST_REVIEW_BODY" ]; then
             PREV_REVIEW_HEAD_SHA=$(printf '%s' "$LAST_REVIEW_BODY" | sed -n 's/.*MERGLBOT_REVIEW_HEAD_SHA: \([0-9a-f]\{7,40\}\).*/\1/p' | head -n 1 || true)
           fi
-          
+
           DIFF_SCOPE_MODE="${DIFF_SCOPE_MODE:-auto}"
           if [ "$DIFF_SCOPE_MODE" == "full" ]; then
             PREV_REVIEW_HEAD_SHA=""
             # Keep LAST_REVIEW_CREATED_AT intact so bugbot/comment ingestion stays bounded to new signals.
           fi
-          
+
           echo "$PREV_REVIEW_HEAD_SHA" > prev_review_head_sha.txt
           echo "PREV_REVIEW_HEAD_SHA=$PREV_REVIEW_HEAD_SHA" >> "$GITHUB_ENV"
-          
+
           if [ "$DIFF_SCOPE_MODE" != "full" ] && [ -n "$PREV_REVIEW_HEAD_SHA" ] && [ "$PREV_REVIEW_HEAD_SHA" == "$PR_HEAD_SHA" ]; then
             SKIP_REVIEW="true"
             SKIP_REASON="no_new_commits"
           fi
-          
+
           if [ "$SKIP_REVIEW" == "true" ]; then
             echo "⏭️ No new commits since last Merglbot review ($PREV_REVIEW_HEAD_SHA)"
             echo "none" > pr_diff_scope.txt
@@ -575,18 +575,18 @@ jobs:
             DIFF_SCOPE="full"
             DIFF_RANGE="$PR_BASE_SHA...$PR_HEAD_SHA"
             echo "" > new_commits.txt
-            
+
             if [ "$DIFF_SCOPE_MODE" == "delta" ] && [ -z "$PREV_REVIEW_HEAD_SHA" ]; then
               echo "Requested DELTA diff but no previous Merglbot review exists; falling back to full PR diff."
             fi
-            
+
             if [ "$DIFF_SCOPE_MODE" != "full" ] && [ -n "$PREV_REVIEW_HEAD_SHA" ] && [ "$PREV_REVIEW_HEAD_SHA" != "$PR_HEAD_SHA" ]; then
               COMPARE_STATUS=$(gh api "/repos/${REPOSITORY_SLUG}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" --jq '.status' 2>/dev/null || echo "")
               if [ "$COMPARE_STATUS" == "ahead" ]; then
                 echo "Using DELTA diff since last review: $PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA"
                 DIFF_SCOPE="delta"
                 DIFF_RANGE="$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA"
-                
+
                 if ! gh api -H "Accept: application/vnd.github.v3.diff" "/repos/${REPOSITORY_SLUG}/compare/$PREV_REVIEW_HEAD_SHA...$PR_HEAD_SHA" > pr_diff.txt 2>/dev/null; then
                   echo "Delta diff fetch failed; falling back to full PR diff."
                   DIFF_SCOPE="full"
@@ -598,18 +598,18 @@ jobs:
                 echo "Requested DELTA diff but compare status is '$COMPARE_STATUS'; falling back to full PR diff."
               fi
             fi
-            
+
             if [ "$DIFF_SCOPE" != "delta" ]; then
               echo "Using FULL PR diff (base→head)."
               gh pr diff "$PR_NUM" > pr_diff.txt
             fi
-            
+
             echo "$DIFF_SCOPE" > pr_diff_scope.txt
             echo "$DIFF_RANGE" > pr_diff_range.txt
             echo "DIFF_SCOPE=$DIFF_SCOPE" >> "$GITHUB_ENV"
             echo "DIFF_RANGE=$DIFF_RANGE" >> "$GITHUB_ENV"
           fi
-          
+
           # Keep a full diff for security pre-scan (fail-closed) and produce a trimmed diff for LLM context.
           # Rationale: large lockfile diffs can cause the LLM prompt to truncate away critical security files
           # (e.g. entrypoints and env-sanitization logic), leading to incomplete reviews.
@@ -668,12 +668,12 @@ jobs:
           echo "Diff: $DIFF_LINES lines"
 
           echo "REVIEW_CUTOFF=$LAST_REVIEW_CREATED_AT" >> "$GITHUB_ENV"
-          
+
           echo "Extracting bugbot findings..."
           echo "" > bugbot_findings.txt
           BUGBOT_TOTAL=0
           BUGBOT_SOURCES=""
-          
+
           for BOT_PATTERN in cursor gemini copilot coderabbit qodo pr-agent snyk sonar codacy deepsource; do
             FINDINGS=$(jq -r --arg pat "$BOT_PATTERN" --arg cutoff "$LAST_REVIEW_CREATED_AT" '.[] | select(.user.login | test($pat; "i")) | select(($cutoff == "") or (.created_at > $cutoff)) | .body' issue_comments.json 2>/dev/null || echo "")
             if [ -n "$FINDINGS" ] && [ "$FINDINGS" != "null" ]; then
@@ -694,7 +694,7 @@ jobs:
               echo "Found $BOT_PATTERN findings"
             fi
           done
-          
+
           if ! gh api "repos/${REPOSITORY_SLUG}/pulls/$PR_NUM/comments" --paginate > review_comments.json 2>/dev/null; then
             echo "::warning::Failed to fetch PR review comments; continuing with none"
             echo "[]" > review_comments.json
@@ -723,17 +723,17 @@ jobs:
               echo ""
             } >> bugbot_findings.txt
           fi
-          
+
           BUGBOT_SIZE=$(wc -c < bugbot_findings.txt)
           if [ "$BUGBOT_SIZE" -lt 20 ]; then
             echo "No automated bot findings detected." > bugbot_findings.txt
             BUGBOT_SOURCES="none"
           fi
-          
+
           echo "Bugbot sources: $BUGBOT_TOTAL ($BUGBOT_SOURCES)"
           echo "$BUGBOT_TOTAL" > bugbot_count.txt
           echo "$BUGBOT_SOURCES" > bugbot_sources.txt
-          
+
           # Security pre-scan: if PR context contains secret-like patterns, skip AI review to avoid exfiltration to LLM APIs.
           # IMPORTANT: never print the matching line(s) to logs.
           if [ "$SKIP_REVIEW" != "true" ]; then
@@ -813,7 +813,7 @@ jobs:
 
           # Defense-in-depth: ensure the full diff never proceeds beyond pre-scan (LLM inputs use pr_diff.txt).
           rm -f pr_diff_full.txt || true
-          
+
           echo "========================================="
           echo "CONTEXT GATHERING COMPLETE"
           echo "========================================="
@@ -825,11 +825,11 @@ jobs:
           SKIP_REASON: ${{ steps.context.outputs.skip_reason }}
         run: |
           set -euo pipefail
-          
+
           PR_NUM="${{ env.PR_NUMBER }}"
           PREV_SHA="${{ env.PREV_REVIEW_HEAD_SHA }}"
           HEAD_SHA="${{ env.PR_HEAD_SHA }}"
-          
+
             if [ "${SKIP_REASON:-}" == "potential_secret" ]; then
               {
               printf '%s\n' "## 🤖 Merglbot PR Assistant v3.5.4"
@@ -855,7 +855,7 @@ jobs:
               printf '%s\n' "Current head: \`${HEAD_SHA:0:12}\`."
               } > comment.md
           fi
-          
+
           # multi-model-review job requests pull-requests:write above; keep publish step adjacent for auditability.
           gh pr comment "$PR_NUM" --body-file comment.md
 
@@ -923,7 +923,7 @@ jobs:
           REASON="unknown"
           ANTHROPIC_SKIP_REASON=""
           OPENAI_SKIP_REASON=""
-          
+
           sanitize_reason() {
             local raw="${1:-}"
             raw="$(printf '%s' "$raw" | tr -d '\r\n')"
@@ -939,7 +939,7 @@ jobs:
             ANTHROPIC_SKIP_REASON="$(grep -m1 '^anthropic_skip_reason=' "$STEP1_REASON_FILE" | cut -d= -f2- || true)"
             OPENAI_SKIP_REASON="$(grep -m1 '^openai_skip_reason=' "$STEP1_REASON_FILE" | cut -d= -f2- || true)"
           fi
-          
+
           REASON="$(sanitize_reason "${REASON:-}")"
           ANTHROPIC_SKIP_REASON="$(sanitize_reason "${ANTHROPIC_SKIP_REASON:-}")"
           OPENAI_SKIP_REASON="$(sanitize_reason "${OPENAI_SKIP_REASON:-}")"
@@ -963,7 +963,7 @@ jobs:
             printf '%s\n' "- Ensure required Actions secrets are configured and visible"
             printf '%s\n' "- Re-run the workflow"
           } > step1_failure_comment.md
-          
+
           MARKER="<!-- MERGLBOT_STEP1_FAILURE -->"
           printf '%s\n' "" >> step1_failure_comment.md
           printf '%s\n' "$MARKER" >> step1_failure_comment.md
@@ -1005,7 +1005,7 @@ jobs:
 
           OPENAI_RESPONSES_URL="${OPENAI_RESPONSES_URL:-https://api.openai.com/v1/responses}"
           OPENAI_RESPONSES_URL="$(printf '%s' "$OPENAI_RESPONSES_URL" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-          
+
           echo "========================================="
           echo "STEP 3: INTELLIGENT SYNTHESIS"
           echo "========================================="
@@ -1073,7 +1073,7 @@ jobs:
           SYNTHESIS_USAGE_TOTAL_TOKENS=0
           OPENAI_SYNTHESIS_MODEL_USED="skipped"
           OPENAI_SYNTHESIS_REASONING_EFFORT_USED="n/a"
-          
+
           PR_TITLE=$(< pr_title.txt)
           PR_BODY=$(python3 -c 'from pathlib import Path; import sys; s=Path("pr_body.txt").read_text(encoding="utf-8", errors="replace"); sys.stdout.write(s[:3000])')
 
@@ -1102,7 +1102,7 @@ jobs:
           else
             echo "  OpenAI: 0 words (failed)"
           fi
-          
+
           AVAILABLE_REVIEW_FILES=()
           if [ "$ANTHROPIC_OK" == "true" ]; then
             AVAILABLE_REVIEW_FILES+=("anthropic_review.txt")
@@ -1222,13 +1222,13 @@ jobs:
             echo "OPENAI_SYNTHESIS_REASONING_EFFORT_USED=${OPENAI_SYNTHESIS_REASONING_EFFORT_USED}" >> "$GITHUB_ENV"
             exit 0
           fi
-          
+
           if [ "${REVIEW_MODE}" == "light" ]; then
             MAX_SYNTH_TOKENS=6000
           else
             MAX_SYNTH_TOKENS=12000
           fi
-          
+
           # Build synthesis prompt (single redirect)
           {
           printf '%s\n' "# Final Review Synthesis"
@@ -1269,13 +1269,13 @@ jobs:
           printf '%s\n' "[List advisory repo-relative suggestions in merglbot-public/docs that should be updated due to this PR; if none: 'None']"
           printf '%s\n' "- [ ] Doc: path - what changed + what to update"
           printf '%s\n' ""
-          
+
           if [ "${INCLUDE_RETRO:-false}" == "true" ]; then
             printf '%s\n' "## Retro (Extractable Learnings)"
             printf '%s\n' "[1-3 items max. Each item: Problem, Trigger Conditions, Root Cause, Fix/Workaround, Verification. If too tactical for SSOT, propose a LOCAL personal skill (not committed) with a SKILL.md skeleton.]"
             printf '%s\n' ""
           fi
-          
+
           printf '%s\n' "## Zaver"
           printf '%s\n' "Verdict: [approved_for_closeout or changes_required or blocked_missing_authority]"
           printf '%s\n' "Documentation Obligation State: [satisfied or not_required or missing or unknown]"
@@ -1301,7 +1301,7 @@ jobs:
           printf '%s\n' ""
           OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
-          
+
           if [ "$ANTHROPIC_OK" == "true" ]; then
             printf '%s\n' "## Anthropic Review ($ANTHROPIC_MODEL_FINAL) (untrusted)"
             printf '%s\n' ""
@@ -1319,7 +1319,7 @@ jobs:
               printf '%s\n' ""
             fi
           printf '%s\n' "Now synthesize into FINAL review."
-          
+
           } > "$SYNTHESIS_PROMPT_FILE"
 
           case "$OPENAI_RESPONSES_URL" in
@@ -1512,7 +1512,7 @@ jobs:
 
           echo "OPENAI_SYNTHESIS_MODEL_USED=${OPENAI_SYNTHESIS_MODEL_USED}" >> "$GITHUB_ENV"
           echo "OPENAI_SYNTHESIS_REASONING_EFFORT_USED=${OPENAI_SYNTHESIS_REASONING_EFFORT_USED}" >> "$GITHUB_ENV"
-          
+
           FINAL_WORDS=$(wc -w < final_review.txt 2>/dev/null || echo 0)
           echo "Final review: $FINAL_WORDS words"
           echo "========================================="
@@ -1586,7 +1586,7 @@ jobs:
             ' pr_head_check_runs.json >&2 || true
             exit 1
           fi
-      
+
       - name: Post Review Comment
         if: success() && steps.context.outputs.skip_review != 'true'
         env:
@@ -1657,45 +1657,45 @@ jobs:
           fi
 
           PR_NUM="${PR_NUMBER}"
-          
+
           BUGBOT_COUNT="0"
           if [ -f bugbot_count.txt ]; then
             BUGBOT_COUNT=$(< bugbot_count.txt)
           fi
-          
+
           BUGBOT_SOURCES="none"
           if [ -f bugbot_sources.txt ]; then
             BUGBOT_SOURCES=$(< bugbot_sources.txt)
           fi
-          
+
           CURRENT_REVIEW_MODE="${REVIEW_MODE}"
-          
+
           DIFF_SCOPE="full"
           if [ -f pr_diff_scope.txt ]; then
             DIFF_SCOPE=$(< pr_diff_scope.txt)
           fi
-          
+
           DIFF_RANGE=""
           if [ -f pr_diff_range.txt ]; then
             DIFF_RANGE=$(< pr_diff_range.txt)
           fi
-          
+
           PR_HEAD_SHA=""
           if [ -f pr_head_sha.txt ]; then
             PR_HEAD_SHA=$(< pr_head_sha.txt)
           fi
-          
+
           PREV_REVIEW_HEAD_SHA=""
           if [ -f prev_review_head_sha.txt ]; then
             PREV_REVIEW_HEAD_SHA=$(< prev_review_head_sha.txt)
           fi
-          
+
           OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
           OPENAI_SYNTHESIS_MODEL_FINAL="${OPENAI_SYNTHESIS_MODEL_USED:-$OPENAI_SYNTHESIS_MODEL}"
           OPENAI_SYNTHESIS_REASONING_EFFORT_FINAL="${OPENAI_SYNTHESIS_REASONING_EFFORT_USED:-$OPENAI_SYNTHESIS_REASONING_EFFORT}"
           OPENAI_REASONING_EFFORT_FINAL="${OPENAI_REASONING_EFFORT_USED:-high}"
-          
+
           OPENAI_CONFIG_DESC="reasoning=${OPENAI_REASONING_EFFORT_FINAL} (Responses API; fallback Chat) 🧠"
           if [ "$OPENAI_MODEL_FINAL" = "gpt-4-turbo" ]; then
             OPENAI_CONFIG_DESC="Chat Completions (max_tokens)"
@@ -1704,7 +1704,7 @@ jobs:
           fi
 
           OPENAI_SYNTHESIS_CONFIG_DESC="reasoning=${OPENAI_SYNTHESIS_REASONING_EFFORT_FINAL} (Responses API) 🧠"
-          
+
           BOT_MODE="${BOT_MODE:-default}"
 
           safe_word_count() {
@@ -1876,9 +1876,9 @@ jobs:
           if [ "$REVIEW_VERDICT" != "approved_for_closeout" ]; then
             REVIEW_STATUS="blocked"
           fi
-          
+
           echo "Building PR comment..."
-          
+
           if [ ! -s final_review.txt ] || grep -q "^API_ERROR$" final_review.txt; then
             {
               echo "## 🤖 Merglbot PR Assistant v3.5.4"
@@ -2027,11 +2027,11 @@ jobs:
               echo "*Your feedback helps us improve the AI review quality.*"
             } > comment.md
           fi
-          
+
           # multi-model-review job requests pull-requests:write above; keep publish step adjacent for auditability.
           gh pr comment "$PR_NUM" --body-file comment.md
           echo "Review posted to PR #$PR_NUM"
-      
+
       - name: Workflow Summary
         run: |
           safe_word_count() {
@@ -2062,22 +2062,22 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          
+
           BUGBOT_COUNT="0"
           if [ -f bugbot_count.txt ]; then
             BUGBOT_COUNT=$(< bugbot_count.txt)
           fi
-          
+
           BUGBOT_SOURCES="none"
           if [ -f bugbot_sources.txt ]; then
             BUGBOT_SOURCES=$(< bugbot_sources.txt)
           fi
-          
+
           REVIEW_STATUS="Failed"
           if [ -s final_review.txt ] && ! grep -qx "API_ERROR" final_review.txt 2>/dev/null; then
             REVIEW_STATUS="Success"
           fi
-          
+
           {
             echo "## 🤖 Merglbot PR Assistant v3.5.4 - Summary"
             echo ""
@@ -2102,7 +2102,7 @@ jobs:
             echo "**Count**: $BUGBOT_COUNT"
             echo "**Sources**: $BUGBOT_SOURCES"
           } >> "$GITHUB_STEP_SUMMARY"
-      
+
       - name: Save Review Metrics (Feedback Loop)
         if: always() && steps.context.outputs.skip_review != 'true'
         env:
@@ -2157,7 +2157,7 @@ jobs:
             # Be resilient to multi-document JSON streams: slurp and take the first object.
             printf '%s' "$raw" | jq -c -s 'if (length > 0 and (.[0] | type == "object")) then .[0] else {} end' 2>/dev/null || printf '%s' "{}"
           }
-          
+
           ANTHROPIC_MODEL_FINAL="${ANTHROPIC_MODEL_USED:-$ANTHROPIC_MODEL}"
           OPENAI_MODEL_FINAL="${OPENAI_MODEL_USED:-$OPENAI_MODEL}"
           OPENAI_SYNTHESIS_MODEL_FINAL="$(sanitize_model "${OPENAI_SYNTHESIS_MODEL_USED:-}")"
@@ -2169,7 +2169,7 @@ jobs:
             low|medium|high|none|n/a) ;;
             *) OPENAI_SYNTHESIS_REASONING_EFFORT_FINAL="unknown" ;;
           esac
-          
+
           safe_word_count() {
             local file="$1"
             if [ ! -s "$file" ]; then
@@ -2186,12 +2186,12 @@ jobs:
           ANTHROPIC_WORDS="$(safe_word_count anthropic_review.txt)"
           OPENAI_WORDS="$(safe_word_count openai_review.txt)"
           FINAL_WORDS="$(safe_word_count final_review.txt)"
-          
+
           BUGBOT_COUNT="0"
           if [ -f bugbot_count.txt ]; then
             BUGBOT_COUNT=$(< bugbot_count.txt)
           fi
-          
+
             count_section_checkboxes() {
               local section_prefix="$1"
               awk -v prefix="$section_prefix" '
@@ -2208,12 +2208,12 @@ jobs:
               END { print count+0 }
             ' final_review.txt 2>/dev/null || echo 0
           }
-          
+
           CRITICAL_COUNT=$(count_section_checkboxes "Critical")
           HIGH_COUNT=$(count_section_checkboxes "High Priority")
           MEDIUM_COUNT=$(count_section_checkboxes "Medium Priority")
           LOW_COUNT=$(count_section_checkboxes "Low Priority")
-          
+
           VERDICT="UNKNOWN"
           extract_review_field_line() {
             local field_name="$1"
@@ -2244,7 +2244,7 @@ jobs:
               VERDICT="APPROVED_FOR_CLOSEOUT"
             fi
           fi
-          
+
           # Create metrics file
           mkdir -p metrics
           BUGBOT_SOURCES="none"
@@ -2265,7 +2265,7 @@ jobs:
           if [ -f anthropic_usage.json ] && jq -e . anthropic_usage.json > /dev/null 2>&1; then
             ANTHROPIC_USAGE_JSON="$(jq -c . anthropic_usage.json)"
           fi
-          
+
           ANTHROPIC_USAGE_JSON="${ANTHROPIC_USAGE_JSON:-{}}"
           OPENAI_USAGE_JSON="${OPENAI_USAGE_JSON:-{}}"
           SYNTHESIS_USAGE_JSON="${SYNTHESIS_USAGE_JSON:-{}}"
@@ -2381,12 +2381,12 @@ jobs:
                 review_status: $review_status
               }
             ' > metrics/review-metrics.json
-          
+
           echo "📊 Review metrics saved to metrics/review-metrics.json"
           if ! jq -c '{timestamp,repository,pr_number,review_mode,models,findings,verdict,status,review_status}' metrics/review-metrics.json; then
             echo "WARN: metrics validation failed" >&2
           fi
-      
+
       - name: Upload Metrics Artifact
         if: always() && steps.context.outputs.skip_review != 'true'
         continue-on-error: true
