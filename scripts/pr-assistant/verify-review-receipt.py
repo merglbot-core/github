@@ -30,8 +30,7 @@ def gh_json(args: list[str]) -> Any:
         ["gh", *args],
         check=False,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or f"gh {' '.join(args)} failed")
