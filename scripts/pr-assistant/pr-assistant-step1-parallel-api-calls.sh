@@ -415,7 +415,7 @@ if [ "$OPENAI_MODEL" = "org_default" ]; then
   OPENAI_MODEL=""
 fi
 if [ -z "$ANTHROPIC_MODEL" ]; then
-  ANTHROPIC_MODEL="claude-opus-4-6"
+  ANTHROPIC_MODEL="claude-opus-4-7"
 fi
 if [ -z "$OPENAI_MODEL" ]; then
   OPENAI_MODEL="gpt-5.4"
@@ -774,7 +774,7 @@ fi
 
 printf '%s\n' "## Zaver"
 printf '%s\n' "Verdict: [approved_for_closeout or changes_required or blocked_missing_authority]"
-printf '%s\n' "Documentation Obligation State: [satisfied or not_required or missing or unknown]"
+printf '%s\n' "Documentation Obligation State: [satisfied or not_required or missing or unknown; use not_required when SSOT Sync (Docs) is None]"
 printf '%s\n' "Docs Follow-Up Hint: [likely_required or not_observed or none]"
 printf '%s\n' "Suggested Docs Targets: [JSON array of advisory repo-relative merglbot-public/docs paths; use [] when none are confidently known; never emit suggested_docs_paths]"
 printf '%s\n' "Docs Signal Basis: review_output_only"
@@ -784,6 +784,7 @@ printf '%s\n' "### Rules"
 printf '%s\n' "- Czech for explanations, English for code"
 printf '%s\n' "- Include line numbers"
 printf '%s\n' "- Evidence-first: every finding must cite file:line AND a diff excerpt; otherwise mark it as 'Needs verification'"
+printf '%s\n' "- If SSOT Sync (Docs) is exactly 'None', set Documentation Obligation State to not_required; reserve unknown for cases where a docs obligation cannot be determined."
 printf '%s\n' "- Cite MERGLBOT rules"
 printf '%s\n' "- Code examples for fixes"
 printf '%s\n' "- Use checkboxes for actions"
@@ -893,7 +894,7 @@ echo "Prompt size: $PROMPT_SIZE chars"
     echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
 
     ANTHROPIC_MODELS_TRIED="|"
-    for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-6" "claude-sonnet-4-6" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
+    for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-7" "claude-opus-4-6" "claude-sonnet-4-6" "claude-opus-4-1-20250805" "claude-opus-4-20250514" "claude-sonnet-4-20250514" "claude-3-5-haiku-20241022"; do
       if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
         continue
       fi
@@ -903,16 +904,33 @@ echo "Prompt size: $PROMPT_SIZE chars"
       ANTHROPIC_MODELS_TRIED="${ANTHROPIC_MODELS_TRIED}${MODEL_TO_TRY}|"
       echo "  → Trying Anthropic model: $MODEL_TO_TRY"
 
-      jq -n \
-        --arg model "$MODEL_TO_TRY" \
-        --rawfile prompt "$FULL_PROMPT_FILE" \
-        --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
-        '{
-          model: $model,
-          max_tokens: $max_tokens,
-          temperature: 0.2,
-          messages: [{role: "user", content: $prompt}]
-      }' > "$ANTHROPIC_PAYLOAD_FILE"
+      case "$MODEL_TO_TRY" in
+        claude-opus-4-7|claude-opus-4-6|claude-sonnet-4-6)
+          jq -n \
+            --arg model "$MODEL_TO_TRY" \
+            --rawfile prompt "$FULL_PROMPT_FILE" \
+            --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
+            '{
+              model: $model,
+              max_tokens: $max_tokens,
+              thinking: {type: "adaptive"},
+              output_config: {effort: "max"},
+              messages: [{role: "user", content: $prompt}]
+            }' > "$ANTHROPIC_PAYLOAD_FILE"
+          ;;
+        *)
+          jq -n \
+            --arg model "$MODEL_TO_TRY" \
+            --rawfile prompt "$FULL_PROMPT_FILE" \
+            --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
+            '{
+              model: $model,
+              max_tokens: $max_tokens,
+              temperature: 0.2,
+              messages: [{role: "user", content: $prompt}]
+            }' > "$ANTHROPIC_PAYLOAD_FILE"
+          ;;
+      esac
 
       set +e
       ANTHROPIC_RESP="$(curl_json_with_backoff "$ANTHROPIC_MESSAGES_URL" \
