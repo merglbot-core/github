@@ -17,7 +17,6 @@ import subprocess
 from typing import Any
 
 MARKER_RE = re.compile(r"<!--\s*(MERGLBOT_[A-Z0-9_]+)\s*:\s*([\s\S]*?)\s*-->")
-ZAVER_HEADER_RE = re.compile(r"^##\s+(?:Zaver|Závěr)\s*$", re.IGNORECASE)
 SECTION_HEADER_RE = re.compile(r"^##\s+")
 MACHINE_TOKEN_STRIP_RE = re.compile(r"[^a-z0-9_]+")
 PR_ASSISTANT_WORKFLOW_PATHS = {
@@ -60,7 +59,8 @@ def extract_zaver_field(body: str, field_name: str) -> str:
     for raw_line in (body or "").splitlines():
         line = raw_line.strip()
         if SECTION_HEADER_RE.match(line):
-            if ZAVER_HEADER_RE.match(f"## {normalize_heading(line)}"):
+            heading = normalize_heading(line)
+            if heading in ("zaver", "závěr"):
                 in_zaver = True
                 continue
             if in_zaver:
