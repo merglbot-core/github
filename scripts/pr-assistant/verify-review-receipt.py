@@ -17,7 +17,6 @@ import subprocess
 from typing import Any
 
 MARKER_RE = re.compile(r"<!--\s*(MERGLBOT_[A-Z0-9_]+)\s*:\s*([\s\S]*?)\s*-->")
-ZAVER_HEADER_RE = re.compile(r"^##\s+(?:Zaver|Závěr)\s*$", re.IGNORECASE)
 SECTION_HEADER_RE = re.compile(r"^##\s+")
 MACHINE_TOKEN_STRIP_RE = re.compile(r"[^a-z0-9_]+")
 PR_ASSISTANT_WORKFLOW_PATHS = {
