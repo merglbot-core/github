@@ -55,6 +55,10 @@ def normalize_heading(value: str) -> str:
     return heading.lower()
 
 
+def docs_state_blocks_closeout(verdict: str, docs_state: str) -> bool:
+    return verdict == "approved_for_closeout" and docs_state in {"missing", "unknown"}
+
+
 def extract_zaver_field(body: str, field_name: str) -> str:
     in_zaver = False
     in_code = False
@@ -142,6 +146,7 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
     pr_check_surface = markers.get("MERGLBOT_PR_CHECK_SURFACE", "")
     run_id = markers.get("MERGLBOT_RUN_ID", "")
     run_url = markers.get("MERGLBOT_RUN_URL", "")
+    docs_state_marker_present = "MERGLBOT_DOCUMENTATION_OBLIGATION_STATE" in markers
     docs_state = markers.get("MERGLBOT_DOCUMENTATION_OBLIGATION_STATE", "")
 
     current_head_match = bool(
@@ -165,11 +170,13 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
     if visible_verdict in valid_verdicts and verdict and visible_verdict != verdict:
         blockers.append("review_visible_verdict_marker_mismatch")
     valid_docs_states = {"satisfied", "not_required", "missing", "unknown"}
-    if docs_state not in valid_docs_states:
+    if docs_state_marker_present and docs_state not in valid_docs_states:
         blockers.append("missing_or_invalid_documentation_obligation_state")
     visible_docs_state = extract_zaver_field(receipt_body, "Documentation Obligation State")
     if visible_docs_state in valid_docs_states and docs_state and visible_docs_state != docs_state:
         blockers.append("review_visible_docs_state_marker_mismatch")
+    if docs_state_blocks_closeout(verdict, docs_state):
+        blockers.append("review_docs_state_blocks_closeout")
     if status != "success" or verdict != "approved_for_closeout":
         blockers.append("review_not_approved_for_closeout")
     if status == "success" and verdict != "approved_for_closeout":
@@ -240,6 +247,11 @@ def self_test() -> int:
     assert normalize_machine_token("Review V4 Failed!") == "review_v4_failed"
     assert normalize_machine_token("approved-for-closeout") == "approved_for_closeout"
     assert normalize_machine_token("approved\tfor\ncloseout") == "approved_for_closeout"
+    assert docs_state_blocks_closeout("approved_for_closeout", "missing")
+    assert docs_state_blocks_closeout("approved_for_closeout", "unknown")
+    assert not docs_state_blocks_closeout("approved_for_closeout", "")
+    assert not docs_state_blocks_closeout("approved_for_closeout", "not_required")
+    assert not docs_state_blocks_closeout("changes_required", "unknown")
     assert (
         extract_zaver_field("## Zaver\n_Verdict_: approved-for-closeout", "Verdict")
         == "approved_for_closeout"
