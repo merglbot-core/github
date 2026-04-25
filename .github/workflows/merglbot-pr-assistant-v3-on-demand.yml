@@ -817,8 +817,10 @@ jobs:
                   # secret-regex source lines in the diff. Those are guardrail code, not
                   # credentials. Keep scanning the rest of the diff fail-closed.
                   awk '
-                    /^[+-].*(SECRET_PATTERN|SENSITIVE_PATTERN|JWT_PATTERN|_[A-Z0-9_]+_RX=|_GH[A-Z_]*=|_SK_PREFIX=|_GENERIC_[A-Z_]+_PREFIX=)/ { next }
-                    /^[+-].*(secrets\.(GITHUB_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY)|Authorization: Bearer \$OPENAI_API_KEY|x-api-key: \$ANTHROPIC_API_KEY)/ { next }
+                    /^[+-][[:space:]]*(SECRET_PATTERN(_STRICT(_NO_KEY)?|_NO_GENERIC)?|SENSITIVE_PATTERN(_STRICT|_NO_GENERIC)?|JWT_PATTERN(_STRICT)?|_[A-Z0-9_]+_RX|_GH[A-Z_]+|_SK_PREFIX|_GENERIC_[A-Z_]+_PREFIX)=/ { next }
+                    /^[+-][[:space:]]*printf[[:space:]]+-v[[:space:]]+SECRET_PATTERN_STRICT_NO_KEY[[:space:]]+/ { next }
+                    /^[+-][[:space:]]*(GITHUB_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY):[[:space:]]*\$\{\{[[:space:]]*secrets\.(GITHUB_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY)[[:space:]]*\}\}[[:space:]]*$/ { next }
+                    /^[+-][[:space:]]*-H[[:space:]]+"(Authorization: Bearer \$OPENAI_API_KEY|x-api-key: \$ANTHROPIC_API_KEY)"[[:space:]]*\\?[[:space:]]*$/ { next }
                     { print }
                   ' "$source_file" > "$target_file"
                   ;;
@@ -835,8 +837,19 @@ jobs:
                 PATTERN="${SENSITIVE_PATTERN_NO_GENERIC}|${JWT_PATTERN_STRICT}"
               fi
               if [ -s "$SECRET_SCAN_FILE" ]; then
-                SECRET_SCAN_INPUT="$(mktemp)"
-                prepare_secret_scan_input "$SECRET_SCAN_FILE" "$SECRET_SCAN_INPUT"
+                SECRET_SCAN_INPUT="$(mktemp)" || {
+                  echo "WARN: Secret pre-scan temp file creation failed for ${SECRET_SCAN_FILE}; skipping AI review fail-closed." >&2
+                  SKIP_REVIEW="true"
+                  SKIP_REASON="potential_secret"
+                  break
+                }
+                if ! prepare_secret_scan_input "$SECRET_SCAN_FILE" "$SECRET_SCAN_INPUT"; then
+                  echo "WARN: Secret pre-scan input preparation failed for ${SECRET_SCAN_FILE}; skipping AI review fail-closed." >&2
+                  rm -f "$SECRET_SCAN_INPUT"
+                  SKIP_REVIEW="true"
+                  SKIP_REASON="potential_secret"
+                  break
+                fi
                 GREP_STATUS=0
                 if grep -Eqi -- "$PATTERN" "$SECRET_SCAN_INPUT"; then
                   echo "⛔️ Potential secret-like material detected in PR context; skipping AI review."
