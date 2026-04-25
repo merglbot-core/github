@@ -366,12 +366,12 @@ def self_test() -> int:
         "missing_or_invalid_documentation_obligation_state",
         "review_docs_state_blocks_closeout",
     ]
-    blockers: list[str] = []
+    review_blockers: list[str] = []
     status = "blocked"
     verdict = "changes_required"
     if status != "success" or verdict != "approved_for_closeout":
-        blockers.append("review_not_approved_for_closeout")
-    assert blockers == ["review_not_approved_for_closeout"]
+        review_blockers.append("review_not_approved_for_closeout")
+    assert review_blockers == ["review_not_approved_for_closeout"]
     assert expected_run_url("https://github.enterprise.example/o/r/pull/42", "123") == (
         "https://github.enterprise.example/o/r/actions/runs/123"
     )
