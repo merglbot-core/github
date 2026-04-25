@@ -894,7 +894,7 @@ echo "Prompt size: $PROMPT_SIZE chars"
     echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
 
     ANTHROPIC_MODELS_TRIED="|"
-    for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-7" "claude-opus-4-6" "claude-sonnet-4-6" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-opus-4-20250514" "claude-sonnet-4-20250514" "claude-3-5-haiku-20241022"; do
+    for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-7" "claude-opus-4-6" "claude-sonnet-4-6" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-opus-4-20250514" "claude-sonnet-4-20250514" "claude-3-5-sonnet-20241022" "claude-3-5-haiku-20241022"; do
       if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
         continue
       fi

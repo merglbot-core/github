@@ -59,6 +59,7 @@ on:
           - claude-opus-4-5-20250929
           - claude-sonnet-4-5-20250929
           - claude-opus-4-1-20250805
+          - claude-3-5-sonnet-20241022
           - claude-3-5-haiku-20241022
       openai_model:
         description: "OpenAI model (canonical default is gpt-5.4; org_default is override-only)"
@@ -817,10 +818,23 @@ jobs:
                   # secret-regex source lines in the diff. Those are guardrail code, not
                   # credentials. Keep scanning the rest of the diff fail-closed.
                   awk '
-                    /^[+-][[:space:]]*(SECRET_PATTERN(_STRICT(_NO_KEY)?|_NO_GENERIC)?|SENSITIVE_PATTERN(_STRICT|_NO_GENERIC)?|JWT_PATTERN(_STRICT)?|_[A-Z0-9_]+_RX|_GH[A-Z_]+|_SK_PREFIX|_GENERIC_[A-Z_]+_PREFIX)=/ { next }
-                    /^[+-][[:space:]]*printf[[:space:]]+-v[[:space:]]+SECRET_PATTERN_STRICT_NO_KEY[[:space:]]+/ { next }
-                    /^[+-][[:space:]]*(GITHUB_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY):[[:space:]]*\$\{\{[[:space:]]*secrets\.(GITHUB_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY)[[:space:]]*\}\}[[:space:]]*$/ { next }
-                    /^[+-][[:space:]]*-H[[:space:]]+"(Authorization: Bearer \$OPENAI_API_KEY|x-api-key: \$ANTHROPIC_API_KEY)"[[:space:]]*\\?[[:space:]]*$/ { next }
+                    function has_runtime_secret(line) {
+                      return line ~ /xox[baprs]-[A-Za-z0-9-]{10,}/ ||
+                        line ~ /ghp_[A-Za-z0-9]{30,}/ ||
+                        line ~ /github_pat_[A-Za-z0-9_]{20,}/ ||
+                        line ~ /gh[oprsut]_[A-Za-z0-9]{30,}/ ||
+                        line ~ /AKIA[0-9A-Z]{16}/ ||
+                        line ~ /AIza[0-9A-Za-z_-]{30,}/ ||
+                        line ~ /ya29\\.[A-Za-z0-9_-]{20,}/ ||
+                        line ~ /sk-(proj|ant)-[A-Za-z0-9_-]{20,}/ ||
+                        line ~ /sk-[A-Za-z0-9_-]{30,}/ ||
+                        line ~ /eyJ[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}/ ||
+                        line ~ /(api_key_|secret_key_|private_key_|access_key_)[A-Za-z0-9_-]{20,}/
+                    }
+                    /^[+-][[:space:]]*(SECRET_PATTERN(_STRICT(_NO_KEY)?|_NO_GENERIC)?|SENSITIVE_PATTERN(_STRICT|_NO_GENERIC)?|JWT_PATTERN(_STRICT)?|_[A-Z0-9_]+_RX|_GH[A-Z_]+|_SK_PREFIX|_GENERIC_[A-Z_]+_PREFIX)=/ && !has_runtime_secret($0) { next }
+                    /^[+-][[:space:]]*printf[[:space:]]+-v[[:space:]]+SECRET_PATTERN_STRICT_NO_KEY[[:space:]]+/ && !has_runtime_secret($0) { next }
+                    /^[+-][[:space:]]*(GITHUB_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY):[[:space:]]*\$\{\{[[:space:]]*secrets\.(GITHUB_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY)[[:space:]]*\}\}[[:space:]]*$/ && !has_runtime_secret($0) { next }
+                    /^[+-][[:space:]]*-H[[:space:]]+"(Authorization: Bearer \$OPENAI_API_KEY|x-api-key: \$ANTHROPIC_API_KEY)"[[:space:]]*\\?[[:space:]]*$/ && !has_runtime_secret($0) { next }
                     { print }
                   ' "$source_file" > "$target_file"
                   ;;
@@ -851,14 +865,13 @@ jobs:
                   break
                 fi
                 GREP_STATUS=0
-                if grep -Eqi -- "$PATTERN" "$SECRET_SCAN_INPUT"; then
+                grep -Eqi -- "$PATTERN" "$SECRET_SCAN_INPUT" || GREP_STATUS=$?
+                if [ "$GREP_STATUS" -eq 0 ]; then
                   echo "⛔️ Potential secret-like material detected in PR context; skipping AI review."
                   SKIP_REVIEW="true"
                   SKIP_REASON="potential_secret"
                   rm -f "$SECRET_SCAN_INPUT"
                   break
-                else
-                  GREP_STATUS=$?
                 fi
                 rm -f "$SECRET_SCAN_INPUT"
                 if [ "$GREP_STATUS" -gt 1 ]; then
