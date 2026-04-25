@@ -294,10 +294,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json headRefName,headRefOid,headRepositoryOwner > pr_dispatch.json
+          gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json headRefName,headRefOid,headRepository > pr_dispatch.json
           PR_HEAD_REF="$(jq -r '.headRefName // empty' pr_dispatch.json)"
           PR_HEAD_SHA="$(jq -r '.headRefOid // empty' pr_dispatch.json)"
-          PR_HEAD_OWNER="$(jq -r '.headRepositoryOwner.login // empty' pr_dispatch.json)"
+          PR_HEAD_REPO="$(jq -r '.headRepository.nameWithOwner // empty' pr_dispatch.json)"
           SELF_WORKFLOW_REF="${GITHUB_WORKFLOW_REF%@*}"
           SELF_WORKFLOW_FILE="${SELF_WORKFLOW_REF##*/}"
 
@@ -305,8 +305,8 @@ jobs:
             echo "ERROR: Unable to resolve PR head ref/SHA for dispatch" >&2
             exit 1
           fi
-          if [ -z "${PR_HEAD_OWNER:-}" ] || [ "$PR_HEAD_OWNER" != "${GITHUB_REPOSITORY_OWNER:-}" ]; then
-            echo "ERROR: head-bound workflow_dispatch cannot target fork PR refs safely (head_owner=${PR_HEAD_OWNER:-unknown}, base_owner=${GITHUB_REPOSITORY_OWNER:-unknown})" >&2
+          if [ -z "${PR_HEAD_REPO:-}" ] || [ "$PR_HEAD_REPO" != "${GITHUB_REPOSITORY:-}" ]; then
+            echo "ERROR: head-bound workflow_dispatch may only target refs from the base repository (head_repo=${PR_HEAD_REPO:-unknown}, base_repo=${GITHUB_REPOSITORY:-unknown})" >&2
             exit 1
           fi
 
