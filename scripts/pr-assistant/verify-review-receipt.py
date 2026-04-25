@@ -64,10 +64,10 @@ def extract_zaver_field(body: str, field_name: str) -> str:
     in_code = False
     for raw_line in (body or "").splitlines():
         line = raw_line.strip()
-        if in_zaver and line.startswith("```"):
+        if line.startswith("```"):
             in_code = not in_code
             continue
-        if in_zaver and in_code:
+        if in_code:
             continue
         if SECTION_HEADER_RE.match(line):
             heading = normalize_heading(line)
@@ -276,6 +276,10 @@ def self_test() -> int:
         extract_zaver_field(
             "\n".join(
                 [
+                    "```markdown",
+                    "## Zaver",
+                    "Verdict: changes_required",
+                    "```",
                     "## Zaver",
                     "```",
                     "## Spoofed",
