@@ -683,6 +683,7 @@ printf '%s\n' "9. SSOT: Dokumentace v merglbot-public/docs/"
 printf '%s\n' "10. Destructive: Double-confirm pred destruktivni akci"
 printf '%s\n' "11. CI Idempotency: CI kroky musi byt idempotentni"
 printf '%s\n' "12. Security Gating: Trivy/CodeQL gaty se NEzmekuji"
+printf '%s\n' "13. PR Assistant copy-target propagation: managed PR Assistant workflow/script copy PRs may be docs-not-required when changed_files_classifier says not_required; do not make advisory docs hints a closeout blocker."
 printf '%s\n' ""
 printf '%s\n' "### MERGLBOT Rule Reference"
 printf '%s\n' ""
@@ -789,6 +790,7 @@ printf '%s\n' "- Cite MERGLBOT rules"
 printf '%s\n' "- Code examples for fixes"
 printf '%s\n' "- Use checkboxes for actions"
 printf '%s\n' "- Keep docs_follow_up_hint and suggested_docs_targets advisory-only review metadata; they must not create a merge blocker or authoritative docs-classifier verdict"
+printf '%s\n' "- For managed PR Assistant copy-target propagation that only updates the canonical PR Assistant workflow/scripts, do not block closeout solely because platform SSOT docs exist; rely on the deterministic changed_files_classifier state."
 printf '%s\n' ""
 printf '%s\n' "---"
 printf '%s\n' ""
@@ -1559,7 +1561,8 @@ if [ -s anthropic_review.txt ] && ! grep -qx "API_ERROR" anthropic_review.txt 2>
 fi
 
 if [ "$OPENAI_OK" != "true" ] && [ "$ANTHROPIC_OK" != "true" ]; then
-  echo "WARN: Step 1 produced no usable output from OpenAI or Anthropic; Step 3 will emit a fail-closed CI-only fallback review." >&2
+  echo "ERROR: Step 1 produced no usable output from OpenAI or Anthropic; refusing to synthesize a CI-only review." >&2
+  exit 1
 fi
 
 echo "========================================="
