@@ -168,7 +168,7 @@ jobs:
             fi
             local comment_body
             comment_body="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")"
-            COMMENT_BODY="$comment_body" python3 -c 'import os, re, sys; body = re.sub(r"\s+", " ", os.environ.get("COMMENT_BODY", "")).strip().lower(); m = re.match(r"^@merglbot\s+review(?:\s+(?P<flags>(?:--(?:full|light|retro|learn|full-diff)(?:\s+|$))+))?(?:[.!?]|$)", body); sys.exit(0 if m else 1)'
+            COMMENT_BODY="$comment_body" python3 -c 'import os, re, sys; body = re.sub(r"\s+", " ", os.environ.get("COMMENT_BODY", "")).rstrip().lower(); body = re.sub(r"[.!?]+$", "", body); parts = body.split(" "); allowed_flags = {"--full", "--light", "--retro", "--learn", "--full-diff"}; ok = len(parts) >= 2 and parts[0] == "@merglbot" and parts[1] == "review" and all(part in allowed_flags for part in parts[2:]); sys.exit(0 if ok else 1)'
           }
 
           # Authorization gate: avoid running expensive workflows for untrusted commenters
@@ -298,11 +298,16 @@ jobs:
           gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json headRefName,headRefOid,headRepository > pr_dispatch.json
           PR_TRUSTED_REF="$(gh repo view "$GH_REPO" --json defaultBranchRef --jq '.defaultBranchRef.name // empty')"
           PR_HEAD_SHA="$(jq -r '.headRefOid // empty' pr_dispatch.json)"
+          PR_HEAD_REPO="$(jq -r '.headRepository.nameWithOwner // empty' pr_dispatch.json)"
           SELF_WORKFLOW_REF="${GITHUB_WORKFLOW_REF%@*}"
           SELF_WORKFLOW_FILE="${SELF_WORKFLOW_REF##*/}"
 
-          if [ -z "${PR_TRUSTED_REF:-}" ] || [ -z "${PR_HEAD_SHA:-}" ] || [ -z "${SELF_WORKFLOW_FILE:-}" ]; then
+          if [ -z "${PR_TRUSTED_REF:-}" ] || [ -z "${PR_HEAD_SHA:-}" ] || [ -z "${PR_HEAD_REPO:-}" ] || [ -z "${SELF_WORKFLOW_FILE:-}" ]; then
             echo "ERROR: Unable to resolve PR head ref/SHA for dispatch" >&2
+            exit 1
+          fi
+          if [ "$PR_HEAD_REPO" != "$GH_REPO" ]; then
+            echo "ERROR: Refusing to review fork PR head from ${PR_HEAD_REPO}; use a maintainer branch in ${GH_REPO} for PR Assistant v3." >&2
             exit 1
           fi
           gh workflow run "$SELF_WORKFLOW_FILE" \
@@ -455,13 +460,12 @@ jobs:
               echo "ERROR: workflow_dispatch must run on the trusted default branch (expected: ${TRUSTED_REF_NAME:-unknown}, got: ${CURRENT_REF_NAME:-unknown})" >&2
               exit 1
             fi
-            if [ -n "${EXPECTED_HEAD_SHA_INPUT:-}" ]; then
-              if [ "${EXPECTED_HEAD_SHA_INPUT}" != "${PR_HEAD_SHA:-}" ]; then
-                echo "ERROR: expected_head_sha does not match live PR head (expected: ${EXPECTED_HEAD_SHA_INPUT:0:12}, live: ${PR_HEAD_SHA:0:12})" >&2
-                exit 1
-              fi
-            elif [ "$DISPATCH_SOURCE" = "issue_comment_dispatch" ]; then
-              echo "ERROR: issue_comment-dispatched workflow_dispatch must provide the live PR head SHA" >&2
+            if [ -z "${EXPECTED_HEAD_SHA_INPUT:-}" ]; then
+              echo "ERROR: workflow_dispatch must provide the live PR head SHA" >&2
+              exit 1
+            fi
+            if [ "${EXPECTED_HEAD_SHA_INPUT}" != "${PR_HEAD_SHA:-}" ]; then
+              echo "ERROR: expected_head_sha does not match live PR head (expected: ${EXPECTED_HEAD_SHA_INPUT:0:12}, live: ${PR_HEAD_SHA:0:12})" >&2
               exit 1
             fi
           fi
@@ -756,7 +760,13 @@ jobs:
           BUGBOT_SOURCES=""
 
           for BOT_PATTERN in cursor gemini copilot coderabbit qodo pr-agent snyk sonar codacy deepsource; do
-            FINDINGS=$(jq -r --arg pat "$BOT_PATTERN" --arg cutoff "$LAST_REVIEW_CREATED_AT" '.[] | select(.user.login | test($pat; "i")) | select(($cutoff == "") or (.created_at > $cutoff)) | .body' issue_comments.json 2>/dev/null || echo "")
+            FINDINGS=$(jq -r --arg pat "$BOT_PATTERN" --arg cutoff "$LAST_REVIEW_CREATED_AT" '
+              .[]
+              | select(.user.login | test($pat; "i"))
+              | select(($cutoff == "") or (.created_at > $cutoff))
+              | select(((.body // "") | test("unable to generate a review|no actionable findings|no issues found|no bugs found"; "i")) | not)
+              | .body
+            ' issue_comments.json 2>/dev/null || echo "")
             if [ -n "$FINDINGS" ] && [ "$FINDINGS" != "null" ]; then
               {
                 echo "### $BOT_PATTERN Bot Findings"
@@ -1730,13 +1740,15 @@ jobs:
           REVIEW_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           CHECK_SUMMARY="Merglbot PR Assistant v3 reviewed PR head ${PR_HEAD_SHA}. Verdict: ${REVIEW_VERDICT:-unknown}. Run: ${REVIEW_RUN_URL}"
 
+          CHECK_EXTERNAL_ID="merglbot-pr-assistant-v3-${GITHUB_RUN_ID}"
+
           jq -n \
             --arg name "Merglbot PR Assistant v3" \
             --arg head_sha "$PR_HEAD_SHA" \
             --arg status "completed" \
             --arg conclusion "$CHECK_CONCLUSION" \
             --arg details_url "$REVIEW_RUN_URL" \
-            --arg external_id "merglbot-pr-assistant-v3-${GITHUB_RUN_ID}" \
+            --arg external_id "$CHECK_EXTERNAL_ID" \
             --arg title "$CHECK_TITLE" \
             --arg summary "$CHECK_SUMMARY" \
             '{
@@ -1752,9 +1764,27 @@ jobs:
               }
             }' > pr_check_run_payload.json
 
-          gh api "repos/${GITHUB_REPOSITORY}/check-runs" \
-            --method POST \
-            --input pr_check_run_payload.json > pr_check_run_response.json
+          EXISTING_CHECK_ID="$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100&filter=all" 2>/dev/null \
+              | jq -sr --arg name "Merglbot PR Assistant v3" --arg external_id "$CHECK_EXTERNAL_ID" '
+                  [ .[]?.check_runs[]?
+                    | select((.name // "") == $name)
+                    | select((.external_id // "") == $external_id)
+                    | .id
+                  ][0] // empty
+                ' || true
+          )"
+
+          if [ -n "${EXISTING_CHECK_ID:-}" ]; then
+            jq 'del(.head_sha)' pr_check_run_payload.json > pr_check_run_update_payload.json
+            gh api "repos/${GITHUB_REPOSITORY}/check-runs/${EXISTING_CHECK_ID}" \
+              --method PATCH \
+              --input pr_check_run_update_payload.json > pr_check_run_response.json
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/check-runs" \
+              --method POST \
+              --input pr_check_run_payload.json > pr_check_run_response.json
+          fi
 
           jq -e '.id and .head_sha' pr_check_run_response.json >/dev/null
           printf '%s\n' "published" > pr_check_surface_state.txt
@@ -1777,32 +1807,19 @@ jobs:
             exit 1
           fi
 
-          # GitHub can lag when projecting a fresh workflow_dispatch run onto the PR checks surface.
-          # Fail closed if it never appears, but resolve against the current run's own job URLs instead
-          # of relying only on a substring match over details_url.
-          gh run view "${GITHUB_RUN_ID}" --json jobs \
-            | jq '[.jobs[]? | .url // empty | select(length > 0)]' > current_run_job_urls.json
-
-          JOB_URL_COUNT="$(jq -r 'length' current_run_job_urls.json 2>/dev/null || echo "0")"
-          if ! [[ "${JOB_URL_COUNT:-0}" =~ ^[0-9]+$ ]] || [ "${JOB_URL_COUNT}" -eq 0 ]; then
-            echo "ERROR: Unable to resolve current workflow job URLs for PR check surface verification" >&2
-            exit 1
-          fi
+          CHECK_EXTERNAL_ID="merglbot-pr-assistant-v3-${GITHUB_RUN_ID}"
 
           MATCH_COUNT="0"
           for _ in $(seq 1 30); do
-            if gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100" 2>/dev/null \
+            if gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100&filter=all" 2>/dev/null \
               | jq -s '{check_runs: (map(.check_runs // []) | add // [])}' > pr_head_check_runs.json.tmp 2>/dev/null; then
               mv -f pr_head_check_runs.json.tmp pr_head_check_runs.json
-              MATCH_COUNT="$(jq -r --arg run_id "${GITHUB_RUN_ID}" --slurpfile current_run_job_urls current_run_job_urls.json '
-                ($current_run_job_urls[0] // []) as $job_urls
-                | [
+              MATCH_COUNT="$(jq -r --arg external_id "$CHECK_EXTERNAL_ID" --arg head_sha "$PR_HEAD_SHA" '
+                [
                     (.check_runs // [])[]?
-                    | (.details_url // "") as $details_url
-                    | select(
-                        (($job_urls | index($details_url)) != null)
-                        or ($details_url | contains("/actions/runs/" + $run_id))
-                      )
+                    | select((.name // "") == "Merglbot PR Assistant v3")
+                    | select((.external_id // "") == $external_id)
+                    | select((.head_sha // "") == $head_sha)
                   ] | length
               ' pr_head_check_runs.json 2>/dev/null || echo "0")"
               if [[ "${MATCH_COUNT:-0}" =~ ^[0-9]+$ ]] && [ "${MATCH_COUNT}" -gt 0 ]; then
@@ -1814,14 +1831,13 @@ jobs:
           done
 
           if ! [[ "${MATCH_COUNT:-0}" =~ ^[0-9]+$ ]] || [ "${MATCH_COUNT}" -eq 0 ]; then
-            echo "ERROR: Current workflow run is not visible as a PR check on head ${PR_HEAD_SHA:0:12}" >&2
-            echo "Observed current run job URLs:" >&2
-            jq -r '.[]' current_run_job_urls.json >&2 || true
+            echo "ERROR: Current workflow run check ${CHECK_EXTERNAL_ID} is not visible on PR head ${PR_HEAD_SHA:0:12}" >&2
             echo "Observed PR check runs on head:" >&2
             jq -r '
               (.check_runs // [])[]?
               | "- " + (.name // "unknown")
                 + " [" + ((.status // "unknown") | tostring) + "/" + ((.conclusion // "null") | tostring) + "] "
+                + "external_id=" + ((.external_id // "none") | tostring) + " "
                 + (.details_url // "no-details-url")
             ' pr_head_check_runs.json >&2 || true
             exit 1
