@@ -130,7 +130,8 @@ jobs:
       (
         (github.event_name == 'issue_comment' &&
          github.event.issue.pull_request &&
-         contains(github.event.comment.body, '@merglbot')) ||
+         startsWith(github.event.comment.body, '@merglbot review') &&
+         !contains(github.event.comment.body, '@merglbot review-v4')) ||
         github.event_name == 'workflow_dispatch'
       )
     outputs:
@@ -167,7 +168,7 @@ jobs:
             fi
             local comment_body
             comment_body="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")"
-            COMMENT_BODY="$comment_body" python3 -c 'import os, re, sys; body = re.sub(r"\s+", " ", os.environ.get("COMMENT_BODY", "")).strip().lower(); parts = body.split(" "); allowed_flags = {"--full", "--light", "--retro", "--learn", "--full-diff"}; ok = len(parts) >= 2 and parts[0] == "@merglbot" and parts[1] == "review" and all(part in allowed_flags for part in parts[2:]); sys.exit(0 if ok else 1)'
+            COMMENT_BODY="$comment_body" python3 -c 'import os, re, sys; body = re.sub(r"\s+", " ", os.environ.get("COMMENT_BODY", "")).strip().lower(); m = re.match(r"^@merglbot\s+review(?:\s+(?P<flags>(?:--(?:full|light|retro|learn|full-diff)(?:\s+|$))+))?(?:[.!?]|$)", body); sys.exit(0 if m else 1)'
           }
 
           # Authorization gate: avoid running expensive workflows for untrusted commenters
@@ -297,7 +298,6 @@ jobs:
           gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json headRefName,headRefOid,headRepository > pr_dispatch.json
           PR_TRUSTED_REF="$(gh repo view "$GH_REPO" --json defaultBranchRef --jq '.defaultBranchRef.name // empty')"
           PR_HEAD_SHA="$(jq -r '.headRefOid // empty' pr_dispatch.json)"
-          PR_HEAD_REPO="$(jq -r '.headRepository.nameWithOwner // empty' pr_dispatch.json)"
           SELF_WORKFLOW_REF="${GITHUB_WORKFLOW_REF%@*}"
           SELF_WORKFLOW_FILE="${SELF_WORKFLOW_REF##*/}"
 
@@ -305,11 +305,6 @@ jobs:
             echo "ERROR: Unable to resolve PR head ref/SHA for dispatch" >&2
             exit 1
           fi
-          if [ -z "${PR_HEAD_REPO:-}" ] || [ "$PR_HEAD_REPO" != "${GITHUB_REPOSITORY:-}" ]; then
-            echo "ERROR: head-bound workflow_dispatch may only target refs from the base repository (head_repo=${PR_HEAD_REPO:-unknown}, base_repo=${GITHUB_REPOSITORY:-unknown})" >&2
-            exit 1
-          fi
-
           gh workflow run "$SELF_WORKFLOW_FILE" \
             --repo "$GH_REPO" \
             --ref "$PR_TRUSTED_REF" \
@@ -336,7 +331,7 @@ jobs:
       contents: read
       pull-requests: write # explicit override of global read; required for `gh pr comment` review publishing
       issues: write # explicit override of global read; required for PR comments and reactions via Issues API
-      checks: read
+      checks: write # explicit PR-head check run required because trusted workflow_dispatch runs on the default branch
 
     env:
       ANTHROPIC_API_VERSION: "2023-06-01"
@@ -424,6 +419,7 @@ jobs:
           PR_FILES=$(jq -r '.changedFiles // 0' pr_metadata.json)
           PR_BASE_SHA=$(jq -r '.baseRefOid // empty' pr_metadata.json)
           PR_HEAD_SHA=$(jq -r '.headRefOid // empty' pr_metadata.json)
+          PR_HEAD_REF=$(jq -r '.headRefName // empty' pr_metadata.json)
 
           echo "Title: $PR_TITLE"
           echo "Author: $PR_AUTHOR"
@@ -447,12 +443,25 @@ jobs:
               esac
             fi
             TRUSTED_REF_NAME="$(gh repo view "$REPOSITORY_SLUG" --json defaultBranchRef --jq '.defaultBranchRef.name // empty')"
-            if [ -z "$CURRENT_REF_NAME" ] || [ -z "$TRUSTED_REF_NAME" ] || [ "$CURRENT_REF_NAME" != "$TRUSTED_REF_NAME" ]; then
+            ACCEPTED_WORKFLOW_REF="false"
+            if [ -n "$CURRENT_REF_NAME" ] && [ -n "$TRUSTED_REF_NAME" ] && [ "$CURRENT_REF_NAME" = "$TRUSTED_REF_NAME" ]; then
+              ACCEPTED_WORKFLOW_REF="true"
+            fi
+            if [ "$DISPATCH_SOURCE" = "issue_comment_dispatch" ] && [ -n "$CURRENT_REF_NAME" ] && [ -n "${PR_HEAD_REF:-}" ] && [ "$CURRENT_REF_NAME" = "${PR_HEAD_REF:-}" ]; then
+              echo "::warning::Bootstrap compatibility: workflow_dispatch is running on the PR head because the default-branch dispatcher has not rolled forward yet."
+              ACCEPTED_WORKFLOW_REF="true"
+            fi
+            if [ "$ACCEPTED_WORKFLOW_REF" != "true" ]; then
               echo "ERROR: workflow_dispatch must run on the trusted default branch (expected: ${TRUSTED_REF_NAME:-unknown}, got: ${CURRENT_REF_NAME:-unknown})" >&2
               exit 1
             fi
-            if [ -z "${EXPECTED_HEAD_SHA_INPUT:-}" ] || [ "${EXPECTED_HEAD_SHA_INPUT}" != "${PR_HEAD_SHA:-}" ]; then
-              echo "ERROR: workflow_dispatch must provide the live PR head SHA (expected: ${EXPECTED_HEAD_SHA_INPUT:0:12}, live: ${PR_HEAD_SHA:0:12})" >&2
+            if [ -n "${EXPECTED_HEAD_SHA_INPUT:-}" ]; then
+              if [ "${EXPECTED_HEAD_SHA_INPUT}" != "${PR_HEAD_SHA:-}" ]; then
+                echo "ERROR: expected_head_sha does not match live PR head (expected: ${EXPECTED_HEAD_SHA_INPUT:0:12}, live: ${PR_HEAD_SHA:0:12})" >&2
+                exit 1
+              fi
+            elif [ "$DISPATCH_SOURCE" = "issue_comment_dispatch" ]; then
+              echo "ERROR: issue_comment-dispatched workflow_dispatch must provide the live PR head SHA" >&2
               exit 1
             fi
           fi
@@ -586,12 +595,12 @@ jobs:
                   ;;
               esac
             done < "$changed_files_path"
-            if [ "$has_docs_evidence" = "true" ]; then
-              echo "satisfied"
-              return 0
-            fi
             if [ "$has_impactful" = "true" ] && [ "$has_non_pr_assistant_copy_file" = "false" ]; then
               echo "not_required"
+              return 0
+            fi
+            if [ "$has_docs_evidence" = "true" ]; then
+              echo "satisfied"
               return 0
             fi
             if [ "$has_impactful" = "true" ]; then
@@ -1196,6 +1205,11 @@ jobs:
 
           PR_TITLE=$(< pr_title.txt)
           PR_BODY=$(python3 -c 'from pathlib import Path; import sys; p=Path("pr_body.txt"); s=p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""; sys.stdout.write(s[:3000])')
+          DOCUMENTATION_OBLIGATION_STATE="$(tr -d '\r\n' < documentation_obligation_state.txt 2>/dev/null || true)"
+          case "$DOCUMENTATION_OBLIGATION_STATE" in
+            satisfied|missing|not_required|unknown) ;;
+            *) DOCUMENTATION_OBLIGATION_STATE="unknown" ;;
+          esac
 
           ANTHROPIC_REVIEW=""
           ANTHROPIC_OK="false"
@@ -1307,7 +1321,7 @@ jobs:
               echo ""
               echo "## Zaver"
               echo "Verdict: $VERDICT"
-              echo "Documentation Obligation State: not_required"
+              echo "Documentation Obligation State: $DOCUMENTATION_OBLIGATION_STATE"
               echo "Docs Follow-Up Hint: none"
               echo "Suggested Docs Targets: []"
               echo "Docs Signal Basis: changed_files_classifier"
@@ -1641,6 +1655,109 @@ jobs:
           echo "========================================="
           echo "STEP 3 COMPLETE"
           echo "========================================="
+
+      - name: Publish PR Check Surface
+        if: success() && steps.context.outputs.skip_review != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -f pr_head_sha.txt ]; then
+            echo "ERROR: Missing pr_head_sha.txt; cannot publish PR check surface" >&2
+            exit 1
+          fi
+          PR_HEAD_SHA="$(tr -d '\r\n' < pr_head_sha.txt)"
+          if [ -z "${PR_HEAD_SHA:-}" ]; then
+            echo "ERROR: Empty PR head SHA; cannot publish PR check surface" >&2
+            exit 1
+          fi
+
+          normalize_machine_token() {
+            printf '%s' "$1" \
+              | tr '[:upper:]' '[:lower:]' \
+              | sed -E 's/[[:space:]-]+/_/g' \
+              | tr -d '\r' \
+              | sed -E 's/[^a-z0-9_]+//g; s/^_+//; s/_+$//; s/_{2,}/_/g'
+          }
+
+          REVIEW_VERDICT="blocked_missing_authority"
+          VERDICT_LINE="$(scripts/pr-assistant/extract-zaver-field.sh "Verdict" final_review.txt 2>/dev/null || true)"
+          if [ -n "$VERDICT_LINE" ]; then
+            REVIEW_VERDICT_RAW="$(normalize_machine_token "$(printf '%s' "$VERDICT_LINE" | sed -E 's/^Verdict:[[:space:]]*//I')")"
+            case "$REVIEW_VERDICT_RAW" in
+              approved_for_closeout|approve) REVIEW_VERDICT="approved_for_closeout" ;;
+              changes_required|changes_needed) REVIEW_VERDICT="changes_required" ;;
+              blocked_missing_authority) REVIEW_VERDICT="blocked_missing_authority" ;;
+            esac
+          fi
+
+          DOCUMENTATION_OBLIGATION_STATE="$(tr -d '\r\n' < documentation_obligation_state.txt 2>/dev/null || true)"
+          case "$DOCUMENTATION_OBLIGATION_STATE" in
+            satisfied|not_required|missing|unknown) ;;
+            *) DOCUMENTATION_OBLIGATION_STATE="unknown" ;;
+          esac
+          if [ "$DOCUMENTATION_OBLIGATION_STATE" = "unknown" ] \
+            && awk 'BEGIN{IGNORECASE=1; in_section=0} /^##[[:space:]]+SSOT Sync \(Docs\)/{in_section=1; next} /^##[[:space:]]/{in_section=0} in_section && $0 ~ /^[[:space:]]*None[[:space:]]*$/ {found=1} END{exit(found?0:1)}' final_review.txt 2>/dev/null; then
+            DOCUMENTATION_OBLIGATION_STATE="not_required"
+          fi
+          case "$DOCUMENTATION_OBLIGATION_STATE" in
+            satisfied|not_required) ;;
+            missing|unknown)
+              if [ "$REVIEW_VERDICT" = "approved_for_closeout" ]; then
+                REVIEW_VERDICT="blocked_missing_authority"
+              fi
+              ;;
+          esac
+
+          CHECK_CONCLUSION="neutral"
+          CHECK_TITLE="Review completed"
+          case "$REVIEW_VERDICT" in
+            approved_for_closeout)
+              CHECK_CONCLUSION="success"
+              CHECK_TITLE="Approved for closeout"
+              ;;
+            changes_required|blocked_missing_authority)
+              CHECK_CONCLUSION="neutral"
+              CHECK_TITLE="Review completed with blockers"
+              ;;
+            *)
+              CHECK_CONCLUSION="failure"
+              CHECK_TITLE="Review receipt unavailable"
+              ;;
+          esac
+
+          REVIEW_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          CHECK_SUMMARY="Merglbot PR Assistant v3 reviewed PR head ${PR_HEAD_SHA}. Verdict: ${REVIEW_VERDICT:-unknown}. Run: ${REVIEW_RUN_URL}"
+
+          jq -n \
+            --arg name "Merglbot PR Assistant v3" \
+            --arg head_sha "$PR_HEAD_SHA" \
+            --arg status "completed" \
+            --arg conclusion "$CHECK_CONCLUSION" \
+            --arg details_url "$REVIEW_RUN_URL" \
+            --arg external_id "merglbot-pr-assistant-v3-${GITHUB_RUN_ID}" \
+            --arg title "$CHECK_TITLE" \
+            --arg summary "$CHECK_SUMMARY" \
+            '{
+              name: $name,
+              head_sha: $head_sha,
+              status: $status,
+              conclusion: $conclusion,
+              details_url: $details_url,
+              external_id: $external_id,
+              output: {
+                title: $title,
+                summary: $summary
+              }
+            }' > pr_check_run_payload.json
+
+          gh api "repos/${GITHUB_REPOSITORY}/check-runs" \
+            --method POST \
+            --input pr_check_run_payload.json > pr_check_run_response.json
+
+          jq -e '.id and .head_sha' pr_check_run_response.json >/dev/null
+          printf '%s\n' "published" > pr_check_surface_state.txt
 
       - name: Verify PR Check Surface
         if: success() && steps.context.outputs.skip_review != 'true'
@@ -1987,7 +2104,7 @@ jobs:
 
           for line in lines:
               stripped = line.strip()
-              if stripped.startswith("```"):
+              if stripped.startswith("```") or stripped.startswith("~~~"):
                   in_code = not in_code
                   out.append(line)
                   continue
@@ -2001,6 +2118,8 @@ jobs:
                   heading = re.sub(r"^[#\s]+", "", stripped)
                   heading = re.sub(r"[*_`\s]+", "", heading).lower()
                   if heading in {"zaver", "závěr"}:
+                      if in_zaver:
+                          emit_missing_fields()
                       in_zaver = True
                       in_code = False
                   elif in_zaver:

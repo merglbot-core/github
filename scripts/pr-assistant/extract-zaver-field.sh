@@ -6,7 +6,8 @@ if [ "$#" -eq 1 ] && [ "$1" = "--self-test" ]; then
   tmp_review="$(mktemp)"
   tmp_nested="$(mktemp)"
   tmp_prefence="$(mktemp)"
-  trap 'rm -f "$tmp_review" "$tmp_nested" "$tmp_prefence"' EXIT
+  tmp_tilde="$(mktemp)"
+  trap 'rm -f "$tmp_review" "$tmp_nested" "$tmp_prefence" "$tmp_tilde"' EXIT
   cat >"$tmp_review" <<'EOF'
 ## Zaver
   ```text
@@ -52,6 +53,19 @@ EOF
     echo "self-test failed: expected real Zaver after prefixed fence, got: $prefence_extracted" >&2
     exit 1
   fi
+  cat >"$tmp_tilde" <<'EOF'
+~~~markdown
+## Zaver
+Verdict: approved_for_closeout
+~~~
+## Zaver
+Verdict: changes_required
+EOF
+  tilde_extracted="$("$0" "Verdict" "$tmp_tilde")"
+  if [ "$tilde_extracted" != "Verdict: changes_required" ]; then
+    echo "self-test failed: expected real Zaver after tilde fence, got: $tilde_extracted" >&2
+    exit 1
+  fi
   echo '{"ok":true,"self_test":"passed"}'
   exit 0
 fi
@@ -66,7 +80,7 @@ REVIEW_FILE="$2"
 
 awk -v field_name="$FIELD_NAME" '
   BEGIN { in_zaver = 0; in_code = 0 }
-  /^[[:space:]]*```/ {
+  /^[[:space:]]*(```|~~~)/ {
     in_code = !in_code
     next
   }
