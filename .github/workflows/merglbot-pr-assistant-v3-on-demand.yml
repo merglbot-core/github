@@ -294,14 +294,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json headRefName,headRefOid > pr_dispatch.json
+          gh pr view "$PR_NUMBER" --repo "$GH_REPO" --json headRefName,headRefOid,headRepository > pr_dispatch.json
           PR_HEAD_REF="$(jq -r '.headRefName // empty' pr_dispatch.json)"
           PR_HEAD_SHA="$(jq -r '.headRefOid // empty' pr_dispatch.json)"
+          PR_HEAD_REPO="$(jq -r '.headRepository.nameWithOwner // empty' pr_dispatch.json)"
           SELF_WORKFLOW_REF="${GITHUB_WORKFLOW_REF%@*}"
           SELF_WORKFLOW_FILE="${SELF_WORKFLOW_REF##*/}"
 
           if [ -z "${PR_HEAD_REF:-}" ] || [ -z "${PR_HEAD_SHA:-}" ] || [ -z "${SELF_WORKFLOW_FILE:-}" ]; then
             echo "ERROR: Unable to resolve PR head ref/SHA for dispatch" >&2
+            exit 1
+          fi
+          if [ -z "${PR_HEAD_REPO:-}" ] || [ "$PR_HEAD_REPO" != "${GITHUB_REPOSITORY:-}" ]; then
+            echo "ERROR: head-bound workflow_dispatch may only target refs from the base repository (head_repo=${PR_HEAD_REPO:-unknown}, base_repo=${GITHUB_REPOSITORY:-unknown})" >&2
             exit 1
           fi
 
@@ -884,8 +889,8 @@ jobs:
                         line ~ /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/ ||
                         line ~ /(api_key_|secret_key_|private_key_|access_key_)[A-Za-z0-9_-]{20,}/
                     }
-                    /^[+-][[:space:]]*(SECRET_PATTERN(_STRICT(_NO_KEY)?|_NO_GENERIC)?|SENSITIVE_PATTERN(_STRICT|_NO_GENERIC)?|JWT_PATTERN(_STRICT)?|_[A-Z0-9_]+_RX|_GH[A-Z_]+|_SK_PREFIX|_GENERIC_[A-Z_]+_PREFIX)=/ && !has_runtime_secret($0) { next }
-                    /^[+-][[:space:]]*printf[[:space:]]+-v[[:space:]]+SECRET_PATTERN_STRICT_NO_KEY[[:space:]]+/ && !has_runtime_secret($0) { next }
+                    /^-[[:space:]]*(SECRET_PATTERN(_STRICT(_NO_KEY)?|_NO_GENERIC)?|SENSITIVE_PATTERN(_STRICT|_NO_GENERIC)?|JWT_PATTERN(_STRICT)?|_[A-Z0-9_]+_RX|_GH[A-Z_]+|_SK_PREFIX|_GENERIC_[A-Z_]+_PREFIX)=/ && !has_runtime_secret($0) { next }
+                    /^-[[:space:]]*printf[[:space:]]+-v[[:space:]]+SECRET_PATTERN_STRICT_NO_KEY[[:space:]]+/ && !has_runtime_secret($0) { next }
                     /^[+-][[:space:]]*(GITHUB_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY):[[:space:]]*\$\{\{[[:space:]]*secrets\.(GITHUB_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY)[[:space:]]*\}\}[[:space:]]*$/ && !has_runtime_secret($0) { next }
                     /^[+-][[:space:]]*-H[[:space:]]+"(Authorization: Bearer \$OPENAI_API_KEY|x-api-key: \$ANTHROPIC_API_KEY)"[[:space:]]*\\?[[:space:]]*$/ && !has_runtime_secret($0) { next }
                     { print }
