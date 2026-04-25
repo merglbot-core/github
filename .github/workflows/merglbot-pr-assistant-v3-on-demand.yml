@@ -130,8 +130,7 @@ jobs:
       (
         (github.event_name == 'issue_comment' &&
          github.event.issue.pull_request &&
-         startsWith(github.event.comment.body, '@merglbot review') &&
-         !contains(github.event.comment.body, '@merglbot review-v4')) ||
+         startsWith(github.event.comment.body, '@merglbot review')) ||
         github.event_name == 'workflow_dispatch'
       )
     outputs:
@@ -173,6 +172,18 @@ jobs:
 
           # Authorization gate: avoid running expensive workflows for untrusted commenters
           if [ "$IS_WORKFLOW_DISPATCH" != "true" ]; then
+            if ! merglbot_v3_command_present; then
+              echo "⏭️ Skipping: no exact v3 @merglbot review command present"
+              {
+                echo "pr_number=$ISSUE_NUMBER"
+                echo "should_run=false"
+                echo "review_mode=light"
+                echo "diff_scope=auto"
+                echo "include_retro=false"
+                echo "trigger_comment_id=${COMMENT_ID:-}"
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             case "${AUTHOR_ASSOCIATION:-}" in
               OWNER|MEMBER|COLLABORATOR)
                 ;;
@@ -189,18 +200,6 @@ jobs:
                 exit 0
                 ;;
             esac
-            if ! merglbot_v3_command_present; then
-              echo "⏭️ Skipping: no exact v3 @merglbot review command present"
-              {
-                echo "pr_number=$ISSUE_NUMBER"
-                echo "should_run=false"
-                echo "review_mode=light"
-                echo "diff_scope=auto"
-                echo "include_retro=false"
-                echo "trigger_comment_id=${COMMENT_ID:-}"
-              } >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
           fi
 
           flag_present() {
@@ -2224,7 +2223,7 @@ jobs:
                   field_name_normalized = field_label_clean.lower()
                   if len(parts) == 2 and field_name_normalized in replacements:
                       canonical_label, target = replacements[field_name_normalized]
-                      prefix = re.match(r"^([\s>\-*+]*)", line).group(1)
+                      prefix = re.match(r"^([\s>]*(?:[-*+]\s+)?)", line).group(1)
                       out.append(f"{prefix}{canonical_label}: {target}")
                       updated.add(field_name_normalized)
                       continue
