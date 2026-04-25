@@ -556,6 +556,22 @@ jobs:
             --paginate \
             --jq '.[].filename' > changed_files.txt 2>/dev/null || echo "" > changed_files.txt
 
+          classify_documentation_obligation() {
+            local changed_files_path="${1:-changed_files.txt}"
+            if [ ! -s "$changed_files_path" ]; then
+              echo "unknown"
+              return 0
+            fi
+            if grep -Eiq '(^|/)(README|MERGLBOT|DOCUMENTATION_INDEX|RULEBOOK|SECURITY|PR_POLICY|BRANCH_PROTECTION)(\.md)?$|(^|/)docs/|^merglbot-public/docs/' "$changed_files_path"; then
+              echo "satisfied"
+              return 0
+            fi
+            echo "not_required"
+          }
+
+          DOCUMENTATION_OBLIGATION_STATE_AUTHORITATIVE="$(classify_documentation_obligation changed_files.txt)"
+          printf '%s\n' "$DOCUMENTATION_OBLIGATION_STATE_AUTHORITATIVE" > documentation_obligation_state.txt
+
           gh api "repos/${REPOSITORY_SLUG}/issues/$PR_NUM/comments" --paginate > issue_comments.json 2>/dev/null || echo "[]" > issue_comments.json
 
           echo "Detecting previous Merglbot review..."
@@ -1262,7 +1278,7 @@ jobs:
               echo "Documentation Obligation State: not_required"
               echo "Docs Follow-Up Hint: none"
               echo "Suggested Docs Targets: []"
-              echo "Docs Signal Basis: review_output_only"
+              echo "Docs Signal Basis: changed_files_classifier"
             } > final_review.txt
 
             SYNTHESIS_USAGE_API="ci_only_fallback"
@@ -1316,7 +1332,7 @@ jobs:
           printf '%s\n' "5. Always include SSOT Sync (Docs) section (or 'None')"
           printf '%s\n' "6. Stay strictly review-only and end with approved_for_closeout, changes_required, or blocked_missing_authority"
           printf '%s\n' "7. Evidence-first: every kept finding must include file:line + a quoted diff excerpt; drop unverified speculation."
-          printf '%s\n' "8. Keep docs_follow_up_hint, suggested_docs_targets, and docs_signal_basis as advisory-only review metadata; do not invent a required check, merge blocker, or authoritative docs-classifier verdict."
+          printf '%s\n' "8. Keep docs_follow_up_hint and suggested_docs_targets advisory-only; docs_signal_basis may be changed_files_classifier when the workflow supplies deterministic docs-state evidence."
           printf '%s\n' "9. If SSOT Sync (Docs) is exactly 'None', set Documentation Obligation State to not_required; reserve unknown for cases where a docs obligation cannot be determined."
           printf '%s\n' ""
           printf '%s\n' "## UNTRUSTED INPUT (PROMPT INJECTION WARNING)"
@@ -1355,7 +1371,7 @@ jobs:
           printf '%s\n' "Documentation Obligation State: [satisfied or not_required or missing or unknown; use not_required when SSOT Sync (Docs) is None]"
           printf '%s\n' "Docs Follow-Up Hint: [likely_required or not_observed or none]"
           printf '%s\n' "Suggested Docs Targets: [JSON array of advisory repo-relative merglbot-public/docs paths; use [] when none are confidently known; never emit suggested_docs_paths]"
-          printf '%s\n' "Docs Signal Basis: review_output_only"
+          printf '%s\n' "Docs Signal Basis: [changed_files_classifier or review_output_only]"
           printf '%s\n' ""
           printf '%s\n' "DO NOT add Review Models section."
           printf '%s\n' "Do NOT include merge instructions, closeout execution steps, or post-merge claims."
@@ -1826,20 +1842,23 @@ jobs:
               | sed -E 's/[^a-z0-9_]+//g; s/^_+//; s/_+$//; s/_{2,}/_/g'
           }
 
-          DOCUMENTATION_OBLIGATION_STATE="unknown"
+          DOCUMENTATION_OBLIGATION_STATE="$(tr -d '\r\n' < documentation_obligation_state.txt 2>/dev/null || true)"
+          case "$DOCUMENTATION_OBLIGATION_STATE" in
+            satisfied|not_required|missing|unknown) ;;
+            *) DOCUMENTATION_OBLIGATION_STATE="unknown" ;;
+          esac
           SSOT_SYNC_DOCS_NONE="false"
           if awk 'BEGIN{IGNORECASE=1; in_section=0} /^##[[:space:]]+SSOT Sync \(Docs\)/{in_section=1; next} /^##[[:space:]]/{in_section=0} in_section && $0 ~ /^[[:space:]]*None[[:space:]]*$/ {found=1} END{exit(found?0:1)}' final_review.txt 2>/dev/null; then
             SSOT_SYNC_DOCS_NONE="true"
           fi
-          DOC_STATE_LINE="$(extract_final_review_field_line 'Documentation Obligation State' || true)"
-          if [ -n "$DOC_STATE_LINE" ]; then
-            DOCUMENTATION_OBLIGATION_STATE="$(normalize_machine_token "$(printf '%s' "$DOC_STATE_LINE" | sed -E 's/^Documentation Obligation State:[[:space:]]*//I')")"
-          elif [ "$SSOT_SYNC_DOCS_NONE" = "true" ]; then
-            DOCUMENTATION_OBLIGATION_STATE="not_required"
+          REVIEW_DOC_STATE_LINE="$(extract_final_review_field_line 'Documentation Obligation State' || true)"
+          REVIEW_DOCUMENTATION_OBLIGATION_STATE=""
+          if [ -n "$REVIEW_DOC_STATE_LINE" ]; then
+            REVIEW_DOCUMENTATION_OBLIGATION_STATE="$(normalize_machine_token "$(printf '%s' "$REVIEW_DOC_STATE_LINE" | sed -E 's/^Documentation Obligation State:[[:space:]]*//I')")"
           fi
-          case "$DOCUMENTATION_OBLIGATION_STATE" in
-            satisfied|not_required|missing|unknown) ;;
-            *) DOCUMENTATION_OBLIGATION_STATE="unknown" ;;
+          case "$REVIEW_DOCUMENTATION_OBLIGATION_STATE" in
+            satisfied|not_required|missing|unknown|"") ;;
+            *) REVIEW_DOCUMENTATION_OBLIGATION_STATE="unknown" ;;
           esac
           if [ "$DOCUMENTATION_OBLIGATION_STATE" = "unknown" ] && [ "$SSOT_SYNC_DOCS_NONE" = "true" ]; then
             DOCUMENTATION_OBLIGATION_STATE="not_required"
@@ -1855,11 +1874,11 @@ jobs:
             *) DOCS_FOLLOW_UP_HINT="none" ;;
           esac
 
-          DOCS_SIGNAL_BASIS="review_output_only"
+          DOCS_SIGNAL_BASIS="changed_files_classifier"
           DOCS_SIGNAL_BASIS_LINE="$(extract_final_review_field_line 'Docs Signal Basis' || true)"
           if [ -n "$DOCS_SIGNAL_BASIS_LINE" ]; then
             DOCS_SIGNAL_BASIS_RAW="$(normalize_machine_token "$(printf '%s' "$DOCS_SIGNAL_BASIS_LINE" | sed -E 's/^Docs Signal Basis:[[:space:]]*//I')")"
-            if [ "$DOCS_SIGNAL_BASIS_RAW" = "review_output_only" ]; then
+            if [ "$DOCS_SIGNAL_BASIS_RAW" = "review_output_only" ] && [ "$DOCUMENTATION_OBLIGATION_STATE" = "unknown" ]; then
               DOCS_SIGNAL_BASIS="review_output_only"
             fi
           fi
@@ -1927,6 +1946,10 @@ jobs:
                   "Documentation Obligation State",
                   os.environ["DOCUMENTATION_OBLIGATION_STATE"],
               ),
+              "docs signal basis": (
+                  "Docs Signal Basis",
+                  os.environ.get("DOCS_SIGNAL_BASIS", "changed_files_classifier"),
+              ),
           }
           path = Path("final_review.txt")
           lines = path.read_text(encoding="utf-8").splitlines()
@@ -1943,13 +1966,15 @@ jobs:
               if in_code:
                   out.append(line)
                   continue
-              if re.match(r"^##+\s+", stripped):
+              if re.match(r"^##\s+", stripped):
                   heading = re.sub(r"^[#\s]+", "", stripped)
                   heading = re.sub(r"[*_`\s]+", "", heading).lower()
                   if heading in {"zaver", "závěr"}:
                       in_zaver = True
                       in_code = False
-                  elif in_zaver and re.match(r"^##\s+", stripped):
+                  elif in_zaver:
+                      in_zaver = False
+                  elif in_zaver and re.match(r"^###+\s+", stripped):
                       in_zaver = False
               if in_zaver:
                   cleaned = re.sub(r"^[\s>\-*+]*", "", line)
@@ -2029,6 +2054,7 @@ jobs:
               printf '%s\n' "| run_url | $REVIEW_RUN_URL |"
               printf '%s\n' "| verdict | \`$REVIEW_VERDICT\` |"
               printf '%s\n' "| status | \`$REVIEW_STATUS\` |"
+              printf '%s\n' "| documentation_obligation_state | \`$DOCUMENTATION_OBLIGATION_STATE\` |"
               printf '%s\n' "| diff_scope | \`$DIFF_SCOPE\` |"
               printf '%s\n' "| pr_check_surface | \`$PR_CHECK_SURFACE_STATE\` |"
               echo ""
