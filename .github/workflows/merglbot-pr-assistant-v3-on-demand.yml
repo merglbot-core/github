@@ -766,13 +766,14 @@ jobs:
               | select(($cutoff == "") or (.created_at > $cutoff))
               | (.body // "") as $body
               | ($body | gsub("\\s+"; " ") | ascii_downcase | gsub("^\\s+|\\s+$"; "")) as $normalized
+              | ($normalized | sub("\\s*<sup>reviewed by [^<]*</sup>$"; "")) as $normalized_core
               | select(
                   (
-                    ($normalized | test("^> \\[!note\\] > gemini is unable to generate a review for this pull request due to the file types involved not being currently supported\\.?$"))
-                    or ($normalized | test("^unable to generate a review[.! ]*$"))
-                    or ($normalized | test("^no actionable findings[.! ]*$"))
-                    or ($normalized | test("^no issues found[.! ]*$"))
-                    or ($normalized | test("^no bugs found[.! ]*$"))
+                    ($normalized_core | test("^> \\[!note\\] > gemini is unable to generate a review for this pull request due to the file types involved not being currently supported\\.?$"))
+                    or ($normalized_core | test("^unable to generate a review[.! ]*$"))
+                    or ($normalized_core | test("^no actionable findings[.! ]*$"))
+                    or ($normalized_core | test("^no issues found[.! ]*$"))
+                    or ($normalized_core | test("^no bugs found[.! ]*$"))
                   ) | not
                 )
               | $body
@@ -1777,35 +1778,44 @@ jobs:
             }' > pr_check_run_payload.json
 
           EXISTING_CHECK_ID=""
-          if gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100&filter=all" > pr_check_runs_for_publish.json 2>/dev/null; then
-            EXISTING_CHECK_ID="$(
+          CHECK_PUBLISH_STATE="published"
+          if gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100&filter=all" > pr_check_runs_for_publish.json 2> pr_check_runs_for_publish.err; then
+            if ! EXISTING_CHECK_ID="$(
               jq -sr --arg name "Merglbot PR Assistant v3" --arg external_id "$CHECK_EXTERNAL_ID" '
                   [ .[]?.check_runs[]?
                     | select((.name // "") == $name)
                     | select((.external_id // "") == $external_id)
                     | .id
                   ][0] // empty
-                ' pr_check_runs_for_publish.json 2>/dev/null || true
-            )"
-          else
-            echo "WARN: Unable to list PR head check-runs before publish; creating a new check-run if possible" >&2
-          fi
-
-          CHECK_PUBLISH_STATE="published"
-          if [ -n "${EXISTING_CHECK_ID:-}" ]; then
-            jq 'del(.head_sha)' pr_check_run_payload.json > pr_check_run_update_payload.json
-            if ! gh api "repos/${GITHUB_REPOSITORY}/check-runs/${EXISTING_CHECK_ID}" \
-              --method PATCH \
-              --input pr_check_run_update_payload.json > pr_check_run_response.json; then
-              echo "WARN: Failed to patch PR-visible check-run ${EXISTING_CHECK_ID}; continuing with review comment only" >&2
+                ' pr_check_runs_for_publish.json 2> pr_check_runs_for_publish_jq.err
+            )"; then
+              echo "WARN: Unable to parse PR head check-runs before publish; skipping publish to preserve run-scoped idempotency" >&2
+              head -c 4000 pr_check_runs_for_publish_jq.err >&2 || true
               CHECK_PUBLISH_STATE="publish_failed"
+              EXISTING_CHECK_ID=""
             fi
           else
-            if ! gh api "repos/${GITHUB_REPOSITORY}/check-runs" \
-              --method POST \
-              --input pr_check_run_payload.json > pr_check_run_response.json; then
-              echo "WARN: Failed to create PR-visible check-run; continuing with review comment only" >&2
-              CHECK_PUBLISH_STATE="publish_failed"
+            echo "WARN: Unable to list PR head check-runs before publish; skipping publish to preserve run-scoped idempotency" >&2
+            head -c 4000 pr_check_runs_for_publish.err >&2 || true
+            CHECK_PUBLISH_STATE="publish_failed"
+          fi
+
+          if [ "$CHECK_PUBLISH_STATE" = "published" ]; then
+            if [ -n "${EXISTING_CHECK_ID:-}" ]; then
+              jq 'del(.head_sha)' pr_check_run_payload.json > pr_check_run_update_payload.json
+              if ! gh api "repos/${GITHUB_REPOSITORY}/check-runs/${EXISTING_CHECK_ID}" \
+                --method PATCH \
+                --input pr_check_run_update_payload.json > pr_check_run_response.json; then
+                echo "WARN: Failed to patch PR-visible check-run ${EXISTING_CHECK_ID}; continuing with review comment only" >&2
+                CHECK_PUBLISH_STATE="publish_failed"
+              fi
+            else
+              if ! gh api "repos/${GITHUB_REPOSITORY}/check-runs" \
+                --method POST \
+                --input pr_check_run_payload.json > pr_check_run_response.json; then
+                echo "WARN: Failed to create PR-visible check-run; continuing with review comment only" >&2
+                CHECK_PUBLISH_STATE="publish_failed"
+              fi
             fi
           fi
 
