@@ -1779,7 +1779,18 @@ jobs:
 
           EXISTING_CHECK_ID=""
           CHECK_PUBLISH_STATE="published"
-          if gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100&filter=all" > pr_check_runs_for_publish.json 2> pr_check_runs_for_publish.err; then
+          CHECK_LOOKUP_OK="false"
+          for check_lookup_attempt in 1 2 3; do
+            if gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100&filter=all" > pr_check_runs_for_publish.json 2> pr_check_runs_for_publish.err; then
+              CHECK_LOOKUP_OK="true"
+              break
+            fi
+            echo "WARN: Unable to list PR head check-runs before publish (attempt ${check_lookup_attempt}/3)" >&2
+            head -c 4000 pr_check_runs_for_publish.err >&2 || true
+            sleep "$((check_lookup_attempt * 2))"
+          done
+
+          if [ "$CHECK_LOOKUP_OK" = "true" ]; then
             if ! EXISTING_CHECK_ID="$(
               jq -sr --arg name "Merglbot PR Assistant v3" --arg external_id "$CHECK_EXTERNAL_ID" '
                   [ .[]?.check_runs[]?
@@ -1789,13 +1800,14 @@ jobs:
                   ][0] // empty
                 ' pr_check_runs_for_publish.json 2> pr_check_runs_for_publish_jq.err
             )"; then
-              echo "WARN: Unable to parse PR head check-runs before publish; creating a fallback check-run if possible" >&2
+              echo "WARN: Unable to parse PR head check-runs before publish; skipping publish to preserve run-scoped idempotency" >&2
               head -c 4000 pr_check_runs_for_publish_jq.err >&2 || true
+              CHECK_PUBLISH_STATE="publish_failed"
               EXISTING_CHECK_ID=""
             fi
           else
-            echo "WARN: Unable to list PR head check-runs before publish; creating a fallback check-run if possible" >&2
-            head -c 4000 pr_check_runs_for_publish.err >&2 || true
+            echo "WARN: Unable to list PR head check-runs before publish after retries; skipping publish to preserve run-scoped idempotency" >&2
+            CHECK_PUBLISH_STATE="publish_failed"
             EXISTING_CHECK_ID=""
           fi
 
