@@ -562,7 +562,7 @@ jobs:
               echo "unknown"
               return 0
             fi
-            if grep -Eiq '(^|/)(README|MERGLBOT|DOCUMENTATION_INDEX|RULEBOOK|SECURITY|PR_POLICY|BRANCH_PROTECTION)(\.md)?$|(^|/)docs/|^merglbot-public/docs/' "$changed_files_path"; then
+            if grep -Eiq '^[^/]+\.md$|(^|/)(README|MERGLBOT)(\.md)?$|(^|/)docs/|^merglbot-public/docs/' "$changed_files_path"; then
               echo "satisfied"
               return 0
             fi
@@ -1860,8 +1860,10 @@ jobs:
             satisfied|not_required|missing|unknown|"") ;;
             *) REVIEW_DOCUMENTATION_OBLIGATION_STATE="unknown" ;;
           esac
+          DOCS_STATE_SOURCE="changed_files_classifier"
           if [ "$REVIEW_DOCUMENTATION_OBLIGATION_STATE" = "missing" ]; then
             DOCUMENTATION_OBLIGATION_STATE="missing"
+            DOCS_STATE_SOURCE="review_output_only"
           fi
           if [ "$DOCUMENTATION_OBLIGATION_STATE" = "unknown" ] && [ "$SSOT_SYNC_DOCS_NONE" = "true" ]; then
             DOCUMENTATION_OBLIGATION_STATE="not_required"
@@ -1877,7 +1879,7 @@ jobs:
             *) DOCS_FOLLOW_UP_HINT="none" ;;
           esac
 
-          DOCS_SIGNAL_BASIS="changed_files_classifier"
+          DOCS_SIGNAL_BASIS="$DOCS_STATE_SOURCE"
           DOCS_SIGNAL_BASIS_LINE="$(extract_final_review_field_line 'Docs Signal Basis' || true)"
           if [ -n "$DOCS_SIGNAL_BASIS_LINE" ]; then
             DOCS_SIGNAL_BASIS_RAW="$(normalize_machine_token "$(printf '%s' "$DOCS_SIGNAL_BASIS_LINE" | sed -E 's/^Docs Signal Basis:[[:space:]]*//I')")"
