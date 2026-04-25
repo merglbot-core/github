@@ -17,8 +17,8 @@ import subprocess
 from typing import Any
 
 MARKER_RE = re.compile(r"<!--\s*(MERGLBOT_[A-Z0-9_]+)\s*:\s*([\s\S]*?)\s*-->")
-SECTION_HEADER_RE = re.compile(r"^##+\s+")
-TOP_LEVEL_SECTION_HEADER_RE = re.compile(r"^##\s+")
+SECTION_HEADER_RE = re.compile(r"^#{2,6}\s+")
+ZAVER_SECTION_HEADER_RE = re.compile(r"^##\s+")
 MACHINE_TOKEN_STRIP_RE = re.compile(r"[^a-z0-9_]+")
 PR_ASSISTANT_WORKFLOW_PATHS = {
     ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
@@ -71,12 +71,17 @@ def extract_zaver_field(body: str, field_name: str) -> str:
             continue
         if SECTION_HEADER_RE.match(line):
             heading = normalize_heading(line)
-            if heading in ("zaver", "závěr"):
+            if (
+                not in_zaver
+                and ZAVER_SECTION_HEADER_RE.match(line)
+                and heading in ("zaver", "závěr")
+            ):
                 in_zaver = True
                 in_code = False
                 continue
-            if in_zaver and TOP_LEVEL_SECTION_HEADER_RE.match(line):
+            if in_zaver:
                 break
+            continue
         if not in_zaver:
             continue
         cleaned = re.sub(r"^[\s>\-*+]*", "", line)
@@ -170,7 +175,10 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
     if visible_verdict in valid_verdicts and verdict and visible_verdict != verdict:
         blockers.append("review_visible_verdict_marker_mismatch")
     valid_docs_states = {"satisfied", "not_required", "missing", "unknown"}
-    if docs_state_marker_present and docs_state not in valid_docs_states:
+    if not docs_state_marker_present:
+        docs_state = "unknown"
+        blockers.append("missing_or_invalid_documentation_obligation_state")
+    elif docs_state not in valid_docs_states:
         blockers.append("missing_or_invalid_documentation_obligation_state")
     visible_docs_state = extract_zaver_field(receipt_body, "Documentation Obligation State")
     if visible_docs_state in valid_docs_states and docs_state and visible_docs_state != docs_state:
@@ -249,23 +257,20 @@ def self_test() -> int:
     assert normalize_machine_token("approved\tfor\ncloseout") == "approved_for_closeout"
     assert docs_state_blocks_closeout("approved_for_closeout", "missing")
     assert docs_state_blocks_closeout("approved_for_closeout", "unknown")
-    assert not docs_state_blocks_closeout("approved_for_closeout", "")
+    assert docs_state_blocks_closeout("approved_for_closeout", "unknown")
     assert not docs_state_blocks_closeout("approved_for_closeout", "not_required")
     assert not docs_state_blocks_closeout("changes_required", "unknown")
     assert (
         extract_zaver_field("## Zaver\n_Verdict_: approved-for-closeout", "Verdict")
         == "approved_for_closeout"
     )
-    assert (
-        extract_zaver_field("### Zaver\n* _Verdict_ : approved-for-closeout", "Verdict")
-        == "approved_for_closeout"
-    )
+    assert extract_zaver_field("### Zaver\n* _Verdict_ : approved-for-closeout", "Verdict") == ""
     assert (
         extract_zaver_field(
             "## Zaver\n### Details\nVerdict: approved_for_closeout",
             "Verdict",
         )
-        == "approved_for_closeout"
+        == ""
     )
     assert (
         extract_zaver_field(
@@ -313,6 +318,34 @@ def self_test() -> int:
     )
     assert failed["MERGLBOT_REVIEW_VERDICT"] == "review_generation_failed"
     assert failed["MERGLBOT_REVIEW_STATUS"] == "failed"
+    missing_docs_state_markers = parse_markers(
+        "\n".join(
+            [
+                "<!-- MERGLBOT_REVIEW_VERDICT: approved_for_closeout -->",
+                "<!-- MERGLBOT_REVIEW_STATUS: success -->",
+            ]
+        )
+    )
+    docs_state_marker_present = (
+        "MERGLBOT_DOCUMENTATION_OBLIGATION_STATE" in missing_docs_state_markers
+    )
+    docs_state = missing_docs_state_markers.get(
+        "MERGLBOT_DOCUMENTATION_OBLIGATION_STATE",
+        "",
+    )
+    blockers = []
+    if not docs_state_marker_present:
+        docs_state = "unknown"
+        blockers.append("missing_or_invalid_documentation_obligation_state")
+    if docs_state_blocks_closeout(
+        missing_docs_state_markers["MERGLBOT_REVIEW_VERDICT"],
+        docs_state,
+    ):
+        blockers.append("review_docs_state_blocks_closeout")
+    assert blockers == [
+        "missing_or_invalid_documentation_obligation_state",
+        "review_docs_state_blocks_closeout",
+    ]
     blockers: list[str] = []
     status = "blocked"
     verdict = "changes_required"
