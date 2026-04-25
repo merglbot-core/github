@@ -713,7 +713,7 @@ def audit_repo(
     )
     documentation_gate_present = bool(
         workflow_content
-        and "Documentation Obligation State: unknown" in workflow_content
+        and "DOCUMENTATION_OBLIGATION_STATE" in workflow_content
         and "blocked_missing_authority" in workflow_content
     )
 
