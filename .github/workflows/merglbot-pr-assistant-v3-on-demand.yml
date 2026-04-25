@@ -1703,7 +1703,7 @@ jobs:
           }
 
           REVIEW_VERDICT="blocked_missing_authority"
-          VERDICT_LINE="$(scripts/pr-assistant/extract-zaver-field.sh "Verdict" final_review.txt 2>/dev/null || true)"
+          VERDICT_LINE="$(bash scripts/pr-assistant/extract-zaver-field.sh "Verdict" final_review.txt 2>/dev/null || true)"
           if [ -n "$VERDICT_LINE" ]; then
             REVIEW_VERDICT_RAW="$(normalize_machine_token "$(printf '%s' "$VERDICT_LINE" | sed -E 's/^Verdict:[[:space:]]*//I')")"
             case "$REVIEW_VERDICT_RAW" in
@@ -1725,6 +1725,13 @@ jobs:
           case "$DOCUMENTATION_OBLIGATION_STATE" in
             satisfied|not_required) ;;
             missing|unknown)
+              if [ "$REVIEW_VERDICT" = "approved_for_closeout" ]; then
+                REVIEW_VERDICT="blocked_missing_authority"
+              fi
+              ;;
+            *)
+              echo "::warning::Unexpected DOCUMENTATION_OBLIGATION_STATE='${DOCUMENTATION_OBLIGATION_STATE}', normalizing to unknown advisory metadata."
+              DOCUMENTATION_OBLIGATION_STATE="unknown"
               if [ "$REVIEW_VERDICT" = "approved_for_closeout" ]; then
                 REVIEW_VERDICT="blocked_missing_authority"
               fi
