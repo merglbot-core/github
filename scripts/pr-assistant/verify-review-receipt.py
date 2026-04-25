@@ -64,7 +64,7 @@ def extract_zaver_field(body: str, field_name: str) -> str:
     in_code = False
     for raw_line in (body or "").splitlines():
         line = raw_line.strip()
-        if line.startswith("```"):
+        if line.startswith("```") or line.startswith("~~~"):
             in_code = not in_code
             continue
         if in_code:
@@ -238,6 +238,7 @@ def self_test() -> int:
             "<!-- MERGLBOT_REVIEW_HEAD_SHA: abc123 -->",
             "<!-- MERGLBOT_REVIEW_VERDICT: approved_for_closeout -->",
             "<!-- MERGLBOT_REVIEW_STATUS: success -->",
+            "<!-- MERGLBOT_DOCUMENTATION_OBLIGATION_STATE: not_required -->",
             "<!-- MERGLBOT_PR_CHECK_SURFACE: verified -->",
             "<!-- MERGLBOT_RUN_ID: 42 -->",
             "<!-- MERGLBOT_RUN_URL: https://github.com/o/r/actions/runs/42 -->",
@@ -256,7 +257,6 @@ def self_test() -> int:
     assert normalize_machine_token("approved-for-closeout") == "approved_for_closeout"
     assert normalize_machine_token("approved\tfor\ncloseout") == "approved_for_closeout"
     assert docs_state_blocks_closeout("approved_for_closeout", "missing")
-    assert docs_state_blocks_closeout("approved_for_closeout", "unknown")
     assert docs_state_blocks_closeout("approved_for_closeout", "unknown")
     assert not docs_state_blocks_closeout("approved_for_closeout", "not_required")
     assert not docs_state_blocks_closeout("changes_required", "unknown")
@@ -285,6 +285,22 @@ def self_test() -> int:
                     "## Spoofed",
                     "Verdict: changes_required",
                     "```",
+                    "Verdict: approved_for_closeout",
+                ]
+            ),
+            "Verdict",
+        )
+        == "approved_for_closeout"
+    )
+    assert (
+        extract_zaver_field(
+            "\n".join(
+                [
+                    "~~~markdown",
+                    "## Zaver",
+                    "Verdict: changes_required",
+                    "~~~",
+                    "## Zaver",
                     "Verdict: approved_for_closeout",
                 ]
             ),
