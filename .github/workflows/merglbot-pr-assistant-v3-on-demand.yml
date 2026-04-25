@@ -129,7 +129,8 @@ jobs:
       vars.MERGLBOT_PR_ASSISTANT_V3_DISABLED != 'true' &&
       (
         (github.event_name == 'issue_comment' &&
-         github.event.issue.pull_request) ||
+         github.event.issue.pull_request &&
+         contains(github.event.comment.body, '@merglbot')) ||
         github.event_name == 'workflow_dispatch'
       )
     outputs:
@@ -166,7 +167,7 @@ jobs:
             fi
             local comment_body
             comment_body="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")"
-            COMMENT_BODY="$comment_body" python3 -c 'import os, re, sys; body = os.environ.get("COMMENT_BODY", "").lower(); pattern = re.compile(r"(?<![a-z0-9_-])@merglbot\s+review(?![a-z0-9_-])"); sys.exit(0 if pattern.search(body) else 1)'
+            COMMENT_BODY="$comment_body" python3 -c 'import os, re, sys; body = re.sub(r"\s+", " ", os.environ.get("COMMENT_BODY", "")).strip().lower(); parts = body.split(" "); allowed_flags = {"--full", "--light", "--retro", "--learn", "--full-diff"}; ok = len(parts) >= 2 and parts[0] == "@merglbot" and parts[1] == "review" and all(part in allowed_flags for part in parts[2:]); sys.exit(0 if ok else 1)'
           }
 
           # Authorization gate: avoid running expensive workflows for untrusted commenters
@@ -823,10 +824,10 @@ jobs:
                         line ~ /gh[oprsut]_[A-Za-z0-9]{30,}/ ||
                         line ~ /AKIA[0-9A-Z]{16}/ ||
                         line ~ /AIza[0-9A-Za-z_-]{30,}/ ||
-                        line ~ /ya29\\.[A-Za-z0-9_-]{20,}/ ||
+                        line ~ /ya29\.[A-Za-z0-9_-]{20,}/ ||
                         line ~ /sk-(proj|ant)-[A-Za-z0-9_-]{20,}/ ||
                         line ~ /sk-[A-Za-z0-9_-]{30,}/ ||
-                        line ~ /eyJ[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{20,}/ ||
+                        line ~ /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/ ||
                         line ~ /(api_key_|secret_key_|private_key_|access_key_)[A-Za-z0-9_-]{20,}/
                     }
                     /^[+-][[:space:]]*(SECRET_PATTERN(_STRICT(_NO_KEY)?|_NO_GENERIC)?|SENSITIVE_PATTERN(_STRICT|_NO_GENERIC)?|JWT_PATTERN(_STRICT)?|_[A-Z0-9_]+_RX|_GH[A-Z_]+|_SK_PREFIX|_GENERIC_[A-Z_]+_PREFIX)=/ && !has_runtime_secret($0) { next }
@@ -1814,54 +1815,7 @@ jobs:
 
           extract_final_review_field_line() {
             local field_name="$1"
-            local zaver_value
-            zaver_value="$(extract_zaver_review_field_line "$field_name" || true)"
-            if [ -n "$zaver_value" ]; then
-              printf '%s\n' "$zaver_value"
-              return 0
-            fi
-            awk -v field_name="$field_name" '
-              /^```/ {
-                if (in_zaver) {
-                  in_code = !in_code
-                }
-                next
-              }
-              in_zaver && in_code {
-                next
-              }
-              /^##+[[:space:]]+/ {
-                header = $0
-                gsub(/^[#[:space:]]+/, "", header)
-                gsub(/[*_`[:space:]]/, "", header)
-                if (tolower(header) == "zaver" || tolower(header) == "závěr") {
-                  in_zaver = 1
-                  in_code = 0
-                  next
-                }
-                if (in_zaver && $0 ~ /^##[[:space:]]+/) {
-                  exit
-                }
-                next
-              }
-              !in_zaver || in_code {
-                next
-              }
-              {
-                line = $0
-                gsub(/^[[:space:]>*+-]*/, "", line)
-                n = split(line, parts, ":")
-                field_label = parts[1]
-                gsub(/[*_`]/, "", field_label)
-                gsub(/^[[:space:]]+|[[:space:]]+$/, "", field_label)
-                if (n >= 2 && tolower(field_label) == tolower(field_name)) {
-                  sub(/^[^:]*:[[:space:]]*/, "", line)
-                  gsub(/[*`]/, "", line)
-                  print field_name ": " line
-                  exit
-                }
-              }
-            ' final_review.txt
+            extract_zaver_review_field_line "$field_name" || true
           }
 
           normalize_machine_token() {
