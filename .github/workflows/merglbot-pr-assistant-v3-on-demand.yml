@@ -1789,15 +1789,14 @@ jobs:
                   ][0] // empty
                 ' pr_check_runs_for_publish.json 2> pr_check_runs_for_publish_jq.err
             )"; then
-              echo "WARN: Unable to parse PR head check-runs before publish; skipping publish to preserve run-scoped idempotency" >&2
+              echo "WARN: Unable to parse PR head check-runs before publish; creating a fallback check-run if possible" >&2
               head -c 4000 pr_check_runs_for_publish_jq.err >&2 || true
-              CHECK_PUBLISH_STATE="publish_failed"
               EXISTING_CHECK_ID=""
             fi
           else
-            echo "WARN: Unable to list PR head check-runs before publish; skipping publish to preserve run-scoped idempotency" >&2
+            echo "WARN: Unable to list PR head check-runs before publish; creating a fallback check-run if possible" >&2
             head -c 4000 pr_check_runs_for_publish.err >&2 || true
-            CHECK_PUBLISH_STATE="publish_failed"
+            EXISTING_CHECK_ID=""
           fi
 
           if [ "$CHECK_PUBLISH_STATE" = "published" ]; then
