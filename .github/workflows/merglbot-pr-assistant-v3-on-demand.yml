@@ -1210,7 +1210,7 @@ jobs:
               echo ""
               echo "## Zaver"
               echo "Verdict: $VERDICT"
-              echo "Documentation Obligation State: unknown"
+              echo "Documentation Obligation State: not_required"
               echo "Docs Follow-Up Hint: none"
               echo "Suggested Docs Targets: []"
               echo "Docs Signal Basis: review_output_only"
