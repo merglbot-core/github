@@ -1860,6 +1860,9 @@ jobs:
             satisfied|not_required|missing|unknown|"") ;;
             *) REVIEW_DOCUMENTATION_OBLIGATION_STATE="unknown" ;;
           esac
+          if [ "$REVIEW_DOCUMENTATION_OBLIGATION_STATE" = "missing" ]; then
+            DOCUMENTATION_OBLIGATION_STATE="missing"
+          fi
           if [ "$DOCUMENTATION_OBLIGATION_STATE" = "unknown" ] && [ "$SSOT_SYNC_DOCS_NONE" = "true" ]; then
             DOCUMENTATION_OBLIGATION_STATE="not_required"
           fi
