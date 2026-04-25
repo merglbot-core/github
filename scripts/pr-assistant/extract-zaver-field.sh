@@ -4,7 +4,8 @@ set -euo pipefail
 
 if [ "$#" -eq 1 ] && [ "$1" = "--self-test" ]; then
   tmp_review="$(mktemp)"
-  trap 'rm -f "$tmp_review"' EXIT
+  tmp_nested="$(mktemp)"
+  trap 'rm -f "$tmp_review" "$tmp_nested"' EXIT
   cat >"$tmp_review" <<'EOF'
 ## Zaver
   ```text
@@ -17,6 +18,24 @@ EOF
   extracted="$("$0" "Verdict" "$tmp_review")"
   if [ "$extracted" != "Verdict: changes_required" ]; then
     echo "self-test failed: expected real Zaver field outside indented fence, got: $extracted" >&2
+    exit 1
+  fi
+  cat >"$tmp_nested" <<'EOF'
+### Zaver
+Verdict: approved_for_closeout
+## Zaver
+Verdict: changes_required
+### Details
+Documentation Obligation State: missing
+EOF
+  nested_extracted="$("$0" "Verdict" "$tmp_nested")"
+  if [ "$nested_extracted" != "Verdict: changes_required" ]; then
+    echo "self-test failed: expected top-level Zaver field, got: $nested_extracted" >&2
+    exit 1
+  fi
+  nested_docs="$("$0" "Documentation Obligation State" "$tmp_nested" || true)"
+  if [ -n "$nested_docs" ]; then
+    echo "self-test failed: nested subsection field was parsed: $nested_docs" >&2
     exit 1
   fi
   echo '{"ok":true,"self_test":"passed"}'
@@ -42,16 +61,22 @@ awk -v field_name="$FIELD_NAME" '
   in_zaver && in_code {
     next
   }
-  /^##+[[:space:]]+/ {
+  /^##[[:space:]]+/ {
     header = $0
     gsub(/^[#[:space:]]+/, "", header)
     gsub(/[*_`[:space:]]/, "", header)
-    if (tolower(header) == "zaver" || tolower(header) == "závěr") {
+    if (!in_zaver && (tolower(header) == "zaver" || tolower(header) == "závěr")) {
       in_zaver = 1
       in_code = 0
       next
     }
-    if (in_zaver && $0 ~ /^##[[:space:]]+/) {
+    if (in_zaver) {
+      exit
+    }
+    next
+  }
+  /^###+[[:space:]]+/ {
+    if (in_zaver) {
       exit
     }
     next

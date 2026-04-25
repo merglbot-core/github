@@ -129,9 +129,7 @@ jobs:
       vars.MERGLBOT_PR_ASSISTANT_V3_DISABLED != 'true' &&
       (
         (github.event_name == 'issue_comment' &&
-         github.event.issue.pull_request &&
-         contains(github.event.comment.body, '@merglbot review') &&
-         !contains(github.event.comment.body, '@merglbot review-v4')) ||
+         github.event.issue.pull_request) ||
         github.event_name == 'workflow_dispatch'
       )
     outputs:
