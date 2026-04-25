@@ -583,7 +583,7 @@ jobs:
                 esac
               fi
               case "$changed_path" in
-                .github/workflows/merglbot-pr-v3-on-demand.yml|scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh|scripts/pr-assistant/verify-review-receipt.py|scripts/pr-assistant/extract-zaver-field.sh)
+                .github/workflows/merglbot-pr-v3-on-demand.yml|.github/workflows/merglbot-pr-assistant-v3-on-demand.yml|scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh|scripts/pr-assistant/verify-review-receipt.py|scripts/pr-assistant/extract-zaver-field.sh)
                   has_impactful="true"
                   ;;
                 .github/workflows/*|scripts/*|src/*|app/*|packages/*|terraform/*|infra/*|Dockerfile|**/Dockerfile|*.tf|*.py|*.js|*.ts|*.tsx|*.jsx|*.sh|*.yml|*.yaml)
