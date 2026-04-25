@@ -129,8 +129,7 @@ jobs:
       (
         (github.event_name == 'issue_comment' &&
          github.event.issue.pull_request &&
-         contains(github.event.comment.body, '@merglbot review') &&
-         !contains(github.event.comment.body, '@merglbot review-v4')) ||
+         contains(github.event.comment.body, '@merglbot review')) ||
         github.event_name == 'workflow_dispatch'
       )
     outputs:
@@ -161,6 +160,15 @@ jobs:
             esac
           }
 
+          merglbot_v3_command_present() {
+            if [ "$IS_WORKFLOW_DISPATCH" == "true" ]; then
+              return 0
+            fi
+            local comment_body
+            comment_body="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")"
+            COMMENT_BODY="$comment_body" python3 -c 'import os, re, sys; body = os.environ.get("COMMENT_BODY", "").lower(); pattern = re.compile(r"(?<![a-z0-9_-])@merglbot\s+review(?![a-z0-9_-])"); sys.exit(0 if pattern.search(body) else 1)'
+          }
+
           # Authorization gate: avoid running expensive workflows for untrusted commenters
           if [ "$IS_WORKFLOW_DISPATCH" != "true" ]; then
             case "${AUTHOR_ASSOCIATION:-}" in
@@ -179,6 +187,18 @@ jobs:
                 exit 0
                 ;;
             esac
+            if ! merglbot_v3_command_present; then
+              echo "⏭️ Skipping: no exact v3 @merglbot review command present"
+              {
+                echo "pr_number=$ISSUE_NUMBER"
+                echo "should_run=false"
+                echo "review_mode=light"
+                echo "diff_scope=auto"
+                echo "include_retro=false"
+                echo "trigger_comment_id=${COMMENT_ID:-}"
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
 
           flag_present() {
@@ -1188,11 +1208,12 @@ jobs:
               echo "## SSOT Sync (Docs)"
               echo "None"
               echo ""
+              echo "## Zaver"
+              echo "Verdict: $VERDICT"
               echo "Documentation Obligation State: unknown"
               echo "Docs Follow-Up Hint: none"
               echo "Suggested Docs Targets: []"
               echo "Docs Signal Basis: review_output_only"
-              echo "Verdict: $VERDICT"
             } > final_review.txt
 
             SYNTHESIS_USAGE_API="ci_only_fallback"
@@ -1740,7 +1761,7 @@ jobs:
 
           extract_zaver_review_field_line() {
             local field_name="$1"
-            scripts/pr-assistant/extract-zaver-field.sh "$field_name" final_review.txt
+            bash scripts/pr-assistant/extract-zaver-field.sh "$field_name" final_review.txt
           }
 
           extract_final_review_field_line() {
@@ -1823,6 +1844,7 @@ jobs:
 
           REVIEW_VERDICT="blocked_missing_authority"
           REVIEW_VERDICT_POLICY_OVERRIDE="false"
+          REVIEW_VERDICT_RAW=""
           VERDICT_LINE="$(extract_final_review_field_line 'Verdict' || true)"
           if [ -n "$VERDICT_LINE" ]; then
             REVIEW_VERDICT_RAW="$(normalize_machine_token "$(printf '%s' "$VERDICT_LINE" | sed -E 's/^Verdict:[[:space:]]*//I')")"
@@ -1849,6 +1871,9 @@ jobs:
               fi
               ;;
           esac
+          if [ "$REVIEW_VERDICT" = "blocked_missing_authority" ] && [ "${REVIEW_VERDICT_RAW:-}" != "blocked_missing_authority" ]; then
+            REVIEW_VERDICT_POLICY_OVERRIDE="true"
+          fi
           if [ "$REVIEW_VERDICT_POLICY_OVERRIDE" = "true" ] && [ -s final_review.txt ]; then
             REVIEW_VERDICT="$REVIEW_VERDICT" python3 - <<'PY'
           from pathlib import Path
@@ -2237,7 +2262,7 @@ jobs:
           VERDICT="UNKNOWN"
           extract_review_field_line() {
             local field_name="$1"
-            scripts/pr-assistant/extract-zaver-field.sh "$field_name" final_review.txt
+            bash scripts/pr-assistant/extract-zaver-field.sh "$field_name" final_review.txt
           }
           VERDICT_LINE=$(extract_review_field_line 'Verdict' || true)
           if [ -n "$VERDICT_LINE" ]; then
