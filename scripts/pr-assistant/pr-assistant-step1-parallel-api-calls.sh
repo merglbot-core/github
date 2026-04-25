@@ -965,6 +965,8 @@ echo "Prompt size: $PROMPT_SIZE chars"
         continue
       fi
 
+      # Adaptive-thinking responses can include non-text blocks before the
+      # final answer; review text is the concatenation of text blocks only.
       ANTHROPIC_CONTENT="$(echo "$ANTHROPIC_RESP" | jq -r '[.content[]? | select(.type=="text") | .text] | join("\n")')"
       if [ -z "$ANTHROPIC_CONTENT" ] || [ "$ANTHROPIC_CONTENT" = "null" ]; then
         echo "  ERROR: Anthropic response contained no content" >&2
