@@ -552,9 +552,12 @@ jobs:
           echo "PR_BASE_SHA=$PR_BASE_SHA" >> "$GITHUB_ENV"
           echo "PR_HEAD_SHA=$PR_HEAD_SHA" >> "$GITHUB_ENV"
 
-          gh api "repos/${REPOSITORY_SLUG}/pulls/${PR_NUM}/files" \
+          if ! gh api "repos/${REPOSITORY_SLUG}/pulls/${PR_NUM}/files" \
             --paginate \
-            --jq '.[].filename' > changed_files.txt 2>/dev/null || echo "" > changed_files.txt
+            --jq '.[].filename' > changed_files.txt; then
+            echo "::error::Failed to fetch PR changed files for ${REPOSITORY_SLUG}#${PR_NUM}; refusing to infer documentation state."
+            exit 1
+          fi
 
           classify_documentation_obligation() {
             local changed_files_path="${1:-changed_files.txt}"
@@ -562,7 +565,11 @@ jobs:
               echo "unknown"
               return 0
             fi
-            if grep -Eiq '^[^/]+\.md$|(^|/)(README|MERGLBOT)(\.md)?$|(^|/)docs/|^merglbot-public/docs/' "$changed_files_path"; then
+            if [ "${REPOSITORY_SLUG:-}" = "merglbot-public/docs" ] && grep -Eiq '^[^/]+\.md$|^docs/' "$changed_files_path"; then
+              echo "satisfied"
+              return 0
+            fi
+            if grep -Eiq '^(README|MERGLBOT)\.md$|^docs/' "$changed_files_path"; then
               echo "satisfied"
               return 0
             fi
