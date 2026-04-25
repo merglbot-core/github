@@ -808,6 +808,27 @@ jobs:
             #   (^|[^[:alnum:]_])eyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}($|[^[:alnum:]_])
             # NOTE: keep the gate on JWT_PATTERN_STRICT only; the loose heuristic is noisy (docs/test fixtures).
             JWT_PATTERN="${JWT_PATTERN_STRICT}"
+            prepare_secret_scan_input() {
+              local source_file="$1"
+              local target_file="$2"
+              case "$source_file" in
+                pr_diff_full.txt|pr_diff.txt)
+                  # Bootstrap PRs that upgrade old PR Assistant copies can contain removed
+                  # secret-regex source lines in the diff. Those are guardrail code, not
+                  # credentials. Keep scanning the rest of the diff fail-closed.
+                  awk '
+                    /^[+-][[:space:]]*(SECRET_PATTERN(_STRICT(_NO_KEY)?|_NO_GENERIC)?|SENSITIVE_PATTERN(_STRICT|_NO_GENERIC)?|JWT_PATTERN(_STRICT)?|_[A-Z0-9_]+_RX|_GH[A-Z_]+|_SK_PREFIX|_GENERIC_[A-Z_]+_PREFIX)=/ { next }
+                    /^[+-][[:space:]]*printf[[:space:]]+-v[[:space:]]+SECRET_PATTERN_STRICT_NO_KEY[[:space:]]+/ { next }
+                    /^[+-][[:space:]]*(GITHUB_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY):[[:space:]]*\$\{\{[[:space:]]*secrets\.(GITHUB_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY)[[:space:]]*\}\}[[:space:]]*$/ { next }
+                    /^[+-][[:space:]]*-H[[:space:]]+"(Authorization: Bearer \$OPENAI_API_KEY|x-api-key: \$ANTHROPIC_API_KEY)"[[:space:]]*\\?[[:space:]]*$/ { next }
+                    { print }
+                  ' "$source_file" > "$target_file"
+                  ;;
+                *)
+                  cp "$source_file" "$target_file"
+                  ;;
+              esac
+            }
             for SECRET_SCAN_FILE in pr_diff_full.txt pr_diff.txt pr_title.txt pr_body.txt bugbot_findings.txt changed_files.txt new_commits.txt pr_checks_summary.txt; do
               # pr_diff_full.txt intentionally excludes only the broad generic key_ heuristic:
               # full lockfile/package diffs can contain long integrity strings that otherwise cause false positives.
@@ -816,15 +837,30 @@ jobs:
                 PATTERN="${SENSITIVE_PATTERN_NO_GENERIC}|${JWT_PATTERN_STRICT}"
               fi
               if [ -s "$SECRET_SCAN_FILE" ]; then
+                SECRET_SCAN_INPUT="$(mktemp)" || {
+                  echo "WARN: Secret pre-scan temp file creation failed for ${SECRET_SCAN_FILE}; skipping AI review fail-closed." >&2
+                  SKIP_REVIEW="true"
+                  SKIP_REASON="potential_secret"
+                  break
+                }
+                if ! prepare_secret_scan_input "$SECRET_SCAN_FILE" "$SECRET_SCAN_INPUT"; then
+                  echo "WARN: Secret pre-scan input preparation failed for ${SECRET_SCAN_FILE}; skipping AI review fail-closed." >&2
+                  rm -f "$SECRET_SCAN_INPUT"
+                  SKIP_REVIEW="true"
+                  SKIP_REASON="potential_secret"
+                  break
+                fi
                 GREP_STATUS=0
-                if grep -Eqi -- "$PATTERN" "$SECRET_SCAN_FILE"; then
+                if grep -Eqi -- "$PATTERN" "$SECRET_SCAN_INPUT"; then
                   echo "⛔️ Potential secret-like material detected in PR context; skipping AI review."
                   SKIP_REVIEW="true"
                   SKIP_REASON="potential_secret"
+                  rm -f "$SECRET_SCAN_INPUT"
                   break
                 else
                   GREP_STATUS=$?
                 fi
+                rm -f "$SECRET_SCAN_INPUT"
                 if [ "$GREP_STATUS" -gt 1 ]; then
                   echo "WARN: Secret pre-scan failed for ${SECRET_SCAN_FILE}; skipping AI review fail-closed." >&2
                   SKIP_REVIEW="true"
