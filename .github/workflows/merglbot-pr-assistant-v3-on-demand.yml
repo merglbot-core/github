@@ -561,16 +561,47 @@ jobs:
 
           classify_documentation_obligation() {
             local changed_files_path="${1:-changed_files.txt}"
+            local has_docs_evidence="false"
+            local has_impactful="false"
+            local has_non_pr_assistant_copy_file="false"
             if [ ! -s "$changed_files_path" ]; then
               echo "unknown"
               return 0
             fi
-            if [ "${REPOSITORY_SLUG:-}" = "merglbot-public/docs" ] && grep -Eiq '^[^/]+\.md$|^docs/' "$changed_files_path"; then
+            while IFS= read -r changed_path; do
+              [ -z "$changed_path" ] && continue
+              case "$changed_path" in
+                README.md|MERGLBOT.md|docs/*)
+                  has_docs_evidence="true"
+                  ;;
+              esac
+              if [ "${REPOSITORY_SLUG:-}" = "merglbot-public/docs" ]; then
+                case "$changed_path" in
+                  *.md|docs/*)
+                    has_docs_evidence="true"
+                    ;;
+                esac
+              fi
+              case "$changed_path" in
+                .github/workflows/merglbot-pr-v3-on-demand.yml|scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh|scripts/pr-assistant/verify-review-receipt.py|scripts/pr-assistant/extract-zaver-field.sh)
+                  has_impactful="true"
+                  ;;
+                .github/workflows/*|scripts/*|src/*|app/*|packages/*|terraform/*|infra/*|Dockerfile|**/Dockerfile|*.tf|*.py|*.js|*.ts|*.tsx|*.jsx|*.sh|*.yml|*.yaml)
+                  has_impactful="true"
+                  has_non_pr_assistant_copy_file="true"
+                  ;;
+              esac
+            done < "$changed_files_path"
+            if [ "$has_docs_evidence" = "true" ]; then
               echo "satisfied"
               return 0
             fi
-            if grep -Eiq '^(README|MERGLBOT)\.md$|^docs/' "$changed_files_path"; then
-              echo "satisfied"
+            if [ "$has_impactful" = "true" ] && [ "$has_non_pr_assistant_copy_file" = "false" ]; then
+              echo "not_required"
+              return 0
+            fi
+            if [ "$has_impactful" = "true" ]; then
+              echo "missing"
               return 0
             fi
             echo "not_required"
@@ -1947,7 +1978,7 @@ jobs:
               ;;
           esac
           if [ -s final_review.txt ]; then
-            REVIEW_VERDICT="$REVIEW_VERDICT" DOCUMENTATION_OBLIGATION_STATE="$DOCUMENTATION_OBLIGATION_STATE" python3 - <<'PY'
+            REVIEW_VERDICT="$REVIEW_VERDICT" DOCUMENTATION_OBLIGATION_STATE="$DOCUMENTATION_OBLIGATION_STATE" DOCS_SIGNAL_BASIS="$DOCS_SIGNAL_BASIS" python3 - <<'PY'
           from pathlib import Path
           import os
           import re
@@ -1969,6 +2000,16 @@ jobs:
           in_zaver = False
           in_code = False
           updated = set()
+          field_order = ("verdict", "documentation obligation state", "docs signal basis")
+
+          def emit_missing_fields():
+              for field_name in field_order:
+                  if field_name in updated:
+                      continue
+                  canonical_label, target = replacements[field_name]
+                  out.append(f"{canonical_label}: {target}")
+                  updated.add(field_name)
+
           for line in lines:
               stripped = line.strip()
               if stripped.startswith("```"):
@@ -1978,15 +2019,17 @@ jobs:
               if in_code:
                   out.append(line)
                   continue
-              if re.match(r"^##\s+", stripped):
+              if in_zaver and re.match(r"^###+\s+", stripped):
+                  emit_missing_fields()
+                  in_zaver = False
+              elif re.match(r"^##\s+", stripped):
                   heading = re.sub(r"^[#\s]+", "", stripped)
                   heading = re.sub(r"[*_`\s]+", "", heading).lower()
                   if heading in {"zaver", "závěr"}:
                       in_zaver = True
                       in_code = False
                   elif in_zaver:
-                      in_zaver = False
-                  elif in_zaver and re.match(r"^###+\s+", stripped):
+                      emit_missing_fields()
                       in_zaver = False
               if in_zaver:
                   cleaned = re.sub(r"^[\s>\-*+]*", "", line)
@@ -2000,6 +2043,8 @@ jobs:
                       updated.add(field_name_normalized)
                       continue
               out.append(line)
+          if in_zaver:
+              emit_missing_fields()
           if updated:
               path.write_text("\n".join(out) + "\n", encoding="utf-8")
           PY
