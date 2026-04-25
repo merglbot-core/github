@@ -577,6 +577,7 @@ jobs:
             local changed_files_path="${1:-changed_files.txt}"
             local has_docs_evidence="false"
             local has_impactful="false"
+            local has_pr_assistant_copy_file="false"
             local has_non_pr_assistant_copy_file="false"
             if [ ! -s "$changed_files_path" ]; then
               echo "unknown"
@@ -592,6 +593,20 @@ jobs:
               case "$changed_path" in
                 .github/workflows/merglbot-pr-v3-on-demand.yml|.github/workflows/merglbot-pr-assistant-v3-on-demand.yml|scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh|scripts/pr-assistant/verify-review-receipt.py|scripts/pr-assistant/extract-zaver-field.sh)
                   has_impactful="true"
+                  has_pr_assistant_copy_file="true"
+                  ;;
+                .github/workflows/ci.yml)
+                  has_impactful="true"
+                  case "${PR_HEAD_REF:-}" in
+                    codex/pr-assistant-v3-*)
+                      # Managed rollout support: some copy-target repos need a
+                      # required-check mirror job in ci.yml, but only alongside
+                      # PR Assistant copy files.
+                      ;;
+                    *)
+                      has_non_pr_assistant_copy_file="true"
+                      ;;
+                  esac
                   ;;
                 .github/workflows/*|scripts/*|src/*|app/*|packages/*|terraform/*|infra/*|Dockerfile|**/Dockerfile|*.tf|*.py|*.js|*.ts|*.tsx|*.jsx|*.sh|*.yml|*.yaml)
                   has_impactful="true"
@@ -599,7 +614,7 @@ jobs:
                   ;;
               esac
             done < "$changed_files_path"
-            if [ "$has_impactful" = "true" ] && [ "$has_non_pr_assistant_copy_file" = "false" ]; then
+            if [ "$has_pr_assistant_copy_file" = "true" ] && [ "$has_non_pr_assistant_copy_file" = "false" ]; then
               echo "not_required"
               return 0
             fi

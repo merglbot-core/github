@@ -24,6 +24,12 @@ PR_ASSISTANT_WORKFLOW_PATHS = {
     ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
     ".github/workflows/merglbot-pr-v3-on-demand.yml",
 }
+PR_ASSISTANT_COPY_PATHS = PR_ASSISTANT_WORKFLOW_PATHS | {
+    "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+    "scripts/pr-assistant/verify-review-receipt.py",
+    "scripts/pr-assistant/extract-zaver-field.sh",
+}
+PR_ASSISTANT_ROLLOUT_SUPPORT_PATHS = {".github/workflows/ci.yml"}
 
 
 def gh_json(args: list[str]) -> Any:
@@ -57,6 +63,23 @@ def normalize_heading(value: str) -> str:
 
 def docs_state_blocks_closeout(verdict: str, docs_state: str) -> bool:
     return verdict == "approved_for_closeout" and docs_state in {"missing", "unknown"}
+
+
+def classify_pr_assistant_copy_docs_state(
+    changed_paths: set[str],
+    pr_head_ref: str,
+) -> str:
+    has_pr_assistant_copy_file = bool(changed_paths & PR_ASSISTANT_COPY_PATHS)
+    non_copy_paths = set(changed_paths) - PR_ASSISTANT_COPY_PATHS
+    if pr_head_ref.startswith("codex/pr-assistant-v3-"):
+        non_copy_paths -= PR_ASSISTANT_ROLLOUT_SUPPORT_PATHS
+    if has_pr_assistant_copy_file and not non_copy_paths:
+        return "not_required"
+    if any(path.endswith(".md") or path.startswith("docs/") for path in changed_paths):
+        return "satisfied"
+    if changed_paths:
+        return "missing"
+    return "not_required"
 
 
 def extract_zaver_field(body: str, field_name: str) -> str:
@@ -381,6 +404,36 @@ def self_test() -> int:
     )
     assert (
         ".github/workflows/merglbot-pr-v3-on-demand.yml" in PR_ASSISTANT_WORKFLOW_PATHS
+    )
+    copy_paths = {
+        ".github/workflows/merglbot-pr-v3-on-demand.yml",
+        "scripts/pr-assistant/verify-review-receipt.py",
+    }
+    copy_with_ci = copy_paths | {".github/workflows/ci.yml"}
+    assert (
+        classify_pr_assistant_copy_docs_state(copy_paths, "codex/pr-assistant-v3-guard")
+        == "not_required"
+    )
+    assert (
+        classify_pr_assistant_copy_docs_state(
+            copy_with_ci,
+            "codex/pr-assistant-v3-guard",
+        )
+        == "not_required"
+    )
+    assert (
+        classify_pr_assistant_copy_docs_state(
+            {".github/workflows/ci.yml"},
+            "codex/pr-assistant-v3-guard",
+        )
+        == "missing"
+    )
+    assert (
+        classify_pr_assistant_copy_docs_state(
+            copy_with_ci,
+            "feature/unrelated-ci",
+        )
+        == "missing"
     )
     print(json.dumps({"ok": True, "self_test": "passed"}))
     return 0
