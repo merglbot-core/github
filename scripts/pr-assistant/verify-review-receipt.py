@@ -18,6 +18,7 @@ from typing import Any
 
 MARKER_RE = re.compile(r"<!--\s*(MERGLBOT_[A-Z0-9_]+)\s*:\s*([\s\S]*?)\s*-->")
 SECTION_HEADER_RE = re.compile(r"^##+\s+")
+TOP_LEVEL_SECTION_HEADER_RE = re.compile(r"^##\s+")
 MACHINE_TOKEN_STRIP_RE = re.compile(r"[^a-z0-9_]+")
 PR_ASSISTANT_WORKFLOW_PATHS = {
     ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
@@ -56,14 +57,21 @@ def normalize_heading(value: str) -> str:
 
 def extract_zaver_field(body: str, field_name: str) -> str:
     in_zaver = False
+    in_code = False
     for raw_line in (body or "").splitlines():
         line = raw_line.strip()
+        if in_zaver and line.startswith("```"):
+            in_code = not in_code
+            continue
+        if in_zaver and in_code:
+            continue
         if SECTION_HEADER_RE.match(line):
             heading = normalize_heading(line)
             if heading in ("zaver", "závěr"):
                 in_zaver = True
+                in_code = False
                 continue
-            if in_zaver:
+            if in_zaver and TOP_LEVEL_SECTION_HEADER_RE.match(line):
                 break
         if not in_zaver:
             continue
@@ -238,6 +246,29 @@ def self_test() -> int:
     )
     assert (
         extract_zaver_field("### Zaver\n* _Verdict_ : approved-for-closeout", "Verdict")
+        == "approved_for_closeout"
+    )
+    assert (
+        extract_zaver_field(
+            "## Zaver\n### Details\nVerdict: approved_for_closeout",
+            "Verdict",
+        )
+        == "approved_for_closeout"
+    )
+    assert (
+        extract_zaver_field(
+            "\n".join(
+                [
+                    "## Zaver",
+                    "```",
+                    "## Spoofed",
+                    "Verdict: changes_required",
+                    "```",
+                    "Verdict: approved_for_closeout",
+                ]
+            ),
+            "Verdict",
+        )
         == "approved_for_closeout"
     )
     spoofed_markers, _, _ = latest_receipt(

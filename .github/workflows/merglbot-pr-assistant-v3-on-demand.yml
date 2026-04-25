@@ -129,7 +129,8 @@ jobs:
       (
         (github.event_name == 'issue_comment' &&
          github.event.issue.pull_request &&
-         contains(github.event.comment.body, '@merglbot review')) ||
+         contains(github.event.comment.body, '@merglbot review') &&
+         !contains(github.event.comment.body, '@merglbot review-v4')) ||
         github.event_name == 'workflow_dispatch'
       )
     outputs:
@@ -1766,7 +1767,54 @@ jobs:
 
           extract_final_review_field_line() {
             local field_name="$1"
-            extract_zaver_review_field_line "$field_name"
+            local zaver_value
+            zaver_value="$(extract_zaver_review_field_line "$field_name" || true)"
+            if [ -n "$zaver_value" ]; then
+              printf '%s\n' "$zaver_value"
+              return 0
+            fi
+            awk -v field_name="$field_name" '
+              /^```/ {
+                if (in_zaver) {
+                  in_code = !in_code
+                }
+                next
+              }
+              in_zaver && in_code {
+                next
+              }
+              /^##+[[:space:]]+/ {
+                header = $0
+                gsub(/^[#[:space:]]+/, "", header)
+                gsub(/[*_`[:space:]]/, "", header)
+                if (tolower(header) == "zaver" || tolower(header) == "závěr") {
+                  in_zaver = 1
+                  in_code = 0
+                  next
+                }
+                if (in_zaver && $0 ~ /^##[[:space:]]+/) {
+                  exit
+                }
+                next
+              }
+              !in_zaver || in_code {
+                next
+              }
+              {
+                line = $0
+                gsub(/^[[:space:]>*+-]*/, "", line)
+                n = split(line, parts, ":")
+                field_label = parts[1]
+                gsub(/[*_`]/, "", field_label)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", field_label)
+                if (n >= 2 && tolower(field_label) == tolower(field_name)) {
+                  sub(/^[^:]*:[[:space:]]*/, "", line)
+                  gsub(/[*`]/, "", line)
+                  print field_name ": " line
+                  exit
+                }
+              }
+            ' final_review.txt
           }
 
           normalize_machine_token() {
@@ -1794,7 +1842,7 @@ jobs:
             satisfied|not_required|missing|unknown) ;;
             *) DOCUMENTATION_OBLIGATION_STATE="unknown" ;;
           esac
-          if [ "$DOCUMENTATION_OBLIGATION_STATE_EXPLICIT" != "true" ] && [ "$DOCUMENTATION_OBLIGATION_STATE" = "unknown" ] && [ "$SSOT_SYNC_DOCS_NONE" = "true" ]; then
+          if [ "$DOCUMENTATION_OBLIGATION_STATE" = "unknown" ] && [ "$SSOT_SYNC_DOCS_NONE" = "true" ]; then
             DOCUMENTATION_OBLIGATION_STATE="not_required"
           fi
 
@@ -1874,35 +1922,52 @@ jobs:
           if [ "$REVIEW_VERDICT" = "blocked_missing_authority" ] && [ "${REVIEW_VERDICT_RAW:-}" != "blocked_missing_authority" ]; then
             REVIEW_VERDICT_POLICY_OVERRIDE="true"
           fi
-          if [ "$REVIEW_VERDICT_POLICY_OVERRIDE" = "true" ] && [ -s final_review.txt ]; then
-            REVIEW_VERDICT="$REVIEW_VERDICT" python3 - <<'PY'
+          if [ -s final_review.txt ]; then
+            REVIEW_VERDICT="$REVIEW_VERDICT" DOCUMENTATION_OBLIGATION_STATE="$DOCUMENTATION_OBLIGATION_STATE" python3 - <<'PY'
           from pathlib import Path
           import os
           import re
 
-          target = os.environ["REVIEW_VERDICT"]
+          replacements = {
+              "verdict": ("Verdict", os.environ["REVIEW_VERDICT"]),
+              "documentation obligation state": (
+                  "Documentation Obligation State",
+                  os.environ["DOCUMENTATION_OBLIGATION_STATE"],
+              ),
+          }
           path = Path("final_review.txt")
           lines = path.read_text(encoding="utf-8").splitlines()
           out = []
           in_zaver = False
-          updated = False
+          in_code = False
+          updated = set()
           for line in lines:
               stripped = line.strip()
+              if in_zaver and stripped.startswith("```"):
+                  in_code = not in_code
+                  out.append(line)
+                  continue
+              if in_zaver and in_code:
+                  out.append(line)
+                  continue
               if re.match(r"^##+\s+", stripped):
                   heading = re.sub(r"^[#\s]+", "", stripped)
                   heading = re.sub(r"[*_`\s]+", "", heading).lower()
                   if heading in {"zaver", "závěr"}:
                       in_zaver = True
-                  elif in_zaver:
+                      in_code = False
+                  elif in_zaver and re.match(r"^##\s+", stripped):
                       in_zaver = False
-              if in_zaver and not updated:
+              if in_zaver:
                   cleaned = re.sub(r"^[\s>\-*+]*", "", line)
                   parts = cleaned.split(":", 1)
                   field_label_clean = parts[0].replace("*", "").replace("_", "").replace("`", "").strip()
-                  if len(parts) == 2 and field_label_clean.lower() == "verdict":
+                  field_name_normalized = field_label_clean.lower()
+                  if len(parts) == 2 and field_name_normalized in replacements:
+                      canonical_label, target = replacements[field_name_normalized]
                       prefix = re.match(r"^([\s>\-*+]*)", line).group(1)
-                      out.append(f"{prefix}Verdict: {target}")
-                      updated = True
+                      out.append(f"{prefix}{canonical_label}: {target}")
+                      updated.add(field_name_normalized)
                       continue
               out.append(line)
           if updated:
@@ -1939,6 +2004,7 @@ jobs:
               printf '%s\n' "| run_url | $REVIEW_RUN_URL |"
               printf '%s\n' "| verdict | \`review_generation_failed\` |"
               printf '%s\n' "| status | \`failed\` |"
+              printf '%s\n' "| documentation_obligation_state | \`$DOCUMENTATION_OBLIGATION_STATE\` |"
               printf '%s\n' "| diff_scope | \`$DIFF_SCOPE\` |"
               printf '%s\n' "| pr_check_surface | \`$PR_CHECK_SURFACE_STATE\` |"
               echo ""
@@ -1947,6 +2013,7 @@ jobs:
               echo "<!-- MERGLBOT_REVIEW_HEAD_SHA: $PR_HEAD_SHA -->"
               echo "<!-- MERGLBOT_REVIEW_VERDICT: review_generation_failed -->"
               echo "<!-- MERGLBOT_REVIEW_STATUS: failed -->"
+              echo "<!-- MERGLBOT_DOCUMENTATION_OBLIGATION_STATE: $DOCUMENTATION_OBLIGATION_STATE -->"
               echo "<!-- MERGLBOT_PR_CHECK_SURFACE: $PR_CHECK_SURFACE_STATE -->"
               echo "<!-- MERGLBOT_RUN_ID: ${{ github.run_id }} -->"
               echo "<!-- MERGLBOT_RUN_URL: $REVIEW_RUN_URL -->"
