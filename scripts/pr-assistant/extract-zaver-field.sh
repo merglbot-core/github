@@ -2,6 +2,27 @@
 # Extract a single machine-readable field from the final Zaver/Závěr section.
 set -euo pipefail
 
+if [ "$#" -eq 1 ] && [ "$1" = "--self-test" ]; then
+  tmp_review="$(mktemp)"
+  trap 'rm -f "$tmp_review"' EXIT
+  cat >"$tmp_review" <<'EOF'
+## Zaver
+  ```text
+  Verdict: approved_for_closeout
+  Documentation Obligation State: not_required
+  ```
+Verdict: changes_required
+Documentation Obligation State: not_required
+EOF
+  extracted="$("$0" "Verdict" "$tmp_review")"
+  if [ "$extracted" != "Verdict: changes_required" ]; then
+    echo "self-test failed: expected real Zaver field outside indented fence, got: $extracted" >&2
+    exit 1
+  fi
+  echo '{"ok":true,"self_test":"passed"}'
+  exit 0
+fi
+
 if [ "$#" -ne 2 ]; then
   echo "Usage: $0 <field-name> <review-file>" >&2
   exit 2
@@ -12,7 +33,7 @@ REVIEW_FILE="$2"
 
 awk -v field_name="$FIELD_NAME" '
   BEGIN { in_zaver = 0; in_code = 0 }
-  /^```/ {
+  /^[[:space:]]*```/ {
     if (in_zaver) {
       in_code = !in_code
     }
