@@ -3,8 +3,10 @@ name: ENT Dependabot Weekly Closeout
 on:
   schedule:
     # Monday 07:30 UTC = 08:30 CET / 09:30 CEST for Europe/Prague.
-    # Scheduled 30 minutes after ent-scope-refresh.yml (Monday 07:00 UTC) so
-    # this run uses the freshest ent_repository_scope.txt SSOT file.
+    # Scheduled 30 minutes after ent-scope-refresh.yml (Monday 07:00 UTC).
+    # In Actions, closeout resolves live scope from ENT_ORG_ALLOWLIST.md plus
+    # non-archived/non-fork repository metadata; the repo-local scope file is
+    # only a generated mirror for local single_repo diagnostics.
     - cron: "30 7 * * 1"
   workflow_dispatch:
     inputs:

@@ -1,5 +1,6 @@
-# Repo-local mirror generated from merglbot-public/docs/REPOSITORY_MAP.md.
-# Keep this file in sync with the canonical 42-repo ENT scope.
+# Repo-local mirror generated from merglbot-public/docs/ENT_ORG_ALLOWLIST.md
+# plus live non-archived/non-fork repository metadata.
+# Used only for local single_repo diagnostics; GitHub Actions resolves live scope.
 merglbot-autodoplnky/autodoplnky-web
 merglbot-cerano/cerano-web
 merglbot-cerano/feed-generator
@@ -9,7 +10,6 @@ merglbot-core/agents-orchestrator
 merglbot-core/ai_prompts
 merglbot-core/dataform
 merglbot-core/fb-viz-api
-merglbot-core/github
 merglbot-core/infra
 merglbot-core/merglbot-admin
 merglbot-core/platform
@@ -19,6 +19,7 @@ merglbot-denatura/denatura-fb-viz
 merglbot-denatura/marketing-planning
 merglbot-denatura/marketing_actions_detector
 merglbot-extractors/abra-flexi-extractor
+merglbot-extractors/cerano-forecast-exporter
 merglbot-extractors/denatura-additional-costs-extractor
 merglbot-extractors/denatura-shoptet-export-extractor
 merglbot-extractors/facebook-extractor
@@ -32,6 +33,7 @@ merglbot-proteinaco/abc_product_material_analysis
 merglbot-proteinaco/basket-analysis
 merglbot-proteinaco/btf-legacy-implementation
 merglbot-proteinaco/btf-viz
+merglbot-proteinaco/proteinaco-forecast-exporter
 merglbot-proteinaco/proteinaco-web
 merglbot-proteinaco/viz-api
 merglbot-public/docs
