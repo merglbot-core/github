@@ -137,6 +137,8 @@ class GhError(RuntimeError):
 
 @dataclass
 class ScopeResolution:
+    """Validated repository scope plus provenance fields for closeout receipts."""
+
     repos: list[str]
     scope_source: str
     scope_validation_status: str
@@ -144,13 +146,16 @@ class ScopeResolution:
 
     @property
     def repo_count(self) -> int:
+        """Return the number of repositories in the resolved scope."""
         return len(self.repos)
 
     @property
     def org_count(self) -> int:
+        """Return the number of distinct repository owners in the resolved scope."""
         return len({repo.split("/", 1)[0] for repo in self.repos})
 
     def report_fields(self) -> dict[str, Any]:
+        """Return scope metadata fields embedded in reports and receipts."""
         return {
             "scope_source": self.scope_source,
             "repo_count": self.repo_count,
@@ -378,6 +383,7 @@ def write_json(path: Path, payload: Any) -> None:
 
 
 def parse_repository_entries(text: str, *, allow_plain_lines: bool = False) -> list[str]:
+    """Extract repository identifiers from Markdown links, inline code, or plain lines."""
     repos: list[str] = []
     for line in text.splitlines():
         match = REPOSITORY_RE.search(line)
@@ -391,10 +397,12 @@ def parse_repository_entries(text: str, *, allow_plain_lines: bool = False) -> l
 
 
 def parse_repository_map(text: str, *, allow_plain_lines: bool = False) -> list[str]:
+    """Return a sorted unique repository list parsed from repository map-style text."""
     return sorted(dict.fromkeys(parse_repository_entries(text, allow_plain_lines=allow_plain_lines)))
 
 
 def duplicate_values(values: list[str]) -> list[str]:
+    """Return sorted values that appear more than once while preserving value text."""
     seen: set[str] = set()
     duplicates: set[str] = set()
     for value in values:
@@ -404,10 +412,11 @@ def duplicate_values(values: list[str]) -> list[str]:
     return sorted(duplicates)
 
 
-def markdown_section(text: str, section_number: int, title_prefix: str) -> list[str]:
+def markdown_section(text: str, title_prefix: str) -> list[str]:
+    """Extract lines from a Markdown H2 section matched by title prefix."""
     lines: list[str] = []
     in_section = False
-    start_re = re.compile(rf"^##\s*{section_number}\.\s*{re.escape(title_prefix)}", re.IGNORECASE)
+    start_re = re.compile(rf"^##\s*(?:\d+\.\s*)?{re.escape(title_prefix)}", re.IGNORECASE)
     for line in text.splitlines():
         if start_re.search(line):
             in_section = True
@@ -420,6 +429,7 @@ def markdown_section(text: str, section_number: int, title_prefix: str) -> list[
 
 
 def table_first_column_values(lines: list[str]) -> list[str]:
+    """Extract non-header first-column values from a Markdown table."""
     values: list[str] = []
     for line in lines:
         match = re.match(r"^\|\s*`?([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?)`?\s*\|", line)
@@ -433,15 +443,17 @@ def table_first_column_values(lines: list[str]) -> list[str]:
 
 
 def parse_declared_org_count(lines: list[str]) -> int | None:
+    """Parse the declared organization count from the allowlist prose."""
     section = "\n".join(lines)
     match = re.search(r"The following\s+\*\*(\d+)\s+organizations\*\*", section, re.IGNORECASE)
     return int(match.group(1)) if match else None
 
 
 def parse_ent_org_allowlist(text: str) -> dict[str, Any]:
-    allowed_lines = markdown_section(text, 1, "Allowed")
-    excluded_org_lines = markdown_section(text, 2, "Explicitly")
-    excluded_repo_lines = markdown_section(text, 3, "Per-repo")
+    """Parse and validate ENT organization allowlist and exclusion tables."""
+    allowed_lines = markdown_section(text, "Allowed")
+    excluded_org_lines = markdown_section(text, "Explicitly")
+    excluded_repo_lines = markdown_section(text, "Per-repo")
     allowed_orgs = table_first_column_values(allowed_lines)
     excluded_orgs = table_first_column_values(excluded_org_lines)
     excluded_repos = [
@@ -471,6 +483,7 @@ def parse_ent_org_allowlist(text: str) -> dict[str, Any]:
 
 
 def fetch_ent_org_allowlist() -> str:
+    """Fetch the canonical ENT organization allowlist from GitHub."""
     with gh_token_for_repo(ENT_ALLOWLIST_REPO):
         content = gh_api_json(f"repos/{ENT_ALLOWLIST_REPO}/contents/{ENT_ALLOWLIST_PATH}?ref=main")
     encoded = content.get("content")
@@ -480,6 +493,7 @@ def fetch_ent_org_allowlist() -> str:
 
 
 def github_api_paginated(endpoint: str) -> list[Any]:
+    """Fetch a paginated GitHub REST endpoint and decode each JSON item."""
     proc = run_cmd(
         [
             "gh",
@@ -513,6 +527,7 @@ def validate_scope_entries(
     excluded_repos: list[str] | None = None,
     live_metadata_checked: bool = False,
 ) -> list[str]:
+    """Validate repository scope entries and return a sorted repository list."""
     repos: list[str] = []
     archived_or_fork: list[str] = []
     for entry in entries:
@@ -560,6 +575,7 @@ def validate_scope_entries(
 
 
 def scope_drift_against_repo_local_mirror(repos: list[str]) -> dict[str, Any]:
+    """Compare resolved live scope with the generated repo-local diagnostics mirror."""
     if not REPO_LOCAL_SCOPE_FILE.exists():
         return {"status": "mirror_unavailable", "mirror_path": str(REPO_LOCAL_SCOPE_FILE)}
     try:
@@ -582,6 +598,7 @@ def scope_drift_against_repo_local_mirror(repos: list[str]) -> dict[str, Any]:
 
 
 def live_ent_scope_from_allowlist(text: str) -> ScopeResolution:
+    """Resolve live active ENT repositories from the allowlist and GitHub metadata."""
     allowlist = parse_ent_org_allowlist(text)
     entries: list[dict[str, Any]] = []
     for org in allowlist["allowed_orgs"]:
@@ -613,6 +630,7 @@ def live_ent_scope_from_allowlist(text: str) -> ScopeResolution:
 
 
 def load_scope_from_file(scope_file: Path) -> ScopeResolution:
+    """Load and validate an explicit scope file used for tests or operator overrides."""
     try:
         text = scope_file.read_text(encoding="utf-8")
     except Exception as exc:
@@ -681,6 +699,7 @@ def load_scope_from_file(scope_file: Path) -> ScopeResolution:
 
 
 def load_repo_local_mirror_scope() -> ScopeResolution:
+    """Load the generated repo-local mirror for local single-repo diagnostics."""
     try:
         text = REPO_LOCAL_SCOPE_FILE.read_text(encoding="utf-8")
     except Exception as exc:
@@ -695,6 +714,7 @@ def load_repo_local_mirror_scope() -> ScopeResolution:
 
 
 def load_repo_scope(scope_file: Path | None) -> ScopeResolution:
+    """Load authoritative ENT scope from an override file or live allowlist metadata."""
     if scope_file:
         return load_scope_from_file(scope_file)
     try:
@@ -707,6 +727,7 @@ def load_repo_scope(scope_file: Path | None) -> ScopeResolution:
 
 
 def load_single_repo_scope(scope_file: Path | None) -> ScopeResolution:
+    """Load the scope source appropriate for single-repo validation."""
     # In GitHub Actions, never trust a branch-local mirror as the authoritative
     # boundary. Local diagnostics can use the repo-local mirror to avoid
     # unnecessary cross-repo token requirements.
@@ -2655,6 +2676,8 @@ The following **2 organizations** are in ENT scope.
     parsed_allowlist = parse_ent_org_allowlist(allowlist_sample)
     assert parsed_allowlist["allowed_orgs"] == ["merglbot-core", "merglbot-public"]
     assert parsed_allowlist["excluded_repos"] == ["merglbot-core/github"]
+    unnumbered_allowlist = re.sub(r"^##\s+\d+\.\s+", "## ", allowlist_sample, flags=re.MULTILINE)
+    assert parse_ent_org_allowlist(unnumbered_allowlist)["allowed_orgs"] == parsed_allowlist["allowed_orgs"]
     try:
         parse_ent_org_allowlist(allowlist_sample.replace("**2 organizations**", "**3 organizations**"))
         raise AssertionError("declared allowlist org count mismatch should fail closed")
