@@ -164,7 +164,11 @@ Every merged Dependabot PR must prove:
 - the latest Merglbot PR Assistant receipt is current-head and
   `approved_for_closeout`; if the receipt was missing or stale, the closeout
   engine must have triggered a head-bound `workflow_dispatch` review and then
-  verified the emitted receipt markers,
+  verified the emitted receipt markers. The only exception is a current-head
+  `blocked_missing_authority` receipt for a PR already proven
+  `VALIDATED_WORKFLOW_REF_ONLY`; in that case the closeout validator's
+  workflow-ref authority may satisfy the docs-authority gap, but any real
+  `changes_required` review verdict remains a hard blocker,
 - Cursor Bugbot has a current-head pass when available, or the receipt records
   that Cursor was absent/neutral/skipping and not required,
 - the merge uses squash with `--match-head-commit`.
