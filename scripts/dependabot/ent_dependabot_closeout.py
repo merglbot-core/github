@@ -1638,6 +1638,24 @@ def merglbot_pr_head_changed(payload: dict[str, Any], expected_head_sha: str) ->
     return bool(current_head and expected_head_sha and current_head != expected_head_sha)
 
 
+def workflow_ref_docs_authority_override_allowed(receipt: ItemReceipt, payload: dict[str, Any], head_sha: str) -> bool:
+    if receipt.validated_scope_class != "VALIDATED_WORKFLOW_REF_ONLY":
+        return False
+    review_head = str(payload.get("review_head_sha") or payload.get("head_sha") or "")
+    if review_head != head_sha or payload.get("current_head_match") is False:
+        return False
+    if str(payload.get("verdict") or "").strip().lower() != "blocked_missing_authority":
+        return False
+    if str(payload.get("status") or "").strip().lower() != "blocked":
+        return False
+    docs_state = str(payload.get("documentation_obligation_state") or "").strip().lower()
+    if docs_state not in {"missing", "unknown"}:
+        return False
+    blockers = {str(item) for item in payload.get("blockers", []) if str(item)}
+    allowed_blockers = {"review_not_approved_for_closeout", "review_docs_state_blocks_closeout"}
+    return "review_docs_state_blocks_closeout" in blockers and blockers.issubset(allowed_blockers)
+
+
 def merglbot_findings_ledger(payload: dict[str, Any], head_sha: str) -> list[dict[str, Any]]:
     """Build an audit ledger entry from the latest current-head Merglbot receipt."""
     blockers = payload.get("blockers")
@@ -2087,7 +2105,11 @@ def process_pr(
     merglbot = wait_for_merglbot(pr.repo, pr.number, refreshed.head_ref, refreshed.head_sha, apply=apply)
     receipt.merglbot_receipt = merglbot
     receipt.merglbot_dispatch = merglbot.get("dispatch")
-    if not merglbot.get("ok"):
+    if not merglbot.get("ok") and workflow_ref_docs_authority_override_allowed(receipt, merglbot, refreshed.head_sha):
+        receipt.evidence.append(
+            "Merglbot blocked only by docs authority for VALIDATED_WORKFLOW_REF_ONLY; closeout validator authority permits continuation"
+        )
+    elif not merglbot.get("ok"):
         if apply and merglbot.get("head_changed_during_review_wait") and max_review_iterations > 1:
             retry_pr = refresh_pr(pr.repo, pr.number)
             retry_receipt = process_pr(
@@ -2960,6 +2982,51 @@ The following **2 organizations** are in ENT scope.
     assert merglbot_pr_head_changed({"head_sha": "b" * 40}, "a" * 40) is True
     assert merglbot_pr_head_changed({"head_sha": "a" * 40}, "a" * 40) is False
     assert merglbot_pr_head_changed({"review_head_sha": "b" * 40}, "a" * 40) is False
+    workflow_receipt = ItemReceipt(
+        "o/r",
+        1,
+        "https://github.com/o/r/pull/1",
+        "blocked",
+        "BLOCKED",
+        head_sha="a" * 40,
+        validated_scope_class="VALIDATED_WORKFLOW_REF_ONLY",
+    )
+    assert workflow_ref_docs_authority_override_allowed(
+        workflow_receipt,
+        {
+            "review_head_sha": "a" * 40,
+            "current_head_match": True,
+            "verdict": "blocked_missing_authority",
+            "status": "blocked",
+            "documentation_obligation_state": "missing",
+            "blockers": ["review_not_approved_for_closeout", "review_docs_state_blocks_closeout"],
+        },
+        "a" * 40,
+    ) is True
+    assert workflow_ref_docs_authority_override_allowed(
+        workflow_receipt,
+        {
+            "review_head_sha": "a" * 40,
+            "current_head_match": True,
+            "verdict": "blocked_missing_authority",
+            "status": "blocked",
+            "documentation_obligation_state": "missing",
+            "blockers": ["review_not_approved_for_closeout"],
+        },
+        "a" * 40,
+    ) is False
+    assert workflow_ref_docs_authority_override_allowed(
+        workflow_receipt,
+        {
+            "review_head_sha": "a" * 40,
+            "current_head_match": True,
+            "verdict": "changes_required",
+            "status": "blocked",
+            "documentation_obligation_state": "missing",
+            "blockers": ["review_not_approved_for_closeout"],
+        },
+        "a" * 40,
+    ) is False
     assert request_update_branch("merglbot-core/github", 1, "b" * 40, apply=False)["blockers"] == ["update_branch_required"]
     assert bad_credentials_seen("GraphQL: Bad credentials") is True
     APP_TOKEN_CACHE["example"] = ("token", datetime.now(timezone.utc) + timedelta(hours=1))

@@ -62,7 +62,7 @@ def normalize_heading(value: str) -> str:
 
 
 def docs_state_blocks_closeout(verdict: str, docs_state: str) -> bool:
-    return verdict == "approved_for_closeout" and docs_state in {"missing", "unknown"}
+    return verdict in {"approved_for_closeout", "blocked_missing_authority"} and docs_state in {"missing", "unknown"}
 
 
 def classify_pr_assistant_copy_docs_state(
@@ -281,6 +281,7 @@ def self_test() -> int:
     assert normalize_machine_token("approved\tfor\ncloseout") == "approved_for_closeout"
     assert docs_state_blocks_closeout("approved_for_closeout", "missing")
     assert docs_state_blocks_closeout("approved_for_closeout", "unknown")
+    assert docs_state_blocks_closeout("blocked_missing_authority", "missing")
     assert not docs_state_blocks_closeout("approved_for_closeout", "not_required")
     assert not docs_state_blocks_closeout("changes_required", "unknown")
     assert (
