@@ -174,6 +174,19 @@ prove that the newest Merglbot receipt covers the post-fix head and that the
 stale-findings ledger was closed by a new head or a documented false-positive
 rationale. Same-head "no new findings" is not sufficient.
 
+## Sibling PR Head Churn
+
+The apply lane processes each repository as a queue, but Dependabot sibling PRs
+can still change while the lane is waiting for current-head review evidence.
+For example, merging one dependency PR can cause GitHub/Dependabot to refresh
+another PR's branch, invalidating the review receipt that was just requested.
+When the closeout engine detects that the live PR head no longer matches the
+head it dispatched or verified, it must fail fast for that head, refresh the PR,
+and retry within the bounded `max_review_iterations` budget. After any merge or
+close action in a repository, previously blocked sibling PRs must be eligible
+for re-evaluation because their merge state, required checks, or review head may
+have changed.
+
 ## Policy Alignment
 
 If required human review is the only blocker for an otherwise evidence-gated

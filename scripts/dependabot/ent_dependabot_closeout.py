@@ -1633,6 +1633,11 @@ def is_current_head_merglbot_terminal_blocker(payload: dict[str, Any], head_sha:
     return bool(terminal_blockers) or verdict in {"changes_required", "blocked", "needs_work"} or status in {"blocked", "failed"}
 
 
+def merglbot_pr_head_changed(payload: dict[str, Any], expected_head_sha: str) -> bool:
+    current_head = str(payload.get("head_sha") or "")
+    return bool(current_head and expected_head_sha and current_head != expected_head_sha)
+
+
 def merglbot_findings_ledger(payload: dict[str, Any], head_sha: str) -> list[dict[str, Any]]:
     """Build an audit ledger entry from the latest current-head Merglbot receipt."""
     blockers = payload.get("blockers")
@@ -1744,6 +1749,11 @@ def trigger_merglbot_review(repo: str, number: int, head_ref: str, head_sha: str
 
 def wait_for_merglbot(repo: str, number: int, head_ref: str, head_sha: str, *, apply: bool) -> dict[str, Any]:
     first = verify_merglbot(repo, number)
+    if merglbot_pr_head_changed(first, head_sha):
+        first.setdefault("blockers", []).append("merglbot_pr_head_changed_before_review_dispatch")
+        first["expected_head_sha"] = head_sha
+        first["head_changed_during_review_wait"] = True
+        return first
     if first.get("ok"):
         return first
     if is_current_head_merglbot_terminal_blocker(first, head_sha):
@@ -1777,6 +1787,11 @@ def wait_for_merglbot(repo: str, number: int, head_ref: str, head_sha: str, *, a
         time.sleep(min(MERGLBOT_REVIEW_POLL_SECONDS, max(0, deadline - time.time())))
         latest = verify_merglbot(repo, number)
         latest["dispatch"] = dispatch
+        if merglbot_pr_head_changed(latest, head_sha):
+            latest.setdefault("blockers", []).append("merglbot_pr_head_changed_during_review_wait")
+            latest["expected_head_sha"] = head_sha
+            latest["head_changed_during_review_wait"] = True
+            return latest
         if latest.get("ok"):
             return latest
         if is_current_head_merglbot_terminal_blocker(latest, head_sha):
@@ -2073,6 +2088,23 @@ def process_pr(
     receipt.merglbot_receipt = merglbot
     receipt.merglbot_dispatch = merglbot.get("dispatch")
     if not merglbot.get("ok"):
+        if apply and merglbot.get("head_changed_during_review_wait") and max_review_iterations > 1:
+            retry_pr = refresh_pr(pr.repo, pr.number)
+            retry_receipt = process_pr(
+                retry_pr,
+                mode=mode,
+                output_dir=output_dir,
+                allow_policy_alignment=allow_policy_alignment,
+                workflow_url=workflow_url,
+                validator_profile=validator_profile,
+                sibling_prs=sibling_prs,
+                autonomous_fix_loop=autonomous_fix_loop,
+                max_fix_iterations=max_fix_iterations,
+                max_review_iterations=max_review_iterations - 1,
+            )
+            retry_receipt.review_iterations = max(retry_receipt.review_iterations, receipt.review_iterations + 1)
+            retry_receipt.evidence.insert(0, f"retried_after_merglbot_head_change:{pr.head_sha}->{retry_pr.head_sha}")
+            return retry_receipt
         if not apply:
             if is_current_head_merglbot_terminal_blocker(merglbot, refreshed.head_sha):
                 receipt.merglbot_findings_ledger.extend(merglbot_findings_ledger(merglbot, refreshed.head_sha))
@@ -2122,6 +2154,22 @@ def process_pr(
 
     refreshed = refresh_pr(pr.repo, pr.number)
     if reject_if_head_changed(receipt, refreshed, "head_changed_after_review"):
+        if apply and max_review_iterations > 1:
+            retry_receipt = process_pr(
+                refreshed,
+                mode=mode,
+                output_dir=output_dir,
+                allow_policy_alignment=allow_policy_alignment,
+                workflow_url=workflow_url,
+                validator_profile=validator_profile,
+                sibling_prs=sibling_prs,
+                autonomous_fix_loop=autonomous_fix_loop,
+                max_fix_iterations=max_fix_iterations,
+                max_review_iterations=max_review_iterations - 1,
+            )
+            retry_receipt.review_iterations = max(retry_receipt.review_iterations, receipt.review_iterations + 1)
+            retry_receipt.evidence.insert(0, f"retried_after_head_changed_after_review:{pr.head_sha}->{refreshed.head_sha}")
+            return retry_receipt
         return receipt
 
     if refreshed.merge_state == MERGE_REVIEW_GATE_STATE and allow_policy_alignment:
@@ -2133,6 +2181,22 @@ def process_pr(
             return receipt
         refreshed = refresh_pr(pr.repo, pr.number)
         if reject_if_head_changed(receipt, refreshed, "head_changed_after_policy_alignment"):
+            if apply and max_review_iterations > 1:
+                retry_receipt = process_pr(
+                    refreshed,
+                    mode=mode,
+                    output_dir=output_dir,
+                    allow_policy_alignment=allow_policy_alignment,
+                    workflow_url=workflow_url,
+                    validator_profile=validator_profile,
+                    sibling_prs=sibling_prs,
+                    autonomous_fix_loop=autonomous_fix_loop,
+                    max_fix_iterations=max_fix_iterations,
+                    max_review_iterations=max_review_iterations - 1,
+                )
+                retry_receipt.review_iterations = max(retry_receipt.review_iterations, receipt.review_iterations + 1)
+                retry_receipt.evidence.insert(0, f"retried_after_head_changed_after_policy_alignment:{pr.head_sha}->{refreshed.head_sha}")
+                return retry_receipt
             return receipt
     elif refreshed.merge_state == MERGE_REVIEW_GATE_STATE:
         receipt.classification = "BLOCKED_MERGE_STATE"
@@ -2290,10 +2354,12 @@ def process_repo(
             if key == "merged":
                 repo_result["merged"].append(receipt.__dict__)
                 took_action = True
+                seen_without_action.clear()
                 break
             if key == "closed":
                 repo_result["closed"].append(receipt.__dict__)
                 took_action = True
+                seen_without_action.clear()
                 break
             if key == "would_merge":
                 repo_result["would_merge"].append(receipt.__dict__)
@@ -2891,6 +2957,9 @@ The following **2 organizations** are in ENT scope.
         },
         "a" * 40,
     ) is False
+    assert merglbot_pr_head_changed({"head_sha": "b" * 40}, "a" * 40) is True
+    assert merglbot_pr_head_changed({"head_sha": "a" * 40}, "a" * 40) is False
+    assert merglbot_pr_head_changed({"review_head_sha": "b" * 40}, "a" * 40) is False
     assert request_update_branch("merglbot-core/github", 1, "b" * 40, apply=False)["blockers"] == ["update_branch_required"]
     assert bad_credentials_seen("GraphQL: Bad credentials") is True
     APP_TOKEN_CACHE["example"] = ("token", datetime.now(timezone.utc) + timedelta(hours=1))
@@ -3005,6 +3074,87 @@ The following **2 organizations** are in ENT scope.
         max_fix_iterations=5,
         max_review_iterations=5,
     )
+    original_list_open_prs = list_open_prs
+    original_list_open_issues = list_open_issues
+    original_list_dependabot_prs = list_dependabot_prs
+    original_process_pr = process_pr
+    retry_pr_1 = PullRequest(
+        "o/r",
+        1,
+        "Bump alpha from 1.0.0 to 1.0.1",
+        "https://github.com/o/r/pull/1",
+        "dependabot[bot]",
+        "a" * 40,
+        "b" * 40,
+        "main",
+        "dependabot/npm_and_yarn/alpha-1.0.1",
+        False,
+        "CLEAN",
+        utc_now(),
+    )
+    retry_pr_2 = PullRequest(
+        "o/r",
+        2,
+        "Bump beta from 1.0.0 to 1.0.1",
+        "https://github.com/o/r/pull/2",
+        "dependabot[bot]",
+        "c" * 40,
+        "b" * 40,
+        "main",
+        "dependabot/npm_and_yarn/beta-1.0.1",
+        False,
+        "CLEAN",
+        utc_now(),
+    )
+    retry_state: dict[str, Any] = {"pr1_open": True, "pr2_open": True, "pr1_attempts": 0}
+
+    def fake_list_open_prs(repo: str) -> list[dict[str, Any]]:
+        return [{"author": {"login": "dependabot[bot]"}}, {"author": {"login": "dependabot[bot]"}}]
+
+    def fake_list_open_issues(repo: str) -> list[dict[str, Any]]:
+        return []
+
+    def fake_list_dependabot_prs(repo: str) -> list[PullRequest]:
+        prs = [retry_pr_1] if retry_state["pr1_open"] else []
+        if retry_state["pr2_open"]:
+            prs.append(retry_pr_2)
+        return prs
+
+    def fake_process_pr(pr: PullRequest, **_: Any) -> ItemReceipt:
+        if pr.number == 1:
+            retry_state["pr1_attempts"] += 1
+            if retry_state["pr2_open"]:
+                return ItemReceipt(pr.repo, pr.number, pr.url, "blocked", "BLOCKED_TEST", head_sha=pr.head_sha)
+            retry_state["pr1_open"] = False
+            return ItemReceipt(pr.repo, pr.number, pr.url, "merged", "MERGED_TEST", head_sha=pr.head_sha)
+        retry_state["pr2_open"] = False
+        return ItemReceipt(pr.repo, pr.number, pr.url, "merged", "MERGED_TEST", head_sha=pr.head_sha)
+
+    try:
+        globals()["list_open_prs"] = fake_list_open_prs
+        globals()["list_open_issues"] = fake_list_open_issues
+        globals()["list_dependabot_prs"] = fake_list_dependabot_prs
+        globals()["process_pr"] = fake_process_pr
+        retry_result = process_repo(
+            "o/r",
+            mode="apply",
+            output_dir=Path("/tmp"),
+            max_prs_per_repo=0,
+            allow_policy_alignment=True,
+            workflow_url="https://github.com/o/r/actions/runs/1",
+            pr_allowlist=set(),
+            validator_profile=DEFAULT_VALIDATOR_PROFILE,
+            autonomous_fix_loop=False,
+            max_fix_iterations=5,
+            max_review_iterations=5,
+        )
+        assert [item["pr_number"] for item in retry_result["merged"]] == [2, 1]
+        assert retry_state["pr1_attempts"] == 2
+    finally:
+        globals()["list_open_prs"] = original_list_open_prs
+        globals()["list_open_issues"] = original_list_open_issues
+        globals()["list_dependabot_prs"] = original_list_dependabot_prs
+        globals()["process_pr"] = original_process_pr
     assert validate_change_scope(
         "merglbot-core/github",
         1,
