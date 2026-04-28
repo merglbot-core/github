@@ -41,6 +41,7 @@ TRACKING_RECEIPT_TEXT_LIMIT = 240
 APP_TOKEN_CACHE: dict[str, tuple[str, datetime]] = {}
 REPO_LOCAL_SCOPE_FILE = Path(__file__).with_name("ent_repository_scope.txt")
 CURRENT_REPO_ENV = "ENT_DEPENDABOT_CURRENT_REPO"
+CURRENT_OWNER_ENV = "ENT_DEPENDABOT_CURRENT_OWNER"
 ENT_ALLOWLIST_REPO = "merglbot-public/docs"
 ENT_ALLOWLIST_PATH = "ENT_ORG_ALLOWLIST.md"
 ENT_ALLOWLIST_SOURCE = f"{ENT_ALLOWLIST_REPO}/{ENT_ALLOWLIST_PATH}"
@@ -297,9 +298,11 @@ def invalidate_app_token_for_owner(owner: str) -> None:
 
 def refresh_current_repo_token() -> bool:
     repo = os.environ.get(CURRENT_REPO_ENV, "")
-    if not repo or "/" not in repo or not github_app_auth_configured():
+    owner = os.environ.get(CURRENT_OWNER_ENV, "")
+    if not owner and repo and "/" in repo:
+        owner = repo.split("/", 1)[0]
+    if not owner or not github_app_auth_configured():
         return False
-    owner = repo.split("/", 1)[0]
     invalidate_app_token_for_owner(owner)
     os.environ["GH_TOKEN"] = installation_token_for_owner(owner)
     return True
@@ -309,9 +312,12 @@ def refresh_current_repo_token() -> bool:
 def gh_token_for_repo(repo: str):
     previous = os.environ.get("GH_TOKEN")
     previous_repo = os.environ.get(CURRENT_REPO_ENV)
+    previous_owner = os.environ.get(CURRENT_OWNER_ENV)
+    owner = repo.split("/", 1)[0]
     if github_app_auth_configured():
-        os.environ["GH_TOKEN"] = installation_token_for_owner(repo.split("/", 1)[0])
+        os.environ["GH_TOKEN"] = installation_token_for_owner(owner)
     os.environ[CURRENT_REPO_ENV] = repo
+    os.environ[CURRENT_OWNER_ENV] = owner
     try:
         yield
     finally:
@@ -319,6 +325,36 @@ def gh_token_for_repo(repo: str):
             os.environ.pop(CURRENT_REPO_ENV, None)
         else:
             os.environ[CURRENT_REPO_ENV] = previous_repo
+        if previous_owner is None:
+            os.environ.pop(CURRENT_OWNER_ENV, None)
+        else:
+            os.environ[CURRENT_OWNER_ENV] = previous_owner
+        if previous is None:
+            os.environ.pop("GH_TOKEN", None)
+        else:
+            os.environ["GH_TOKEN"] = previous
+
+
+@contextmanager
+def gh_token_for_owner(owner: str):
+    """Use a GitHub App installation token scoped by owner, not by repository."""
+    previous = os.environ.get("GH_TOKEN")
+    previous_repo = os.environ.get(CURRENT_REPO_ENV)
+    previous_owner = os.environ.get(CURRENT_OWNER_ENV)
+    if github_app_auth_configured():
+        os.environ["GH_TOKEN"] = installation_token_for_owner(owner)
+    os.environ[CURRENT_OWNER_ENV] = owner
+    try:
+        yield
+    finally:
+        if previous_repo is None:
+            os.environ.pop(CURRENT_REPO_ENV, None)
+        else:
+            os.environ[CURRENT_REPO_ENV] = previous_repo
+        if previous_owner is None:
+            os.environ.pop(CURRENT_OWNER_ENV, None)
+        else:
+            os.environ[CURRENT_OWNER_ENV] = previous_owner
         if previous is None:
             os.environ.pop("GH_TOKEN", None)
         else:
@@ -471,6 +507,9 @@ def parse_ent_org_allowlist(text: str) -> dict[str, Any]:
     duplicates = duplicate_values(allowed_orgs)
     if duplicates:
         raise GhError(f"duplicate allowed organizations in {ENT_ALLOWLIST_SOURCE}: {', '.join(duplicates)}")
+    org_overlap = set(allowed_orgs) & set(excluded_orgs)
+    if org_overlap:
+        raise GhError(f"allowlist/excluded organization overlap in {ENT_ALLOWLIST_SOURCE}: {', '.join(sorted(org_overlap))}")
     out_of_scope_orgs = [org for org in allowed_orgs if not org.startswith("merglbot-") or org.lower() == "merglevsky-cz"]
     if out_of_scope_orgs:
         raise GhError(f"out-of-scope owner in {ENT_ALLOWLIST_SOURCE}: {', '.join(sorted(out_of_scope_orgs))}")
@@ -602,7 +641,7 @@ def live_ent_scope_from_allowlist(text: str) -> ScopeResolution:
     allowlist = parse_ent_org_allowlist(text)
     entries: list[dict[str, Any]] = []
     for org in allowlist["allowed_orgs"]:
-        with gh_token_for_repo(f"{org}/__ent_scope_probe"):
+        with gh_token_for_owner(org):
             repos = github_api_paginated(f"orgs/{org}/repos?per_page=100&type=all")
         for repo in repos:
             full_name = repo.get("full_name", "")
@@ -2683,6 +2722,11 @@ The following **2 organizations** are in ENT scope.
         raise AssertionError("declared allowlist org count mismatch should fail closed")
     except GhError as exc:
         assert "declared-count mismatch" in str(exc)
+    try:
+        parse_ent_org_allowlist(allowlist_sample.replace("Merglevsky-cz", "merglbot-public"))
+        raise AssertionError("allowlist/excluded organization overlap should fail closed")
+    except GhError as exc:
+        assert "allowlist/excluded organization overlap" in str(exc)
     assert validate_scope_entries(
         [
             {"full_name": "merglbot-core/agents-orchestrator", "archived": False, "fork": False},
