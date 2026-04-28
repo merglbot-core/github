@@ -41,6 +41,11 @@ TRACKING_RECEIPT_TEXT_LIMIT = 240
 APP_TOKEN_CACHE: dict[str, tuple[str, datetime]] = {}
 REPO_LOCAL_SCOPE_FILE = Path(__file__).with_name("ent_repository_scope.txt")
 CURRENT_REPO_ENV = "ENT_DEPENDABOT_CURRENT_REPO"
+CURRENT_OWNER_ENV = "ENT_DEPENDABOT_CURRENT_OWNER"
+ENT_ALLOWLIST_REPO = "merglbot-public/docs"
+ENT_ALLOWLIST_PATH = "ENT_ORG_ALLOWLIST.md"
+ENT_ALLOWLIST_SOURCE = f"{ENT_ALLOWLIST_REPO}/{ENT_ALLOWLIST_PATH}"
+SCOPE_DRIFT_ITEM_LIMIT = 20
 BAD_CREDENTIAL_MARKERS = (
     "HTTP 401",
     "Bad credentials",
@@ -129,6 +134,36 @@ SENSITIVE_FILE_PATTERNS = [
 
 class GhError(RuntimeError):
     pass
+
+
+@dataclass
+class ScopeResolution:
+    """Validated repository scope plus provenance fields for closeout receipts."""
+
+    repos: list[str]
+    scope_source: str
+    scope_validation_status: str
+    scope_drift: dict[str, Any]
+
+    @property
+    def repo_count(self) -> int:
+        """Return the number of repositories in the resolved scope."""
+        return len(self.repos)
+
+    @property
+    def org_count(self) -> int:
+        """Return the number of distinct repository owners in the resolved scope."""
+        return len({repo.split("/", 1)[0] for repo in self.repos})
+
+    def report_fields(self) -> dict[str, Any]:
+        """Return scope metadata fields embedded in reports and receipts."""
+        return {
+            "scope_source": self.scope_source,
+            "repo_count": self.repo_count,
+            "org_count": self.org_count,
+            "scope_validation_status": self.scope_validation_status,
+            "scope_drift": self.scope_drift,
+        }
 
 
 def fix_loop_control_errors(
@@ -263,9 +298,11 @@ def invalidate_app_token_for_owner(owner: str) -> None:
 
 def refresh_current_repo_token() -> bool:
     repo = os.environ.get(CURRENT_REPO_ENV, "")
-    if not repo or "/" not in repo or not github_app_auth_configured():
+    owner = os.environ.get(CURRENT_OWNER_ENV, "")
+    if not owner and repo and "/" in repo:
+        owner = repo.split("/", 1)[0]
+    if not owner or not github_app_auth_configured():
         return False
-    owner = repo.split("/", 1)[0]
     invalidate_app_token_for_owner(owner)
     os.environ["GH_TOKEN"] = installation_token_for_owner(owner)
     return True
@@ -275,9 +312,12 @@ def refresh_current_repo_token() -> bool:
 def gh_token_for_repo(repo: str):
     previous = os.environ.get("GH_TOKEN")
     previous_repo = os.environ.get(CURRENT_REPO_ENV)
+    previous_owner = os.environ.get(CURRENT_OWNER_ENV)
+    owner = repo.split("/", 1)[0]
     if github_app_auth_configured():
-        os.environ["GH_TOKEN"] = installation_token_for_owner(repo.split("/", 1)[0])
+        os.environ["GH_TOKEN"] = installation_token_for_owner(owner)
     os.environ[CURRENT_REPO_ENV] = repo
+    os.environ[CURRENT_OWNER_ENV] = owner
     try:
         yield
     finally:
@@ -285,6 +325,36 @@ def gh_token_for_repo(repo: str):
             os.environ.pop(CURRENT_REPO_ENV, None)
         else:
             os.environ[CURRENT_REPO_ENV] = previous_repo
+        if previous_owner is None:
+            os.environ.pop(CURRENT_OWNER_ENV, None)
+        else:
+            os.environ[CURRENT_OWNER_ENV] = previous_owner
+        if previous is None:
+            os.environ.pop("GH_TOKEN", None)
+        else:
+            os.environ["GH_TOKEN"] = previous
+
+
+@contextmanager
+def gh_token_for_owner(owner: str):
+    """Use a GitHub App installation token scoped by owner, not by repository."""
+    previous = os.environ.get("GH_TOKEN")
+    previous_repo = os.environ.get(CURRENT_REPO_ENV)
+    previous_owner = os.environ.get(CURRENT_OWNER_ENV)
+    if github_app_auth_configured():
+        os.environ["GH_TOKEN"] = installation_token_for_owner(owner)
+    os.environ[CURRENT_OWNER_ENV] = owner
+    try:
+        yield
+    finally:
+        if previous_repo is None:
+            os.environ.pop(CURRENT_REPO_ENV, None)
+        else:
+            os.environ[CURRENT_REPO_ENV] = previous_repo
+        if previous_owner is None:
+            os.environ.pop(CURRENT_OWNER_ENV, None)
+        else:
+            os.environ[CURRENT_OWNER_ENV] = previous_owner
         if previous is None:
             os.environ.pop("GH_TOKEN", None)
         else:
@@ -348,7 +418,8 @@ def write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def parse_repository_map(text: str, *, allow_plain_lines: bool = False) -> list[str]:
+def parse_repository_entries(text: str, *, allow_plain_lines: bool = False) -> list[str]:
+    """Extract repository identifiers from Markdown links, inline code, or plain lines."""
     repos: list[str] = []
     for line in text.splitlines():
         match = REPOSITORY_RE.search(line)
@@ -358,40 +429,350 @@ def parse_repository_map(text: str, *, allow_plain_lines: bool = False) -> list[
         stripped = line.strip()
         if allow_plain_lines and OWNER_REPO_RE.fullmatch(stripped):
             repos.append(stripped)
-    return sorted(dict.fromkeys(repos))
-
-
-def fetch_repository_map() -> str:
-    with gh_token_for_repo("merglbot-public/docs"):
-        content = gh_api_json("repos/merglbot-public/docs/contents/REPOSITORY_MAP.md?ref=main")
-    encoded = content.get("content")
-    if not encoded:
-        raise GhError("REPOSITORY_MAP.md content missing from GitHub API response")
-    return base64.b64decode(encoded).decode("utf-8")
-
-
-def load_repo_scope(scope_file: Path | None, *, use_repo_local_default: bool = False) -> list[str]:
-    if scope_file and scope_file.exists():
-        text = scope_file.read_text(encoding="utf-8")
-    elif use_repo_local_default:
-        text = REPO_LOCAL_SCOPE_FILE.read_text(encoding="utf-8")
-    else:
-        text = fetch_repository_map()
-    repos = parse_repository_map(text, allow_plain_lines=bool(scope_file or use_repo_local_default))
-    if len(repos) != 42:
-        raise GhError(f"expected 42 in-scope active repositories, got {len(repos)}")
-    if any(repo.startswith("Merglevsky-cz/") or repo.startswith("merglevsky-cz/") for repo in repos):
-        raise GhError("out-of-scope Merglevsky-cz repository appeared in scope")
     return repos
 
 
-def load_single_repo_scope(scope_file: Path | None) -> list[str]:
+def parse_repository_map(text: str, *, allow_plain_lines: bool = False) -> list[str]:
+    """Return a sorted unique repository list parsed from repository map-style text."""
+    return sorted(dict.fromkeys(parse_repository_entries(text, allow_plain_lines=allow_plain_lines)))
+
+
+def duplicate_values(values: list[str]) -> list[str]:
+    """Return sorted values that appear more than once while preserving value text."""
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for value in values:
+        if value in seen:
+            duplicates.add(value)
+        seen.add(value)
+    return sorted(duplicates)
+
+
+def markdown_section(text: str, title_prefix: str) -> list[str]:
+    """Extract lines from a Markdown H2 section matched by title prefix."""
+    lines: list[str] = []
+    in_section = False
+    start_re = re.compile(rf"^##\s*(?:\d+\.\s*)?{re.escape(title_prefix)}", re.IGNORECASE)
+    for line in text.splitlines():
+        if start_re.search(line):
+            in_section = True
+            continue
+        if in_section and re.match(r"^##\s+", line):
+            break
+        if in_section:
+            lines.append(line)
+    return lines
+
+
+def table_first_column_values(lines: list[str]) -> list[str]:
+    """Extract non-header first-column values from a Markdown table."""
+    values: list[str] = []
+    for line in lines:
+        match = re.match(r"^\|\s*`?([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?)`?\s*\|", line)
+        if not match:
+            continue
+        value = match.group(1)
+        if value.lower() in {"organization", "repo"} or value.strip("-:") == "":
+            continue
+        values.append(value)
+    return values
+
+
+def parse_declared_org_count(lines: list[str]) -> int | None:
+    """Parse the declared organization count from the allowlist prose."""
+    section = "\n".join(lines)
+    match = re.search(r"The following\s+\*\*(\d+)\s+organizations\*\*", section, re.IGNORECASE)
+    return int(match.group(1)) if match else None
+
+
+def parse_ent_org_allowlist(text: str) -> dict[str, Any]:
+    """Parse and validate ENT organization allowlist and exclusion tables."""
+    allowed_lines = markdown_section(text, "Allowed")
+    excluded_org_lines = markdown_section(text, "Explicitly")
+    excluded_repo_lines = markdown_section(text, "Per-repo")
+    allowed_orgs = table_first_column_values(allowed_lines)
+    excluded_orgs = table_first_column_values(excluded_org_lines)
+    excluded_repos = [
+        value
+        for value in table_first_column_values(excluded_repo_lines)
+        if OWNER_REPO_RE.fullmatch(value)
+    ]
+    declared_org_count = parse_declared_org_count(allowed_lines)
+    if declared_org_count is not None and declared_org_count != len(allowed_orgs):
+        raise GhError(
+            f"declared-count mismatch in {ENT_ALLOWLIST_SOURCE}: declared {declared_org_count} organizations, parsed {len(allowed_orgs)}"
+        )
+    if not allowed_orgs:
+        raise GhError(f"empty scope: no allowed organizations found in {ENT_ALLOWLIST_SOURCE}")
+    duplicates = duplicate_values(allowed_orgs)
+    if duplicates:
+        raise GhError(f"duplicate allowed organizations in {ENT_ALLOWLIST_SOURCE}: {', '.join(duplicates)}")
+    org_overlap = set(allowed_orgs) & set(excluded_orgs)
+    if org_overlap:
+        raise GhError(f"allowlist/excluded organization overlap in {ENT_ALLOWLIST_SOURCE}: {', '.join(sorted(org_overlap))}")
+    out_of_scope_orgs = [org for org in allowed_orgs if not org.startswith("merglbot-") or org.lower() == "merglevsky-cz"]
+    if out_of_scope_orgs:
+        raise GhError(f"out-of-scope owner in {ENT_ALLOWLIST_SOURCE}: {', '.join(sorted(out_of_scope_orgs))}")
+    return {
+        "allowed_orgs": sorted(allowed_orgs),
+        "excluded_orgs": sorted(excluded_orgs),
+        "excluded_repos": sorted(excluded_repos),
+        "declared_org_count": declared_org_count,
+    }
+
+
+def fetch_ent_org_allowlist() -> str:
+    """Fetch the canonical ENT organization allowlist from GitHub."""
+    with gh_token_for_repo(ENT_ALLOWLIST_REPO):
+        content = gh_api_json(f"repos/{ENT_ALLOWLIST_REPO}/contents/{ENT_ALLOWLIST_PATH}?ref=main")
+    encoded = content.get("content")
+    if not encoded:
+        raise GhError(f"unreadable SSOT: {ENT_ALLOWLIST_SOURCE} content missing from GitHub API response")
+    return base64.b64decode(encoded).decode("utf-8")
+
+
+def github_api_paginated(endpoint: str) -> list[Any]:
+    """Fetch a paginated GitHub REST endpoint and decode each JSON item."""
+    proc = run_cmd(
+        [
+            "gh",
+            "api",
+            "-H",
+            "Accept: application/vnd.github+json",
+            "-H",
+            "X-GitHub-Api-Version: 2022-11-28",
+            "--paginate",
+            endpoint,
+            "--jq",
+            ".[] | {full_name, archived, fork}",
+        ],
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise GhError(proc.stderr.strip() or proc.stdout.strip() or f"unreadable live GitHub repo metadata from {endpoint}")
+    items: list[Any] = []
+    for line in proc.stdout.splitlines():
+        try:
+            items.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            raise GhError(f"unreadable live GitHub repo metadata: invalid JSON from {endpoint}: {exc}") from exc
+    return items
+
+
+def validate_scope_entries(
+    entries: list[str | dict[str, Any]],
+    *,
+    allowed_orgs: list[str] | None,
+    excluded_repos: list[str] | None = None,
+    live_metadata_checked: bool = False,
+) -> list[str]:
+    """Validate repository scope entries and return a sorted repository list."""
+    repos: list[str] = []
+    archived_or_fork: list[str] = []
+    for entry in entries:
+        if isinstance(entry, str):
+            full_name = entry
+            archived = False
+            fork = False
+        else:
+            full_name = str(entry.get("full_name") or entry.get("repo") or "")
+            archived = bool(entry.get("archived"))
+            fork = bool(entry.get("fork"))
+        if not OWNER_REPO_RE.fullmatch(full_name):
+            raise GhError(f"unreadable SSOT: invalid repository identifier {full_name!r}")
+        if live_metadata_checked and (archived or fork):
+            archived_or_fork.append(full_name)
+        repos.append(full_name)
+    if not repos:
+        raise GhError("empty scope: no in-scope active repositories resolved")
+    duplicates = duplicate_values(repos)
+    if duplicates:
+        raise GhError(f"duplicate repositories in scope: {', '.join(duplicates)}")
+    if archived_or_fork:
+        raise GhError(f"archived/fork leakage when live metadata was checked: {', '.join(sorted(archived_or_fork))}")
+    allowed = set(allowed_orgs or [])
+    excluded = set(excluded_repos or [])
+    out_of_scope: set[str] = set()
+    excluded_hits: set[str] = set()
+    for repo in repos:
+        owner = repo.split("/", 1)[0]
+        if owner.lower() == "merglevsky-cz":
+            out_of_scope.add(owner)
+            continue
+        if allowed_orgs is not None:
+            if owner not in allowed:
+                out_of_scope.add(owner)
+        elif not owner.startswith("merglbot-"):
+            out_of_scope.add(owner)
+        if repo in excluded:
+            excluded_hits.add(repo)
+    if out_of_scope:
+        raise GhError(f"out-of-scope owner appeared in scope: {', '.join(sorted(out_of_scope))}")
+    if excluded_hits:
+        raise GhError(f"excluded repository appeared in scope: {', '.join(sorted(excluded_hits))}")
+    return sorted(repos)
+
+
+def scope_drift_against_repo_local_mirror(repos: list[str]) -> dict[str, Any]:
+    """Compare resolved live scope with the generated repo-local diagnostics mirror."""
+    if not REPO_LOCAL_SCOPE_FILE.exists():
+        return {"status": "mirror_unavailable", "mirror_path": str(REPO_LOCAL_SCOPE_FILE)}
+    try:
+        mirror_entries = parse_repository_entries(REPO_LOCAL_SCOPE_FILE.read_text(encoding="utf-8"), allow_plain_lines=True)
+        mirror_repos = validate_scope_entries(mirror_entries, allowed_orgs=None)
+    except Exception as exc:
+        return {"status": "mirror_unreadable", "mirror_path": str(REPO_LOCAL_SCOPE_FILE), "error": str(exc)}
+    missing_from_mirror = sorted(set(repos) - set(mirror_repos))
+    extra_in_mirror = sorted(set(mirror_repos) - set(repos))
+    if not missing_from_mirror and not extra_in_mirror:
+        return {"status": "in_sync", "mirror_path": str(REPO_LOCAL_SCOPE_FILE)}
+    return {
+        "status": "drift_detected",
+        "mirror_path": str(REPO_LOCAL_SCOPE_FILE),
+        "missing_from_mirror_count": len(missing_from_mirror),
+        "extra_in_mirror_count": len(extra_in_mirror),
+        "missing_from_mirror_sample": missing_from_mirror[:SCOPE_DRIFT_ITEM_LIMIT],
+        "extra_in_mirror_sample": extra_in_mirror[:SCOPE_DRIFT_ITEM_LIMIT],
+    }
+
+
+def live_ent_scope_from_allowlist(text: str) -> ScopeResolution:
+    """Resolve live active ENT repositories from the allowlist and GitHub metadata."""
+    allowlist = parse_ent_org_allowlist(text)
+    entries: list[dict[str, Any]] = []
+    for org in allowlist["allowed_orgs"]:
+        with gh_token_for_owner(org):
+            repos = github_api_paginated(f"orgs/{org}/repos?per_page=100&type=all")
+        for repo in repos:
+            full_name = repo.get("full_name", "")
+            if repo.get("archived") or repo.get("fork") or full_name in allowlist["excluded_repos"]:
+                continue
+            entries.append(
+                {
+                    "full_name": full_name,
+                    "archived": bool(repo.get("archived")),
+                    "fork": bool(repo.get("fork")),
+                }
+            )
+    resolved = validate_scope_entries(
+        entries,
+        allowed_orgs=allowlist["allowed_orgs"],
+        excluded_repos=allowlist["excluded_repos"],
+        live_metadata_checked=True,
+    )
+    return ScopeResolution(
+        repos=resolved,
+        scope_source=f"{ENT_ALLOWLIST_SOURCE} + live GitHub repo metadata",
+        scope_validation_status="validated_live",
+        scope_drift=scope_drift_against_repo_local_mirror(resolved),
+    )
+
+
+def load_scope_from_file(scope_file: Path) -> ScopeResolution:
+    """Load and validate an explicit scope file used for tests or operator overrides."""
+    try:
+        text = scope_file.read_text(encoding="utf-8")
+    except Exception as exc:
+        raise GhError(f"unreadable SSOT: cannot read scope file {scope_file}: {exc}") from exc
+    stripped = text.lstrip()
+    if stripped.startswith("{"):
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise GhError(f"unreadable SSOT: invalid JSON scope file {scope_file}: {exc}") from exc
+        raw_entries = payload.get("repos") or payload.get("repositories")
+        if not isinstance(raw_entries, list):
+            raise GhError(f"unreadable SSOT: JSON scope file {scope_file} missing repos list")
+        declared_repo_count = payload.get("repo_count")
+        if declared_repo_count is not None:
+            try:
+                declared_repo_count_int = int(declared_repo_count)
+            except (TypeError, ValueError) as exc:
+                raise GhError(f"unreadable SSOT: invalid repo_count in {scope_file}") from exc
+            if declared_repo_count_int != len(raw_entries):
+                raise GhError(
+                    f"declared-count mismatch in {scope_file}: declared repo_count {declared_repo_count}, parsed {len(raw_entries)}"
+                )
+        live_metadata_checked = any(isinstance(entry, dict) and ("archived" in entry or "fork" in entry) for entry in raw_entries)
+        excluded_repos = payload.get("excluded_repos") if isinstance(payload.get("excluded_repos"), list) else None
+        repos = validate_scope_entries(
+            raw_entries,
+            allowed_orgs=None,
+            excluded_repos=excluded_repos,
+            live_metadata_checked=live_metadata_checked,
+        )
+        declared_org_count = payload.get("org_count")
+        if declared_org_count is not None:
+            try:
+                declared_org_count_int = int(declared_org_count)
+            except (TypeError, ValueError) as exc:
+                raise GhError(f"unreadable SSOT: invalid org_count in {scope_file}") from exc
+            parsed_org_count = len({repo.split("/", 1)[0] for repo in repos})
+            if declared_org_count_int != parsed_org_count:
+                raise GhError(
+                    f"declared-count mismatch in {scope_file}: declared org_count {declared_org_count}, parsed {parsed_org_count}"
+                )
+        org_counts = payload.get("org_counts")
+        if isinstance(org_counts, dict):
+            actual_org_counts: dict[str, int] = {}
+            for repo in repos:
+                owner = repo.split("/", 1)[0]
+                actual_org_counts[owner] = actual_org_counts.get(owner, 0) + 1
+            try:
+                declared_counts = {str(owner): int(count) for owner, count in org_counts.items()}
+            except (TypeError, ValueError) as exc:
+                raise GhError(f"unreadable SSOT: invalid org_counts in {scope_file}") from exc
+            if declared_counts != actual_org_counts:
+                raise GhError(
+                    f"declared-count mismatch in {scope_file}: declared org_counts {declared_counts}, parsed {actual_org_counts}"
+                )
+    else:
+        entries = parse_repository_entries(text, allow_plain_lines=True)
+        repos = validate_scope_entries(entries, allowed_orgs=None)
+    return ScopeResolution(
+        repos=repos,
+        scope_source=str(scope_file),
+        scope_validation_status="validated_scope_file",
+        scope_drift={"status": "not_checked_scope_file"},
+    )
+
+
+def load_repo_local_mirror_scope() -> ScopeResolution:
+    """Load the generated repo-local mirror for local single-repo diagnostics."""
+    try:
+        text = REPO_LOCAL_SCOPE_FILE.read_text(encoding="utf-8")
+    except Exception as exc:
+        raise GhError(f"unreadable SSOT: cannot read repo-local scope mirror {REPO_LOCAL_SCOPE_FILE}: {exc}") from exc
+    repos = validate_scope_entries(parse_repository_entries(text, allow_plain_lines=True), allowed_orgs=None)
+    return ScopeResolution(
+        repos=repos,
+        scope_source=str(REPO_LOCAL_SCOPE_FILE),
+        scope_validation_status="validated_repo_local_mirror",
+        scope_drift={"status": "not_checked_local_diagnostics_mirror"},
+    )
+
+
+def load_repo_scope(scope_file: Path | None) -> ScopeResolution:
+    """Load authoritative ENT scope from an override file or live allowlist metadata."""
+    if scope_file:
+        return load_scope_from_file(scope_file)
+    try:
+        allowlist_text = fetch_ent_org_allowlist()
+    except GhError:
+        raise
+    except Exception as exc:
+        raise GhError(f"unreadable SSOT: cannot read {ENT_ALLOWLIST_SOURCE}: {exc}") from exc
+    return live_ent_scope_from_allowlist(allowlist_text)
+
+
+def load_single_repo_scope(scope_file: Path | None) -> ScopeResolution:
+    """Load the scope source appropriate for single-repo validation."""
     # In GitHub Actions, never trust a branch-local mirror as the authoritative
     # boundary. Local diagnostics can use the repo-local mirror to avoid
     # unnecessary cross-repo token requirements.
     if os.environ.get("GITHUB_ACTIONS") == "true" or scope_file:
         return load_repo_scope(scope_file)
-    return load_repo_scope(scope_file, use_repo_local_default=True)
+    return load_repo_local_mirror_scope()
 
 
 def repo_endpoint(repo: str, suffix: str) -> str:
@@ -1957,6 +2338,11 @@ def tracking_comment_receipt(report: dict[str, Any], *, minimal: bool = False) -
         "mode": report.get("mode"),
         "validator_profile": report.get("validator_profile", DEFAULT_VALIDATOR_PROFILE),
         "workflow_url": report.get("workflow_url"),
+        "scope_source": report.get("scope_source"),
+        "repo_count": report.get("repo_count"),
+        "org_count": report.get("org_count"),
+        "scope_validation_status": report.get("scope_validation_status"),
+        "scope_drift": report.get("scope_drift"),
         "repos_scanned": report.get("repos_scanned"),
         "open_prs_total": report.get("open_prs_total"),
         "open_dependabot_prs_total": report.get("open_dependabot_prs_total"),
@@ -2053,6 +2439,11 @@ def markdown_summary(report: dict[str, Any]) -> str:
         f"- Mode: `{report['mode']}`",
         f"- Validator profile: `{report.get('validator_profile', DEFAULT_VALIDATOR_PROFILE)}`",
         f"- Status: `{report['final_verdict']}`",
+        f"- Scope source: `{report.get('scope_source', 'unknown')}`",
+        f"- Scope validation: `{report.get('scope_validation_status', 'unknown')}`",
+        f"- Scope repo count: `{report.get('repo_count', 'unknown')}`",
+        f"- Scope org count: `{report.get('org_count', 'unknown')}`",
+        f"- Scope drift: `{(report.get('scope_drift') or {}).get('status', 'unknown')}`",
         f"- Repos scanned: `{report['repos_scanned']}`",
         f"- Open PRs: `{report['open_prs_total']}` (`{report['open_dependabot_prs_total']}` Dependabot / `{report['open_non_dependabot_prs_total']}` non-Dependabot)",
         f"- Open issues: `{report['open_issues_total']}`",
@@ -2102,6 +2493,30 @@ def blocker_summary(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{"reason": key, "count": value} for key, value in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))[:10]]
 
 
+def scope_receipt_fields(repos: list[str], scope_info: ScopeResolution | None) -> dict[str, Any]:
+    if scope_info:
+        return scope_info.report_fields()
+    return {
+        "scope_source": "legacy_repo_list",
+        "repo_count": len(repos),
+        "org_count": len({repo.split("/", 1)[0] for repo in repos}),
+        "scope_validation_status": "validated_legacy_repo_list",
+        "scope_drift": {"status": "not_checked"},
+    }
+
+
+def unresolved_scope_receipt_fields(scope_info: ScopeResolution | None) -> dict[str, Any]:
+    if scope_info:
+        return scope_info.report_fields()
+    return {
+        "scope_source": "unresolved",
+        "repo_count": None,
+        "org_count": None,
+        "scope_validation_status": "not_validated",
+        "scope_drift": {"status": "not_evaluated"},
+    }
+
+
 def build_report(
     mode: str,
     repos: list[str],
@@ -2112,6 +2527,7 @@ def build_report(
     approval_issue_url: str,
     workflow_url: str,
     validator_profile: str,
+    scope_info: ScopeResolution | None = None,
     tracking_comment_url: str | None = None,
 ) -> dict[str, Any]:
     merged = [item for result in repo_results for item in result.get("merged", [])]
@@ -2148,6 +2564,7 @@ def build_report(
     ]
     open_prs_total = sum(row["open_prs_before"] for row in repo_table)
     open_dependabot_prs_total = sum(row["dependabot_prs_before"] for row in repo_table)
+    scope_fields = scope_receipt_fields(repos, scope_info)
     report = {
         "ok": True,
         "final_verdict": "ENT_DEPENDABOT_WEEKLY_CLOSEOUT_COMPLETE",
@@ -2155,6 +2572,7 @@ def build_report(
         "mode": mode,
         "validator_profile": validator_profile,
         "workflow_url": workflow_url,
+        **scope_fields,
         "repos_scanned": len(repos),
         "open_prs_total": open_prs_total,
         "open_dependabot_prs_total": open_dependabot_prs_total,
@@ -2206,9 +2624,26 @@ def build_slack_payload(report: dict[str, Any], status: str) -> dict[str, Any]:
         blocker_text = ", ".join(str(item) for item in runtime_blockers[:5])
     workflow_url = report.get("workflow_url") or "not available"
     error_line = f"\nError: `{report['error']}`" if report.get("error") else ""
+    scope_drift = report.get("scope_drift") or {}
+    repos_scanned = report.get("repos_scanned")
+    repos_scanned_text = str(repos_scanned) if isinstance(repos_scanned, int) else "n/a"
+    repo_count = report.get("repo_count")
+    repo_count_text = str(repo_count) if isinstance(repo_count, int) else "n/a"
+    org_count = report.get("org_count")
+    org_count_text = str(org_count) if isinstance(org_count, int) else "n/a"
+    if all(isinstance(report.get(key), int) for key in ["open_prs_total", "open_dependabot_prs_total", "open_non_dependabot_prs_total", "open_issues_total"]):
+        backlog_line = (
+            f"Open backlog: `{report.get('open_prs_total')}` PRs "
+            f"(`{report.get('open_dependabot_prs_total')}` Dependabot / "
+            f"`{report.get('open_non_dependabot_prs_total')}` non-Dependabot), "
+            f"`{report.get('open_issues_total')}` issues"
+        )
+    else:
+        backlog_line = "Open backlog: `not_evaluated` (scope validation did not complete)"
     summary = (
         f"*ENT Dependabot Weekly Closeout* `{status}`\n"
-        f"Mode: `{report.get('mode', 'unknown')}` | Validator: `{report.get('validator_profile', DEFAULT_VALIDATOR_PROFILE)}` | Repos: `{report.get('repos_scanned', 0)}`\n"
+        f"Mode: `{report.get('mode', 'unknown')}` | Validator: `{report.get('validator_profile', DEFAULT_VALIDATOR_PROFILE)}` | Repos scanned: `{repos_scanned_text}`\n"
+        f"Scope: `{report.get('scope_validation_status', 'unknown')}` | Source: `{report.get('scope_source', 'unknown')}` | Repo count: `{repo_count_text}` | Org count: `{org_count_text}` | Drift: `{scope_drift.get('status', 'unknown')}`\n"
         f"Dependabot PRs: `{report.get('dependabot_prs_before', 0)}` before, "
         f"`{len(report.get('merged_prs', []))}` merged, "
         f"`{len(report.get('closed_prs', []))}` closed, "
@@ -2218,10 +2653,7 @@ def build_slack_payload(report: dict[str, Any], status: str) -> dict[str, Any]:
         f"`{len(report.get('would_start_fix_loop_prs', []))}` would-fix, "
         f"`{len(report.get('would_heal_required_checks_prs', []))}` would-heal-checks, "
         f"`{report.get('remaining_dependabot_prs', 0)}` remaining\n"
-        f"Open backlog: `{report.get('open_prs_total', 0)}` PRs "
-        f"(`{report.get('open_dependabot_prs_total', 0)}` Dependabot / "
-        f"`{report.get('open_non_dependabot_prs_total', 0)}` non-Dependabot), "
-        f"`{report.get('open_issues_total', 0)}` issues\n"
+        f"{backlog_line}\n"
         f"Top blockers: {blocker_text}\n"
         f"Run: {workflow_url}"
         f"{error_line}"
@@ -2262,6 +2694,64 @@ merglbot-core/agents-orchestrator
         "merglbot-core/github",
         "merglbot-public/docs",
     ]
+    allowlist_sample = """
+## 1. Allowed organizations
+The following **2 organizations** are in ENT scope.
+| Organization | Tier |
+|---|---|
+| `merglbot-core` | ENT |
+| `merglbot-public` | ENT |
+
+## 2. Explicitly excluded organizations
+| Organization | Reason |
+|---|---|
+| `Merglevsky-cz` | legacy |
+
+## 3. Per-repo exclusions
+| Repo | Reason |
+|---|---|
+| `merglbot-core/github` | control plane |
+"""
+    parsed_allowlist = parse_ent_org_allowlist(allowlist_sample)
+    assert parsed_allowlist["allowed_orgs"] == ["merglbot-core", "merglbot-public"]
+    assert parsed_allowlist["excluded_repos"] == ["merglbot-core/github"]
+    unnumbered_allowlist = re.sub(r"^##\s+\d+\.\s+", "## ", allowlist_sample, flags=re.MULTILINE)
+    assert parse_ent_org_allowlist(unnumbered_allowlist)["allowed_orgs"] == parsed_allowlist["allowed_orgs"]
+    try:
+        parse_ent_org_allowlist(allowlist_sample.replace("**2 organizations**", "**3 organizations**"))
+        raise AssertionError("declared allowlist org count mismatch should fail closed")
+    except GhError as exc:
+        assert "declared-count mismatch" in str(exc)
+    try:
+        parse_ent_org_allowlist(allowlist_sample.replace("Merglevsky-cz", "merglbot-public"))
+        raise AssertionError("allowlist/excluded organization overlap should fail closed")
+    except GhError as exc:
+        assert "allowlist/excluded organization overlap" in str(exc)
+    assert validate_scope_entries(
+        [
+            {"full_name": "merglbot-core/agents-orchestrator", "archived": False, "fork": False},
+            {"full_name": "merglbot-public/docs", "archived": False, "fork": False},
+        ],
+        allowed_orgs=parsed_allowlist["allowed_orgs"],
+        excluded_repos=parsed_allowlist["excluded_repos"],
+        live_metadata_checked=True,
+    ) == ["merglbot-core/agents-orchestrator", "merglbot-public/docs"]
+    for bad_entries in (
+        ["merglbot-core/agents-orchestrator", "merglbot-core/agents-orchestrator"],
+        ["Merglevsky-cz/example"],
+        [{"full_name": "merglbot-public/docs", "archived": True, "fork": False}],
+        ["merglbot-core/github"],
+    ):
+        try:
+            validate_scope_entries(
+                bad_entries,
+                allowed_orgs=parsed_allowlist["allowed_orgs"],
+                excluded_repos=parsed_allowlist["excluded_repos"],
+                live_metadata_checked=any(isinstance(entry, dict) for entry in bad_entries),
+            )
+            raise AssertionError("invalid scope entries should fail closed")
+        except GhError:
+            pass
     assert classify_change_scope(["package-lock.json", "apps/web/yarn.lock"])[0] is True
     assert classify_change_scope(["apps/web/package.json"])[0] is False
     assert classify_change_scope(["docs/requirements/design.txt"])[0] is False
@@ -2298,9 +2788,30 @@ merglbot-core/agents-orchestrator
         validator_profile=DEFAULT_VALIDATOR_PROFILE,
     )
     assert report["repos_scanned"] == 1
+    assert report["scope_source"] == "legacy_repo_list"
+    assert report["repo_count"] == 1
+    assert report["org_count"] == 1
+    assert report["scope_validation_status"] == "validated_legacy_repo_list"
+    assert "scope_source" in json.dumps(tracking_comment_receipt(report))
     assert report["dependabot_prs_before"] == 1
     assert report["open_non_dependabot_prs_total"] == 1
     assert build_slack_payload(report, "ok")["text"].count("Dependabot") >= 2
+    failed_scope_slack = build_slack_payload(
+        {
+            "mode": "dry-run",
+            "validator_profile": DEFAULT_VALIDATOR_PROFILE,
+            "workflow_url": "https://github.com/o/r/actions/runs/2",
+            "scope_source": "unresolved",
+            "repo_count": None,
+            "org_count": None,
+            "scope_validation_status": "not_validated",
+            "scope_drift": {"status": "not_evaluated"},
+            "remaining_blockers": ["unreadable SSOT"],
+        },
+        "blocked",
+    )["text"]
+    assert "Repos: `0`" not in failed_scope_slack
+    assert "Open backlog: `not_evaluated`" in failed_scope_slack
     large_report = dict(report)
     large_report["blocked_prs"] = [
         {"repo": "merglbot-core/github", "pr_number": number, "blockers": ["sample"], "evidence": ["x" * 200]}
@@ -2637,33 +3148,39 @@ def main() -> int:
         parser.error("; ".join(fix_loop_errors))
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    scope_info: ScopeResolution | None = None
     try:
         pr_allowlist = parse_pr_allowlist(args.pr_allowlist)
         validate_apply_approval(args.mode, pr_allowlist, args.approval_note, args.approval_issue_url)
         if args.repo_scope == "single_repo":
             if not args.single_repo:
                 raise GhError("--single-repo is required with --repo-scope single_repo")
-            all_repos = load_single_repo_scope(args.scope_file)
+            scope_info = load_single_repo_scope(args.scope_file)
+            all_repos = scope_info.repos
             repos = [args.single_repo]
             missing = set(repos) - set(all_repos)
             if missing:
-                raise GhError(f"single repo is outside 42-repo scope: {', '.join(sorted(missing))}")
+                raise GhError(f"single repo is outside resolved ENT scope: {', '.join(sorted(missing))}")
         elif args.repo_scope == "cohort":
             if not args.cohort_file:
                 raise GhError("--cohort-file is required with --repo-scope cohort")
-            all_repos = load_repo_scope(args.scope_file)
-            repos = parse_repository_map(args.cohort_file.read_text(encoding="utf-8"), allow_plain_lines=True)
+            scope_info = load_repo_scope(args.scope_file)
+            all_repos = scope_info.repos
+            repos = validate_scope_entries(
+                parse_repository_entries(args.cohort_file.read_text(encoding="utf-8"), allow_plain_lines=True),
+                allowed_orgs=None,
+            )
             missing = set(repos) - set(all_repos)
             if missing:
-                raise GhError(f"cohort contains repos outside 42-repo scope: {', '.join(sorted(missing))}")
+                raise GhError(f"cohort contains repos outside resolved ENT scope: {', '.join(sorted(missing))}")
             owners = {repo.split("/", 1)[0] for repo in repos}
             if len(owners) > 1 and not github_app_auth_configured():
                 raise GhError("GitHub App auth is required for multi-owner cohort runs")
         else:
             if not github_app_auth_configured():
                 raise GhError("GitHub App auth is required for ENT all-repo runs")
-            all_repos = load_repo_scope(args.scope_file)
-            repos = all_repos
+            scope_info = load_repo_scope(args.scope_file)
+            repos = scope_info.repos
 
         repo_results = []
         for repo in repos:
@@ -2692,6 +3209,7 @@ def main() -> int:
             approval_issue_url=args.approval_issue_url,
             workflow_url=args.workflow_url,
             validator_profile=args.validator_profile,
+            scope_info=scope_info,
         )
         report["autonomous_fix_loop"] = {
             "enabled": bool(args.autonomous_fix_loop),
@@ -2720,6 +3238,7 @@ def main() -> int:
         print(json.dumps(report, sort_keys=True))
         return 0 if report["ok"] else 1
     except Exception as exc:
+        scope_fields = unresolved_scope_receipt_fields(scope_info)
         failure = {
             "ok": False,
             "final_verdict": "ENT_DEPENDABOT_WEEKLY_CLOSEOUT_BLOCKED",
@@ -2727,6 +3246,8 @@ def main() -> int:
             "validator_profile": args.validator_profile,
             "workflow_url": args.workflow_url,
             "generated_at": utc_now(),
+            **scope_fields,
+            "repos_scanned": None,
             "error": str(exc),
             "slack_delivery": {"status": "not_requested"},
             "remaining_blockers": [str(exc)],

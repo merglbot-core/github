@@ -7,9 +7,10 @@ status: "active"
 
 # ENT Dependabot Autonomous Closeout
 
-`ENT Dependabot Weekly Closeout` runs every Sunday at `13:00 UTC` and calls
+`ENT Dependabot Weekly Closeout` runs every Monday at `07:30 UTC` and calls
 `ENT Dependabot Autonomous Closeout`, the reusable workflow that scans the
-canonical 42-repo Merglbot ENT scope from `merglbot-public/docs/REPOSITORY_MAP.md`.
+dynamic Merglbot ENT scope from `merglbot-public/docs/ENT_ORG_ALLOWLIST.md`
+plus live non-archived/non-fork GitHub repository metadata.
 
 ## Canonical SSOT Dependencies
 
@@ -84,11 +85,12 @@ Platform policy authority remains in `merglbot-public/docs`:
   `401 Bad credentials` after invalidating the owner token cache. A second 401
   is classified as an installation/capability blocker, not silently retried
   indefinitely.
-- Local `single_repo` diagnostics validate against the repo-local
-  `scripts/dependabot/ent_repository_scope.txt` mirror to stay inside the
-  canonical 42-repo boundary without unnecessary cross-repo auth. GitHub Actions
-  `single_repo` runs validate against canonical remote `REPOSITORY_MAP.md` on
-  `main`, and `all` plus multi-owner `cohort` runs require GitHub App auth.
+- Local `single_repo` diagnostics may validate against the repo-local
+  `scripts/dependabot/ent_repository_scope.txt` generated mirror to stay inside
+  the last refreshed ENT boundary without unnecessary cross-repo auth. GitHub
+  Actions runs resolve the authoritative scope from `ENT_ORG_ALLOWLIST.md` plus
+  live non-archived/non-fork repository metadata, and `all` plus multi-owner
+  `cohort` runs require GitHub App auth.
 - Canonical GitHub App setup and permission authority lives in
   `merglbot-public/docs/ENT_DEPENDABOT_GITHUB_APP_SETUP.md`; repo-local setup
   docs are implementation mirrors only.
