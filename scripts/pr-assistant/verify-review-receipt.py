@@ -62,7 +62,10 @@ def normalize_heading(value: str) -> str:
 
 
 def docs_state_blocks_closeout(verdict: str, docs_state: str) -> bool:
-    return verdict in {"approved_for_closeout", "blocked_missing_authority"} and docs_state in {"missing", "unknown"}
+    return verdict in {
+        "approved_for_closeout",
+        "blocked_missing_authority",
+    } and docs_state in {"missing", "unknown"}
 
 
 def classify_pr_assistant_copy_docs_state(
