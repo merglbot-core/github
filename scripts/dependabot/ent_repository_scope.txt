@@ -1,6 +1,7 @@
-# Repo-local mirror generated from merglbot-public/docs/ENT_ORG_ALLOWLIST.md
-# plus live non-archived/non-fork repository metadata.
-# Used only for local single_repo diagnostics; GitHub Actions resolves live scope.
+# Repo-local mirror regenerated from merglbot-public/docs/ENT_ORG_ALLOWLIST.md
+# by ent-scope-refresh.yml. DO NOT hand-edit; changes are overwritten weekly.
+# Canonical scope source: merglbot-public/docs/ENT_ORG_ALLOWLIST.md + live org scan.
+
 merglbot-autodoplnky/autodoplnky-web
 merglbot-cerano/cerano-web
 merglbot-cerano/feed-generator
@@ -23,6 +24,7 @@ merglbot-extractors/cerano-forecast-exporter
 merglbot-extractors/denatura-additional-costs-extractor
 merglbot-extractors/denatura-shoptet-export-extractor
 merglbot-extractors/facebook-extractor
+merglbot-extractors/heureka-costs-extractor
 merglbot-extractors/ruzovyslon-forecast-exporter
 merglbot-extractors/shoptet-extractor
 merglbot-hodinarstvibechyne/hodinarstvi-web
