@@ -33,9 +33,11 @@ merglbot-denatura/marketing-planning
 merglbot-denatura/marketing_actions_detector
 
 merglbot-extractors/abra-flexi-extractor
+merglbot-extractors/cerano-forecast-exporter
 merglbot-extractors/denatura-additional-costs-extractor
 merglbot-extractors/denatura-shoptet-export-extractor
 merglbot-extractors/facebook-extractor
+merglbot-extractors/heureka-costs-extractor
 merglbot-extractors/ruzovyslon-forecast-exporter
 merglbot-extractors/shoptet-extractor
 
