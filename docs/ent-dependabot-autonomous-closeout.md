@@ -164,7 +164,11 @@ Every merged Dependabot PR must prove:
 - the latest Merglbot PR Assistant receipt is current-head and
   `approved_for_closeout`; if the receipt was missing or stale, the closeout
   engine must have triggered a head-bound `workflow_dispatch` review and then
-  verified the emitted receipt markers,
+  verified the emitted receipt markers. The only exception is a current-head
+  `blocked_missing_authority` receipt for a PR already proven
+  `VALIDATED_WORKFLOW_REF_ONLY`; in that case the closeout validator's
+  workflow-ref authority may satisfy the docs-authority gap, but any real
+  `changes_required` review verdict remains a hard blocker,
 - Cursor Bugbot has a current-head pass when available, or the receipt records
   that Cursor was absent/neutral/skipping and not required,
 - the merge uses squash with `--match-head-commit`.
@@ -173,6 +177,19 @@ If a close-loop lane pushed a fix commit, the final merge gate must additionally
 prove that the newest Merglbot receipt covers the post-fix head and that the
 stale-findings ledger was closed by a new head or a documented false-positive
 rationale. Same-head "no new findings" is not sufficient.
+
+## Sibling PR Head Churn
+
+The apply lane processes each repository as a queue, but Dependabot sibling PRs
+can still change while the lane is waiting for current-head review evidence.
+For example, merging one dependency PR can cause GitHub/Dependabot to refresh
+another PR's branch, invalidating the review receipt that was just requested.
+When the closeout engine detects that the live PR head no longer matches the
+head it dispatched or verified, it must fail fast for that head, refresh the PR,
+and retry within the bounded `max_review_iterations` budget. After any merge or
+close action in a repository, previously blocked sibling PRs must be eligible
+for re-evaluation because their merge state, required checks, or review head may
+have changed.
 
 ## Policy Alignment
 
