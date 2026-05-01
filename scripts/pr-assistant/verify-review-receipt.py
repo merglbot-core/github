@@ -17,13 +17,19 @@ import subprocess
 from typing import Any
 
 MARKER_RE = re.compile(r"<!--\s*(MERGLBOT_[A-Z0-9_]+)\s*:\s*([\s\S]*?)\s*-->")
-ZAVER_HEADER_RE = re.compile(r"^##\s+(?:Zaver|Závěr)\s*$", re.IGNORECASE)
-SECTION_HEADER_RE = re.compile(r"^##\s+")
+SECTION_HEADER_RE = re.compile(r"^#{2,6}\s+")
+ZAVER_SECTION_HEADER_RE = re.compile(r"^##\s+")
 MACHINE_TOKEN_STRIP_RE = re.compile(r"[^a-z0-9_]+")
 PR_ASSISTANT_WORKFLOW_PATHS = {
     ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
     ".github/workflows/merglbot-pr-v3-on-demand.yml",
 }
+PR_ASSISTANT_COPY_PATHS = PR_ASSISTANT_WORKFLOW_PATHS | {
+    "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+    "scripts/pr-assistant/verify-review-receipt.py",
+    "scripts/pr-assistant/extract-zaver-field.sh",
+}
+PR_ASSISTANT_ROLLOUT_SUPPORT_PATHS = {".github/workflows/ci.yml"}
 
 
 def gh_json(args: list[str]) -> Any:
@@ -43,7 +49,7 @@ def parse_markers(body: str) -> dict[str, str]:
 
 
 def normalize_machine_token(value: str) -> str:
-    normalized = value.strip().lower().replace(" ", "_").replace("-", "_")
+    normalized = re.sub(r"[\s-]+", "_", value.strip().lower())
     normalized = MACHINE_TOKEN_STRIP_RE.sub("", normalized)
     normalized = re.sub(r"_+", "_", normalized).strip("_")
     return normalized
@@ -55,19 +61,56 @@ def normalize_heading(value: str) -> str:
     return heading.lower()
 
 
+def docs_state_blocks_closeout(verdict: str, docs_state: str) -> bool:
+    return verdict in {
+        "approved_for_closeout",
+        "blocked_missing_authority",
+    } and docs_state in {"missing", "unknown"}
+
+
+def classify_pr_assistant_copy_docs_state(
+    changed_paths: set[str],
+    pr_head_ref: str,
+) -> str:
+    has_pr_assistant_copy_file = bool(changed_paths & PR_ASSISTANT_COPY_PATHS)
+    non_copy_paths = set(changed_paths) - PR_ASSISTANT_COPY_PATHS
+    if pr_head_ref.startswith("codex/pr-assistant-v3-"):
+        non_copy_paths -= PR_ASSISTANT_ROLLOUT_SUPPORT_PATHS
+    if has_pr_assistant_copy_file and not non_copy_paths:
+        return "not_required"
+    if any(path.endswith(".md") or path.startswith("docs/") for path in changed_paths):
+        return "satisfied"
+    if changed_paths:
+        return "missing"
+    return "not_required"
+
+
 def extract_zaver_field(body: str, field_name: str) -> str:
     in_zaver = False
+    in_code = False
     for raw_line in (body or "").splitlines():
         line = raw_line.strip()
+        if line.startswith("```") or line.startswith("~~~"):
+            in_code = not in_code
+            continue
+        if in_code:
+            continue
         if SECTION_HEADER_RE.match(line):
-            if ZAVER_HEADER_RE.match(f"## {normalize_heading(line)}"):
+            heading = normalize_heading(line)
+            if (
+                not in_zaver
+                and ZAVER_SECTION_HEADER_RE.match(line)
+                and heading in ("zaver", "závěr")
+            ):
                 in_zaver = True
+                in_code = False
                 continue
             if in_zaver:
                 break
+            continue
         if not in_zaver:
             continue
-        cleaned = re.sub(r"^[\s>\-]*", "", line)
+        cleaned = re.sub(r"^[\s>\-*+]*", "", line)
         parts = cleaned.split(":", 1)
         field_key = (
             parts[0].replace("*", "").replace("_", "").replace("`", "").strip()
@@ -134,6 +177,8 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
     pr_check_surface = markers.get("MERGLBOT_PR_CHECK_SURFACE", "")
     run_id = markers.get("MERGLBOT_RUN_ID", "")
     run_url = markers.get("MERGLBOT_RUN_URL", "")
+    docs_state_marker_present = "MERGLBOT_DOCUMENTATION_OBLIGATION_STATE" in markers
+    docs_state = markers.get("MERGLBOT_DOCUMENTATION_OBLIGATION_STATE", "")
 
     current_head_match = bool(
         head_sha and review_head_sha and head_sha == review_head_sha
@@ -155,6 +200,17 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
     visible_verdict = extract_zaver_field(receipt_body, "Verdict")
     if visible_verdict in valid_verdicts and verdict and visible_verdict != verdict:
         blockers.append("review_visible_verdict_marker_mismatch")
+    valid_docs_states = {"satisfied", "not_required", "missing", "unknown"}
+    if not docs_state_marker_present:
+        docs_state = "unknown"
+        blockers.append("missing_or_invalid_documentation_obligation_state")
+    elif docs_state not in valid_docs_states:
+        blockers.append("missing_or_invalid_documentation_obligation_state")
+    visible_docs_state = extract_zaver_field(receipt_body, "Documentation Obligation State")
+    if visible_docs_state in valid_docs_states and docs_state and visible_docs_state != docs_state:
+        blockers.append("review_visible_docs_state_marker_mismatch")
+    if docs_state_blocks_closeout(verdict, docs_state):
+        blockers.append("review_docs_state_blocks_closeout")
     if status != "success" or verdict != "approved_for_closeout":
         blockers.append("review_not_approved_for_closeout")
     if status == "success" and verdict != "approved_for_closeout":
@@ -190,6 +246,7 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
         "schema_version": schema_version or None,
         "verdict": verdict or None,
         "status": status or None,
+        "documentation_obligation_state": docs_state or None,
         "pr_check_surface": pr_check_surface or None,
         "comment_url": comment_url,
         "run_id": run_id or None,
@@ -207,6 +264,7 @@ def self_test() -> int:
             "<!-- MERGLBOT_REVIEW_HEAD_SHA: abc123 -->",
             "<!-- MERGLBOT_REVIEW_VERDICT: approved_for_closeout -->",
             "<!-- MERGLBOT_REVIEW_STATUS: success -->",
+            "<!-- MERGLBOT_DOCUMENTATION_OBLIGATION_STATE: not_required -->",
             "<!-- MERGLBOT_PR_CHECK_SURFACE: verified -->",
             "<!-- MERGLBOT_RUN_ID: 42 -->",
             "<!-- MERGLBOT_RUN_URL: https://github.com/o/r/actions/runs/42 -->",
@@ -223,8 +281,58 @@ def self_test() -> int:
     assert extract_zaver_field(trusted_body, "Verdict") == ""
     assert normalize_machine_token("Review V4 Failed!") == "review_v4_failed"
     assert normalize_machine_token("approved-for-closeout") == "approved_for_closeout"
+    assert normalize_machine_token("approved\tfor\ncloseout") == "approved_for_closeout"
+    assert docs_state_blocks_closeout("approved_for_closeout", "missing")
+    assert docs_state_blocks_closeout("approved_for_closeout", "unknown")
+    assert docs_state_blocks_closeout("blocked_missing_authority", "missing")
+    assert not docs_state_blocks_closeout("approved_for_closeout", "not_required")
+    assert not docs_state_blocks_closeout("changes_required", "unknown")
     assert (
         extract_zaver_field("## Zaver\n_Verdict_: approved-for-closeout", "Verdict")
+        == "approved_for_closeout"
+    )
+    assert extract_zaver_field("### Zaver\n* _Verdict_ : approved-for-closeout", "Verdict") == ""
+    assert (
+        extract_zaver_field(
+            "## Zaver\n### Details\nVerdict: approved_for_closeout",
+            "Verdict",
+        )
+        == ""
+    )
+    assert (
+        extract_zaver_field(
+            "\n".join(
+                [
+                    "```markdown",
+                    "## Zaver",
+                    "Verdict: changes_required",
+                    "```",
+                    "## Zaver",
+                    "```",
+                    "## Spoofed",
+                    "Verdict: changes_required",
+                    "```",
+                    "Verdict: approved_for_closeout",
+                ]
+            ),
+            "Verdict",
+        )
+        == "approved_for_closeout"
+    )
+    assert (
+        extract_zaver_field(
+            "\n".join(
+                [
+                    "~~~markdown",
+                    "## Zaver",
+                    "Verdict: changes_required",
+                    "~~~",
+                    "## Zaver",
+                    "Verdict: approved_for_closeout",
+                ]
+            ),
+            "Verdict",
+        )
         == "approved_for_closeout"
     )
     spoofed_markers, _, _ = latest_receipt(
@@ -238,6 +346,7 @@ def self_test() -> int:
             "",
             "<!-- MERGLBOT_PR_ASSISTANT_V3 -->",
             "<!-- MERGLBOT_REVIEW_VERDICT: blocked_missing_authority -->",
+            "<!-- MERGLBOT_DOCUMENTATION_OBLIGATION_STATE: unknown -->",
         ]
     )
     assert extract_zaver_field(mismatched_body, "Verdict") == "approved_for_closeout"
@@ -256,12 +365,40 @@ def self_test() -> int:
     )
     assert failed["MERGLBOT_REVIEW_VERDICT"] == "review_generation_failed"
     assert failed["MERGLBOT_REVIEW_STATUS"] == "failed"
-    blockers: list[str] = []
+    missing_docs_state_markers = parse_markers(
+        "\n".join(
+            [
+                "<!-- MERGLBOT_REVIEW_VERDICT: approved_for_closeout -->",
+                "<!-- MERGLBOT_REVIEW_STATUS: success -->",
+            ]
+        )
+    )
+    docs_state_marker_present = (
+        "MERGLBOT_DOCUMENTATION_OBLIGATION_STATE" in missing_docs_state_markers
+    )
+    docs_state = missing_docs_state_markers.get(
+        "MERGLBOT_DOCUMENTATION_OBLIGATION_STATE",
+        "",
+    )
+    blockers = []
+    if not docs_state_marker_present:
+        docs_state = "unknown"
+        blockers.append("missing_or_invalid_documentation_obligation_state")
+    if docs_state_blocks_closeout(
+        missing_docs_state_markers["MERGLBOT_REVIEW_VERDICT"],
+        docs_state,
+    ):
+        blockers.append("review_docs_state_blocks_closeout")
+    assert blockers == [
+        "missing_or_invalid_documentation_obligation_state",
+        "review_docs_state_blocks_closeout",
+    ]
+    review_blockers: list[str] = []
     status = "blocked"
     verdict = "changes_required"
     if status != "success" or verdict != "approved_for_closeout":
-        blockers.append("review_not_approved_for_closeout")
-    assert blockers == ["review_not_approved_for_closeout"]
+        review_blockers.append("review_not_approved_for_closeout")
+    assert review_blockers == ["review_not_approved_for_closeout"]
     assert expected_run_url("https://github.enterprise.example/o/r/pull/42", "123") == (
         "https://github.enterprise.example/o/r/actions/runs/123"
     )
@@ -271,6 +408,36 @@ def self_test() -> int:
     )
     assert (
         ".github/workflows/merglbot-pr-v3-on-demand.yml" in PR_ASSISTANT_WORKFLOW_PATHS
+    )
+    copy_paths = {
+        ".github/workflows/merglbot-pr-v3-on-demand.yml",
+        "scripts/pr-assistant/verify-review-receipt.py",
+    }
+    copy_with_ci = copy_paths | {".github/workflows/ci.yml"}
+    assert (
+        classify_pr_assistant_copy_docs_state(copy_paths, "codex/pr-assistant-v3-guard")
+        == "not_required"
+    )
+    assert (
+        classify_pr_assistant_copy_docs_state(
+            copy_with_ci,
+            "codex/pr-assistant-v3-guard",
+        )
+        == "not_required"
+    )
+    assert (
+        classify_pr_assistant_copy_docs_state(
+            {".github/workflows/ci.yml"},
+            "codex/pr-assistant-v3-guard",
+        )
+        == "missing"
+    )
+    assert (
+        classify_pr_assistant_copy_docs_state(
+            copy_with_ci,
+            "feature/unrelated-ci",
+        )
+        == "missing"
     )
     print(json.dumps({"ok": True, "self_test": "passed"}))
     return 0

@@ -23,7 +23,8 @@ Authority history for this implementation:
   contract for the app private key and Slack webhook.
 
 The weekly ENT Dependabot closeout lane needs cross-org GitHub API access across
-the canonical 42-repo Merglbot ENT scope. Fine-grained PATs are not appropriate
+the dynamic Merglbot ENT scope resolved from `ENT_ORG_ALLOWLIST.md` plus live
+non-archived/non-fork repository metadata. Fine-grained PATs are not appropriate
 because they are bound to a single resource owner. Use a GitHub App installed in
 the in-scope organizations instead.
 
@@ -32,7 +33,7 @@ the in-scope organizations instead.
 - Name: `Merglbot ENT Dependabot Closeout`
 - Homepage URL: `https://github.com/merglbot-core/github`
 - Webhooks: disabled
-- Installation scope: the 11 in-scope Merglbot orgs only
+- Installation scope: the currently allowlisted Merglbot orgs only
 - Excluded scope: `Merglevsky-cz`
 
 ## Repository Permissions
@@ -75,28 +76,21 @@ using selective installation:
 - `merglbot-proteinaco`
 - `merglbot-public`
 - `merglbot-ruzovyslon`
+- `merglbot-shared`
 
-## Selective Installation Repository List
+## Selective Installation Guidance
 
-If you choose `Only select repositories`, install exactly these active repos:
-
-- `merglbot-autodoplnky`: `autodoplnky-web`
-- `merglbot-cerano`: `product-forecasting`, `feed-generator`, `cerano-web`, `viz-api`
-- `merglbot-core`: `infra`, `tf-modules-`, `github`, `ai_prompts`, `merglbot-admin`, `platform`, `dataform`, `fb-viz-api`, `agents-orchestrator`, `project-management-app`
-- `merglbot-denatura`: `marketing_actions_detector`, `marketing-planning`, `denatura-fb-viz`
-- `merglbot-extractors`: `denatura-additional-costs-extractor`, `denatura-shoptet-export-extractor`, `facebook-extractor`, `ruzovyslon-forecast-exporter`, `shoptet-extractor`
-- `merglbot-hodinarstvibechyne`: `hodinarstvi-web`
-- `merglbot-kiteboarding`: `kiteboarding-web`
-- `merglbot-milan-private`: `fakturoid`, `plane_so`
-- `merglbot-proteinaco`: `proteinaco-web`, `btf-viz`, `viz-api`, `basket-analysis`, `abc_product_material_analysis`, `btf-legacy-implementation`
-- `merglbot-public`: `docs`, `website`, `kazdavterina-web`, `livero-web`
-- `merglbot-ruzovyslon`: `kbc_data_quality_metodology`, `business_forecasting`, `data-pipelines`, `ruzovyslon-web`, `viz-api`
+Prefer `Repository access = All repositories` for each allowed organization so
+new non-archived/non-fork repos are covered automatically after the allowlist is
+updated. If you choose `Only select repositories`, generate the selection from
+the current `ENT_ORG_ALLOWLIST.md` plus live repo metadata; do not hand-maintain
+a static repository list in this mirror.
 
 The engine keeps `scripts/dependabot/ent_repository_scope.txt` as a repo-local
 mirror for low-blast-radius local `single_repo` diagnostics. GitHub Actions
-`single_repo` runs validate against canonical remote `REPOSITORY_MAP.md` on
-`main`, not the branch-local mirror. ENT-wide `repo_scope=all` and multi-owner
-cohort runs require GitHub App auth.
+`single_repo` runs validate against canonical remote `ENT_ORG_ALLOWLIST.md` plus
+live non-archived/non-fork repository metadata, not the branch-local mirror.
+ENT-wide `repo_scope=all` and multi-owner cohort runs require GitHub App auth.
 
 ## GitHub Actions Secrets
 
@@ -119,7 +113,8 @@ After the app is installed and secrets are present, run:
 1. `ENT Dependabot Autonomous Closeout` in `dry-run` mode for
    `merglbot-public/docs`.
 2. `ENT Dependabot Weekly Closeout` in `dry-run` mode for `repo_scope=all`.
-3. Confirm the receipt scans 42 repos and Slack reports `sent`.
+3. Confirm the receipt records `scope_validation_status=validated_live`, a
+   non-zero `repo_count`, the expected `org_count`, and Slack reports `sent`.
 4. Build an explicit approval packet before any `apply` run.
 
 ## Guardrails Mirror

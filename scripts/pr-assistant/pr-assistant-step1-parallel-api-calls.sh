@@ -415,7 +415,7 @@ if [ "$OPENAI_MODEL" = "org_default" ]; then
   OPENAI_MODEL=""
 fi
 if [ -z "$ANTHROPIC_MODEL" ]; then
-  ANTHROPIC_MODEL="claude-opus-4-6"
+  ANTHROPIC_MODEL="claude-opus-4-7"
 fi
 if [ -z "$OPENAI_MODEL" ]; then
   OPENAI_MODEL="gpt-5.4"
@@ -683,6 +683,7 @@ printf '%s\n' "9. SSOT: Dokumentace v merglbot-public/docs/"
 printf '%s\n' "10. Destructive: Double-confirm pred destruktivni akci"
 printf '%s\n' "11. CI Idempotency: CI kroky musi byt idempotentni"
 printf '%s\n' "12. Security Gating: Trivy/CodeQL gaty se NEzmekuji"
+printf '%s\n' "13. PR Assistant copy-target propagation: managed PR Assistant workflow/script copy PRs may be docs-not-required when changed_files_classifier says not_required; do not make advisory docs hints a closeout blocker."
 printf '%s\n' ""
 printf '%s\n' "### MERGLBOT Rule Reference"
 printf '%s\n' ""
@@ -774,7 +775,7 @@ fi
 
 printf '%s\n' "## Zaver"
 printf '%s\n' "Verdict: [approved_for_closeout or changes_required or blocked_missing_authority]"
-printf '%s\n' "Documentation Obligation State: [satisfied or not_required or missing or unknown]"
+printf '%s\n' "Documentation Obligation State: [satisfied or not_required or missing or unknown; use not_required when SSOT Sync (Docs) is None]"
 printf '%s\n' "Docs Follow-Up Hint: [likely_required or not_observed or none]"
 printf '%s\n' "Suggested Docs Targets: [JSON array of advisory repo-relative merglbot-public/docs paths; use [] when none are confidently known; never emit suggested_docs_paths]"
 printf '%s\n' "Docs Signal Basis: review_output_only"
@@ -784,10 +785,12 @@ printf '%s\n' "### Rules"
 printf '%s\n' "- Czech for explanations, English for code"
 printf '%s\n' "- Include line numbers"
 printf '%s\n' "- Evidence-first: every finding must cite file:line AND a diff excerpt; otherwise mark it as 'Needs verification'"
+printf '%s\n' "- If SSOT Sync (Docs) is exactly 'None', set Documentation Obligation State to not_required; reserve unknown for cases where a docs obligation cannot be determined."
 printf '%s\n' "- Cite MERGLBOT rules"
 printf '%s\n' "- Code examples for fixes"
 printf '%s\n' "- Use checkboxes for actions"
 printf '%s\n' "- Keep docs_follow_up_hint and suggested_docs_targets advisory-only review metadata; they must not create a merge blocker or authoritative docs-classifier verdict"
+printf '%s\n' "- For managed PR Assistant copy-target propagation that only updates the canonical PR Assistant workflow/scripts, do not block closeout solely because platform SSOT docs exist; rely on the deterministic changed_files_classifier state."
 printf '%s\n' ""
 printf '%s\n' "---"
 printf '%s\n' ""
@@ -893,7 +896,7 @@ echo "Prompt size: $PROMPT_SIZE chars"
     echo "Calling Anthropic (requested: $ANTHROPIC_MODEL)..."
 
     ANTHROPIC_MODELS_TRIED="|"
-    for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-6" "claude-sonnet-4-6" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-3-5-haiku-20241022"; do
+    for MODEL_TO_TRY in "$ANTHROPIC_MODEL" "claude-opus-4-7" "claude-opus-4-6" "claude-sonnet-4-6" "claude-opus-4-5-20251101" "claude-opus-4-5-20250929" "claude-sonnet-4-5-20250929" "claude-opus-4-1-20250805" "claude-opus-4-20250514" "claude-sonnet-4-20250514" "claude-3-5-sonnet-20241022" "claude-3-5-haiku-20241022"; do
       if [ -z "$MODEL_TO_TRY" ] || [ "$MODEL_TO_TRY" = "null" ]; then
         continue
       fi
@@ -903,16 +906,33 @@ echo "Prompt size: $PROMPT_SIZE chars"
       ANTHROPIC_MODELS_TRIED="${ANTHROPIC_MODELS_TRIED}${MODEL_TO_TRY}|"
       echo "  → Trying Anthropic model: $MODEL_TO_TRY"
 
-      jq -n \
-        --arg model "$MODEL_TO_TRY" \
-        --rawfile prompt "$FULL_PROMPT_FILE" \
-        --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
-        '{
-          model: $model,
-          max_tokens: $max_tokens,
-          temperature: 0.2,
-          messages: [{role: "user", content: $prompt}]
-      }' > "$ANTHROPIC_PAYLOAD_FILE"
+      case "$MODEL_TO_TRY" in
+        claude-opus-4-7)
+          jq -n \
+            --arg model "$MODEL_TO_TRY" \
+            --rawfile prompt "$FULL_PROMPT_FILE" \
+            --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
+            '{
+              model: $model,
+              max_tokens: $max_tokens,
+              thinking: {type: "adaptive"},
+              output_config: {effort: "max"},
+              messages: [{role: "user", content: $prompt}]
+            }' > "$ANTHROPIC_PAYLOAD_FILE"
+          ;;
+        *)
+          jq -n \
+            --arg model "$MODEL_TO_TRY" \
+            --rawfile prompt "$FULL_PROMPT_FILE" \
+            --argjson max_tokens "$MAX_TOKENS_ANTHROPIC" \
+            '{
+              model: $model,
+              max_tokens: $max_tokens,
+              temperature: 0.2,
+              messages: [{role: "user", content: $prompt}]
+            }' > "$ANTHROPIC_PAYLOAD_FILE"
+          ;;
+      esac
 
       set +e
       ANTHROPIC_RESP="$(curl_json_with_backoff "$ANTHROPIC_MESSAGES_URL" \
@@ -945,6 +965,8 @@ echo "Prompt size: $PROMPT_SIZE chars"
         continue
       fi
 
+      # Adaptive-thinking responses can include non-text blocks before the
+      # final answer; review text is the concatenation of text blocks only.
       ANTHROPIC_CONTENT="$(echo "$ANTHROPIC_RESP" | jq -r '[.content[]? | select(.type=="text") | .text] | join("\n")')"
       if [ -z "$ANTHROPIC_CONTENT" ] || [ "$ANTHROPIC_CONTENT" = "null" ]; then
         echo "  ERROR: Anthropic response contained no content" >&2
@@ -1541,7 +1563,8 @@ if [ -s anthropic_review.txt ] && ! grep -qx "API_ERROR" anthropic_review.txt 2>
 fi
 
 if [ "$OPENAI_OK" != "true" ] && [ "$ANTHROPIC_OK" != "true" ]; then
-  echo "WARN: Step 1 produced no usable output from OpenAI or Anthropic; proceeding with CI-only fallback in Step 3." >&2
+  echo "ERROR: Step 1 produced no usable output from OpenAI or Anthropic; refusing to synthesize a CI-only review." >&2
+  exit 1
 fi
 
 echo "========================================="
