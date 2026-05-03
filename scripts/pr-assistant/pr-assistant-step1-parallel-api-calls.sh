@@ -1042,16 +1042,10 @@ else
 
         if [ "$CURL_EXIT" -eq 28 ]; then
           echo "  ERROR: OpenAI request timed out (exit=$CURL_EXIT)" >&2
-          if [ "$OPENAI_CHAT_ATTEMPT" -eq 1 ]; then
-            continue
-          fi
           break
         fi
         if ! printf '%s' "$OPENAI_RESP" | jq -e . > /dev/null 2>&1; then
           echo "  ERROR: OpenAI request returned non-JSON (exit=$CURL_EXIT)" >&2
-          if [ "$OPENAI_CHAT_ATTEMPT" -eq 1 ]; then
-            continue
-          fi
           break
         fi
 
@@ -1061,6 +1055,8 @@ else
           err_msg_redacted="$(printf '%s' "$err_msg_slim" | sed -E 's/[A-Za-z0-9_\\/+=-]{20,}/<REDACTED>/g')"
           echo "  ERROR: $err_msg_redacted" >&2
 
+          # The second Chat Completions attempt only removes reasoning_effort.
+          # Retry here only when the API error specifically points at that parameter.
           if [ "$OPENAI_CHAT_ATTEMPT" -eq 1 ] && printf '%s' "$err_msg_slim" | grep -Eqi 'reasoning[_ ]effort'; then
             echo "  WARN: Chat Completions rejected reasoning_effort; retrying without it." >&2
             continue
