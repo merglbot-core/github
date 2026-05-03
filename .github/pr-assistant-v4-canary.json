@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "policy_version": "pr-assistant-v4-canary-policy-2026-05-01",
+  "model_policy_version": "pr-assistant-v4-model-policy-2026-05-01",
+  "prompt_policy_version": "prompt-library-assets-ssot-2026-05-01",
+  "runtime_type": "github_actions_evidence_canary",
+  "canary_command": "@merglbot review-v4",
+  "promoted_command": "@merglbot review",
+  "check_name": "Merglbot PR Assistant v4",
+  "policy_engine_check_name": "Final Merge Readiness",
+  "review_boundary": "review_only",
+  "closeout_mode": "human_merge_only",
+  "github_active_repo_denominator": 46,
+  "gcp_merglbot_project_denominator": 31,
+  "command_ownership": {
+    "canary_command_owner": "v4",
+    "promoted_command_owner": "v3_until_policy_approved_promotion",
+    "promotion_requires_exactly_one_owner_per_active_repo": true
+  },
+  "allowed_canary_actions": [
+    "publish_review_evidence",
+    "publish_final_pr_comments",
+    "publish_github_check_runs"
+  ],
+  "forbidden_actions": [
+    "merge_prs",
+    "deploy_production",
+    "run_terraform_apply",
+    "approve_github_environment_deployments",
+    "create_documentation_prs",
+    "bypass_branch_protection",
+    "direct_push_main",
+    "use_admin_bypass",
+    "log_secrets",
+    "use_service_account_json_keys"
+  ],
+  "approval_gated_actions": [
+    "enable_canary_trigger",
+    "github_app_installation_or_permission_change",
+    "command_promotion",
+    "terraform_plan_staging_or_production",
+    "terraform_apply",
+    "cloud_run_deploy",
+    "production_rollout",
+    "destructive_rollback_beyond_disabling_app_or_command_routing"
+  ],
+  "receipt_required_markers": [
+    "MERGLBOT_PR_ASSISTANT_V4",
+    "MERGLBOT_REVIEW_RECEIPT_SCHEMA_VERSION",
+    "MERGLBOT_FOLLOW_UP_ID",
+    "MERGLBOT_REVIEW_HEAD_SHA",
+    "MERGLBOT_REVIEW_VERDICT",
+    "MERGLBOT_REVIEW_STATUS",
+    "MERGLBOT_PR_CHECK_SURFACE",
+    "MERGLBOT_DOCUMENTATION_OBLIGATION_STATE",
+    "MERGLBOT_DOCS_FOLLOW_UP_HINT",
+    "MERGLBOT_SUGGESTED_DOCS_TARGETS",
+    "MERGLBOT_CLOSEOUT_MODE",
+    "MERGLBOT_MODEL_POLICY_VERSION",
+    "MERGLBOT_PROMPT_POLICY_VERSION",
+    "MERGLBOT_REVIEW_RUN_ID",
+    "MERGLBOT_RUN_ID",
+    "MERGLBOT_RUNTIME_TYPE"
+  ],
+  "safe_default_verdict": "blocked_missing_authority",
+  "safe_default_status": "blocked",
+  "docs_automation_boundary": {
+    "docs_follow_up_hint_is_advisory": true,
+    "suggested_docs_targets_are_advisory": true,
+    "may_create_docs_prs": false
+  }
+}
