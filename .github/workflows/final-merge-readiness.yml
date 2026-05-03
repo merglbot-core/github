@@ -1,0 +1,72 @@
+name: Final Merge Readiness
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to evaluate
+        required: true
+        type: number
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  issues: read
+  pull-requests: read
+  statuses: read
+
+concurrency:
+  group: final-merge-readiness-${{ github.event.pull_request.number || inputs.pr_number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  final-merge-readiness:
+    name: Final Merge Readiness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout current head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Resolve pull request number
+        id: pr
+        run: |
+          set -euo pipefail
+          PR_NUMBER="${PR_NUMBER_INPUT:-}"
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::error::Missing pull request number."
+            exit 1
+          fi
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+        env:
+          PR_NUMBER_INPUT: ${{ github.event.pull_request.number || inputs.pr_number }}
+
+      - name: Evaluate final merge readiness
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          python3 scripts/pr-assistant/final-merge-readiness.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr "$PR_NUMBER" \
+            --output final-merge-readiness-receipt.json
+
+      - name: Publish readiness receipt summary
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Final Merge Readiness Receipt"
+            echo ""
+            if [ -s final-merge-readiness-receipt.json ]; then
+              echo '```json'
+              python3 -m json.tool final-merge-readiness-receipt.json
+              echo '```'
+            else
+              echo "No receipt was produced."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

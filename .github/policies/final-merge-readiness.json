@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "policy_id": "merglbot.final_merge_readiness",
+  "policy_version": "2026-05-01",
+  "mode": "human_merge_only",
+  "scope_baseline": {
+    "github_active_repo_denominator": 46,
+    "gcp_merglbot_project_denominator": 31,
+    "prompt_ssot": "merglbot-core/agents-orchestrator/prompt-library/assets",
+    "prompt_compatibility_mirror": "merglbot-core/ai_prompts",
+    "excluded_github_orgs": [
+      "Merglevsky-cz",
+      "lrtch"
+    ],
+    "governance_only_orgs": [
+      "merglbot-shared"
+    ]
+  },
+  "pr_assistant": {
+    "role": "review_only_evidence_provider",
+    "allowed_markers": [
+      "MERGLBOT_PR_ASSISTANT_V4",
+      "MERGLBOT_PR_ASSISTANT_V3"
+    ],
+    "trusted_comment_logins": [
+      "github-actions[bot]",
+      "github-actions"
+    ],
+    "required_receipt_schema_versions": [
+      "1"
+    ],
+    "review_boundary_required": true,
+    "required_closeout_mode": "human_merge_only",
+    "approved_verdicts": [
+      "approved_for_closeout"
+    ],
+    "successful_statuses": [
+      "success"
+    ],
+    "passing_documentation_states": [
+      "satisfied",
+      "not_required"
+    ],
+    "required_pr_check_surface": "verified",
+    "allowed_workflow_paths": [
+      ".github/workflows/merglbot-pr-assistant-v4-on-demand.yml",
+      ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
+      ".github/workflows/merglbot-pr-v3-on-demand.yml"
+    ],
+    "forbidden_actions": [
+      "merge_pull_request",
+      "deploy_production",
+      "terraform_apply",
+      "create_documentation_pr"
+    ]
+  },
+  "required_checks": {
+    "source": "branch_protection_with_manifest_fallback",
+    "fallback_required_contexts": [
+      "ci"
+    ],
+    "self_check_names": [
+      "Final Merge Readiness"
+    ],
+    "success_conclusions": [
+      "success",
+      "neutral",
+      "skipped"
+    ],
+    "blocking_conclusions": [
+      "action_required",
+      "cancelled",
+      "failure",
+      "startup_failure",
+      "timed_out"
+    ],
+    "block_failed_non_required_checks": true
+  },
+  "path_risk": {
+    "docs_only_patterns": [
+      "*.md",
+      "docs/**",
+      "training/**",
+      "templates/**/*.md"
+    ],
+    "high_risk_patterns": [
+      ".github/workflows/**",
+      ".github/actions/**",
+      ".github/policies/**",
+      "scripts/**",
+      "terraform/**",
+      "infra/**",
+      "platform/**",
+      "**/*.tf",
+      "**/*.tfvars",
+      "**/*.sh",
+      "**/*.py",
+      "**/*.js",
+      "**/*.ts",
+      "**/*.tsx",
+      "**/*.jsx",
+      "Dockerfile",
+      "**/Dockerfile"
+    ],
+    "forbidden_path_patterns": [
+      ".env",
+      ".env.*",
+      "**/.env",
+      "**/.env.*",
+      "*.pem",
+      "*.p12",
+      "*.pfx",
+      "*.key",
+      "*service-account*.json",
+      "*service_account*.json",
+      "secrets/**"
+    ],
+    "forbidden_content_patterns": [
+      {
+        "id": "private_key_material",
+        "pattern": "-----BEGIN (RSA |DSA |EC |OPENSSH |)?PRIVATE KEY-----",
+        "ignore_case": false
+      },
+      {
+        "id": "gcp_service_account_private_key",
+        "pattern": "\"type\"\\s*:\\s*\"service_account\"[\\s\\S]{0,4000}\"private_key\"\\s*:",
+        "ignore_case": true
+      },
+      {
+        "id": "terraform_apply",
+        "pattern": "\\bterraform\\s+apply\\b",
+        "ignore_case": true
+      },
+      {
+        "id": "branch_protection_admin_bypass",
+        "pattern": "\\b(admin|administrator)\\s+bypass\\b|\\bbypass\\s+branch\\s+protection\\b",
+        "ignore_case": true
+      }
+    ]
+  }
+}
