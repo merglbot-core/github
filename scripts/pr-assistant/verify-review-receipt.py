@@ -14,6 +14,7 @@ import argparse
 import json
 import re
 import subprocess
+from pathlib import Path
 from typing import Any
 
 MARKER_RE = re.compile(r"<!--\s*(MERGLBOT_[A-Z0-9_]+)\s*:\s*([\s\S]*?)\s*-->")
@@ -42,6 +43,7 @@ PR_ASSISTANT_COPY_PATHS = PR_ASSISTANT_WORKFLOW_PATHS | {
     ".github/pr-assistant-v4-canary.json",
 }
 PR_ASSISTANT_ROLLOUT_SUPPORT_PATHS = {".github/workflows/ci.yml"}
+V4_CANARY_CONFIG_PATH = Path(".github/pr-assistant-v4-canary.json")
 
 
 def gh_json(args: list[str]) -> Any:
@@ -58,6 +60,34 @@ def gh_json(args: list[str]) -> Any:
 
 def parse_markers(body: str) -> dict[str, str]:
     return {key.strip(): value.strip() for key, value in MARKER_RE.findall(body or "")}
+
+
+def load_v4_required_markers(config_path: Path = V4_CANARY_CONFIG_PATH) -> set[str]:
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    markers = config.get("receipt_required_markers")
+    if not isinstance(markers, list) or not all(isinstance(item, str) for item in markers):
+        raise ValueError("receipt_required_markers must be a string array")
+    return set(markers)
+
+
+def receipt_has_marker(body: str, markers: dict[str, str], marker: str) -> bool:
+    if marker == "MERGLBOT_PR_ASSISTANT_V3":
+        return PR_ASSISTANT_RECEIPT_MARKERS["v3"] in body
+    if marker == "MERGLBOT_PR_ASSISTANT_V4":
+        return PR_ASSISTANT_RECEIPT_MARKERS["v4"] in body
+    return marker in markers
+
+
+def missing_required_receipt_markers(
+    body: str,
+    markers: dict[str, str],
+    required_markers: set[str],
+) -> list[str]:
+    return sorted(
+        marker
+        for marker in required_markers
+        if not receipt_has_marker(body, markers, marker)
+    )
 
 
 def normalize_machine_token(value: str) -> str:
@@ -250,6 +280,17 @@ def verify(repo: str, pr_number: int, assistant_version: str = "v3") -> dict[str
     if not run_id:
         blockers.append("missing_review_run_id")
     if receipt_version == "v4":
+        try:
+            required_markers = load_v4_required_markers()
+        except Exception as exc:  # pragma: no cover - exercised through live CLI usage.
+            blockers.append(f"v4_required_marker_config_unavailable:{exc}")
+        else:
+            for marker in missing_required_receipt_markers(
+                receipt_body,
+                markers,
+                required_markers,
+            ):
+                blockers.append(f"missing_v4_required_marker:{marker}")
         if review_boundary != "review_only":
             blockers.append("review_boundary_not_review_only")
         if closeout_mode != "human_merge_only":
@@ -413,6 +454,7 @@ def self_test() -> int:
             "<!-- MERGLBOT_REVIEW_VERDICT: blocked_missing_authority -->",
             "<!-- MERGLBOT_REVIEW_STATUS: blocked -->",
             "<!-- MERGLBOT_DOCUMENTATION_OBLIGATION_STATE: unknown -->",
+            "<!-- MERGLBOT_DOCS_FOLLOW_UP_HINT: none -->",
             "<!-- MERGLBOT_PR_CHECK_SURFACE: verified -->",
             "<!-- MERGLBOT_CLOSEOUT_MODE: human_merge_only -->",
             "<!-- MERGLBOT_MODEL_POLICY_VERSION: pr-assistant-v4-model-policy-2026-05-01 -->",
@@ -430,6 +472,25 @@ def self_test() -> int:
     )
     assert v4_markers and v4_markers["MERGLBOT_CLOSEOUT_MODE"] == "human_merge_only"
     assert v4_version == "v4"
+    assert missing_required_receipt_markers(
+        v4_body,
+        v4_markers,
+        {
+            "MERGLBOT_PR_ASSISTANT_V4",
+            "MERGLBOT_FOLLOW_UP_ID",
+            "MERGLBOT_DOCS_FOLLOW_UP_HINT",
+        },
+    ) == []
+    incomplete_v4_markers = parse_markers(v4_body.replace("MERGLBOT_DOCS_FOLLOW_UP_HINT", "MERGLBOT_DOCS_HINT"))
+    assert missing_required_receipt_markers(
+        v4_body.replace("MERGLBOT_DOCS_FOLLOW_UP_HINT", "MERGLBOT_DOCS_HINT"),
+        incomplete_v4_markers,
+        {
+            "MERGLBOT_PR_ASSISTANT_V4",
+            "MERGLBOT_FOLLOW_UP_ID",
+            "MERGLBOT_DOCS_FOLLOW_UP_HINT",
+        },
+    ) == ["MERGLBOT_DOCS_FOLLOW_UP_HINT"]
     any_markers, _, _, any_version = latest_receipt(
         [
             {"body": body, "user": {"login": "github-actions[bot]", "type": "Bot"}},

@@ -97,15 +97,27 @@ jobs:
               echo "::error::Invalid PR number: must be numeric"
               exit 1
             fi
+            if [ "${CANARY_ENABLED:-}" != "true" ] || [ -z "${CANARY_APPROVAL_RECEIPT:-}" ]; then
+              echo "::error::PR Assistant v4 canary workflow_dispatch is disabled until policy approval vars are set"
+              exit 1
+            fi
+            if ! validate_approval_receipt "${CANARY_APPROVAL_RECEIPT:-}"; then
+              echo "::error::MERGLBOT_PR_ASSISTANT_V4_CANARY_APPROVAL_RECEIPT must be a single safe token, 8-512 chars"
+              exit 1
+            fi
             if ! validate_approval_receipt "${INPUT_POLICY_APPROVAL_RECEIPT:-}"; then
               echo "::error::policy_approval_receipt must be a single safe token, 8-512 chars"
+              exit 1
+            fi
+            if [ "${INPUT_POLICY_APPROVAL_RECEIPT:-}" != "${CANARY_APPROVAL_RECEIPT:-}" ]; then
+              echo "::error::policy_approval_receipt does not match the approved v4 canary receipt"
               exit 1
             fi
             {
               echo "pr_number=$INPUT_PR_NUMBER"
               echo "should_run=true"
               echo "trigger_comment_id=${INPUT_TRIGGER_COMMENT_ID:-}"
-              echo "policy_approval_receipt=$INPUT_POLICY_APPROVAL_RECEIPT"
+              echo "policy_approval_receipt=$CANARY_APPROVAL_RECEIPT"
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
