@@ -63,7 +63,7 @@ permissions:
   statuses: read
 
 concurrency:
-  group: ent-dependabot-weekly-closeout
+  group: ent-dependabot-weekly-closeout-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 jobs:
