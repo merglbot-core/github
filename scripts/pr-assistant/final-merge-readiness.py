@@ -234,7 +234,27 @@ def check_blocked(check: dict[str, Any], blocking_conclusions: set[str]) -> bool
 
 
 def local_content_loader(path: str) -> str:
-    candidate = pathlib.Path(path)
+    return content_loader_for_root(pathlib.Path.cwd())(path)
+
+
+def content_loader_for_root(root: pathlib.Path) -> Callable[[str], str]:
+    resolved_root = root.resolve()
+
+    def load(path: str) -> str:
+        rel = pathlib.PurePosixPath(path)
+        if rel.is_absolute() or ".." in rel.parts:
+            return ""
+        candidate = (resolved_root / pathlib.Path(*rel.parts)).resolve()
+        try:
+            candidate.relative_to(resolved_root)
+        except ValueError:
+            return ""
+        return read_text_candidate(candidate)
+
+    return load
+
+
+def read_text_candidate(candidate: pathlib.Path) -> str:
     if not candidate.is_file():
         return ""
     try:
@@ -821,6 +841,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo", help="Repository in owner/name form.")
     parser.add_argument("--pr", type=int, help="Pull request number.")
     parser.add_argument("--policy", default=DEFAULT_POLICY_PATH, help="Policy manifest JSON path.")
+    parser.add_argument(
+        "--content-root",
+        default=".",
+        help="Checkout root used for changed-file content scanning. Defaults to the current working directory.",
+    )
     parser.add_argument("--output", help="Optional path to write the JSON receipt.")
     parser.add_argument("--self-test", action="store_true", help="Run deterministic unit tests.")
     return parser.parse_args()
@@ -847,7 +872,7 @@ def main() -> int:
         changed_paths=changed_paths,
         required_contexts=required_contexts,
         run_lookup=run_lookup,
-        content_loader=local_content_loader,
+        content_loader=content_loader_for_root(pathlib.Path(args.content_root)),
     )
     output = json.dumps(receipt, indent=2, sort_keys=True)
     if args.output:

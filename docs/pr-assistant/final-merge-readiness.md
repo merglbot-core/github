@@ -8,6 +8,12 @@ evidence for a human merge.
 The policy manifest lives in `.github/policies/final-merge-readiness.json`.
 The evaluator lives in `scripts/pr-assistant/final-merge-readiness.py`, and the
 GitHub Actions check is `.github/workflows/final-merge-readiness.yml`.
+The workflow checks out the PR head only as inspected content. When the
+evaluator already exists on the protected base ref, the check executes that
+trusted base copy of the evaluator and policy while scanning changed-file
+content from the PR checkout. For the introductory policy PR where no protected
+base copy exists yet, the summary marks `Bootstrap evaluator: true` so the
+receipt is explicit policy bootstrap evidence, not autonomous merge authority.
 
 The evaluator emits a JSON receipt with these gates:
 
@@ -27,6 +33,11 @@ The evaluator emits a JSON receipt with these gates:
 Docs-only pull requests can pass without a PR Assistant receipt. Any non-docs
 or high-risk path still requires trusted PR Assistant evidence for the current
 head.
+
+The check polls bounded asynchronous dependencies for up to 12 minutes. It only
+retries while required checks are still settling or the latest PR Assistant
+receipt is missing/stale for the current head; current-head `changes_required`,
+`partial_authority`, degraded, or blocked receipts still fail immediately.
 
 Local validation:
 
