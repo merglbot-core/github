@@ -64,7 +64,7 @@ permissions:
 
 concurrency:
   group: ent-dependabot-weekly-closeout
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 jobs:
   weekly-closeout:
@@ -75,6 +75,8 @@ jobs:
       single_repo: ${{ github.event.inputs.single_repo || '' }}
       max_parallel_repos: 3
       max_prs_per_repo: ${{ fromJSON(github.event_name == 'schedule' && '0' || github.event.inputs.max_prs_per_repo || '0') }}
+      max_fix_iterations: 2
+      max_review_iterations: 2
       allow_policy_alignment: true
       comment_report: true
       tracking_issue: "https://github.com/merglbot-public/docs/issues/636"
