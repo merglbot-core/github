@@ -180,6 +180,17 @@ def expected_run_url(pr_url: str, run_id: str) -> str:
     return f"{pr_url.split('/pull/', 1)[0]}/actions/runs/{run_id}"
 
 
+def marker_set(assistant: dict[str, Any], key: str) -> set[str]:
+    value = assistant.get(key, [])
+    if not isinstance(value, list):
+        return set()
+    return {str(item) for item in value}
+
+
+def run_id_matches_prefix(run_id: str, prefixes: set[str]) -> bool:
+    return bool(run_id) and any(run_id.startswith(prefix) for prefix in prefixes)
+
+
 def add_decision(
     decisions: list[dict[str, Any]],
     decision_id: str,
@@ -332,14 +343,20 @@ def evaluate_pr_assistant(
     pr_check_surface = markers.get("MERGLBOT_PR_CHECK_SURFACE", "")
     run_id = markers.get("MERGLBOT_RUN_ID", "")
     run_url = markers.get("MERGLBOT_RUN_URL", "")
+    runtime_type = markers.get("MERGLBOT_RUNTIME_TYPE", "")
     visible_verdict = extract_zaver_field(body, "Verdict")
     visible_docs_state = extract_zaver_field(body, "Documentation Obligation State")
+    external_runtime_types = marker_set(assistant, "external_runtime_types")
+    external_run_id_prefixes = marker_set(assistant, "external_run_id_prefixes")
+    boundary_optional_runtime_types = marker_set(assistant, "review_boundary_optional_runtime_types")
+    is_external_runtime = runtime_type in external_runtime_types
+    boundary_optional = runtime_type in boundary_optional_runtime_types
 
     if schema_version not in set(assistant["required_receipt_schema_versions"]):
         blockers.append("unsupported_or_missing_receipt_schema")
     if review_head_sha != head_sha:
         blockers.append("pr_assistant_head_sha_mismatch")
-    if assistant.get("review_boundary_required", True) and boundary != "review_only":
+    if assistant.get("review_boundary_required", True) and boundary != "review_only" and not boundary_optional:
         blockers.append("pr_assistant_boundary_not_review_only")
     if closeout_mode != assistant["required_closeout_mode"]:
         blockers.append("pr_assistant_closeout_mode_not_human_merge_only")
@@ -357,11 +374,14 @@ def evaluate_pr_assistant(
         blockers.append("pr_assistant_visible_docs_state_marker_mismatch")
     if not run_id:
         blockers.append("missing_pr_assistant_run_id")
-    if run_id and run_url != expected_run_url(pr_url, run_id):
+    elif is_external_runtime:
+        if not run_id_matches_prefix(run_id, external_run_id_prefixes):
+            blockers.append("pr_assistant_external_run_id_not_allowed")
+    elif run_url != expected_run_url(pr_url, run_id):
         blockers.append("pr_assistant_run_url_mismatch")
 
     run_path = ""
-    if run_id and run_lookup is not None:
+    if run_id and not is_external_runtime and run_lookup is not None:
         try:
             run = run_lookup(run_id)
         except Exception as exc:  # pragma: no cover - live API failure path.
@@ -392,6 +412,7 @@ def evaluate_pr_assistant(
             "pr_check_surface": pr_check_surface or None,
             "run_id": run_id or None,
             "run_url": run_url or None,
+            "runtime_type": runtime_type or None,
             "run_path": run_path or None,
         },
         blockers=blockers,
@@ -685,6 +706,60 @@ def self_test() -> int:
         evaluated_at="2026-05-01T00:00:00Z",
     )
     assert "missing_pr_assistant_receipt" in spoofed_receipt["blockers"]
+
+    cloud_body = "\n".join(
+        [
+            "Verdict: approved_for_closeout",
+            "Documentation Obligation State: satisfied",
+            "",
+            "<!-- MERGLBOT_PR_ASSISTANT_V4 -->",
+            "<!-- MERGLBOT_REVIEW_RECEIPT_SCHEMA_VERSION: 1 -->",
+            "<!-- MERGLBOT_FOLLOW_UP_ID: pr-assistant-v4:100 -->",
+            "<!-- MERGLBOT_REVIEW_HEAD_SHA: abc123 -->",
+            "<!-- MERGLBOT_REVIEW_VERDICT: approved_for_closeout -->",
+            "<!-- MERGLBOT_REVIEW_STATUS: success -->",
+            "<!-- MERGLBOT_DOCUMENTATION_OBLIGATION_STATE: satisfied -->",
+            "<!-- MERGLBOT_CLOSEOUT_MODE: human_merge_only -->",
+            "<!-- MERGLBOT_PR_CHECK_SURFACE: verified -->",
+            "<!-- MERGLBOT_RUN_ID: pr-assistant-v4:100 -->",
+            "<!-- MERGLBOT_RUNTIME_TYPE: github_app_cloud_run -->",
+        ]
+    )
+    cloud_receipt = evaluate(
+        policy=policy,
+        pr=pr,
+        comments=[
+            {
+                **comments[0],
+                "body": cloud_body,
+                "user": {"login": "merglbot-pr-assistant-v4-stg[bot]", "type": "Bot"},
+            }
+        ],
+        changed_paths=["scripts/pr-assistant/final-merge-readiness.py"],
+        required_contexts=["ci"],
+        run_lookup=lambda run_id: (_ for _ in ()).throw(AssertionError("cloud receipts must not call actions run lookup")),
+        content_loader=lambda path: "",
+        evaluated_at="2026-05-01T00:00:00Z",
+    )
+    assert cloud_receipt["ok"], cloud_receipt
+
+    degraded_cloud_receipt = evaluate(
+        policy=policy,
+        pr=pr,
+        comments=[
+            {
+                **comments[0],
+                "body": cloud_body.replace("MERGLBOT_REVIEW_STATUS: success", "MERGLBOT_REVIEW_STATUS: degraded"),
+                "user": {"login": "merglbot-pr-assistant-v4-stg[bot]", "type": "Bot"},
+            }
+        ],
+        changed_paths=["scripts/pr-assistant/final-merge-readiness.py"],
+        required_contexts=["ci"],
+        run_lookup=None,
+        content_loader=lambda path: "",
+        evaluated_at="2026-05-01T00:00:00Z",
+    )
+    assert "pr_assistant_status_not_success" in degraded_cloud_receipt["blockers"]
 
     docs_only_receipt = evaluate(
         policy=policy,

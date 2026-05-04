@@ -15,10 +15,11 @@ The evaluator emits a JSON receipt with these gates:
   files, private key material, service account JSON keys, Terraform execution
   commands, and branch-protection bypass language.
 - `pr_assistant_review_only_evidence`: parses the latest trusted PR Assistant
-  v4 or v3 receipt comment from `github-actions[bot]`, requires review-only
-  markers, current-head SHA, approved verdict, successful status, satisfied or
-  not-required documentation state, verified PR check surface, and an allowed
-  PR Assistant workflow run path.
+  v4 or v3 receipt comment from `github-actions[bot]` or the approved
+  Merglbot v4 GitHub App bot, requires review-only markers where the runtime
+  emits them, current-head SHA, approved verdict, successful status, satisfied
+  or not-required documentation state, verified PR check surface, and either an
+  allowed PR Assistant workflow run path or an approved external v4 run id.
 - `required_checks_gate`: reads branch-protection required checks from GitHub
   and falls back to the manifest context list when that surface is unavailable.
 - `draft_state_gate`: blocks draft pull requests.
