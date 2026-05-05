@@ -82,13 +82,13 @@ jobs:
               "head_sha": head_sha,
               "base_ref": base_ref,
               "ok": False,
-              "blockers": ["trusted_evaluator_missing_on_base"],
+              "blockers": ["human_confirmation_required:trusted_evaluator_missing_on_base"],
               "decisions": [
                   {
                       "id": "trusted_evaluator_source",
-                      "status": "fail",
+                      "status": "human_confirmation_required",
                       "summary": "Protected base ref does not yet contain the Final Merge Readiness evaluator and policy.",
-                      "blockers": ["trusted_evaluator_missing_on_base"],
+                      "blockers": ["human_confirmation_required:trusted_evaluator_missing_on_base"],
                       "evidence": {
                           "bootstrap": True,
                           "pr_head_evaluator_executed": False,
@@ -103,7 +103,7 @@ jobs:
               handle.write("\n")
           print(json.dumps(receipt, indent=2, sort_keys=True))
           PY
-          exit 1
+          echo "::notice::Bootstrap receipt requires human confirmation; no PR-head evaluator code was executed."
 
       - name: Evaluate final merge readiness
         if: steps.evaluator.outputs.bootstrap != 'true'
