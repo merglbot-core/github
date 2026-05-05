@@ -402,16 +402,18 @@ def evaluate_pr_assistant(
 
     run_path = ""
     if run_id and not is_external_runtime and run_lookup is not None:
+        run_lookup_failed = False
         try:
             run = run_lookup(run_id)
         except Exception as exc:  # pragma: no cover - live API failure path.
             run = None
+            run_lookup_failed = True
             blockers.append(f"pr_assistant_run_lookup_failed:{exc}")
         if run:
             run_path = str(run.get("path") or "")
             if run_path not in set(assistant["allowed_workflow_paths"]):
                 blockers.append("pr_assistant_run_workflow_not_allowed")
-        else:
+        elif not run_lookup_failed:
             blockers.append("pr_assistant_run_lookup_missing")
 
     add_decision(
@@ -805,6 +807,41 @@ def self_test() -> int:
     )
     assert "required_check_missing:ci" in missing_check_receipt["blockers"]
 
+    draft_receipt = evaluate(
+        policy=policy,
+        pr={**pr, "isDraft": True},
+        comments=comments,
+        changed_paths=["scripts/pr-assistant/final-merge-readiness.py"],
+        required_contexts=["ci"],
+        run_lookup=run_lookup,
+        content_loader=lambda path: "",
+        evaluated_at="2026-05-01T00:00:00Z",
+    )
+    assert "pr_is_draft" in draft_receipt["blockers"]
+
+    failed_non_required_check_receipt = evaluate(
+        policy=policy,
+        pr={
+            **pr,
+            "statusCheckRollup": [
+                *pr["statusCheckRollup"],
+                {
+                    "__typename": "CheckRun",
+                    "name": "lint-extra",
+                    "status": "COMPLETED",
+                    "conclusion": "FAILURE",
+                },
+            ],
+        },
+        comments=comments,
+        changed_paths=["scripts/pr-assistant/final-merge-readiness.py"],
+        required_contexts=["ci"],
+        run_lookup=run_lookup,
+        content_loader=lambda path: "",
+        evaluated_at="2026-05-01T00:00:00Z",
+    )
+    assert "non_required_check_failed:lint-extra" in failed_non_required_check_receipt["blockers"]
+
     forbidden_path_receipt = evaluate(
         policy=policy,
         pr=pr,
@@ -830,6 +867,21 @@ def self_test() -> int:
     assert any(
         blocker.startswith("forbidden_content:terraform_apply:infra/main.tf")
         for blocker in terraform_apply_receipt["blockers"]
+    )
+
+    admin_bypass_receipt = evaluate(
+        policy=policy,
+        pr=pr,
+        comments=comments,
+        changed_paths=[".github/workflows/release.yml"],
+        required_contexts=["ci"],
+        run_lookup=run_lookup,
+        content_loader=lambda path: "echo 'bypass branch protection'",
+        evaluated_at="2026-05-01T00:00:00Z",
+    )
+    assert any(
+        blocker.startswith("forbidden_content:branch_protection_admin_bypass:.github/workflows/release.yml")
+        for blocker in admin_bypass_receipt["blockers"]
     )
 
     private_key_label = "PRIVATE" + " KEY"
