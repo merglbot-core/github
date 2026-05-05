@@ -308,7 +308,7 @@ def self_test() -> int:
         "schema_version": 1,
         "policy_version": "pr-assistant-v4-canary-policy-2026-05-01",
         "model_policy_version": "pr-assistant-v4-model-policy-2026-05-01",
-        "prompt_policy_version": "prompt-library-assets-ssot-2026-05-01",
+        "prompt_policy_version": "pr-assistant-v4-prompt-2026-05-01",
         "runtime_type": "github_actions_evidence_canary",
         "canary_command": "@merglbot review-v4",
         "promoted_command": "@merglbot review",
