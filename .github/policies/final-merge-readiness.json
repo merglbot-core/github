@@ -129,7 +129,7 @@
     "forbidden_content_patterns": [
       {
         "id": "private_key_material",
-        "pattern": "-----BEGIN (RSA |DSA |EC |OPENSSH |)?PRIVATE KEY-----",
+        "pattern": "-----BEGIN (ENCRYPTED |RSA |DSA |EC |OPENSSH |)?PRIVATE KEY-----",
         "ignore_case": false
       },
       {

@@ -52,17 +52,61 @@ jobs:
         run: |
           set -euo pipefail
           TRUSTED_ROOT="$GITHUB_WORKSPACE/trusted-gate"
-          PR_ROOT="$GITHUB_WORKSPACE/pr-head"
           if [ -f "$TRUSTED_ROOT/scripts/pr-assistant/final-merge-readiness.py" ] && [ -f "$TRUSTED_ROOT/.github/policies/final-merge-readiness.json" ]; then
             echo "root=$TRUSTED_ROOT" >> "$GITHUB_OUTPUT"
             echo "bootstrap=false" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::Final Merge Readiness is absent on the protected base ref; using PR-head bootstrap evaluator for this introductory policy PR."
-            echo "root=$PR_ROOT" >> "$GITHUB_OUTPUT"
+            echo "::notice::Final Merge Readiness is absent on the protected base ref; refusing to execute PR-head evaluator code with GitHub token access."
+            echo "root=" >> "$GITHUB_OUTPUT"
             echo "bootstrap=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Record trusted evaluator bootstrap blocker
+        if: steps.evaluator.outputs.bootstrap == 'true'
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          RECEIPT_PATH: ${{ github.workspace }}/final-merge-readiness-receipt.json
+        run: |
+          set -euo pipefail
+          python3 - "$RECEIPT_PATH" "$GITHUB_REPOSITORY" "$PR_NUMBER" "${{ github.event.pull_request.head.sha }}" "${{ github.event.pull_request.base.ref }}" <<'PY'
+          import json
+          import sys
+
+          path, repo, pr_number, head_sha, base_ref = sys.argv[1:]
+          receipt = {
+              "schema_version": 1,
+              "policy_id": "merglbot.final_merge_readiness",
+              "policy_version": "2026-05-01",
+              "repo": repo,
+              "pr_number": int(pr_number),
+              "head_sha": head_sha,
+              "base_ref": base_ref,
+              "ok": False,
+              "blockers": ["trusted_evaluator_missing_on_base"],
+              "decisions": [
+                  {
+                      "id": "trusted_evaluator_source",
+                      "status": "fail",
+                      "summary": "Protected base ref does not yet contain the Final Merge Readiness evaluator and policy.",
+                      "blockers": ["trusted_evaluator_missing_on_base"],
+                      "evidence": {
+                          "bootstrap": True,
+                          "pr_head_evaluator_executed": False,
+                          "github_token_exposed_to_pr_head_code": False,
+                          "closeout_mode": "human_merge_only",
+                      },
+                  }
+              ],
+          }
+          with open(path, "w", encoding="utf-8") as handle:
+              json.dump(receipt, handle, indent=2, sort_keys=True)
+              handle.write("\n")
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+          PY
+          exit 1
+
       - name: Evaluate final merge readiness
+        if: steps.evaluator.outputs.bootstrap != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}

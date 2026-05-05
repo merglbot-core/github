@@ -11,15 +11,18 @@ GitHub Actions check is `.github/workflows/final-merge-readiness.yml`.
 The workflow checks out the PR head only as inspected content. When the
 evaluator already exists on the protected base ref, the check executes that
 trusted base copy of the evaluator and policy while scanning changed-file
-content from the PR checkout. For the introductory policy PR where no protected
-base copy exists yet, the summary marks `Bootstrap evaluator: true` so the
-receipt is explicit policy bootstrap evidence, not autonomous merge authority.
+content from the PR checkout. If no protected base copy exists yet, the check
+does not execute PR-head evaluator code and does not expose `GH_TOKEN` to PR
+head code. It emits a fail-closed `trusted_evaluator_missing_on_base` receipt
+as explicit human-confirmation bootstrap evidence, not autonomous merge
+authority.
 
 The evaluator emits a JSON receipt with these gates:
 
 - `path_risk_gate`: classifies changed paths, blocks committed secret-like
-  files, private key material, service account JSON keys, Terraform execution
-  commands, and branch-protection bypass language.
+  files, private key material including encrypted private key PEM headers,
+  service account JSON keys, Terraform execution commands, and
+  branch-protection bypass language.
 - `pr_assistant_review_only_evidence`: parses the latest trusted PR Assistant
   v4 or v3 receipt comment from `github-actions[bot]` or the approved
   Merglbot v4 GitHub App bot, requires review-only markers where the runtime

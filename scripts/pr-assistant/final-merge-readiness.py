@@ -832,6 +832,21 @@ def self_test() -> int:
         for blocker in terraform_apply_receipt["blockers"]
     )
 
+    encrypted_private_key_receipt = evaluate(
+        policy=policy,
+        pr=pr,
+        comments=comments,
+        changed_paths=["scripts/pr-assistant/final-merge-readiness.py"],
+        required_contexts=["ci"],
+        run_lookup=run_lookup,
+        content_loader=lambda path: "-----BEGIN ENCRYPTED PRIVATE KEY-----\nredacted\n-----END ENCRYPTED PRIVATE KEY-----",
+        evaluated_at="2026-05-01T00:00:00Z",
+    )
+    assert any(
+        blocker.startswith("forbidden_content:private_key_material:scripts/pr-assistant/final-merge-readiness.py")
+        for blocker in encrypted_private_key_receipt["blockers"]
+    )
+
     print(json.dumps({"ok": True, "self_test": "passed"}))
     return 0
 
