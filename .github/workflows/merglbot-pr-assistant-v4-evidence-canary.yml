@@ -14,7 +14,7 @@ on:
         required: true
         type: string
       policy_approval_receipt:
-        description: "Policy-engine or explicit approval receipt for the v4 canary trigger"
+        description: "Public, non-secret policy approval receipt marker for the v4 canary trigger"
         required: true
         type: string
       trigger_comment_id:
@@ -75,7 +75,7 @@ jobs:
             fi
             local comment_body
             comment_body="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")"
-            COMMENT_BODY="$comment_body" python3 -c 'import os, re, sys; body = re.sub(r"\s+", " ", os.environ.get("COMMENT_BODY", "")).strip().lower(); body = re.sub(r"[.!?]+$", "", body); parts = body.split(); allowed_flags = {"--evidence-only"}; ok = len(parts) >= 2 and parts[0] == "@merglbot" and parts[1] == "review-v4" and all(part in allowed_flags for part in parts[2:]); sys.exit(0 if ok else 1)'
+            COMMENT_BODY="$comment_body" python3 -c 'import os, re, sys; body = re.sub(r"\s+", " ", os.environ.get("COMMENT_BODY", "")).strip().lower(); body = re.sub(r"[.!?]+$", "", body); parts = body.split(); ok = len(parts) == 2 and parts[0] == "@merglbot" and parts[1] == "review-v4"; sys.exit(0 if ok else 1)'
           }
 
           write_skip() {
@@ -91,6 +91,9 @@ jobs:
             local value="${1:-}"
             [[ "$value" =~ ^[A-Za-z0-9._:/@+=,-]{8,512}$ ]]
           }
+
+          # This is intentionally a public policy attestation marker, not a secret.
+          # The PR-visible canary receipt stores only its SHA-256 digest.
 
           if [ "$IS_WORKFLOW_DISPATCH" = "true" ]; then
             if ! [[ "${INPUT_PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then
@@ -252,6 +255,10 @@ jobs:
           PR_HEAD_REPO="$(jq -r '.headRepository.nameWithOwner // empty' pr_metadata.json)"
           if [ -z "${PR_HEAD_SHA:-}" ] || [ -z "${PR_BASE_SHA:-}" ] || [ -z "${PR_HEAD_REPO:-}" ]; then
             echo "ERROR: Unable to resolve PR head/base metadata" >&2
+            exit 1
+          fi
+          if ! [[ "$PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || ! [[ "$PR_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ERROR: PR head/base metadata must contain full 40-character git SHAs" >&2
             exit 1
           fi
           if [ "$PR_HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then

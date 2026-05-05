@@ -34,6 +34,7 @@ REQUIRED_ROOT_KEYS = {
     "allowed_canary_actions",
     "forbidden_actions",
     "approval_gated_actions",
+    "policy_approval_receipt",
     "receipt_required_markers",
     "safe_default_verdict",
     "safe_default_status",
@@ -84,8 +85,10 @@ RECEIPT_MARKERS_REQUIRED = {
     "MERGLBOT_RUN_ID",
     "MERGLBOT_RUNTIME_TYPE",
 }
-HEX_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+HEX_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SAFE_REF_RE = re.compile(r"^[A-Za-z0-9._/@:-]+$")
+RUN_URL_RE = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[0-9]+$")
+NUMERIC_RE = re.compile(r"^[0-9]+$")
 
 
 def load_json(path: pathlib.Path) -> Any:
@@ -160,6 +163,14 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
         raise SystemExit("docs_automation_boundary must be an object")
     if docs_boundary.get("may_create_docs_prs") is not False:
         raise SystemExit("v4 evidence canary must not create docs PRs")
+
+    approval_receipt = config["policy_approval_receipt"]
+    if not isinstance(approval_receipt, dict):
+        raise SystemExit("policy_approval_receipt must be an object")
+    if approval_receipt.get("confidentiality") != "public_audit_marker_not_secret":
+        raise SystemExit("policy_approval_receipt must be declared as a non-secret public audit marker")
+    if approval_receipt.get("pr_output_value") != "sha256_only":
+        raise SystemExit("policy_approval_receipt pr_output_value must be sha256_only")
     return {
         "ok": True,
         "policy_version": config["policy_version"],
@@ -187,16 +198,30 @@ def require_safe(value: str, *, label: str, sha: bool = False) -> str:
     return value
 
 
+def require_run_url(value: str) -> str:
+    value = (value or "").strip()
+    if not RUN_URL_RE.match(value):
+        raise SystemExit("run_url must be a GitHub Actions run URL")
+    return value
+
+
+def optional_numeric(value: str, *, label: str) -> str:
+    value = (value or "").strip()
+    if value and not NUMERIC_RE.match(value):
+        raise SystemExit(f"{label} must be numeric")
+    return value
+
+
 def render_comment(args: argparse.Namespace, config: dict[str, Any]) -> str:
     repo = require_safe(args.repo, label="repo")
     pr_number = require_safe(args.pr_number, label="pr_number")
     head_sha = require_safe(args.head_sha, label="head_sha", sha=True)
     base_sha = require_safe(args.base_sha, label="base_sha", sha=True)
     run_id = require_safe(args.run_id, label="run_id")
-    run_url = args.run_url.strip()
+    run_url = require_run_url(args.run_url)
     check_surface = require_safe(args.check_surface, label="check_surface")
     dispatch_source = require_safe(args.dispatch_source, label="dispatch_source")
-    trigger_comment_id = (args.trigger_comment_id or "").strip()
+    trigger_comment_id = optional_numeric(args.trigger_comment_id, label="trigger_comment_id")
     approval_receipt = (args.policy_approval_receipt or "").strip()
     approval_receipt_sha = sha256_text(approval_receipt) if approval_receipt else ""
     follow_up_id = f"pr-{pr_number}-v4-canary-{run_id}"
@@ -223,6 +248,7 @@ def render_comment(args: argparse.Namespace, config: dict[str, Any]) -> str:
         "- None from this evidence canary.",
         "### Medium Priority",
         "- v4 GitHub App review generation is not enabled by this workflow; the canary emits blocked_missing_authority until the approved runtime is available.",
+        "- The policy approval receipt is a public audit marker, not a credential; PR output stores only its SHA-256 digest.",
         "### Low Priority",
         "- None from this evidence canary.",
         "",
@@ -277,7 +303,7 @@ def render_comment(args: argparse.Namespace, config: dict[str, Any]) -> str:
 def build_check_payload(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
     head_sha = require_safe(args.head_sha, label="head_sha", sha=True)
     run_id = require_safe(args.run_id, label="run_id")
-    run_url = args.run_url.strip()
+    run_url = require_run_url(args.run_url)
     check_surface = require_safe(args.check_surface, label="check_surface")
     verdict = config["safe_default_verdict"]
     docs_state = "unknown"
@@ -288,6 +314,8 @@ def build_check_payload(args: argparse.Namespace, config: dict[str, Any]) -> dic
         f"Model policy: {config['model_policy_version']}. "
         f"Prompt policy: {config['prompt_policy_version']}. "
         f"Closeout mode: {closeout_mode}. Check surface: {check_surface}."
+        " The neutral check conclusion means the canary ran and published evidence;"
+        " the receipt verdict remains blocked_missing_authority until the approved runtime is available."
     )
     return {
         "name": config["check_name"],
@@ -326,6 +354,12 @@ def self_test() -> int:
         "allowed_canary_actions": sorted(ALLOWED_CANARY_ACTIONS),
         "forbidden_actions": sorted(FORBIDDEN_ACTIONS_REQUIRED),
         "approval_gated_actions": sorted(APPROVAL_GATES_REQUIRED),
+        "policy_approval_receipt": {
+            "confidentiality": "public_audit_marker_not_secret",
+            "workflow_input_allowed": True,
+            "pr_output_value": "sha256_only",
+            "description": "Non-secret canary approval marker.",
+        },
         "receipt_required_markers": sorted(RECEIPT_MARKERS_REQUIRED),
         "safe_default_verdict": "blocked_missing_authority",
         "safe_default_status": "blocked",

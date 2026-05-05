@@ -44,6 +44,12 @@
     "production_rollout",
     "destructive_rollback_beyond_disabling_app_or_command_routing"
   ],
+  "policy_approval_receipt": {
+    "confidentiality": "public_audit_marker_not_secret",
+    "workflow_input_allowed": true,
+    "pr_output_value": "sha256_only",
+    "description": "The canary approval receipt is an operator-visible policy attestation marker. It must never contain credentials, bearer tokens, private keys, or other secret material."
+  },
   "receipt_required_markers": [
     "MERGLBOT_PR_ASSISTANT_V4",
     "MERGLBOT_REVIEW_RECEIPT_SCHEMA_VERSION",
