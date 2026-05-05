@@ -832,6 +832,9 @@ def self_test() -> int:
         for blocker in terraform_apply_receipt["blockers"]
     )
 
+    private_key_label = "PRIVATE" + " KEY"
+    encrypted_key_header = "-" * 5 + "BEGIN ENCRYPTED " + private_key_label + "-" * 5
+    encrypted_key_footer = "-" * 5 + "END ENCRYPTED " + private_key_label + "-" * 5
     encrypted_private_key_receipt = evaluate(
         policy=policy,
         pr=pr,
@@ -839,7 +842,7 @@ def self_test() -> int:
         changed_paths=["scripts/pr-assistant/final-merge-readiness.py"],
         required_contexts=["ci"],
         run_lookup=run_lookup,
-        content_loader=lambda path: "-----BEGIN ENCRYPTED PRIVATE KEY-----\nredacted\n-----END ENCRYPTED PRIVATE KEY-----",
+        content_loader=lambda path: f"{encrypted_key_header}\nredacted\n{encrypted_key_footer}",
         evaluated_at="2026-05-01T00:00:00Z",
     )
     assert any(

@@ -12,8 +12,8 @@ The workflow checks out the PR head only as inspected content. When the
 evaluator already exists on the protected base ref, the check executes that
 trusted base copy of the evaluator and policy while scanning changed-file
 content from the PR checkout. If no protected base copy exists yet, the check
-does not execute PR-head evaluator code and does not expose `GH_TOKEN` to PR
-head code. It emits a `human_confirmation_required:trusted_evaluator_missing_on_base`
+does not execute PR-head evaluator code and does not expose the workflow token
+to PR head code. It emits a `human_confirmation_required:trusted_evaluator_missing_on_base`
 receipt as explicit bootstrap evidence, not autonomous merge authority.
 
 The evaluator emits a JSON receipt with these gates:

@@ -108,7 +108,7 @@ jobs:
       - name: Evaluate final merge readiness
         if: steps.evaluator.outputs.bootstrap != 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.pr.outputs.number }}
           EVALUATOR_ROOT: ${{ steps.evaluator.outputs.root }}
           CONTENT_ROOT: ${{ github.workspace }}/pr-head
