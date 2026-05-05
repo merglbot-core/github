@@ -52,6 +52,7 @@ jobs:
       pr_number: ${{ steps.get_pr.outputs.pr_number }}
       should_run: ${{ steps.get_pr.outputs.should_run }}
       trigger_comment_id: ${{ steps.get_pr.outputs.trigger_comment_id }}
+      # Public policy attestation marker only; PR-visible receipts store its SHA-256 digest.
       policy_approval_receipt: ${{ steps.get_pr.outputs.policy_approval_receipt }}
     steps:
       - name: Get PR Number and Canary Approval
@@ -204,6 +205,8 @@ jobs:
     if: needs.check-trigger.outputs.should_run == 'true' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # These are the only write scopes in the canary execution job. They publish
+    # the PR comment receipt and the Checks API surface; the runtime remains review-only.
     permissions:
       actions: read
       checks: write
@@ -217,7 +220,7 @@ jobs:
       TRIGGER_COMMENT_ID: ${{ github.event.inputs.trigger_comment_id || needs.check-trigger.outputs.trigger_comment_id || '' }}
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2, refs/tags/v6.0.2
         with:
           persist-credentials: false
 
@@ -307,7 +310,7 @@ jobs:
 
           CHECK_EXTERNAL_ID="merglbot-pr-assistant-v4-canary-${GITHUB_RUN_ID}"
           EXISTING_CHECK_ID=""
-          if gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100&filter=all" > pr_check_runs_for_publish.json 2>/dev/null; then
+          if gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100&filter=all" > pr_check_runs_for_publish.json 2> pr_check_runs_for_publish.err; then
             EXISTING_CHECK_ID="$(
               jq -sr --arg name "Merglbot PR Assistant v4" --arg external_id "$CHECK_EXTERNAL_ID" '
                 [ .[]?.check_runs[]?
@@ -317,6 +320,8 @@ jobs:
                 ][0] // empty
               ' pr_check_runs_for_publish.json
             )"
+          else
+            echo "WARN: unable to list existing check runs before publish; continuing with create attempt" >&2
           fi
 
           CHECK_PUBLISH_STATE="published"
@@ -356,8 +361,8 @@ jobs:
           CHECK_EXTERNAL_ID="merglbot-pr-assistant-v4-canary-${GITHUB_RUN_ID}"
           MATCH_COUNT="0"
           for _ in $(seq 1 12); do
-            if gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100&filter=all" 2>/dev/null \
-              | jq -s '{check_runs: (map(.check_runs // []) | add // [])}' > pr_head_check_runs.json.tmp 2>/dev/null; then
+            if gh api --paginate "repos/${GITHUB_REPOSITORY}/commits/${PR_HEAD_SHA}/check-runs?per_page=100&filter=all" 2> pr_head_check_runs.err \
+              | jq -s '{check_runs: (map(.check_runs // []) | add // [])}' > pr_head_check_runs.json.tmp 2> pr_head_check_runs_jq.err; then
               mv -f pr_head_check_runs.json.tmp pr_head_check_runs.json
               MATCH_COUNT="$(jq -r --arg name "Merglbot PR Assistant v4" --arg external_id "$CHECK_EXTERNAL_ID" --arg head_sha "$PR_HEAD_SHA" '
                 [
@@ -371,6 +376,8 @@ jobs:
                 printf '%s\n' "verified" > pr_check_surface_state.txt
                 exit 0
               fi
+            else
+              echo "WARN: unable to fetch or parse PR-head check runs during verification attempt" >&2
             fi
             sleep 5
           done
@@ -400,4 +407,4 @@ jobs:
             --policy-approval-receipt "$POLICY_APPROVAL_RECEIPT" \
             --output comment.md
 
-          gh pr comment "$PR_NUMBER" --body-file comment.md
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file comment.md

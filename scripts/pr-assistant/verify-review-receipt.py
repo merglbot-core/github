@@ -458,7 +458,7 @@ def self_test() -> int:
             "<!-- MERGLBOT_PR_CHECK_SURFACE: verified -->",
             "<!-- MERGLBOT_CLOSEOUT_MODE: human_merge_only -->",
             "<!-- MERGLBOT_MODEL_POLICY_VERSION: pr-assistant-v4-model-policy-2026-05-01 -->",
-            "<!-- MERGLBOT_PROMPT_POLICY_VERSION: prompt-library-assets-ssot-2026-05-01 -->",
+            "<!-- MERGLBOT_PROMPT_POLICY_VERSION: pr-assistant-v4-prompt-2026-05-01 -->",
             "<!-- MERGLBOT_REVIEW_RUN_ID: 42 -->",
             "<!-- MERGLBOT_RUN_ID: 42 -->",
             "<!-- MERGLBOT_RUN_URL: https://github.com/o/r/actions/runs/42 -->",
