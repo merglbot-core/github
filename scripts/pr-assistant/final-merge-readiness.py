@@ -138,7 +138,7 @@ def trusted_comment(comment: dict[str, Any], trusted_logins: set[str]) -> bool:
         return False
     login = str(user.get("login") or "")
     user_type = str(user.get("type") or "")
-    return login in trusted_logins and user_type in {"Bot", ""}
+    return login in trusted_logins and user_type == "Bot"
 
 
 def sorted_comments(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -615,6 +615,8 @@ def collect_live_context(repo: str, pr_number: int, policy: dict[str, Any]) -> t
     run_cache: dict[str, dict[str, Any] | None] = {}
 
     def run_lookup(run_id: str) -> dict[str, Any] | None:
+        if not run_id or not run_id.isdigit():
+            return None
         if run_id not in run_cache:
             run_cache[run_id] = gh_json(["api", f"repos/{repo}/actions/runs/{run_id}"])
         return run_cache[run_id]

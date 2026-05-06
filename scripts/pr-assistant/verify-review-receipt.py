@@ -226,7 +226,7 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
     elif run_id and run_url != expected_run_url(str(pr.get("url") or ""), run_id):
         blockers.append("review_run_url_mismatch")
     run_path = ""
-    if run_id:
+    if run_id and run_id.isdigit():
         try:
             run = gh_json(["api", f"repos/{repo}/actions/runs/{run_id}"])
             run_path = str(run.get("path") or "")
