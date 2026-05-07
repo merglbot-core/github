@@ -1,0 +1,181 @@
+name: Final Merge Readiness
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  issues: read
+  pull-requests: read
+  statuses: read
+
+concurrency:
+  group: final-merge-readiness-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  final-merge-readiness:
+    name: Final Merge Readiness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout pull request head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr-head
+
+      - name: Checkout trusted base
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted-gate
+
+      - name: Resolve pull request number
+        id: pr
+        run: |
+          set -euo pipefail
+          PR_NUMBER="${PR_NUMBER_INPUT}"
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::error::Missing pull request number."
+            exit 1
+          fi
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+        env:
+          PR_NUMBER_INPUT: ${{ github.event.pull_request.number }}
+
+      - name: Select trusted evaluator source
+        id: evaluator
+        run: |
+          set -euo pipefail
+          TRUSTED_ROOT="$GITHUB_WORKSPACE/trusted-gate"
+          if [ -f "$TRUSTED_ROOT/scripts/pr-assistant/final-merge-readiness.py" ] && [ -f "$TRUSTED_ROOT/.github/policies/final-merge-readiness.json" ]; then
+            echo "root=$TRUSTED_ROOT" >> "$GITHUB_OUTPUT"
+            echo "bootstrap=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Final Merge Readiness is absent on the protected base ref; refusing to execute PR-head evaluator code with GitHub token access."
+            echo "root=" >> "$GITHUB_OUTPUT"
+            echo "bootstrap=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Record trusted evaluator bootstrap blocker
+        if: steps.evaluator.outputs.bootstrap == 'true'
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          RECEIPT_PATH: ${{ github.workspace }}/final-merge-readiness-receipt.json
+        run: |
+          set -euo pipefail
+          python3 - "$RECEIPT_PATH" "$GITHUB_REPOSITORY" "$PR_NUMBER" "${{ github.event.pull_request.head.sha }}" "${{ github.event.pull_request.base.ref }}" <<'PY'
+          import json
+          import sys
+
+          path, repo, pr_number, head_sha, base_ref = sys.argv[1:]
+          receipt = {
+              "schema_version": 1,
+              "policy_id": "merglbot.final_merge_readiness",
+              "policy_version": "2026-05-01",
+              "repo": repo,
+              "pr_number": int(pr_number),
+              "head_sha": head_sha,
+              "base_ref": base_ref,
+              "ok": False,
+              "blockers": ["human_confirmation_required:trusted_evaluator_missing_on_base"],
+              "decisions": [
+                  {
+                      "id": "trusted_evaluator_source",
+                      "status": "human_confirmation_required",
+                      "summary": "Protected base ref does not yet contain the Final Merge Readiness evaluator and policy.",
+                      "blockers": ["human_confirmation_required:trusted_evaluator_missing_on_base"],
+                      "evidence": {
+                          "bootstrap": True,
+                          "pr_head_evaluator_executed": False,
+                          "github_token_exposed_to_pr_head_code": False,
+                          "closeout_mode": "human_merge_only",
+                      },
+                  }
+              ],
+          }
+          with open(path, "w", encoding="utf-8") as handle:
+              json.dump(receipt, handle, indent=2, sort_keys=True)
+              handle.write("\n")
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+          PY
+          echo "::notice::Bootstrap receipt requires human confirmation; no PR-head evaluator code was executed."
+
+      - name: Evaluate final merge readiness
+        if: steps.evaluator.outputs.bootstrap != 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          EVALUATOR_ROOT: ${{ steps.evaluator.outputs.root }}
+          CONTENT_ROOT: ${{ github.workspace }}/pr-head
+          RECEIPT_PATH: ${{ github.workspace }}/final-merge-readiness-receipt.json
+        run: |
+          set -euo pipefail
+          cd "$EVALUATOR_ROOT"
+          for attempt in $(seq 1 24); do
+            set +e
+            python3 scripts/pr-assistant/final-merge-readiness.py \
+              --repo "$GITHUB_REPOSITORY" \
+              --pr "$PR_NUMBER" \
+              --content-root "$CONTENT_ROOT" \
+              --output "$RECEIPT_PATH"
+            status=$?
+            set -e
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+            if [ "$attempt" -ge 24 ]; then
+              exit "$status"
+            fi
+            if python3 - "$RECEIPT_PATH" <<'PY'
+          import json
+          import sys
+
+          receipt = json.load(open(sys.argv[1], encoding="utf-8"))
+          blockers = set(receipt.get("blockers") or [])
+          head_sha = receipt.get("head_sha")
+          pr_gate = next(
+              (item for item in receipt.get("decisions", []) if item.get("id") == "pr_assistant_review_only_evidence"),
+              {},
+          )
+          review_head_sha = (pr_gate.get("evidence") or {}).get("review_head_sha")
+          retry = False
+          if "missing_pr_assistant_receipt" in blockers or "pr_assistant_head_sha_mismatch" in blockers:
+              retry = True
+          if review_head_sha and review_head_sha != head_sha:
+              retry = True
+          if any(item.startswith("required_check_missing:") or item.startswith("required_check_not_success:") for item in blockers):
+              retry = True
+          sys.exit(0 if retry else 1)
+          PY
+            then
+              echo "Readiness dependencies are still settling; retrying attempt $((attempt + 1))/24 after 30s."
+              sleep 30
+              continue
+            fi
+            exit "$status"
+          done
+
+      - name: Publish readiness receipt summary
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Final Merge Readiness Receipt"
+            echo ""
+            echo "- Evaluator root: \`${{ steps.evaluator.outputs.root }}\`"
+            echo "- Bootstrap evaluator: \`${{ steps.evaluator.outputs.bootstrap }}\`"
+            echo ""
+            if [ -s final-merge-readiness-receipt.json ]; then
+              echo '```json'
+              python3 -m json.tool final-merge-readiness-receipt.json
+              echo '```'
+            else
+              echo "No receipt was produced."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
