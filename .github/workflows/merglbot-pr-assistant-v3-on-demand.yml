@@ -590,14 +590,14 @@ jobs:
                   ;;
               esac
               case "$changed_path" in
-                .github/workflows/merglbot-pr-v3-on-demand.yml|.github/workflows/merglbot-pr-assistant-v3-on-demand.yml|scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh|scripts/pr-assistant/verify-review-receipt.py|scripts/pr-assistant/extract-zaver-field.sh)
+                .github/workflows/merglbot-pr-v3-on-demand.yml|.github/workflows/merglbot-pr-assistant-v3-on-demand.yml|.github/workflows/merglbot-pr-assistant-v4-evidence-canary.yml|.github/pr-assistant-v4-canary.json|scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh|scripts/pr-assistant/verify-review-receipt.py|scripts/pr-assistant/extract-zaver-field.sh|scripts/pr-assistant/pr-assistant-v4-evidence-canary.py)
                   has_impactful="true"
                   has_pr_assistant_copy_file="true"
                   ;;
                 .github/workflows/ci.yml)
                   has_impactful="true"
                   case "${PR_HEAD_REF:-}" in
-                    codex/pr-assistant-v3-*)
+                    codex/pr-assistant-v3-*|codex/pr-assistant-v4-*)
                       # Managed rollout support: some copy-target repos need a
                       # required-check mirror job in ci.yml, but only alongside
                       # PR Assistant copy files.

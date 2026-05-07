@@ -14,22 +14,36 @@ import argparse
 import json
 import re
 import subprocess
+from pathlib import Path
 from typing import Any
 
 MARKER_RE = re.compile(r"<!--\s*(MERGLBOT_[A-Z0-9_]+)\s*:\s*([\s\S]*?)\s*-->")
 SECTION_HEADER_RE = re.compile(r"^#{2,6}\s+")
 ZAVER_SECTION_HEADER_RE = re.compile(r"^##\s+")
 MACHINE_TOKEN_STRIP_RE = re.compile(r"[^a-z0-9_]+")
-PR_ASSISTANT_WORKFLOW_PATHS = {
-    ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
-    ".github/workflows/merglbot-pr-v3-on-demand.yml",
+PR_ASSISTANT_RECEIPT_MARKERS = {
+    "v3": "<!-- MERGLBOT_PR_ASSISTANT_V3 -->",
+    "v4": "<!-- MERGLBOT_PR_ASSISTANT_V4 -->",
 }
+PR_ASSISTANT_WORKFLOW_PATHS_BY_VERSION = {
+    "v3": {
+        ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
+        ".github/workflows/merglbot-pr-v3-on-demand.yml",
+    },
+    "v4": {
+        ".github/workflows/merglbot-pr-assistant-v4-evidence-canary.yml",
+    },
+}
+PR_ASSISTANT_WORKFLOW_PATHS = set().union(*PR_ASSISTANT_WORKFLOW_PATHS_BY_VERSION.values())
 PR_ASSISTANT_COPY_PATHS = PR_ASSISTANT_WORKFLOW_PATHS | {
     "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
     "scripts/pr-assistant/verify-review-receipt.py",
     "scripts/pr-assistant/extract-zaver-field.sh",
+    "scripts/pr-assistant/pr-assistant-v4-evidence-canary.py",
+    ".github/pr-assistant-v4-canary.json",
 }
 PR_ASSISTANT_ROLLOUT_SUPPORT_PATHS = {".github/workflows/ci.yml"}
+V4_CANARY_CONFIG_PATH = Path(".github/pr-assistant-v4-canary.json")
 
 
 def gh_json(args: list[str]) -> Any:
@@ -46,6 +60,34 @@ def gh_json(args: list[str]) -> Any:
 
 def parse_markers(body: str) -> dict[str, str]:
     return {key.strip(): value.strip() for key, value in MARKER_RE.findall(body or "")}
+
+
+def load_v4_required_markers(config_path: Path = V4_CANARY_CONFIG_PATH) -> set[str]:
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    markers = config.get("receipt_required_markers")
+    if not isinstance(markers, list) or not all(isinstance(item, str) for item in markers):
+        raise ValueError("receipt_required_markers must be a string array")
+    return set(markers)
+
+
+def receipt_has_marker(body: str, markers: dict[str, str], marker: str) -> bool:
+    if marker == "MERGLBOT_PR_ASSISTANT_V3":
+        return PR_ASSISTANT_RECEIPT_MARKERS["v3"] in body
+    if marker == "MERGLBOT_PR_ASSISTANT_V4":
+        return PR_ASSISTANT_RECEIPT_MARKERS["v4"] in body
+    return marker in markers
+
+
+def missing_required_receipt_markers(
+    body: str,
+    markers: dict[str, str],
+    required_markers: set[str],
+) -> list[str]:
+    return sorted(
+        marker
+        for marker in required_markers
+        if not receipt_has_marker(body, markers, marker)
+    )
 
 
 def normalize_machine_token(value: str) -> str:
@@ -74,7 +116,7 @@ def classify_pr_assistant_copy_docs_state(
 ) -> str:
     has_pr_assistant_copy_file = bool(changed_paths & PR_ASSISTANT_COPY_PATHS)
     non_copy_paths = set(changed_paths) - PR_ASSISTANT_COPY_PATHS
-    if pr_head_ref.startswith("codex/pr-assistant-v3-"):
+    if pr_head_ref.startswith(("codex/pr-assistant-v3-", "codex/pr-assistant-v4-")):
         non_copy_paths -= PR_ASSISTANT_ROLLOUT_SUPPORT_PATHS
     if has_pr_assistant_copy_file and not non_copy_paths:
         return "not_required"
@@ -124,7 +166,12 @@ def extract_zaver_field(body: str, field_name: str) -> str:
 
 def latest_receipt(
     comments: list[dict[str, Any]],
-) -> tuple[dict[str, str] | None, str | None, str]:
+    assistant_version: str = "v3",
+) -> tuple[dict[str, str] | None, str | None, str, str | None]:
+    if assistant_version == "any":
+        versions = ("v4", "v3")
+    else:
+        versions = (assistant_version,)
     for comment in reversed(comments):
         user = comment.get("user")
         if not isinstance(user, dict):
@@ -132,11 +179,12 @@ def latest_receipt(
         if user.get("login") != "github-actions[bot]" or user.get("type") != "Bot":
             continue
         body = str(comment.get("body") or "")
-        if "<!-- MERGLBOT_PR_ASSISTANT_V3 -->" not in body:
-            continue
-        markers = parse_markers(body)
-        return markers, str(comment.get("html_url") or comment.get("url") or ""), body
-    return None, None, ""
+        for version in versions:
+            if PR_ASSISTANT_RECEIPT_MARKERS[version] not in body:
+                continue
+            markers = parse_markers(body)
+            return markers, str(comment.get("html_url") or comment.get("url") or ""), body, version
+    return None, None, "", None
 
 
 def expected_run_url(pr_url: str, run_id: str) -> str:
@@ -145,7 +193,7 @@ def expected_run_url(pr_url: str, run_id: str) -> str:
     return f"{pr_url.split('/pull/', 1)[0]}/actions/runs/{run_id}"
 
 
-def verify(repo: str, pr_number: int) -> dict[str, Any]:
+def verify(repo: str, pr_number: int, assistant_version: str = "v3") -> dict[str, Any]:
     pr = gh_json(
         ["pr", "view", str(pr_number), "--repo", repo, "--json", "headRefOid,url,state"]
     )
@@ -163,7 +211,10 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
         for page in (comments_pages if isinstance(comments_pages, list) else [])
         for item in (page if isinstance(page, list) else [page])
     ]
-    markers, comment_url, receipt_body = latest_receipt(comments)
+    markers, comment_url, receipt_body, receipt_version = latest_receipt(
+        comments,
+        assistant_version=assistant_version,
+    )
 
     blockers: list[str] = []
     if not markers:
@@ -176,7 +227,14 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
     schema_version = markers.get("MERGLBOT_REVIEW_RECEIPT_SCHEMA_VERSION", "")
     pr_check_surface = markers.get("MERGLBOT_PR_CHECK_SURFACE", "")
     run_id = markers.get("MERGLBOT_RUN_ID", "")
+    review_run_id = markers.get("MERGLBOT_REVIEW_RUN_ID", "")
     run_url = markers.get("MERGLBOT_RUN_URL", "")
+    review_boundary = markers.get("MERGLBOT_REVIEW_BOUNDARY", "")
+    closeout_mode = markers.get("MERGLBOT_CLOSEOUT_MODE", "")
+    model_policy_version = markers.get("MERGLBOT_MODEL_POLICY_VERSION", "")
+    prompt_policy_version = markers.get("MERGLBOT_PROMPT_POLICY_VERSION", "")
+    runtime_type = markers.get("MERGLBOT_RUNTIME_TYPE", "")
+    suggested_docs_targets = markers.get("MERGLBOT_SUGGESTED_DOCS_TARGETS", "")
     docs_state_marker_present = "MERGLBOT_DOCUMENTATION_OBLIGATION_STATE" in markers
     docs_state = markers.get("MERGLBOT_DOCUMENTATION_OBLIGATION_STATE", "")
 
@@ -221,6 +279,42 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
         blockers.append("pr_check_surface_not_verified")
     if not run_id:
         blockers.append("missing_review_run_id")
+    if receipt_version == "v4":
+        try:
+            required_markers = load_v4_required_markers()
+        except Exception as exc:  # pragma: no cover - exercised through live CLI usage.
+            blockers.append(f"v4_required_marker_config_unavailable:{exc}")
+        else:
+            for marker in missing_required_receipt_markers(
+                receipt_body,
+                markers,
+                required_markers,
+            ):
+                blockers.append(f"missing_v4_required_marker:{marker}")
+        if review_boundary != "review_only":
+            blockers.append("review_boundary_not_review_only")
+        if closeout_mode != "human_merge_only":
+            blockers.append("closeout_mode_not_human_merge_only")
+        if not model_policy_version:
+            blockers.append("missing_model_policy_version")
+        if not prompt_policy_version:
+            blockers.append("missing_prompt_policy_version")
+        if not runtime_type:
+            blockers.append("missing_runtime_type")
+        if not review_run_id:
+            blockers.append("missing_v4_review_run_id")
+        elif run_id and review_run_id != run_id:
+            blockers.append("review_run_id_mismatch")
+        if suggested_docs_targets:
+            try:
+                parsed_docs_targets = json.loads(suggested_docs_targets)
+            except json.JSONDecodeError:
+                blockers.append("suggested_docs_targets_not_json")
+            else:
+                if not isinstance(parsed_docs_targets, list) or not all(
+                    isinstance(item, str) for item in parsed_docs_targets
+                ):
+                    blockers.append("suggested_docs_targets_not_string_array")
     if not run_url:
         blockers.append("missing_review_run_url")
     elif run_id and run_url != expected_run_url(str(pr.get("url") or ""), run_id):
@@ -232,7 +326,13 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
             run_path = str(run.get("path") or "")
         except Exception as exc:  # pragma: no cover - exercised through live CLI usage.
             blockers.append(f"review_run_lookup_failed:{exc}")
-        if run_path and run_path not in PR_ASSISTANT_WORKFLOW_PATHS:
+        if assistant_version == "any":
+            allowed_run_paths = PR_ASSISTANT_WORKFLOW_PATHS
+        elif receipt_version:
+            allowed_run_paths = PR_ASSISTANT_WORKFLOW_PATHS_BY_VERSION[receipt_version]
+        else:
+            allowed_run_paths = PR_ASSISTANT_WORKFLOW_PATHS_BY_VERSION[assistant_version]
+        if run_path and run_path not in allowed_run_paths:
             blockers.append("review_run_not_from_pr_assistant_workflow")
 
     return {
@@ -240,6 +340,8 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
         "repo": repo,
         "pr_number": pr_number,
         "pr_url": pr.get("url"),
+        "assistant_version_requested": assistant_version,
+        "assistant_version_detected": receipt_version,
         "head_sha": head_sha or None,
         "review_head_sha": review_head_sha or None,
         "current_head_match": current_head_match,
@@ -248,8 +350,14 @@ def verify(repo: str, pr_number: int) -> dict[str, Any]:
         "status": status or None,
         "documentation_obligation_state": docs_state or None,
         "pr_check_surface": pr_check_surface or None,
+        "review_boundary": review_boundary or None,
+        "closeout_mode": closeout_mode or None,
+        "model_policy_version": model_policy_version or None,
+        "prompt_policy_version": prompt_policy_version or None,
+        "runtime_type": runtime_type or None,
         "comment_url": comment_url,
         "run_id": run_id or None,
+        "review_run_id": review_run_id or None,
         "run_url": run_url or None,
         "run_path": run_path or None,
         "blockers": blockers,
@@ -274,10 +382,11 @@ def self_test() -> int:
     assert markers["MERGLBOT_REVIEW_HEAD_SHA"] == "abc123"
     assert markers["MERGLBOT_REVIEW_STATUS"] == "success"
     assert markers["MERGLBOT_RUN_ID"] == "42"
-    trusted_markers, _, trusted_body = latest_receipt(
+    trusted_markers, _, trusted_body, trusted_version = latest_receipt(
         [{"body": body, "user": {"login": "github-actions[bot]", "type": "Bot"}}]
     )
     assert trusted_markers and trusted_markers["MERGLBOT_REVIEW_HEAD_SHA"] == "abc123"
+    assert trusted_version == "v3"
     assert extract_zaver_field(trusted_body, "Verdict") == ""
     assert normalize_machine_token("Review V4 Failed!") == "review_v4_failed"
     assert normalize_machine_token("approved-for-closeout") == "approved_for_closeout"
@@ -335,7 +444,69 @@ def self_test() -> int:
         )
         == "approved_for_closeout"
     )
-    spoofed_markers, _, _ = latest_receipt(
+    v4_body = "\n".join(
+        [
+            "<!-- MERGLBOT_PR_ASSISTANT_V4 -->",
+            "<!-- MERGLBOT_REVIEW_RECEIPT_SCHEMA_VERSION: 1 -->",
+            "<!-- MERGLBOT_REVIEW_BOUNDARY: review_only -->",
+            "<!-- MERGLBOT_FOLLOW_UP_ID: pr-1-v4-canary-42 -->",
+            "<!-- MERGLBOT_REVIEW_HEAD_SHA: abc123 -->",
+            "<!-- MERGLBOT_REVIEW_VERDICT: blocked_missing_authority -->",
+            "<!-- MERGLBOT_REVIEW_STATUS: blocked -->",
+            "<!-- MERGLBOT_DOCUMENTATION_OBLIGATION_STATE: unknown -->",
+            "<!-- MERGLBOT_DOCS_FOLLOW_UP_HINT: none -->",
+            "<!-- MERGLBOT_PR_CHECK_SURFACE: verified -->",
+            "<!-- MERGLBOT_CLOSEOUT_MODE: human_merge_only -->",
+            "<!-- MERGLBOT_MODEL_POLICY_VERSION: pr-assistant-v4-model-policy-2026-05-01 -->",
+            "<!-- MERGLBOT_PROMPT_POLICY_VERSION: pr-assistant-v4-prompt-2026-05-01 -->",
+            "<!-- MERGLBOT_REVIEW_RUN_ID: 42 -->",
+            "<!-- MERGLBOT_RUN_ID: 42 -->",
+            "<!-- MERGLBOT_RUN_URL: https://github.com/o/r/actions/runs/42 -->",
+            "<!-- MERGLBOT_RUNTIME_TYPE: github_actions_evidence_canary -->",
+            "<!-- MERGLBOT_SUGGESTED_DOCS_TARGETS: [] -->",
+        ]
+    )
+    v4_markers, _, _, v4_version = latest_receipt(
+        [{"body": v4_body, "user": {"login": "github-actions[bot]", "type": "Bot"}}],
+        assistant_version="v4",
+    )
+    assert v4_markers and v4_markers["MERGLBOT_CLOSEOUT_MODE"] == "human_merge_only"
+    assert v4_version == "v4"
+    assert missing_required_receipt_markers(
+        v4_body,
+        v4_markers,
+        {
+            "MERGLBOT_PR_ASSISTANT_V4",
+            "MERGLBOT_FOLLOW_UP_ID",
+            "MERGLBOT_DOCS_FOLLOW_UP_HINT",
+        },
+    ) == []
+    incomplete_v4_markers = parse_markers(v4_body.replace("MERGLBOT_DOCS_FOLLOW_UP_HINT", "MERGLBOT_DOCS_HINT"))
+    assert missing_required_receipt_markers(
+        v4_body.replace("MERGLBOT_DOCS_FOLLOW_UP_HINT", "MERGLBOT_DOCS_HINT"),
+        incomplete_v4_markers,
+        {
+            "MERGLBOT_PR_ASSISTANT_V4",
+            "MERGLBOT_FOLLOW_UP_ID",
+            "MERGLBOT_DOCS_FOLLOW_UP_HINT",
+        },
+    ) == ["MERGLBOT_DOCS_FOLLOW_UP_HINT"]
+    any_markers, _, _, any_version = latest_receipt(
+        [
+            {"body": body, "user": {"login": "github-actions[bot]", "type": "Bot"}},
+            {"body": v4_body, "user": {"login": "github-actions[bot]", "type": "Bot"}},
+        ],
+        assistant_version="any",
+    )
+    assert any_markers and any_version == "v4"
+    default_markers, _, _, default_version = latest_receipt(
+        [
+            {"body": body, "user": {"login": "github-actions[bot]", "type": "Bot"}},
+            {"body": v4_body, "user": {"login": "github-actions[bot]", "type": "Bot"}},
+        ]
+    )
+    assert default_markers and default_version == "v3"
+    spoofed_markers, _, _, _ = latest_receipt(
         [{"body": body, "user": {"login": "octocat", "type": "User"}}]
     )
     assert spoofed_markers is None
@@ -447,6 +618,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", help="Repository in owner/name form")
     parser.add_argument("--pr", type=int, help="Pull request number")
+    parser.add_argument(
+        "--assistant-version",
+        choices=("v3", "v4", "any"),
+        default="v3",
+        help="Receipt marker family to verify. Defaults to v3 for rollout compatibility.",
+    )
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
 
@@ -455,7 +632,7 @@ def main() -> int:
     if not args.repo or not args.pr:
         parser.error("--repo and --pr are required unless --self-test is used")
 
-    result = verify(args.repo, args.pr)
+    result = verify(args.repo, args.pr, assistant_version=args.assistant_version)
     print(json.dumps(result, sort_keys=True))
     return 0 if result["ok"] else 1
 

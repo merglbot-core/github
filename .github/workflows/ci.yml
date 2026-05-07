@@ -25,10 +25,13 @@ jobs:
           bash -n scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh
           bash -n scripts/pr-assistant/secret-scan-patterns-smoke-test.sh
           bash scripts/pr-assistant/secret-scan-patterns-smoke-test.sh
+          python3 -m py_compile scripts/pr-assistant/verify-review-receipt.py
+          python3 -m py_compile scripts/pr-assistant/pr-assistant-v4-evidence-canary.py
           python3 -m py_compile scripts/pr-assistant/final-merge-readiness.py
-          python3 scripts/pr-assistant/final-merge-readiness.py --self-test
-          test -f scripts/pr-assistant/verify-review-receipt.py
           python3 scripts/pr-assistant/verify-review-receipt.py --self-test
+          python3 scripts/pr-assistant/pr-assistant-v4-evidence-canary.py self-test
+          python3 scripts/pr-assistant/pr-assistant-v4-evidence-canary.py validate-config
+          python3 scripts/pr-assistant/final-merge-readiness.py --self-test
           python3 -m py_compile scripts/dependabot/ent_dependabot_closeout.py
           python3 scripts/dependabot/ent_dependabot_closeout.py --self-test
       - name: Validate PR Assistant rollout manifest
