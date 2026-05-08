@@ -153,6 +153,9 @@ Reusable callers may also enable `autonomous_fix_loop`,
 orchestrator PR close-loop waves. Those inputs are intentionally kept off manual
 `workflow_dispatch` to preserve GitHub's 10-input limit and do not by themselves
 perform semantic code edits inside GitHub Actions.
+The weekly caller uses `max_fix_iterations=2` and `max_review_iterations=2` for
+the GHAU waste lane documented in
+`docs/finops/ghau-waste-ent-dependabot-weekly-timeout.md`.
 
 ## Merge Gate
 

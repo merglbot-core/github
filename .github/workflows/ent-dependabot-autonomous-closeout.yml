@@ -156,9 +156,12 @@ permissions:
   pull-requests: write
   statuses: read
 
+# Apply mode can mutate overlapping repository state even when callers use
+# different scopes such as `all` and `single_repo`, so all apply runs share one
+# non-cancelling queue. Dry-runs are non-mutating and may be superseded.
 concurrency:
-  group: ent-dependabot-autonomous-closeout-${{ github.event_name }}-${{ inputs.mode || 'dry-run' }}-${{ inputs.repo_scope || 'all' }}-${{ inputs.single_repo || 'all' }}
-  cancel-in-progress: false
+  group: ent-dependabot-autonomous-closeout-${{ inputs.mode || 'dry-run' }}
+  cancel-in-progress: ${{ (inputs.mode || 'dry-run') != 'apply' }}
 
 jobs:
   closeout:

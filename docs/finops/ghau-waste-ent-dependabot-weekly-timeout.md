@@ -11,13 +11,14 @@ Audit telemetry over 2026-03-31 → 2026-04-30 attributed Actions minutes to the
 `.github/workflows/ent-dependabot-weekly.yml` is updated so that:
 
 - The reusable closeout workflow is invoked with explicit `max_fix_iterations: 2` and `max_review_iterations: 2`. Tail iterations beyond these caps were the long-tail consumer of weekly minutes.
-- `concurrency.cancel-in-progress` is now `${{ github.event_name == 'workflow_dispatch' }}` (previously `false`). This deduplicates manual reruns started while an earlier manual run is still in flight, without affecting `schedule`-triggered runs.
-- `concurrency.group` is `ent-dependabot-weekly-closeout-${{ github.event_name }}` so that `schedule` and `workflow_dispatch` runs occupy disjoint groups; a manual rerun can never cancel an in-flight scheduled weekly closeout.
+- `concurrency.cancel-in-progress` is true only for manual `dry-run` dispatches. Manual `apply` dispatches and scheduled weekly `apply` runs queue instead of being cancelled.
+- `concurrency.group` is keyed by effective mode, so scheduled `apply` and manual `apply` runs share a non-cancelling queue while manual dry-runs remain independently deduplicated.
+- The reusable closeout workflow also queues all `apply` calls behind one non-cancelling lock. This covers overlapping scopes such as `all` and `single_repo`.
 
 ## Operator notes
 
 - The change does not introduce a job-level `timeout-minutes` cap. The waste reduction here is iteration-count and dedup, not wall-clock timeout. The candidate slug retains `weekly-timeout` as a historical lane key but the implementation is iteration-cap + trigger-isolated dedup.
-- Manual `workflow_dispatch` reruns are now deduplicated within their own group; in-flight scheduled runs are unaffected.
+- Manual `workflow_dispatch` dry-run reruns are deduplicated within their own group. In-flight scheduled or manual `apply` runs are never cancelled by this workflow; overlapping apply work queues behind the workflow locks.
 
 ## Merge policy
 
