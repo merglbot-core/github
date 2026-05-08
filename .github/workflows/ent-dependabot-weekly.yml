@@ -71,7 +71,20 @@ permissions:
 #     adjusted inputs). Scheduled runs are never cancelled.
 #   - Schedule and workflow_dispatch can run in parallel by design;
 #     downstream state mutations are guarded by the reusable closeout
-#     workflow's per-repo locking, not by this concurrency block.
+#     workflow's own concurrency block, not by this wrapper.
+#
+# Verified locking and cancellation safety contract (cross-run):
+#   - The reusable workflow ent-dependabot-autonomous-closeout.yml declares
+#     its own concurrency block:
+#       group: ent-dependabot-autonomous-closeout-${event_name}-${mode}
+#              -${repo_scope}-${single_repo}
+#       cancel-in-progress: false
+#     This means parallel calls QUEUE (do not cancel) and are scoped by
+#     mode (apply/dry-run), repo_scope (all/single_repo) and single_repo
+#     value, so two simultaneous runs targeting the same repo serialize
+#     rather than racing. cancel-in-progress=false on the reusable workflow
+#     prevents any operator-initiated dispatch from cancelling a scheduled
+#     apply mid-run.
 concurrency:
   group: ent-dependabot-weekly-closeout-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
