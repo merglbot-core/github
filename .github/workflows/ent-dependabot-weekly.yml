@@ -62,11 +62,29 @@ permissions:
   pull-requests: write
   statuses: read
 
+# Concurrency:
+#   - Group is keyed by github.event_name so schedule and workflow_dispatch
+#     runs do not block each other. This is intentional: a scheduled weekly
+#     run must not wait on an ad-hoc operator dispatch and vice versa.
+#   - cancel-in-progress is true only for workflow_dispatch, so a newer
+#     manual dispatch supersedes an older manual dispatch (e.g. retry with
+#     adjusted inputs). Scheduled runs are never cancelled.
+#   - Schedule and workflow_dispatch can run in parallel by design;
+#     downstream state mutations are guarded by the reusable closeout
+#     workflow's per-repo locking, not by this concurrency block.
 concurrency:
   group: ent-dependabot-weekly-closeout-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 jobs:
+  # Reusable workflow input contract:
+  #   - max_fix_iterations and max_review_iterations are declared in
+  #     ent-dependabot-autonomous-closeout.yml under on.workflow_call.inputs
+  #     with type: number and default: 5. Passing the literal 2 here
+  #     matches that declared type; YAML deserializes 2 as integer/number.
+  #   - The 2-iteration cap intentionally defers PRs needing more loops to
+  #     the next scheduled run; the SLA is documented in
+  #     docs/finops/ghau-waste-ent-dependabot-weekly-timeout.md.
   weekly-closeout:
     uses: ./.github/workflows/ent-dependabot-autonomous-closeout.yml
     with:
