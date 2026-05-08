@@ -54,8 +54,8 @@ Platform policy authority remains in `merglbot-public/docs`:
   so monorepo PRs are not closed solely by dependency name.
   Close comments must include evidence, successor/main proof when applicable,
   workflow run URL, and a reopen condition.
-- The workflow does not deploy, run Terraform apply, mutate secrets, change
-  default branches, or bypass branch protection.
+- The workflow does not deploy, run Terraform state-changing operations, mutate
+  secrets, change default branches, or circumvent branch protection.
 - Cross-org GitHub API authority should come from the GitHub App secrets
   `ENT_DEPENDABOT_APP_ID` and `ENT_DEPENDABOT_APP_PRIVATE_KEY`. The engine mints
   short-lived installation tokens per repository owner and fails closed when the
