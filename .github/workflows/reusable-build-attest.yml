@@ -59,6 +59,16 @@ on:
         required: false
         type: boolean
         default: true
+      trivyignores:
+        description: |
+          Optional path (relative to the checkout) to a .trivyignore file
+          listing CVE IDs to be temporarily ignored by the Trivy scan step.
+          Each ignore entry should follow the existing AADC D05 pattern
+          (CVE-... exp:YYYY-MM-DD) and must be tracked by a security
+          follow-up issue. Leave empty to apply no ignore file.
+        required: false
+        type: string
+        default: ''
     secrets:
       wif_provider:
         description: 'GCP Workload Identity Federation Provider'
@@ -181,6 +191,7 @@ jobs:
           severity: 'CRITICAL,HIGH'
           limit-severities-for-sarif: true
           exit-code: '1'
+          trivyignores: ${{ inputs.trivyignores }}
 
       - name: Upload Trivy SARIF
         if: inputs.scan && always()
