@@ -1,0 +1,128 @@
+{
+  "schema_version": "2026-05-01",
+  "policy_name": "merglbot-autonomy-policy",
+  "default_merge_strategy": "squash",
+  "receipt_ttl_minutes": 30,
+  "repo_scope": {
+    "included_orgs": [
+      "merglbot-autodoplnky",
+      "merglbot-cerano",
+      "merglbot-core",
+      "merglbot-denatura",
+      "merglbot-extractors",
+      "merglbot-hodinarstvibechyne",
+      "merglbot-kiteboarding",
+      "merglbot-milan-private",
+      "merglbot-proteinaco",
+      "merglbot-public",
+      "merglbot-ruzovyslon",
+      "merglbot-shared"
+    ],
+    "excluded_orgs": ["Merglevsky-cz", "lrtch"],
+    "active_repo_count": 46,
+    "active_repo_count_source": "merglbot-public/docs/REPOSITORY_MAP.md"
+  },
+  "path_policy": {
+    "docs_only_globs": [
+      "*.md",
+      "docs/**",
+      "projects/**",
+      "ci-audit/**",
+      "DOCUMENTATION_INDEX.md",
+      "REPOSITORY_MAP.md"
+    ],
+    "prompt_library_globs": [
+      "prompt-library/assets/**",
+      "prompt-library/*.json",
+      "apps/server/src/promptCatalog.ts",
+      "apps/server/test/promptCatalog.test.ts"
+    ],
+    "ai_data_policy_globs": [
+      "MERGLBOT_AI_DATA_WORKFLOW_POLICY.md",
+      "MERGLBOT_AI_TOOLS.md",
+      "MERGLBOT_CURSOR_SETUP.md",
+      "MERGLBOT_DATA_VALIDATION.md",
+      "SECURITY.md",
+      "RULEBOOK_V2.md",
+      "DOCUMENTATION_INDEX.md",
+      "prompt-library/assets/**",
+      "prompt-library/*.json",
+      "agent-opening/**",
+      "agent-appendix/**",
+      "apps/server/src/contextPolicy.ts",
+      "apps/server/src/createServer.ts",
+      "apps/server/src/dataExposurePolicy.ts",
+      "apps/server/src/invocationAudit.ts",
+      "apps/server/test/*Policy*.test.ts",
+      "projects/**/*ANALYTICS*.md",
+      "projects/**/*BIGQUERY*.md"
+    ],
+    "workflow_globs": [
+      ".github/workflows/**",
+      ".github/actions/**",
+      ".github/policies/**"
+    ],
+    "terraform_globs": [
+      "terraform/**",
+      "**/*.tf",
+      "**/*.tfvars",
+      ".github/workflows/terraform-*.yml"
+    ],
+    "denied_globs": [
+      "**/*secret*",
+      "**/*.pem",
+      "**/*.key",
+      "**/*service-account*.json",
+      "**/*credentials*.json"
+    ]
+  },
+  "autonomous_actions": {
+    "docs_only": ["final_merge_readiness"],
+    "prompt_library": ["final_merge_readiness"],
+    "workflow": [],
+    "terraform": [],
+    "security_sensitive": []
+  },
+  "required_evidence": {
+    "review_receipt": {
+      "provider": "Merglbot PR Assistant",
+      "must_match_head_sha": true,
+      "accepted_statuses": ["success", "approved_for_closeout"],
+      "advisory_providers": ["Cursor", "Gemini", "Bugbot"]
+    },
+    "required_checks": {
+      "accepted_conclusions": ["success", "neutral", "skipped"]
+    },
+    "docs_obligation": {
+      "accepted_states": ["none", "not_required", "satisfied", "same_pr"]
+    },
+    "ai_data_policy_check": {
+      "accepted_states": ["not_applicable", "passed", "aggregate_only", "schema_only", "synthetic_only"]
+    }
+  },
+  "terraform_approval": {
+    "custom_deployment_protection_rule": {
+      "environment": "production",
+      "decision_provider": "merglbot-autonomy-policy-engine",
+      "docs_reference": "https://docs.github.com/en/actions/how-tos/managing-workflow-runs-and-deployments/managing-deployments/configuring-custom-deployment-protection-rules"
+    },
+    "allowed_workspace_phases": ["bootstrap", "core", "public", "clients"],
+    "allowed_expected_actions": ["apply"],
+    "required_fields": [
+      "workflow_run_id",
+      "head_sha",
+      "workspace_phase",
+      "plan_hash",
+      "allowed_targets",
+      "expected_action",
+      "policy_decision",
+      "rollback_note"
+    ],
+    "approved_policy_decisions": ["approved"],
+    "denied_target_globs": [
+      "**/*service-account-key*",
+      "**/*iam_key*",
+      "google_service_account_key.*"
+    ]
+  }
+}
