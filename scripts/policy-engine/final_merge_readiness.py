@@ -4,6 +4,8 @@
 The script is intentionally stdlib-only so it can run from GitHub Actions
 without bootstrapping a repo-specific runtime. It emits bounded JSON receipts
 for final merge readiness and Terraform deployment protection approval.
+
+Runtime contract: Python 3.11 in CI. The script only uses the standard library.
 """
 
 from __future__ import annotations
