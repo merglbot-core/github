@@ -13,6 +13,8 @@ DECISION_BLOCK = policy_engine.DECISION_BLOCK
 DECISION_HUMAN_REQUIRED = policy_engine.DECISION_HUMAN_REQUIRED
 evaluate_final_merge_readiness = policy_engine.evaluate_final_merge_readiness
 evaluate_terraform_approval = policy_engine.evaluate_terraform_approval
+glob_match = policy_engine.glob_match
+stable_tree_marker = policy_engine.stable_tree_marker
 
 
 MANIFEST = {
@@ -136,6 +138,16 @@ class FinalMergeReadinessTest(unittest.TestCase):
         self.assertEqual(receipt["risk_class"], "security_sensitive")
         self.assertEqual(receipt["changed_files_summary"]["count"], 1)
         self.assertNotIn("service-account-prod.json", serialized)
+
+    def test_path_markers_normalize_separators_and_leading_slashes(self):
+        left = stable_tree_marker(["/ci-audit\\2026-05-01\\inventory.md"], "head", "base")
+        right = stable_tree_marker(["ci-audit/2026-05-01/inventory.md"], "head", "base")
+
+        self.assertEqual(left, right)
+
+    def test_glob_match_supports_recursive_patterns_on_normalized_paths(self):
+        self.assertTrue(glob_match("projects/client/deep/SALES_ANALYTICS_REPORT.md", ["projects/**/*ANALYTICS*.md"]))
+        self.assertTrue(glob_match("\\docs\\policy.md", ["**/*.md"]))
 
     def test_ai_data_policy_scope_requires_policy_check(self):
         event = base_event()

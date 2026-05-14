@@ -16,7 +16,7 @@ import hashlib
 import json
 import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
@@ -49,18 +49,27 @@ def stable_digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def glob_match(path_value: str, patterns: list[str]) -> bool:
-    """Match repository-relative paths with fnmatch semantics.
+def normalize_repo_path(path_value: str) -> str:
+    return str(path_value or "").replace("\\", "/").lstrip("/")
 
-    Python's fnmatch treats `**` as ordinary glob characters, so this helper
-    keeps one documented compatibility rule: patterns that start with `**/`
-    also match the same suffix at repository root.
+
+def glob_match(path_value: str, patterns: list[str]) -> bool:
+    """Match normalized repository-relative paths.
+
+    `PurePosixPath.match` provides deterministic recursive `**` behavior for
+    manifest paths after separators and leading slashes are normalized.
+    Patterns that start with `**/` also match the same suffix at repository
+    root to keep historical manifest compatibility.
     """
-    normalized = path_value.replace("\\", "/").lstrip("/")
+    normalized = normalize_repo_path(path_value)
+    posix_path = PurePosixPath(normalized)
     for pattern in patterns:
-        if fnmatch.fnmatchcase(normalized, pattern):
+        normalized_pattern = normalize_repo_path(str(pattern))
+        if posix_path.match(normalized_pattern):
             return True
-        if pattern.startswith("**/") and fnmatch.fnmatchcase(normalized, pattern[3:]):
+        if normalized_pattern.startswith("**/") and posix_path.match(normalized_pattern[3:]):
+            return True
+        if fnmatch.fnmatchcase(normalized, normalized_pattern):
             return True
     return False
 
@@ -78,7 +87,7 @@ def stable_tree_marker(changed_files: list[str], head_sha: str, base_sha: str) -
     digest.update(head_sha.encode("utf-8"))
     digest.update(b"\0")
     digest.update(base_sha.encode("utf-8"))
-    for file_path in sorted(changed_files):
+    for file_path in sorted({normalize_repo_path(file_path) for file_path in changed_files}):
         digest.update(b"\0")
         digest.update(file_path.encode("utf-8"))
     return digest.hexdigest()
