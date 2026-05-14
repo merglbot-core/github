@@ -128,6 +128,16 @@ class FinalMergeReadinessTest(unittest.TestCase):
         self.assertFalse(receipt["repo_scope"]["accepted"])
         self.assertIn("Repository owner is explicitly excluded by policy manifest.", receipt["reasons"])
 
+    def test_missing_repo_scope_blocks_policy_evaluation(self):
+        manifest = dict(MANIFEST)
+        manifest.pop("repo_scope")
+
+        receipt = evaluate_final_merge_readiness(base_event(), manifest)
+
+        self.assertEqual(receipt["decision"], DECISION_BLOCK)
+        self.assertFalse(receipt["repo_scope"]["accepted"])
+        self.assertIn("Repository scope is missing from policy manifest.", receipt["reasons"])
+
     def test_receipt_does_not_echo_denied_changed_file_paths(self):
         event = base_event()
         event["changed_files"] = ["config/service-account-prod.json"]

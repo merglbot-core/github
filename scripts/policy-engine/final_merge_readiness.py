@@ -19,6 +19,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+if sys.version_info < (3, 11):
+    raise SystemExit("final_merge_readiness.py requires Python 3.11 or newer")
+
 
 DECISION_ALLOW = "allow"
 DECISION_BLOCK = "block"
@@ -124,7 +127,7 @@ def extract_repository_full_name(event: dict[str, Any]) -> str:
 def evaluate_repo_scope(event: dict[str, Any], manifest: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
     scope = manifest.get("repo_scope", {})
     if not isinstance(scope, dict) or not scope:
-        return {"configured": False, "accepted": True}, []
+        return {"configured": False, "accepted": False}, ["Repository scope is missing from policy manifest."]
 
     repository_full_name = extract_repository_full_name(event)
     owner = repository_full_name.split("/", 1)[0] if "/" in repository_full_name else ""

@@ -18,6 +18,8 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      # Pinned action SHAs are reviewed through the normal dependency refresh
+      # lane; update both pins in one PR with policy-engine tests green.
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
