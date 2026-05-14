@@ -43,7 +43,17 @@ def as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
+def stable_digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
 def glob_match(path_value: str, patterns: list[str]) -> bool:
+    """Match repository-relative paths with fnmatch semantics.
+
+    Python's fnmatch treats `**` as ordinary glob characters, so this helper
+    keeps one documented compatibility rule: patterns that start with `**/`
+    also match the same suffix at repository root.
+    """
     normalized = path_value.replace("\\", "/").lstrip("/")
     for pattern in patterns:
         if fnmatch.fnmatchcase(normalized, pattern):
@@ -70,6 +80,59 @@ def stable_tree_marker(changed_files: list[str], head_sha: str, base_sha: str) -
         digest.update(b"\0")
         digest.update(file_path.encode("utf-8"))
     return digest.hexdigest()
+
+
+def evidence_summary(values: list[str], *, head_sha: str = "", base_sha: str = "") -> dict[str, Any]:
+    return {
+        "count": len(values),
+        "marker": stable_tree_marker(values, head_sha, base_sha) if values else None,
+    }
+
+
+def extract_repository_full_name(event: dict[str, Any]) -> str:
+    raw_repository = event.get("repository") or event.get("repository_full_name") or event.get("repo")
+    if isinstance(raw_repository, dict):
+        full_name = raw_repository.get("full_name")
+        if isinstance(full_name, str) and "/" in full_name:
+            return full_name
+        owner = raw_repository.get("owner")
+        owner_name = owner.get("login") if isinstance(owner, dict) else owner
+        name = raw_repository.get("name")
+        if isinstance(owner_name, str) and isinstance(name, str):
+            return f"{owner_name}/{name}"
+        return ""
+    if isinstance(raw_repository, str):
+        return raw_repository.strip()
+    owner = event.get("owner") or event.get("organization")
+    repo_name = event.get("repo_name") or event.get("repository_name")
+    if isinstance(owner, str) and isinstance(repo_name, str):
+        return f"{owner}/{repo_name}"
+    return ""
+
+
+def evaluate_repo_scope(event: dict[str, Any], manifest: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    scope = manifest.get("repo_scope", {})
+    if not isinstance(scope, dict) or not scope:
+        return {"configured": False, "accepted": True}, []
+
+    repository_full_name = extract_repository_full_name(event)
+    owner = repository_full_name.split("/", 1)[0] if "/" in repository_full_name else ""
+    included_orgs = {str(value) for value in as_list(scope.get("included_orgs"))}
+    excluded_orgs = {str(value) for value in as_list(scope.get("excluded_orgs"))}
+    problems: list[str] = []
+
+    if not owner:
+        problems.append("Repository scope evidence is missing or malformed.")
+    elif owner in excluded_orgs:
+        problems.append("Repository owner is explicitly excluded by policy manifest.")
+    elif included_orgs and owner not in included_orgs:
+        problems.append("Repository owner is outside the policy manifest scope.")
+
+    return {
+        "configured": True,
+        "accepted": not problems,
+        "repository_marker": stable_digest(repository_full_name)[:16] if repository_full_name else None,
+    }, problems
 
 
 def classify_path_risk(changed_files: list[str], manifest: dict[str, Any]) -> tuple[str, list[str]]:
@@ -207,12 +270,13 @@ def evaluate_final_merge_readiness(event: dict[str, Any], manifest: dict[str, An
     now = utc_now()
     ttl_minutes = int(manifest.get("receipt_ttl_minutes") or 30)
     risk_class, risk_notes = classify_path_risk(changed_files, manifest)
+    repo_scope, repo_scope_problems = evaluate_repo_scope(event, manifest)
     review_receipt, review_problems = evaluate_review_receipt(event, manifest)
     required_checks, check_problems = evaluate_required_checks(event, manifest)
     docs_obligation, docs_problems = evaluate_docs_obligation(event, manifest, risk_class)
     ai_data_policy_check, ai_data_policy_problems = evaluate_ai_data_policy_check(event, manifest, changed_files)
 
-    problems = [*risk_notes, *review_problems, *check_problems, *docs_problems, *ai_data_policy_problems]
+    problems = [*repo_scope_problems, *risk_notes, *review_problems, *check_problems, *docs_problems, *ai_data_policy_problems]
     allowed_actions = manifest.get("autonomous_actions", {}).get(risk_class, [])
     if risk_class in {"workflow", "terraform", "security_sensitive", "code", "unknown"}:
         decision = DECISION_HUMAN_REQUIRED
@@ -220,7 +284,7 @@ def evaluate_final_merge_readiness(event: dict[str, Any], manifest: dict[str, An
     elif "final_merge_readiness" not in allowed_actions:
         decision = DECISION_HUMAN_REQUIRED
         problems.append(f"Risk class `{risk_class}` has no autonomous final merge policy.")
-    elif review_problems or check_problems or docs_problems or ai_data_policy_problems:
+    elif repo_scope_problems or review_problems or check_problems or docs_problems or ai_data_policy_problems:
         decision = DECISION_BLOCK
     else:
         decision = DECISION_ALLOW
@@ -234,7 +298,8 @@ def evaluate_final_merge_readiness(event: dict[str, Any], manifest: dict[str, An
         "base_sha": base_sha,
         "merge_strategy": str(event.get("merge_strategy") or manifest.get("default_merge_strategy") or "squash"),
         "candidate_tree_sha": candidate_tree_sha,
-        "changed_files": changed_files,
+        "changed_files_summary": evidence_summary(changed_files, head_sha=head_sha, base_sha=base_sha),
+        "repo_scope": repo_scope,
         "risk_class": risk_class,
         "docs_obligation": docs_obligation,
         "ai_data_policy_check": ai_data_policy_check,
@@ -285,7 +350,7 @@ def evaluate_terraform_approval(event: dict[str, Any], manifest: dict[str, Any])
         "head_sha": head_sha,
         "workspace_phase": workspace_phase,
         "plan_hash": plan_hash,
-        "allowed_targets": allowed_targets,
+        "allowed_targets_summary": evidence_summary(allowed_targets, head_sha=head_sha),
         "expected_action": expected_action,
         "policy_decision": event.get("policy_decision"),
         "rollback_note": event.get("rollback_note"),

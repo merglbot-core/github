@@ -20,6 +20,10 @@ MANIFEST = {
     "policy_name": "test-policy",
     "default_merge_strategy": "squash",
     "receipt_ttl_minutes": 30,
+    "repo_scope": {
+        "included_orgs": ["merglbot-core", "merglbot-public"],
+        "excluded_orgs": ["external-org"],
+    },
     "path_policy": {
         "docs_only_globs": ["*.md", "docs/**", "ci-audit/**", "REPOSITORY_MAP.md"],
         "prompt_library_globs": ["prompt-library/assets/**", "apps/server/src/promptCatalog.ts"],
@@ -71,6 +75,7 @@ def base_event():
     return {
         "head_sha": "abc123",
         "base_sha": "base123",
+        "repository": "merglbot-public/docs",
         "changed_files": ["REPOSITORY_MAP.md", "ci-audit/2026-05-01/inventory.md"],
         "review_receipt": {
             "provider": "Merglbot PR Assistant",
@@ -89,6 +94,8 @@ class FinalMergeReadinessTest(unittest.TestCase):
         self.assertEqual(receipt["decision"], DECISION_ALLOW)
         self.assertEqual(receipt["risk_class"], "docs_only")
         self.assertEqual(receipt["head_sha"], "abc123")
+        self.assertEqual(receipt["changed_files_summary"]["count"], 2)
+        self.assertNotIn("changed_files", receipt)
         self.assertIn("candidate_tree_sha", receipt)
 
     def test_stale_review_fails(self):
@@ -108,6 +115,27 @@ class FinalMergeReadinessTest(unittest.TestCase):
 
         self.assertEqual(receipt["decision"], DECISION_HUMAN_REQUIRED)
         self.assertEqual(receipt["risk_class"], "workflow")
+
+    def test_out_of_scope_repository_blocks_policy_evaluation(self):
+        event = base_event()
+        event["repository"] = "external-org/private-repo"
+
+        receipt = evaluate_final_merge_readiness(event, MANIFEST)
+
+        self.assertEqual(receipt["decision"], DECISION_BLOCK)
+        self.assertFalse(receipt["repo_scope"]["accepted"])
+        self.assertIn("Repository owner is explicitly excluded by policy manifest.", receipt["reasons"])
+
+    def test_receipt_does_not_echo_denied_changed_file_paths(self):
+        event = base_event()
+        event["changed_files"] = ["config/service-account-prod.json"]
+
+        receipt = evaluate_final_merge_readiness(event, MANIFEST)
+        serialized = str(receipt)
+
+        self.assertEqual(receipt["risk_class"], "security_sensitive")
+        self.assertEqual(receipt["changed_files_summary"]["count"], 1)
+        self.assertNotIn("service-account-prod.json", serialized)
 
     def test_ai_data_policy_scope_requires_policy_check(self):
         event = base_event()
@@ -140,6 +168,24 @@ class FinalMergeReadinessTest(unittest.TestCase):
         self.assertEqual(receipt["decision"], DECISION_BLOCK)
         self.assertTrue(any("plan_hash" in reason or "plan hash" in reason.lower() for reason in receipt["reasons"]))
 
+    def test_terraform_approval_does_not_echo_denied_targets(self):
+        event = {
+            "workflow_run_id": "12345",
+            "head_sha": "abc123",
+            "workspace_phase": "core",
+            "plan_hash": "sha256:" + ("b" * 64),
+            "allowed_targets": ["google_service_account_key.prod"],
+            "expected_action": "apply",
+            "policy_decision": "approved",
+            "rollback_note": "Rollback by reverting this commit and re-running apply.",
+        }
+
+        receipt = evaluate_terraform_approval(event, MANIFEST)
+
+        self.assertEqual(receipt["decision"], DECISION_BLOCK)
+        self.assertEqual(receipt["allowed_targets_summary"]["count"], 1)
+        self.assertNotIn("google_service_account_key.prod", str(receipt))
+
     def test_terraform_approval_passes_with_exact_policy_receipt(self):
         event = {
             "workflow_run_id": "12345",
@@ -156,6 +202,8 @@ class FinalMergeReadinessTest(unittest.TestCase):
 
         self.assertEqual(receipt["decision"], DECISION_ALLOW)
         self.assertEqual(receipt["workspace_phase"], "clients")
+        self.assertEqual(receipt["allowed_targets_summary"]["count"], 1)
+        self.assertNotIn("allowed_targets", receipt)
 
 
 if __name__ == "__main__":

@@ -18,9 +18,7 @@
       "merglbot-ruzovyslon",
       "merglbot-shared"
     ],
-    "excluded_orgs": ["Merglevsky-cz", "lrtch"],
-    "active_repo_count": 46,
-    "active_repo_count_source": "merglbot-public/docs/REPOSITORY_MAP.md"
+    "excluded_orgs": ["Merglevsky-cz", "lrtch"]
   },
   "path_policy": {
     "docs_only_globs": [
@@ -87,8 +85,7 @@
     "review_receipt": {
       "provider": "Merglbot PR Assistant",
       "must_match_head_sha": true,
-      "accepted_statuses": ["success", "approved_for_closeout"],
-      "advisory_providers": ["Cursor", "Gemini", "Bugbot"]
+      "accepted_statuses": ["success", "approved_for_closeout"]
     },
     "required_checks": {
       "accepted_conclusions": ["success", "neutral", "skipped"]
