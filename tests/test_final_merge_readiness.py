@@ -149,15 +149,35 @@ class FinalMergeReadinessTest(unittest.TestCase):
         self.assertEqual(receipt["changed_files_summary"]["count"], 1)
         self.assertNotIn("service-account-prod.json", serialized)
 
-    def test_path_markers_normalize_separators_and_leading_slashes(self):
-        left = stable_tree_marker(["/ci-audit\\2026-05-01\\inventory.md"], "head", "base")
+    def test_path_markers_normalize_separators(self):
+        left = stable_tree_marker(["ci-audit\\2026-05-01\\inventory.md"], "head", "base")
         right = stable_tree_marker(["ci-audit/2026-05-01/inventory.md"], "head", "base")
 
         self.assertEqual(left, right)
 
     def test_glob_match_supports_recursive_patterns_on_normalized_paths(self):
         self.assertTrue(glob_match("projects/client/deep/SALES_ANALYTICS_REPORT.md", ["projects/**/*ANALYTICS*.md"]))
-        self.assertTrue(glob_match("\\docs\\policy.md", ["**/*.md"]))
+        self.assertTrue(glob_match("docs\\policy.md", ["**/*.md"]))
+
+    def test_invalid_changed_file_path_is_security_sensitive(self):
+        event = base_event()
+        event["changed_files"] = ["../docs/policy.md"]
+
+        receipt = evaluate_final_merge_readiness(event, MANIFEST)
+
+        self.assertEqual(receipt["risk_class"], "security_sensitive")
+        self.assertEqual(receipt["decision"], DECISION_HUMAN_REQUIRED)
+        self.assertIn("Invalid repository path changed.", receipt["reasons"])
+
+    def test_changed_file_count_limit_is_security_sensitive(self):
+        event = base_event()
+        event["changed_files"] = [f"docs/generated-{index}.md" for index in range(policy_engine.MAX_CHANGED_FILES + 1)]
+
+        receipt = evaluate_final_merge_readiness(event, MANIFEST)
+
+        self.assertEqual(receipt["risk_class"], "security_sensitive")
+        self.assertEqual(receipt["decision"], DECISION_HUMAN_REQUIRED)
+        self.assertIn("Changed-file evidence exceeds policy size limit.", receipt["reasons"])
 
     def test_ai_data_policy_scope_requires_policy_check(self):
         event = base_event()

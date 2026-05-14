@@ -64,7 +64,9 @@ The bootstrap evaluator has these safety contracts:
   Missing or malformed scope fails closed, the same as an out-of-scope
   repository owner.
 - Changed-file paths are normalized before glob matching and receipt hashing,
-  including Windows separators and leading slashes.
+  including Windows separators. Absolute paths, drive-prefixed paths, parent
+  traversal, and changed-file lists above the policy size limit are classified
+  as security-sensitive instead of being accepted.
 - The module remains import-safe for unit tests; command-line execution stays
   behind the `if __name__ == "__main__"` guard.
 - GitHub Actions are pinned to commit SHAs. Refresh both the checkout and

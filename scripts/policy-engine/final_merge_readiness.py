@@ -19,13 +19,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-if sys.version_info < (3, 11):
-    raise SystemExit("final_merge_readiness.py requires Python 3.11 or newer")
-
 
 DECISION_ALLOW = "allow"
 DECISION_BLOCK = "block"
 DECISION_HUMAN_REQUIRED = "human_required"
+INVALID_REPO_PATH_MARKER = "__invalid_repo_path__"
+MAX_CHANGED_FILES = 1_000
 
 
 def load_json(path: str | Path) -> dict[str, Any]:
@@ -53,7 +52,23 @@ def stable_digest(value: str) -> str:
 
 
 def normalize_repo_path(path_value: str) -> str:
-    return str(path_value or "").replace("\\", "/").lstrip("/")
+    raw = str(path_value or "").replace("\\", "/").strip()
+    if not raw:
+        return ""
+    if raw.startswith("/") or (len(raw) >= 2 and raw[1] == ":" and raw[0].isalpha()):
+        return INVALID_REPO_PATH_MARKER
+    parts: list[str] = []
+    for part in raw.split("/"):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            return INVALID_REPO_PATH_MARKER
+        parts.append(part)
+    return "/".join(parts)
+
+
+def has_invalid_repo_path(paths: list[str]) -> bool:
+    return any(normalize_repo_path(path_value) == INVALID_REPO_PATH_MARKER for path_value in paths)
 
 
 def glob_match(path_value: str, patterns: list[str]) -> bool:
@@ -160,6 +175,10 @@ def classify_path_risk(changed_files: list[str], manifest: dict[str, Any]) -> tu
     notes: list[str] = []
     if not changed_files:
         return "unknown", ["No changed files were supplied."]
+    if len(changed_files) > MAX_CHANGED_FILES:
+        return "security_sensitive", ["Changed-file evidence exceeds policy size limit."]
+    if has_invalid_repo_path(changed_files):
+        return "security_sensitive", ["Invalid repository path changed."]
     if any_match(changed_files, denied_globs):
         return "security_sensitive", ["Denied or credential-shaped path changed."]
     if any_match(changed_files, workflow_globs):
@@ -383,6 +402,9 @@ def write_receipt(receipt: dict[str, Any], output_path: str | None) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if sys.version_info < (3, 11):
+        raise SystemExit("final_merge_readiness.py requires Python 3.11 or newer")
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", default="scripts/policy-engine/policy-manifest.json")
     parser.add_argument("--event", required=True, help="JSON event payload to evaluate")
