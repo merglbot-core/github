@@ -47,3 +47,28 @@ Local validation:
 python3 -m py_compile scripts/pr-assistant/final-merge-readiness.py
 python3 scripts/pr-assistant/final-merge-readiness.py --self-test
 ```
+
+## Policy Engine Bootstrap
+
+`scripts/policy-engine/final_merge_readiness.py` is the stdlib-only bootstrap
+evaluator used before the protected-base final merge readiness evaluator is
+available in a repository. It is covered by
+`.github/workflows/policy-engine-tests.yml` and
+`tests/test_final_merge_readiness.py`.
+
+The bootstrap evaluator has these safety contracts:
+
+- Runtime is Python 3.11 or newer. The workflow installs Python 3.11 and the
+  script exits immediately on older interpreters.
+- `repo_scope` is required in `scripts/policy-engine/policy-manifest.json`.
+  Missing or malformed scope fails closed, the same as an out-of-scope
+  repository owner.
+- Changed-file paths are normalized before glob matching and receipt hashing,
+  including Windows separators. Absolute paths, drive-prefixed paths, parent
+  traversal, and changed-file lists above the policy size limit are classified
+  as security-sensitive instead of being accepted.
+- The module remains import-safe for unit tests; command-line execution stays
+  behind the `if __name__ == "__main__"` guard.
+- GitHub Actions are pinned to commit SHAs. Refresh both the checkout and
+  setup-python pins in the dependency refresh lane, with policy-engine tests
+  green in the same PR.

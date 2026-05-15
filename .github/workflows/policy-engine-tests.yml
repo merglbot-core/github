@@ -1,0 +1,32 @@
+name: Policy Engine Tests
+
+on:
+  pull_request:
+    paths:
+      - "scripts/policy-engine/**"
+      - "tests/test_final_merge_readiness.py"
+      - ".github/workflows/policy-engine-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    name: Policy Engine Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      # Pinned action SHAs are reviewed through the normal dependency refresh
+      # lane; update both pins in one PR with policy-engine tests green.
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.11"
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -p 'test_*.py'
