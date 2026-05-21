@@ -62,11 +62,36 @@ permissions:
   pull-requests: write
   statuses: read
 
+# Concurrency:
+#   - Group is keyed by effective mode. Scheduled runs are always `apply`.
+#     Manual `apply` runs share that same queue, so they cannot race the
+#     scheduled weekly closeout over overlapping repository state.
+#   - Manual `dry-run` runs use a separate group and may supersede older
+#     dry-runs. Dry-runs do not write repository state.
+#   - cancel-in-progress is true only for manual dry-runs. No `apply` run is
+#     cancelled by a later operator dispatch; apply work queues instead.
+#
+# Verified locking and cancellation safety contract (cross-run):
+#   - The reusable workflow ent-dependabot-autonomous-closeout.yml declares
+#     its own concurrency block:
+#       group: ent-dependabot-autonomous-closeout-${mode}
+#       cancel-in-progress: ${mode != 'apply'}
+#     This means every `apply` call, including `all` vs `single_repo`, queues
+#     behind the same non-cancelling lock. Non-mutating dry-runs can be
+#     superseded by newer dry-runs.
 concurrency:
-  group: ent-dependabot-weekly-closeout
-  cancel-in-progress: false
+  group: ent-dependabot-weekly-closeout-${{ inputs.mode || 'apply' }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'dry-run' }}
 
 jobs:
+  # Reusable workflow input contract:
+  #   - max_fix_iterations and max_review_iterations are declared in
+  #     ent-dependabot-autonomous-closeout.yml under on.workflow_call.inputs
+  #     with type: number and default: 5. Passing the literal 2 here
+  #     matches that declared type; YAML deserializes 2 as integer/number.
+  #   - The 2-iteration cap intentionally defers PRs needing more loops to
+  #     the next scheduled run; the SLA is documented in
+  #     docs/finops/ghau-waste-ent-dependabot-weekly-timeout.md.
   weekly-closeout:
     uses: ./.github/workflows/ent-dependabot-autonomous-closeout.yml
     with:
@@ -75,6 +100,8 @@ jobs:
       single_repo: ${{ github.event.inputs.single_repo || '' }}
       max_parallel_repos: 3
       max_prs_per_repo: ${{ fromJSON(github.event_name == 'schedule' && '0' || github.event.inputs.max_prs_per_repo || '0') }}
+      max_fix_iterations: 2
+      max_review_iterations: 2
       allow_policy_alignment: true
       comment_report: true
       tracking_issue: "https://github.com/merglbot-public/docs/issues/636"
