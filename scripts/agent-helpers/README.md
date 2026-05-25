@@ -4,7 +4,7 @@ CLI fallback scripts for AI agents when MCP servers are unavailable or fail.
 
 ## Purpose
 
-AI agents (Cursor native, Claude Code, Codex) have varying access to MCP servers.
+AI agents have varying access to MCP servers.
 These scripts provide reliable CLI-based alternatives that always work.
 
 ## Scripts
@@ -70,6 +70,6 @@ GCP operation needed?
 ## Related Documentation
 
 - [MERGLBOT_CURSOR_SETUP.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_CURSOR_SETUP.md) - MCP configuration
-- [Cursor templates](https://github.com/merglbot-public/docs/blob/main/templates/cursor/README.md) - Project rules/commands/.cursorignore templates
-- [.cursorrules](../../bot-configs/.cursorrules) - Cursor legacy rules (deprecated; prefer .cursor/rules)
+- legacy IDE templates - deprecated
+- legacy IDE rules - removed
 - [MERGLBOT_AI_TOOLS.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_AI_TOOLS.md) - AI tools security policy

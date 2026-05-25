@@ -653,7 +653,7 @@ jobs:
           DIFF_SCOPE_MODE="${DIFF_SCOPE_MODE:-auto}"
           if [ "$DIFF_SCOPE_MODE" == "full" ]; then
             PREV_REVIEW_HEAD_SHA=""
-            # Keep LAST_REVIEW_CREATED_AT intact so bugbot/comment ingestion stays bounded to new signals.
+            # Keep LAST_REVIEW_CREATED_AT intact so review-bot/comment ingestion stays bounded to new signals.
           fi
 
           echo "$PREV_REVIEW_HEAD_SHA" > prev_review_head_sha.txt
@@ -768,12 +768,12 @@ jobs:
 
           echo "REVIEW_CUTOFF=$LAST_REVIEW_CREATED_AT" >> "$GITHUB_ENV"
 
-          echo "Extracting bugbot findings..."
+          echo "Extracting third-party review-bot findings..."
           echo "" > bugbot_findings.txt
           BUGBOT_TOTAL=0
           BUGBOT_SOURCES=""
 
-          for BOT_PATTERN in cursor gemini copilot coderabbit qodo pr-agent snyk sonar codacy deepsource; do
+          for BOT_PATTERN in copilot coderabbit qodo pr-agent snyk sonar codacy deepsource; do
             FINDINGS=$(jq -r --arg pat "$BOT_PATTERN" --arg cutoff "$LAST_REVIEW_CREATED_AT" '
               .[]
               | select(.user.login | test($pat; "i"))
@@ -815,7 +815,7 @@ jobs:
             echo "::warning::Failed to fetch PR review comments; continuing with none"
             echo "[]" > review_comments.json
           fi
-          REVIEW_BOT_LOGIN_ALLOWLIST_JSON='["cursor[bot]","gemini-code-assist[bot]","github-copilot[bot]","coderabbitai[bot]","snyk-bot","qodo-ai[bot]","pr-agent[bot]"]'
+          REVIEW_BOT_LOGIN_ALLOWLIST_JSON='["github-copilot[bot]","coderabbitai[bot]","snyk-bot","qodo-ai[bot]","pr-agent[bot]"]'
           : "${LAST_REVIEW_CREATED_AT:=}"
 
           # Fail-closed: only ingest bot review comments after we have a valid cutoff timestamp.
@@ -846,7 +846,7 @@ jobs:
             BUGBOT_SOURCES="none"
           fi
 
-          echo "Bugbot sources: $BUGBOT_TOTAL ($BUGBOT_SOURCES)"
+          echo "third-party review-bot sources: $BUGBOT_TOTAL ($BUGBOT_SOURCES)"
           echo "$BUGBOT_TOTAL" > bugbot_count.txt
           echo "$BUGBOT_SOURCES" > bugbot_sources.txt
 
@@ -1434,7 +1434,7 @@ jobs:
           printf '%s\n' ""
           printf '%s\n' "## Whats Good"
           printf '%s\n' ""
-          printf '%s\n' "## Bugbot Findings Analysis"
+          printf '%s\n' "## Third-party review-bot findings analysis"
           printf '%s\n' "[For EACH bugbot finding state: Agree/Disagree/Partially with reason]"
           printf '%s\n' ""
           printf '%s\n' "## SSOT Sync (Docs)"
@@ -2326,7 +2326,7 @@ jobs:
               echo "| OpenAI Output | $OPENAI_WORDS words |"
               echo "| Final Review | $FINAL_WORDS words |"
               echo ""
-              echo "### Bugbot Sources Analyzed"
+              echo "### Third-party review-bot sources analyzed"
               echo ""
               if [ "$BUGBOT_COUNT" -gt 0 ]; then
                 echo "**$BUGBOT_COUNT source(s)**: $BUGBOT_SOURCES"
@@ -2340,7 +2340,7 @@ jobs:
               echo "- CI / checks summary"
               printf '%s\n' "- Diff scope: \`$DIFF_SCOPE\` (\`$DIFF_RANGE\`)"
               echo "- Changed files list"
-              echo "- Bugbot findings ($BUGBOT_COUNT sources)"
+              echo "- third-party review-bot findings ($BUGBOT_COUNT sources)"
               echo "- Merglbot Appendix v2.15 (MERGLBOT rules)"
               printf '%s\n' "- Review boundary: review-only (\`human_merge_only\` closeout path)"
               echo ""
@@ -2470,7 +2470,7 @@ jobs:
             echo "| OpenAI | $(safe_word_count openai_review.txt) words |"
             echo "| Final | $(safe_word_count final_review.txt) words |"
             echo ""
-            echo "### Bugbot Sources"
+            echo "### Third-party review-bot sources"
             echo ""
             echo "**Count**: $BUGBOT_COUNT"
             echo "**Sources**: $BUGBOT_SOURCES"

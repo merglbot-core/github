@@ -21,7 +21,7 @@ Welcome to the merglbot.ai Team Training Hub! This directory contains comprehens
 
 - **Module 2.1:** [AI Coding Assistants Overview](./bots/01-ai-assistants-overview.md) ✅
 - **Module 2.2:** GitHub Copilot Best Practices (WIP - Coming Soon)
-- **Module 2.3:** Cursor IDE Workshop (WIP - Coming Soon)
+- **Module 2.3:** AI IDE Workshop (WIP - Coming Soon)
 - **Module 2.4:** Code Review with AI (WIP - Coming Soon)
 - **Module 2.5:** Safety & Compliance (WIP - Coming Soon)
 

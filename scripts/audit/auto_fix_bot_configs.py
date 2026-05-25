@@ -12,7 +12,7 @@ from typing import Dict, Any
 
 # Template bot configurations
 BOT_CONFIG_TEMPLATES = {
-    ".cursorrules": """# Cursor AI Development Rules
+    "legacy-agent-rules.md": """# AI Development Rules
 
 ## Code Style and Best Practices
 - Follow PEP 8 for Python code
@@ -48,7 +48,7 @@ BOT_CONFIG_TEMPLATES = {
 - Keep CHANGELOG up to date
 - Add inline comments for complex logic
 """,
-    ".cursorbot": """{
+    "legacy-agentbot.json": """{
   "version": "1.0",
   "rules": {
     "security": [
@@ -129,7 +129,7 @@ def parse_bot_config_report(report_file: str) -> Dict[str, Any]:
     }
     
     # Check which configs are missing
-    expected_configs = [".cursorrules", ".cursorbot", "copilot-config.yml"]
+    expected_configs = ["legacy-agent-rules.md", "legacy-agentbot.json", "copilot-config.yml"]
     found_configs = []
     
     for detail in report.get("details", []):

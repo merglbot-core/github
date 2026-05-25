@@ -1,4 +1,4 @@
-# AI Assistants Overview (Cursor, Copilot, etc.)
+# AI Assistants Overview
 
 ## Co je cílem
 
