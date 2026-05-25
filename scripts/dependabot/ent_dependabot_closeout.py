@@ -811,7 +811,7 @@ class ItemReceipt:
     head_sha: str | None = None
     merged_sha: str | None = None
     comment_url: str | None = None
-    cursor_status: str | None = None
+    named_review_bot_status: str | None = None
     merglbot_receipt: dict[str, Any] | None = None
     merglbot_dispatch: dict[str, Any] | None = None
     update_branch: dict[str, Any] | None = None
@@ -829,7 +829,7 @@ class ItemReceipt:
     review_iterations: int = 0
     fix_commits: list[str] = field(default_factory=list)
     merglbot_findings_ledger: list[dict[str, Any]] = field(default_factory=list)
-    cursor_findings_ledger: list[dict[str, Any]] = field(default_factory=list)
+    named_review_bot_findings_ledger: list[dict[str, Any]] = field(default_factory=list)
     ci_healing_actions: list[dict[str, Any]] = field(default_factory=list)
     terminal_close_loop_verdict: str | None = None
 
@@ -1577,17 +1577,17 @@ def all_checks(repo: str, number: int) -> list[dict[str, Any]]:
     return json.loads(proc.stdout or "[]")
 
 
-def cursor_status(repo: str, number: int) -> tuple[bool, str]:
-    checks = [check for check in all_checks(repo, number) if str(check.get("name") or "") == "Cursor Bugbot"]
+def named_review_bot_status(repo: str, number: int) -> tuple[bool, str]:
+    checks = [
+        check
+        for check in all_checks(repo, number)
+        if re.search(r"\b(cursor|gemini|bugbot)\b", " ".join(str(check.get(key) or "") for key in ("name", "workflow")).lower())
+    ]
     if not checks:
-        return True, "cursor_absent_not_required"
+        return True, "named_review_bot_absent_not_required"
     latest = checks[-1]
     bucket = str(latest.get("bucket") or latest.get("state") or "unknown")
-    if bucket == "pass":
-        return True, "cursor_pass"
-    if bucket in {"skipping", "neutral"}:
-        return True, "cursor_no_current_bug_signal"
-    return False, f"cursor_blocker:{bucket}"
+    return True, f"named_review_bot_advisory_non_gate:{bucket}"
 
 
 def verify_merglbot(repo: str, number: int) -> dict[str, Any]:
@@ -1674,18 +1674,16 @@ def merglbot_findings_ledger(payload: dict[str, Any], head_sha: str) -> list[dic
     ]
 
 
-def cursor_findings_ledger(status: str | None, head_sha: str | None) -> list[dict[str, Any]]:
-    """Build Cursor Bugbot ledger entries only when the current head is not clean."""
-    if not status:
-        return []
-    if status in {"cursor_pass", "cursor_absent_not_required", "cursor_no_current_bug_signal"}:
+def named_review_bot_findings_ledger(status: str | None, head_sha: str | None) -> list[dict[str, Any]]:
+    """Keep advisory third-party review-bot state out of the autonomous merge gate."""
+    if not status or status == "named_review_bot_absent_not_required":
         return []
     return [
         {
-            "source": "cursor",
+            "source": "named_review_bot_advisory",
             "head_sha": head_sha,
             "status": status,
-            "next_action": "minimal_same_branch_fix_then_rerun_cursor_or_recheck_current_head_summary",
+            "next_action": "none_required_unless_branch_protection_requires_this_check",
         }
     ]
 
@@ -2157,21 +2155,12 @@ def process_pr(
         receipt.blockers.extend([f"merglbot:{blocker}" for blocker in merglbot.get("blockers", [])])
         return receipt
 
-    cursor_ok, cursor = cursor_status(pr.repo, pr.number)
-    receipt.cursor_status = cursor
-    if not cursor_ok:
-        receipt.cursor_findings_ledger.extend(cursor_findings_ledger(cursor, refreshed.head_sha))
-        if not apply and autonomous_fix_loop:
-            mark_fix_loop_candidate(
-                receipt,
-                classification="WOULD_START_AUTONOMOUS_FIX_LOOP",
-                evidence="Cursor current-head signal is blocking; close-loop lane should apply a minimal same-branch fix and rerun/recheck Cursor.",
-                max_fix_iterations=max_fix_iterations,
-                max_review_iterations=max_review_iterations,
-            )
-            receipt.blockers.append(cursor)
-            return receipt
-        receipt.blockers.append(cursor)
+    review_bot_ok, review_bot = named_review_bot_status(pr.repo, pr.number)
+    receipt.named_review_bot_status = review_bot
+    receipt.named_review_bot_findings_ledger.extend(named_review_bot_findings_ledger(review_bot, refreshed.head_sha))
+    receipt.evidence.append(f"named_review_bot_policy={review_bot}; advisory_non_gate_unless_required_check")
+    if not review_bot_ok:
+        receipt.blockers.append(review_bot)
         return receipt
 
     refreshed = refresh_pr(pr.repo, pr.number)
@@ -2233,7 +2222,7 @@ def process_pr(
     if not apply:
         receipt.action = "would_merge"
         receipt.classification = "MERGE_ELIGIBLE_MAXIMUM_AUTONOMY"
-        receipt.evidence.extend(["required checks green", "Merglbot current-head approved", receipt.cursor_status or "cursor_unknown"])
+        receipt.evidence.extend(["required checks green", "Merglbot current-head approved", receipt.named_review_bot_status or "named_review_bot_unknown"])
         return receipt
 
     receipt.post_merge = merge_pr(pr.repo, pr.number, refreshed.head_sha)

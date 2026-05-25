@@ -71,7 +71,7 @@ function Dashboard() {
 
   const botUsageData = [
     { name: 'Copilot', value: 45, usage: 320 },
-    { name: 'Cursor', value: 30, usage: 210 },
+    { name: 'AI IDE', value: 30, usage: 210 },
     { name: 'Claude', value: 20, usage: 140 },
     { name: 'Manual', value: 5, usage: 35 },
   ];

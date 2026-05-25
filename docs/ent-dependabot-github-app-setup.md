@@ -54,7 +54,7 @@ review triggers are not the ENT apply path. `Contents: read and write` is
 required for exact-head merges and GitHub's PR `update-branch` API. Dry-run and
 close-only paths do not need contents writes, but the app identity must be able
 to perform an exact-head PR merge when all gates pass. Branch protection,
-required checks, Merglbot current-head review, Cursor/no-bug evidence, and
+required checks, Merglbot current-head review, third-party review-bot advisory evidence, and
 `--match-head-commit` remain mandatory.
 
 Do not grant `Administration` for the first live apply. Branch protection or

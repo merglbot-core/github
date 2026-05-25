@@ -67,12 +67,12 @@ Platform policy authority remains in `merglbot-public/docs`:
   `@merglbot review --light` comment path is not used by the ENT weekly apply
   lane because GitHub App comments do not carry a trusted author association.
 - When `autonomous_fix_loop=true`, current-head Merglbot `changes_required`,
-  Cursor blockers, and real CI failures are not treated as final closeout
+  third-party review-bot blockers, and real CI failures are not treated as final closeout
   blockers in dry-run. They are classified as `WOULD_START_AUTONOMOUS_FIX_LOOP`
   or `WOULD_HEAL_REQUIRED_CHECKS` with a findings ledger and the expected
   prompt-library close-loop contract. The write-capable fix loop is deliberately
   a separate orchestrator lane: it may push only minimal commits to the existing
-  Dependabot branch, must rerun Merglbot/Cursor/current-head gates after every
+  Dependabot branch, must rerun Merglbot/third-party review-bot/current-head gates after every
   new head, and may merge only through squash `--match-head-commit` after
   post-fix approval. This follows `Autonomous PR Close-Loop v1` and
   `MERGLBOT_PR_REVIEW_AUTONOMOUS_AUTOMERGE_V1`.
@@ -172,8 +172,8 @@ Every merged Dependabot PR must prove:
   `VALIDATED_WORKFLOW_REF_ONLY`; in that case the closeout validator's
   workflow-ref authority may satisfy the docs-authority gap, but any real
   `changes_required` review verdict remains a hard blocker,
-- Cursor Bugbot has a current-head pass when available, or the receipt records
-  that Cursor was absent/neutral/skipping and not required,
+- third-party review-bot has a current-head pass when available, or the receipt records
+  that third-party review-bot was absent/neutral/skipping and not required,
 - the merge uses squash with `--match-head-commit`.
 
 If a close-loop lane pushed a fix commit, the final merge gate must additionally
