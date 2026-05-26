@@ -58,6 +58,7 @@ jobs:
           PY
           then
             python3 scripts/pr-assistant/repo-policy-manifest.py verify --token-env GH_TOKEN
+            python3 scripts/pr-assistant/repo-policy-manifest.py verify-review-owner-alignment --token-env GH_TOKEN
             exit 0
           fi
 
