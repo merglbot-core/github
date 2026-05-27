@@ -140,6 +140,8 @@ jobs:
       diff_scope: ${{ steps.get_pr.outputs.diff_scope }}
       include_retro: ${{ steps.get_pr.outputs.include_retro }}
       trigger_comment_id: ${{ steps.get_pr.outputs.trigger_comment_id }}
+      skip_reason: ${{ steps.get_pr.outputs.skip_reason }}
+      trigger_contract_status: ${{ steps.get_pr.outputs.trigger_contract_status }}
     steps:
       - name: Get PR Number and Mode
         id: get_pr
@@ -161,6 +163,50 @@ jobs:
             esac
           }
 
+          write_trigger_skip() {
+            local reason="$1"
+            local message="$2"
+            local pr_number="${3:-${ISSUE_NUMBER:-}}"
+            local trigger_comment_id="${4:-${COMMENT_ID:-}}"
+            local payload
+            payload="$(jq -nc \
+              --arg schema "merglbot.pr_assistant.v3.trigger_skip.v1" \
+              --arg reason "$reason" \
+              --arg message "$message" \
+              --arg pr_number "${pr_number:-}" \
+              --arg trigger_comment_id "${trigger_comment_id:-}" \
+              --arg command_owner "v3" \
+              '{
+                schema: $schema,
+                should_run: false,
+                skip_reason: $reason,
+                message: $message,
+                pr_number: $pr_number,
+                trigger_comment_id: $trigger_comment_id,
+                command_owner: $command_owner
+              }')"
+            echo "::notice title=Merglbot PR Assistant v3 trigger skip::$payload"
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              {
+                echo "## Merglbot PR Assistant v3 Trigger Skip"
+                echo ""
+                echo '```json'
+                printf '%s\n' "$payload"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+            {
+              echo "pr_number=${pr_number:-}"
+              echo "should_run=false"
+              echo "review_mode=light"
+              echo "diff_scope=auto"
+              echo "include_retro=false"
+              echo "trigger_comment_id=${trigger_comment_id:-}"
+              echo "skip_reason=$reason"
+              echo "trigger_contract_status=skipped"
+            } >> "$GITHUB_OUTPUT"
+          }
+
           merglbot_v3_command_present() {
             if [ "$IS_WORKFLOW_DISPATCH" == "true" ]; then
               return 0
@@ -173,15 +219,12 @@ jobs:
           # Authorization gate: avoid running expensive workflows for untrusted commenters
           if [ "$IS_WORKFLOW_DISPATCH" != "true" ]; then
             if ! merglbot_v3_command_present; then
-              echo "⏭️ Skipping: no exact v3 @merglbot review command present"
-              {
-                echo "pr_number=$ISSUE_NUMBER"
-                echo "should_run=false"
-                echo "review_mode=light"
-                echo "diff_scope=auto"
-                echo "include_retro=false"
-                echo "trigger_comment_id=${COMMENT_ID:-}"
-              } >> "$GITHUB_OUTPUT"
+              echo "⏭️ Skipping: invalid v3 @merglbot review trigger"
+              write_trigger_skip \
+                "invalid_v3_review_trigger" \
+                "Comment starts with @merglbot review but does not match the v3 command contract." \
+                "$ISSUE_NUMBER" \
+                "${COMMENT_ID:-}"
               exit 0
             fi
             case "${AUTHOR_ASSOCIATION:-}" in
@@ -189,14 +232,11 @@ jobs:
                 ;;
               *)
                 echo "⛔️ Skipping: commenter not authorized (author_association=${AUTHOR_ASSOCIATION:-unknown})"
-                {
-                  echo "pr_number=$ISSUE_NUMBER"
-                  echo "should_run=false"
-                  echo "review_mode=light"
-                  echo "diff_scope=auto"
-                  echo "include_retro=false"
-                  echo "trigger_comment_id=${COMMENT_ID:-}"
-                } >> "$GITHUB_OUTPUT"
+                write_trigger_skip \
+                  "unauthorized_commenter" \
+                  "Commenter is not OWNER, MEMBER, or COLLABORATOR." \
+                  "$ISSUE_NUMBER" \
+                  "${COMMENT_ID:-}"
                 exit 0
                 ;;
             esac
@@ -269,6 +309,8 @@ jobs:
             echo "diff_scope=$DIFF_SCOPE_OUT"
             echo "include_retro=$INCLUDE_RETRO_OUT"
             echo "trigger_comment_id=$TRIGGER_COMMENT_ID_OUT"
+            echo "skip_reason=none"
+            echo "trigger_contract_status=accepted"
           } >> "$GITHUB_OUTPUT"
 
   dispatch-review-on-head:
