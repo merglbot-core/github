@@ -22,6 +22,7 @@ from typing import Any
 ALLOWED_ROLLOUT_TIERS = {"core", "public", "client", "private", "shared"}
 ALLOWED_ADMISSION_STATES = {"baseline_only", "advisory_docs_pilot"}
 ALLOWED_DEPLOY_MODES = {"copy_target", "canonical_self"}
+ALLOWED_REVIEW_OWNER_POLICIES = {"hard_gate", "advisory", "no_owner"}
 DEFAULT_MANIFEST_PATH = "scripts/pr-assistant/repo-policy-manifest.json"
 DEFAULT_POLICY_PATH = "scripts/pr-assistant/repo-policy-inventory-policy.json"
 DEFAULT_TARGET_LIST_PATH = "scripts/pr-assistant/target-repos.txt"
@@ -31,6 +32,7 @@ REQUIRED_REPO_FIELDS = (
     "rollout_tier",
     "admission_state",
     "human_merge_only",
+    "review_owner_policy",
     "deploy_mode",
     "expected_workflow",
     "notes",
@@ -317,6 +319,7 @@ def validate_repo_override(override: dict[str, Any], path: pathlib.Path, *, labe
         "rollout_tier",
         "admission_state",
         "human_merge_only",
+        "review_owner_policy",
         "deploy_mode",
         "expected_workflow",
         "expected_step1",
@@ -336,6 +339,10 @@ def validate_repo_override(override: dict[str, Any], path: pathlib.Path, *, labe
         )
     if "human_merge_only" in override and override["human_merge_only"] is not True:
         raise SystemExit(f"{path} {label}.human_merge_only must stay true")
+    if "review_owner_policy" in override and override["review_owner_policy"] not in ALLOWED_REVIEW_OWNER_POLICIES:
+        raise SystemExit(
+            f"{path} {label}.review_owner_policy must be one of {sorted(ALLOWED_REVIEW_OWNER_POLICIES)}"
+        )
     if "deploy_mode" in override and override["deploy_mode"] not in ALLOWED_DEPLOY_MODES:
         raise SystemExit(f"{path} {label}.deploy_mode must be one of {sorted(ALLOWED_DEPLOY_MODES)}")
     if "expected_workflow" in override:
@@ -446,6 +453,17 @@ def validate_manifest(
         human_merge_only = repo_entry["human_merge_only"]
         if human_merge_only is not True:
             raise SystemExit(f"{manifest_path} repos[{index}].human_merge_only must stay true")
+
+        review_owner_policy = repo_entry["review_owner_policy"]
+        if review_owner_policy not in ALLOWED_REVIEW_OWNER_POLICIES:
+            raise SystemExit(
+                f"{manifest_path} repos[{index}].review_owner_policy must be one of "
+                f"{sorted(ALLOWED_REVIEW_OWNER_POLICIES)}"
+            )
+        if not enabled and review_owner_policy != "no_owner":
+            raise SystemExit(
+                f"{manifest_path} repos[{index}] disabled repos must use review_owner_policy=no_owner"
+            )
 
         deploy_mode = repo_entry["deploy_mode"]
         if deploy_mode not in ALLOWED_DEPLOY_MODES:
@@ -620,8 +638,6 @@ def read_live_inventory(policy: dict[str, Any], token: str) -> tuple[list[str], 
     for org in visible_orgs:
         repo_payload = github_paginated_request(f"/orgs/{org}/repos?type=all&sort=full_name&direction=asc", token)
         for repo in repo_payload:
-            if repo.get("archived"):
-                continue
             full_name = repo["full_name"]
             if full_name in excluded_repos:
                 continue
@@ -792,26 +808,108 @@ def evaluate_branch_protection_review_owner(
     *,
     active_review_owner: str,
     required_checks: list[str],
+    review_owner_policy: str = "hard_gate",
 ) -> dict[str, Any]:
+    if review_owner_policy not in ALLOWED_REVIEW_OWNER_POLICIES:
+        raise ValueError(f"Unsupported review_owner_policy: {review_owner_policy}")
+
     required_review_checks = sorted(
         check for check in required_checks if check in PR_ASSISTANT_REVIEW_CHECK_NAMES
     )
     expected_check = PR_ASSISTANT_REVIEW_CHECK_BY_OWNER.get(active_review_owner)
-    if expected_check:
+    if review_owner_policy == "hard_gate" and expected_check:
         mismatched = [check for check in required_review_checks if check != expected_check]
     else:
         mismatched = required_review_checks
-    if mismatched:
+
+    mismatch_reason = None
+    remediation: list[str] = []
+    if review_owner_policy == "hard_gate" and not expected_check:
         status = "branch_protection_review_owner_mismatch"
-    elif required_review_checks:
+        mismatch_reason = "hard_gate_without_active_review_owner"
+        remediation = [
+            "deploy_or_enable_active_merglbot_review_owner",
+            "or_change_review_owner_policy_to_advisory_or_no_owner",
+        ]
+    elif review_owner_policy == "hard_gate" and expected_check not in required_review_checks:
+        status = "branch_protection_review_owner_mismatch"
+        mismatch_reason = "hard_gate_missing_required_review_check"
+        remediation = [f"add_required_status_check:{expected_check}"]
+        if mismatched:
+            remediation.append(
+                "remove_mismatched_merglbot_required_checks:" + ",".join(mismatched)
+            )
+    elif review_owner_policy == "hard_gate" and mismatched:
+        status = "branch_protection_review_owner_mismatch"
+        mismatch_reason = "required_review_check_does_not_match_active_owner"
+        remediation = ["remove_mismatched_merglbot_required_checks:" + ",".join(mismatched)]
+    elif review_owner_policy == "hard_gate":
         status = "aligned"
+
+    elif review_owner_policy == "advisory" and required_review_checks:
+        status = "branch_protection_review_owner_mismatch"
+        mismatch_reason = "advisory_policy_has_required_review_check"
+        remediation = [
+            "remove_merglbot_required_status_checks:" + ",".join(required_review_checks),
+            "or_change_review_owner_policy_to_hard_gate",
+        ]
+    elif review_owner_policy == "advisory":
+        status = "advisory"
+
+    elif active_review_owner != "none":
+        status = "branch_protection_review_owner_mismatch"
+        mismatch_reason = "no_owner_policy_has_active_review_owner"
+        remediation = [
+            "disable_merglbot_review_surface",
+            "or_change_review_owner_policy_to_advisory_or_hard_gate",
+        ]
+    elif required_review_checks:
+        status = "branch_protection_review_owner_mismatch"
+        mismatch_reason = "no_owner_policy_has_required_review_check"
+        remediation = ["remove_merglbot_required_status_checks:" + ",".join(required_review_checks)]
     else:
-        status = "no_review_check_required"
+        status = "no_owner"
+
     return {
         "status": status,
+        "review_owner_policy": review_owner_policy,
+        "allowed_merge_policy": {
+            "hard_gate": "active_merglbot_owner_must_be_required_status_check",
+            "advisory": "merglbot_signal_is_advisory_not_branch_protection_gate",
+            "no_owner": "no_merglbot_owner_or_required_check_allowed",
+        }[review_owner_policy],
         "expected_check": expected_check,
         "required_review_checks": required_review_checks,
         "mismatched_required_review_checks": mismatched,
+        "mismatch_reason": mismatch_reason,
+        "remediation": remediation,
+    }
+
+
+def build_review_owner_alignment_payload(
+    rows: list[dict[str, Any]],
+    mismatches: list[dict[str, Any]],
+    *,
+    excluded_orgs: list[str] | None = None,
+) -> dict[str, Any]:
+    classification_counts = {
+        policy: sum(1 for row in rows if row["review_owner_policy"] == policy)
+        for policy in sorted(ALLOWED_REVIEW_OWNER_POLICIES)
+    }
+    return {
+        "schema_version": 2,
+        "audit": "pr_assistant_review_owner_branch_protection_alignment",
+        "delivery_scope": {
+            "included_repo_count": len(rows),
+            "excluded_orgs": sorted(excluded_orgs or []),
+        },
+        "status": "failed" if mismatches else "passed",
+        "reason": "branch_protection_review_owner_mismatch" if mismatches else "aligned",
+        "repo_count": len(rows),
+        "classification_counts": classification_counts,
+        "mismatch_count": len(mismatches),
+        "mismatches": mismatches,
+        "repos": rows,
     }
 
 
@@ -844,6 +942,7 @@ def audit_review_owner_alignment(
     token_env: str,
     *,
     repo_filter: list[str] | None = None,
+    excluded_orgs: list[str] | None = None,
 ) -> dict[str, Any]:
     token = get_token(token_env)
     requested_repos = set(repo_filter or [])
@@ -877,39 +976,37 @@ def audit_review_owner_alignment(
         alignment = evaluate_branch_protection_review_owner(
             active_review_owner=active_owner,
             required_checks=required_checks,
+            review_owner_policy=repo_entry["review_owner_policy"],
         )
         row = {
             "repo": repo,
             "default_branch": default_branch,
             "enabled": repo_entry["enabled"],
+            "review_owner_policy": repo_entry["review_owner_policy"],
+            "merglbot_gate_classification": repo_entry["review_owner_policy"],
+            "allowed_merge_policy": alignment["allowed_merge_policy"],
             "workflow_present": workflow_present,
             "active_review_owner": active_owner,
             "active_review_owner_signal": owner_signal,
             "expected_review_check": expected_check,
             "v3_disabled_variable_source": v3_disabled_source,
             "branch_protection_state": branch_protection_state,
+            "branch_protection_required_checks": required_checks,
             "required_review_checks": alignment["required_review_checks"],
             "alignment_status": alignment["status"],
+            "mismatch_reason": alignment["mismatch_reason"],
+            "remediation": alignment["remediation"],
         }
         rows.append(row)
         if alignment["status"] == "branch_protection_review_owner_mismatch":
             mismatch = {
                 **row,
-                "reason": "branch_protection_review_owner_mismatch",
+                "reason": alignment["mismatch_reason"] or "branch_protection_review_owner_mismatch",
                 "mismatched_required_review_checks": alignment["mismatched_required_review_checks"],
             }
             mismatches.append(mismatch)
 
-    return {
-        "schema_version": 1,
-        "audit": "pr_assistant_review_owner_branch_protection_alignment",
-        "status": "failed" if mismatches else "passed",
-        "reason": "branch_protection_review_owner_mismatch" if mismatches else "aligned",
-        "repo_count": len(rows),
-        "mismatch_count": len(mismatches),
-        "mismatches": mismatches,
-        "repos": rows,
-    }
+    return build_review_owner_alignment_payload(rows, mismatches, excluded_orgs=excluded_orgs)
 
 
 def audit_repo(
@@ -1182,7 +1279,14 @@ def main() -> None:
         return
 
     if args.command == "verify-review-owner-alignment":
-        payload = audit_review_owner_alignment(manifest, args.token_env, repo_filter=args.repo)
+        policy = load_json(policy_path)
+        validate_inventory_policy(policy, policy_path)
+        payload = audit_review_owner_alignment(
+            manifest,
+            args.token_env,
+            repo_filter=args.repo,
+            excluded_orgs=policy["excluded_orgs"],
+        )
         print(json.dumps(payload, indent=2, sort_keys=False))
         if payload["mismatch_count"]:
             raise SystemExit("branch_protection_review_owner_mismatch")
