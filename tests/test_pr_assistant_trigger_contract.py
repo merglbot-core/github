@@ -53,6 +53,40 @@ class TriggerContractTests(unittest.TestCase):
         self.assertEqual(result["expected_check"], "Merglbot PR Assistant v4")
         self.assertEqual(result["mismatched_required_review_checks"], ["Merglbot PR Assistant v3"])
 
+    def test_hard_gate_missing_required_review_check_is_mismatch(self):
+        result = self.helper.evaluate_branch_protection_review_owner(
+            active_review_owner="v4",
+            required_checks=["ci"],
+            review_owner_policy="hard_gate",
+        )
+
+        self.assertEqual(result["status"], "branch_protection_review_owner_mismatch")
+        self.assertEqual(result["mismatch_reason"], "hard_gate_missing_required_review_check")
+        self.assertEqual(result["expected_check"], "Merglbot PR Assistant v4")
+        self.assertIn("add_required_status_check:Merglbot PR Assistant v4", result["remediation"])
+
+    def test_advisory_repo_without_required_review_check_is_not_violation(self):
+        result = self.helper.evaluate_branch_protection_review_owner(
+            active_review_owner="v3",
+            required_checks=["ci"],
+            review_owner_policy="advisory",
+        )
+
+        self.assertEqual(result["status"], "advisory")
+        self.assertEqual(result["mismatch_reason"], None)
+        self.assertEqual(result["allowed_merge_policy"], "merglbot_signal_is_advisory_not_branch_protection_gate")
+
+    def test_no_owner_repo_with_required_review_check_is_mismatch(self):
+        result = self.helper.evaluate_branch_protection_review_owner(
+            active_review_owner="none",
+            required_checks=["ci", "Merglbot PR Assistant v3"],
+            review_owner_policy="no_owner",
+        )
+
+        self.assertEqual(result["status"], "branch_protection_review_owner_mismatch")
+        self.assertEqual(result["mismatch_reason"], "no_owner_policy_has_required_review_check")
+        self.assertEqual(result["mismatched_required_review_checks"], ["Merglbot PR Assistant v3"])
+
     def test_branch_protection_alignment_accepts_matching_owner(self):
         result = self.helper.evaluate_branch_protection_review_owner(
             active_review_owner="v3",
@@ -61,6 +95,24 @@ class TriggerContractTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "aligned")
         self.assertEqual(result["mismatched_required_review_checks"], [])
+
+    def test_review_owner_alignment_payload_lists_excluded_orgs_and_classification_counts(self):
+        rows = [
+            {"repo": "example/a", "review_owner_policy": "advisory"},
+            {"repo": "example/b", "review_owner_policy": "no_owner"},
+        ]
+
+        payload = self.helper.build_review_owner_alignment_payload(
+            rows,
+            [],
+            excluded_orgs=["lrtch", "Merglevsky-cz"],
+        )
+
+        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(payload["delivery_scope"]["included_repo_count"], 2)
+        self.assertEqual(payload["delivery_scope"]["excluded_orgs"], ["Merglevsky-cz", "lrtch"])
+        self.assertEqual(payload["classification_counts"]["advisory"], 1)
+        self.assertEqual(payload["classification_counts"]["no_owner"], 1)
 
     def test_git_blob_sha_matches_github_contents_sha_shape(self):
         self.assertEqual(
