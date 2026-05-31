@@ -35,9 +35,11 @@ merglbot-denatura/marketing_actions_detector
 merglbot-extractors/abra-flexi-extractor
 merglbot-extractors/cerano-forecast-exporter
 merglbot-extractors/denatura-additional-costs-extractor
+# NOTE: No active PR Assistant review owner in the 2026-05-31 rollout audit; keep out of required-check scope until ownership is deployed.
 merglbot-extractors/denatura-forecast-exporter
 merglbot-extractors/denatura-shoptet-export-extractor
 merglbot-extractors/facebook-extractor
+# NOTE: No active PR Assistant review owner in the 2026-05-31 rollout audit; keep out of required-check scope until ownership is deployed.
 merglbot-extractors/ga4-extractor
 merglbot-extractors/heureka-costs-extractor
 merglbot-extractors/ruzovyslon-forecast-exporter
@@ -54,6 +56,7 @@ merglbot-proteinaco/abc_product_material_analysis
 merglbot-proteinaco/basket-analysis
 merglbot-proteinaco/btf-legacy-implementation
 merglbot-proteinaco/btf-viz
+# NOTE: No active PR Assistant review owner in the 2026-05-31 rollout audit; keep out of required-check scope until ownership is deployed.
 merglbot-proteinaco/cac-crc-exporter
 merglbot-proteinaco/proteinaco-forecast-exporter
 merglbot-proteinaco/proteinaco-web

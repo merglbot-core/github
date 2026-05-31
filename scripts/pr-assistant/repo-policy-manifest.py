@@ -809,6 +809,7 @@ def evaluate_branch_protection_review_owner(
     active_review_owner: str,
     required_checks: list[str],
     review_owner_policy: str = "hard_gate",
+    enabled: bool = True,
 ) -> dict[str, Any]:
     if review_owner_policy not in ALLOWED_REVIEW_OWNER_POLICIES:
         raise ValueError(f"Unsupported review_owner_policy: {review_owner_policy}")
@@ -869,6 +870,8 @@ def evaluate_branch_protection_review_owner(
         remediation = ["remove_merglbot_required_status_checks:" + ",".join(required_review_checks)]
     else:
         status = "no_owner"
+        if enabled:
+            remediation = ["deploy_or_enable_active_merglbot_review_owner_before_required_check"]
 
     return {
         "status": status,
@@ -977,6 +980,7 @@ def audit_review_owner_alignment(
             active_review_owner=active_owner,
             required_checks=required_checks,
             review_owner_policy=repo_entry["review_owner_policy"],
+            enabled=bool(repo_entry["enabled"]),
         )
         row = {
             "repo": repo,

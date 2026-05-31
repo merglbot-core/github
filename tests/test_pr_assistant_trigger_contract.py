@@ -1,11 +1,15 @@
+import json
 import importlib.util
 import pathlib
 import sys
 import unittest
+from collections import Counter
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 MANIFEST_HELPER = REPO_ROOT / "scripts" / "pr-assistant" / "repo-policy-manifest.py"
+MANIFEST = REPO_ROOT / "scripts" / "pr-assistant" / "repo-policy-manifest.json"
+INVENTORY_POLICY = REPO_ROOT / "scripts" / "pr-assistant" / "repo-policy-inventory-policy.json"
 V3_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "merglbot-pr-assistant-v3-on-demand.yml"
 
 
@@ -87,6 +91,31 @@ class TriggerContractTests(unittest.TestCase):
         self.assertEqual(result["mismatch_reason"], "no_owner_policy_has_required_review_check")
         self.assertEqual(result["mismatched_required_review_checks"], ["Merglbot PR Assistant v3"])
 
+    def test_enabled_no_owner_repo_has_required_owner_remediation(self):
+        result = self.helper.evaluate_branch_protection_review_owner(
+            active_review_owner="none",
+            required_checks=["ci"],
+            review_owner_policy="no_owner",
+            enabled=True,
+        )
+
+        self.assertEqual(result["status"], "no_owner")
+        self.assertEqual(
+            result["remediation"],
+            ["deploy_or_enable_active_merglbot_review_owner_before_required_check"],
+        )
+
+    def test_archived_disabled_no_owner_repo_has_no_required_owner_remediation(self):
+        result = self.helper.evaluate_branch_protection_review_owner(
+            active_review_owner="none",
+            required_checks=[],
+            review_owner_policy="no_owner",
+            enabled=False,
+        )
+
+        self.assertEqual(result["status"], "no_owner")
+        self.assertEqual(result["remediation"], [])
+
     def test_branch_protection_alignment_accepts_matching_owner(self):
         result = self.helper.evaluate_branch_protection_review_owner(
             active_review_owner="v3",
@@ -113,6 +142,44 @@ class TriggerContractTests(unittest.TestCase):
         self.assertEqual(payload["delivery_scope"]["excluded_orgs"], ["Merglevsky-cz", "lrtch"])
         self.assertEqual(payload["classification_counts"]["advisory"], 1)
         self.assertEqual(payload["classification_counts"]["no_owner"], 1)
+
+    def test_generated_matrix_scopes_v4_required_checks_to_owner_repos(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        policy = json.loads(INVENTORY_POLICY.read_text(encoding="utf-8"))
+        counts = Counter(entry["review_owner_policy"] for entry in manifest["repos"])
+        no_owner_repos = {
+            entry["repo"]
+            for entry in manifest["repos"]
+            if entry["review_owner_policy"] == "no_owner"
+        }
+
+        self.assertEqual(len(manifest["repos"]), 51)
+        self.assertEqual(counts["hard_gate"], 46)
+        self.assertEqual(counts["no_owner"], 5)
+        self.assertEqual(counts["advisory"], 0)
+        self.assertEqual(policy["excluded_orgs"], ["Merglevsky-cz", "lrtch"])
+        self.assertEqual(
+            no_owner_repos,
+            {
+                "merglbot-denatura/denatura-btf-data",
+                "merglbot-extractors/denatura-forecast-exporter",
+                "merglbot-extractors/ga4-extractor",
+                "merglbot-proteinaco/cac-crc-exporter",
+                "merglbot-shared/workflows_shared",
+            },
+        )
+
+    def test_archived_repos_stay_no_owner_and_disabled(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        by_repo = {entry["repo"]: entry for entry in manifest["repos"]}
+
+        for repo in (
+            "merglbot-denatura/denatura-btf-data",
+            "merglbot-shared/workflows_shared",
+        ):
+            self.assertFalse(by_repo[repo]["enabled"])
+            self.assertEqual(by_repo[repo]["review_owner_policy"], "no_owner")
+            self.assertIn("Archived/inert repo", by_repo[repo]["notes"])
 
     def test_git_blob_sha_matches_github_contents_sha_shape(self):
         self.assertEqual(

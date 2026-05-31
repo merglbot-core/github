@@ -10,7 +10,10 @@ single-line JSON payload using schema
 Enterprise rollout audit also checks that branch-protection required PR
 Assistant checks match the active review owner. If
 `MERGLBOT_PR_ASSISTANT_V3_DISABLED=true` selects v4 ownership, a protected branch
-must not keep requiring `Merglbot PR Assistant v3`; the audit emits
-`branch_protection_review_owner_mismatch` for that drift. Repositories without a
-required PR Assistant check are treated as `no_review_check_required`, not as an
-owner mismatch.
+must require `Merglbot PR Assistant v4` and must not keep requiring
+`Merglbot PR Assistant v3`; the audit emits
+`branch_protection_review_owner_mismatch` for either drift. Repositories without
+an active review owner are classified as `no_owner`, stay out of required-check
+scope, and include a remediation row when ownership must be deployed before the
+v4 hard gate can be enabled. Excluded orgs remain listed as out-of-scope evidence
+instead of being silently omitted.
