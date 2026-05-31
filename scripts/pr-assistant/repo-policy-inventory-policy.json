@@ -32,7 +32,7 @@
     "rollout_tier": "client",
     "admission_state": "baseline_only",
     "human_merge_only": true,
-    "review_owner_policy": "advisory",
+    "review_owner_policy": "hard_gate",
     "deploy_mode": "copy_target",
     "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
     "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
@@ -89,6 +89,14 @@
       "review_owner_policy": "no_owner",
       "notes": "Archived/inert repo; explicitly included in the 51-repo delivery matrix as no_owner."
     },
+    "merglbot-extractors/denatura-forecast-exporter": {
+      "review_owner_policy": "no_owner",
+      "notes": "No active PR Assistant review owner in the 2026-05-31 rollout audit; keep out of required-check scope until ownership is deployed."
+    },
+    "merglbot-extractors/ga4-extractor": {
+      "review_owner_policy": "no_owner",
+      "notes": "No active PR Assistant review owner in the 2026-05-31 rollout audit; keep out of required-check scope until ownership is deployed."
+    },
     "merglbot-core/github": {
       "deploy_mode": "canonical_self",
       "expected_workflow": ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
@@ -103,6 +111,10 @@
     },
     "merglbot-core/tf-modules-": {
       "notes": "Repo slug intentionally ends with a trailing hyphen."
+    },
+    "merglbot-proteinaco/cac-crc-exporter": {
+      "review_owner_policy": "no_owner",
+      "notes": "No active PR Assistant review owner in the 2026-05-31 rollout audit; keep out of required-check scope until ownership is deployed."
     },
     "merglbot-public/docs": {
       "admission_state": "advisory_docs_pilot",
