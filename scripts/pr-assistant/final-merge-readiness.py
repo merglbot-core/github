@@ -433,7 +433,7 @@ def evaluate_pr_assistant(
             decisions,
             "pr_assistant_review_only_evidence",
             "fail",
-            "No trusted PR Assistant receipt comment was found.",
+            "No trusted PR Assistant receipt comment or check-run summary was found.",
             evidence={
                 "required": True,
                 "marker": marker_name or None,
@@ -851,6 +851,7 @@ def self_test() -> int:
         evaluated_at="2026-05-01T00:00:00Z",
     )
     assert "missing_pr_assistant_receipt" in spoofed_receipt["blockers"]
+    assert "missing_current_head_approved_v5_review" in spoofed_receipt["blockers"]
 
     cloud_body = "\n".join(
         [
