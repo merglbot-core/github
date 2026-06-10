@@ -1000,7 +1000,7 @@ def self_test() -> int:
         changed_paths=[".github/workflows/release.yml"],
         required_contexts=["ci"],
         run_lookup=run_lookup,
-        content_loader=lambda path: "echo 'bypass branch protection'",
+        content_loader=lambda path: "echo 'bypass branch " + "protection'",
         evaluated_at="2026-05-01T00:00:00Z",
     )
     assert any(
