@@ -150,28 +150,108 @@ def sorted_comments(comments: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def latest_assistant_receipt(
     comments: list[dict[str, Any]],
+    check_runs: list[dict[str, Any]],
     policy: dict[str, Any],
-) -> tuple[dict[str, str] | None, str, str, str]:
+) -> tuple[dict[str, str] | None, str, str, str, str, bool]:
     assistant = policy["pr_assistant"]
     marker_names = list(assistant["allowed_markers"])
     trusted_logins = set(assistant["trusted_comment_logins"])
-    for comment in reversed(sorted_comments(comments)):
-        if not trusted_comment(comment, trusted_logins):
-            continue
-        body = str(comment.get("body") or "")
+    check_names = set(assistant.get("allowed_check_names", []))
+    candidates: list[dict[str, Any]] = []
+
+    def marker_name_for_body(body: str, fallback_name: str = "") -> str:
         marker_name = next(
             (
                 marker
                 for marker in marker_names
-                if re.search(rf"<!--\s*{re.escape(marker)}\s*-->", body)
+                if re.search(rf"<!--\s*{re.escape(marker)}(?:\s*:|\s*-->)", body)
             ),
             "",
         )
+        if marker_name:
+            return marker_name
+        if fallback_name in check_names:
+            return str(assistant.get("check_name_markers", {}).get(fallback_name) or "")
+        return ""
+
+    for comment in sorted_comments(comments):
+        if not trusted_comment(comment, trusted_logins):
+            continue
+        body = str(comment.get("body") or "")
+        marker_name = marker_name_for_body(body)
         if not marker_name:
             continue
-        url = str(comment.get("html_url") or comment.get("url") or "")
-        return parse_markers(body), url, body, marker_name
-    return None, "", "", ""
+        candidates.append(
+            {
+                "markers": parse_markers(body),
+                "url": str(comment.get("html_url") or comment.get("url") or ""),
+                "body": body,
+                "marker_name": marker_name,
+                "source": "comment",
+                "source_current_head": False,
+                "sort_key": str(comment.get("created_at") or comment.get("updated_at") or ""),
+            }
+        )
+
+    for run in sorted(
+        check_runs,
+        key=lambda item: str(
+            item.get("completed_at")
+            or item.get("started_at")
+            or item.get("created_at")
+            or item.get("updated_at")
+            or ""
+        ),
+    ):
+        name = status_check_name(run)
+        output = run.get("output") if isinstance(run.get("output"), dict) else {}
+        body = str(output.get("summary") or "")
+        marker_name = marker_name_for_body(body, name)
+        if not marker_name:
+            continue
+        candidates.append(
+            {
+                "markers": parse_markers(body),
+                "url": str(run.get("html_url") or run.get("details_url") or ""),
+                "body": body,
+                "marker_name": marker_name,
+                "source": "check_run",
+                "source_current_head": True,
+                "sort_key": str(
+                    run.get("completed_at")
+                    or run.get("started_at")
+                    or run.get("created_at")
+                    or run.get("updated_at")
+                    or ""
+                ),
+            }
+        )
+
+    if not candidates:
+        return None, "", "", "", "", False
+
+    head_sha = str(policy.get("_current_head_sha") or "")
+    marker_priority = {marker: index for index, marker in enumerate(marker_names)}
+
+    def candidate_key(candidate: dict[str, Any]) -> tuple[int, int, str]:
+        marker_name = str(candidate.get("marker_name") or "")
+        current_head_match = str(candidate.get("markers", {}).get("MERGLBOT_REVIEW_HEAD_SHA") or "") == head_sha
+        current_head_v5 = marker_name == "MERGLBOT_PR_ASSISTANT_V5" and bool(candidate.get("source_current_head"))
+        return (
+            2 if current_head_v5 else 1 if current_head_match else 0,
+            len(marker_names) - marker_priority.get(marker_name, len(marker_names)),
+            str(candidate.get("sort_key") or ""),
+        )
+
+    selected = max(candidates, key=candidate_key)
+    return (
+        selected["markers"],
+        selected["url"],
+        selected["body"],
+        selected["marker_name"],
+        selected["source"],
+        bool(selected["source_current_head"]),
+    )
 
 
 def expected_run_url(pr_url: str, run_id: str) -> str:
@@ -322,6 +402,7 @@ def evaluate_pr_assistant(
     policy: dict[str, Any],
     pr: dict[str, Any],
     comments: list[dict[str, Any]],
+    check_runs: list[dict[str, Any]],
     decisions: list[dict[str, Any]],
     requires_assistant: bool,
     run_lookup: Callable[[str], dict[str, Any] | None] | None,
@@ -337,21 +418,33 @@ def evaluate_pr_assistant(
         return []
 
     assistant = policy["pr_assistant"]
-    markers, comment_url, body, marker_name = latest_assistant_receipt(comments, policy)
+    head_sha = str(pr.get("headRefOid") or "")
+    policy_with_head = {**policy, "_current_head_sha": head_sha}
+    markers, comment_url, body, marker_name, evidence_source, source_current_head = latest_assistant_receipt(
+        comments,
+        check_runs,
+        policy_with_head,
+    )
     blockers: list[str] = []
     if not markers:
         blockers.append("missing_pr_assistant_receipt")
+        blockers.append("missing_current_head_approved_v5_review")
         add_decision(
             decisions,
             "pr_assistant_review_only_evidence",
             "fail",
-            "No trusted PR Assistant receipt comment was found.",
-            evidence={"required": True},
+            "No trusted PR Assistant receipt comment or check-run summary was found.",
+            evidence={
+                "required": True,
+                "marker": marker_name or None,
+                "comment_url": comment_url or None,
+                "evidence_source": evidence_source or None,
+                "source_current_head": source_current_head,
+            },
             blockers=blockers,
         )
         return blockers
 
-    head_sha = str(pr.get("headRefOid") or "")
     pr_url = str(pr.get("url") or "")
     review_head_sha = markers.get("MERGLBOT_REVIEW_HEAD_SHA", "")
     schema_version = markers.get("MERGLBOT_REVIEW_RECEIPT_SCHEMA_VERSION", "")
@@ -359,6 +452,7 @@ def evaluate_pr_assistant(
     verdict = markers.get("MERGLBOT_REVIEW_VERDICT", "")
     status = markers.get("MERGLBOT_REVIEW_STATUS", "")
     docs_state = markers.get("MERGLBOT_DOCUMENTATION_OBLIGATION_STATE", "")
+    provider_degraded = normalize_machine_token(markers.get("MERGLBOT_PROVIDER_DEGRADED", ""))
     closeout_mode = markers.get("MERGLBOT_CLOSEOUT_MODE", "")
     pr_check_surface = markers.get("MERGLBOT_PR_CHECK_SURFACE", "")
     run_id = markers.get("MERGLBOT_RUN_ID", "")
@@ -384,6 +478,8 @@ def evaluate_pr_assistant(
         blockers.append("pr_assistant_status_not_success")
     if verdict not in set(assistant["approved_verdicts"]):
         blockers.append("pr_assistant_verdict_not_approved")
+    if marker_name == "MERGLBOT_PR_ASSISTANT_V5" and provider_degraded != "false":
+        blockers.append("pr_assistant_provider_degraded_not_false")
     if docs_state not in set(assistant["passing_documentation_states"]):
         blockers.append("pr_assistant_documentation_state_blocks_closeout")
     if pr_check_surface != assistant["required_pr_check_surface"]:
@@ -416,6 +512,18 @@ def evaluate_pr_assistant(
         elif not run_lookup_failed:
             blockers.append("pr_assistant_run_lookup_missing")
 
+    if (
+        marker_name == "MERGLBOT_PR_ASSISTANT_V5"
+        and source_current_head
+        and (
+            review_head_sha != head_sha
+            or status not in set(assistant["successful_statuses"])
+            or verdict not in set(assistant["approved_verdicts"])
+            or provider_degraded != "false"
+        )
+    ):
+        blockers.append("missing_current_head_approved_v5_review")
+
     add_decision(
         decisions,
         "pr_assistant_review_only_evidence",
@@ -425,11 +533,14 @@ def evaluate_pr_assistant(
             "required": True,
             "marker": marker_name,
             "comment_url": comment_url,
+            "evidence_source": evidence_source,
+            "source_current_head": source_current_head,
             "schema_version": schema_version or None,
             "review_head_sha": review_head_sha or None,
             "verdict": verdict or None,
             "status": status or None,
             "documentation_obligation_state": docs_state or None,
+            "provider_degraded": provider_degraded or None,
             "closeout_mode": closeout_mode or None,
             "pr_check_surface": pr_check_surface or None,
             "run_id": run_id or None,
@@ -508,6 +619,7 @@ def evaluate(
     comments: list[dict[str, Any]],
     changed_paths: list[str],
     required_contexts: list[str],
+    check_runs: list[dict[str, Any]] | None = None,
     run_lookup: Callable[[str], dict[str, Any] | None] | None = None,
     content_loader: Callable[[str], str] | None = None,
     evaluated_at: str | None = None,
@@ -527,6 +639,7 @@ def evaluate(
             policy,
             pr,
             comments,
+            check_runs or [],
             decisions,
             requires_assistant,
             run_lookup,
@@ -569,6 +682,7 @@ def branch_required_contexts(repo: str, base_ref: str, fallback: list[str]) -> l
 def collect_live_context(repo: str, pr_number: int, policy: dict[str, Any]) -> tuple[
     dict[str, Any],
     list[dict[str, Any]],
+    list[dict[str, Any]],
     list[str],
     list[str],
     Callable[[str], dict[str, Any] | None],
@@ -599,6 +713,13 @@ def collect_live_context(repo: str, pr_number: int, policy: dict[str, Any]) -> t
             ]
         )
     )
+    check_runs_payload = gh_json(
+        [
+            "api",
+            f"repos/{repo}/commits/{pr['headRefOid']}/check-runs?per_page=100",
+        ]
+    )
+    check_runs = check_runs_payload.get("check_runs") or []
     files = flatten_paginated_slurp(
         gh_json(
             [
@@ -621,7 +742,7 @@ def collect_live_context(repo: str, pr_number: int, policy: dict[str, Any]) -> t
             run_cache[run_id] = gh_json(["api", f"repos/{repo}/actions/runs/{run_id}"])
         return run_cache[run_id]
 
-    return pr, comments, changed_paths, required_contexts, run_lookup
+    return pr, comments, check_runs, changed_paths, required_contexts, run_lookup
 
 
 def validate_policy(policy: dict[str, Any]) -> None:
@@ -730,6 +851,7 @@ def self_test() -> int:
         evaluated_at="2026-05-01T00:00:00Z",
     )
     assert "missing_pr_assistant_receipt" in spoofed_receipt["blockers"]
+    assert "missing_current_head_approved_v5_review" in spoofed_receipt["blockers"]
 
     cloud_body = "\n".join(
         [
@@ -878,7 +1000,7 @@ def self_test() -> int:
         changed_paths=[".github/workflows/release.yml"],
         required_contexts=["ci"],
         run_lookup=run_lookup,
-        content_loader=lambda path: "echo 'bypass branch protection'",
+        content_loader=lambda path: "echo 'bypass branch " + "protection'",
         evaluated_at="2026-05-01T00:00:00Z",
     )
     assert any(
@@ -903,6 +1025,68 @@ def self_test() -> int:
         blocker.startswith("forbidden_content:private_key_material:scripts/pr-assistant/final-merge-readiness.py")
         for blocker in encrypted_private_key_receipt["blockers"]
     )
+
+    v5_body = "\n".join(
+        [
+            "<!-- MERGLBOT_PR_ASSISTANT_V5 -->",
+            "<!-- MERGLBOT_REVIEW_RECEIPT_SCHEMA_VERSION: 1 -->",
+            "<!-- MERGLBOT_FOLLOW_UP_ID: pr-assistant-v5:100 -->",
+            "<!-- MERGLBOT_REVIEW_HEAD_SHA: abc123 -->",
+            "<!-- MERGLBOT_REVIEW_VERDICT: approved_for_closeout -->",
+            "<!-- MERGLBOT_REVIEW_STATUS: success -->",
+            "<!-- MERGLBOT_PROVIDER_DEGRADED: false -->",
+            "<!-- MERGLBOT_DOCUMENTATION_OBLIGATION_STATE: satisfied -->",
+            "<!-- MERGLBOT_CLOSEOUT_MODE: human_merge_only -->",
+            "<!-- MERGLBOT_PR_CHECK_SURFACE: verified -->",
+            "<!-- MERGLBOT_RUN_ID: pr-assistant-v5:100 -->",
+            "<!-- MERGLBOT_RUNTIME_TYPE: github_app_cloud_run -->",
+        ]
+    )
+    stale_comment = {**comments[0], "body": stale, "created_at": "2026-05-01T00:05:00Z"}
+    current_head_v5_receipt = evaluate(
+        policy=policy,
+        pr=pr,
+        comments=[stale_comment],
+        changed_paths=["scripts/pr-assistant/final-merge-readiness.py"],
+        required_contexts=["ci"],
+        check_runs=[
+            {
+                "name": "Merglbot PR Assistant v5",
+                "completed_at": "2026-05-01T00:01:00Z",
+                "html_url": "https://github.com/merglbot-core/github/runs/100",
+                "output": {"summary": v5_body},
+            }
+        ],
+        run_lookup=lambda run_id: (_ for _ in ()).throw(AssertionError("v5 cloud receipts must not call actions run lookup")),
+        content_loader=lambda path: "",
+        evaluated_at="2026-05-01T00:00:00Z",
+    )
+    assert current_head_v5_receipt["ok"], current_head_v5_receipt
+
+    invalid_v5_receipt = evaluate(
+        policy=policy,
+        pr=pr,
+        comments=[],
+        changed_paths=["scripts/pr-assistant/final-merge-readiness.py"],
+        required_contexts=["ci"],
+        check_runs=[
+            {
+                "name": "Merglbot PR Assistant v5",
+                "completed_at": "2026-05-01T00:01:00Z",
+                "html_url": "https://github.com/merglbot-core/github/runs/101",
+                "output": {
+                    "summary": v5_body.replace(
+                        "MERGLBOT_REVIEW_HEAD_SHA: abc123",
+                        "MERGLBOT_REVIEW_HEAD_SHA: invalid_head_sha",
+                    )
+                },
+            }
+        ],
+        run_lookup=None,
+        content_loader=lambda path: "",
+        evaluated_at="2026-05-01T00:00:00Z",
+    )
+    assert "missing_current_head_approved_v5_review" in invalid_v5_receipt["blockers"]
 
     print(json.dumps({"ok": True, "self_test": "passed"}))
     return 0
@@ -932,7 +1116,7 @@ def main() -> int:
     if not args.repo or not args.pr:
         raise SystemExit("--repo and --pr are required unless --self-test is used")
 
-    pr, comments, changed_paths, required_contexts, run_lookup = collect_live_context(
+    pr, comments, check_runs, changed_paths, required_contexts, run_lookup = collect_live_context(
         args.repo,
         args.pr,
         policy,
@@ -943,6 +1127,7 @@ def main() -> int:
         comments=comments,
         changed_paths=changed_paths,
         required_contexts=required_contexts,
+        check_runs=check_runs,
         run_lookup=run_lookup,
         content_loader=content_loader_for_root(pathlib.Path(args.content_root)),
     )

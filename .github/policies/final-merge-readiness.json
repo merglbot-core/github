@@ -19,12 +19,23 @@
   "pr_assistant": {
     "role": "review_only_evidence_provider",
     "allowed_markers": [
+      "MERGLBOT_PR_ASSISTANT_V5",
       "MERGLBOT_PR_ASSISTANT_V4",
       "MERGLBOT_PR_ASSISTANT_V3"
     ],
+    "allowed_check_names": [
+      "Merglbot PR Assistant v5",
+      "Merglbot PR Assistant v4"
+    ],
+    "check_name_markers": {
+      "Merglbot PR Assistant v5": "MERGLBOT_PR_ASSISTANT_V5",
+      "Merglbot PR Assistant v4": "MERGLBOT_PR_ASSISTANT_V4"
+    },
     "trusted_comment_logins": [
       "github-actions[bot]",
       "github-actions",
+      "merglbot-pr-assistant-v5-stg[bot]",
+      "merglbot-pr-assistant-v5[bot]",
       "merglbot-pr-assistant-v4-stg[bot]",
       "merglbot-pr-assistant-v4[bot]"
     ],
@@ -40,6 +51,7 @@
       "github_app_cloud_run"
     ],
     "external_run_id_prefixes": [
+      "pr-assistant-v5:",
       "pr-assistant-v4:"
     ],
     "approved_verdicts": [
