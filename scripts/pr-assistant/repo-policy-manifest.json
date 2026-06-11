@@ -492,6 +492,18 @@
       "notes": ""
     },
     {
+      "repo": "merglbot-proteinaco/proteinaco-gmc-feed-enhancer",
+      "enabled": true,
+      "rollout_tier": "client",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "review_owner_policy": "hard_gate",
+      "deploy_mode": "copy_target",
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": "New Proteinaco GMC feed migration repo; bootstrap PR installs repo-local PR Assistant workflow before runtime implementation."
+    },
+    {
       "repo": "merglbot-proteinaco/proteinaco-web",
       "enabled": true,
       "rollout_tier": "client",

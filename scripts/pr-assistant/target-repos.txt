@@ -59,6 +59,8 @@ merglbot-proteinaco/btf-viz
 # NOTE: No active PR Assistant review owner in the 2026-05-31 rollout audit; keep out of required-check scope until ownership is deployed.
 merglbot-proteinaco/cac-crc-exporter
 merglbot-proteinaco/proteinaco-forecast-exporter
+# NOTE: New Proteinaco GMC feed migration repo; bootstrap PR installs repo-local PR Assistant workflow before runtime implementation.
+merglbot-proteinaco/proteinaco-gmc-feed-enhancer
 merglbot-proteinaco/proteinaco-web
 merglbot-proteinaco/viz-api
 
