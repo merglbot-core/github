@@ -1,0 +1,14 @@
+name: V5PBF Negative Control Canary
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  explain:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain negative control
+        run: echo "Temporary workflow-file canary for PR Assistant v5 high-risk fail-closed validation."
