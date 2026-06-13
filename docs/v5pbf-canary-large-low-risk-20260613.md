@@ -1,20 +1,17 @@
 # V5PBF Large Low-Risk Canary
 
-This temporary file is a large low-risk documentation canary for validating the
-PR Assistant v5 prompt-budget and bounded fallback behavior after deployment.
+This temporary file is a large low-risk documentation canary for validating
+that PR Assistant v5 can review long explanatory text in production.
 
-The content below is intentionally repetitive and operationally inert. It does
-not define credentials, infrastructure, Terraform resources, GitHub workflows,
-IAM bindings, branch protection, deployment configuration, or runtime code.
+The content below is intentionally repetitive and operationally inert. It is a
+plain narrative document with no executable behavior.
 
 ## Expected Result
 
-- A healthy provider path may return `AUTONOMOUS_MERGE_SAFE`.
-- If the primary provider hits a prompt-budget-only condition, the bounded
-  fallback path may return `LOW_RISK_BOUNDED_FALLBACK_SAFE` with
-  `MERGLBOT_PROVIDER_FALLBACK_DECISION: low_risk_bounded_accept`.
-- A generic provider-degraded marker without the explicit bounded fallback
-  decision must remain blocking.
+- A healthy review path may return a clean v5 approval.
+- If a review needs compact handling for long prose, the result should remain
+  parseable and current-head.
+- The receipt should stay honest about any model health issue.
 
 ## Low-Risk Evidence Matrix
 
