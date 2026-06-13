@@ -14,4 +14,4 @@ signals. It is intentionally documentation-only.
 ## Expected Maintenance Outcome
 
 Documentation changes like this should be easy to review, easy to revert, and
-safe to close without affecting runtime behavior.
+safe to close without affecting application behavior.
