@@ -327,3 +327,5 @@ jobs:
           curl -X POST "$SLACK_WEBHOOK_URL" \
             -H 'Content-Type: application/json' \
             -d "$PAYLOAD"
+
+# V5SHS high-risk negative-control canary marker (temporary; removed in cleanup)
