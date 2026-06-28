@@ -37,6 +37,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Preflight runtime prerequisites (gh, jq)
+        run: |
+          set -euo pipefail
+          command -v gh >/dev/null || { echo "::error::gh not found on runner"; exit 1; }
+          command -v jq >/dev/null || { echo "::error::jq not found on runner"; exit 1; }
+          echo "gh:  $(gh --version | head -1)"
+          echo "jq:  $(jq --version)"
+
       - name: Sync / detect drift for the v5 required check
         env:
           # Enterprise token with administration:write across the App-installed

@@ -114,11 +114,22 @@ for full in "${repos[@]}"; do
     [ -z "$branch" ] && { err "${full}: cannot resolve default branch"; count_fail=$((count_fail+1)); continue; }
   fi
 
-  # Detect "no branch protection" by EXIT CODE: gh api prints the 404 error body
-  # to stdout, so an emptiness check is unreliable.
-  if ! prot="$(gh api "repos/${full}/branches/${branch}/protection" 2>/dev/null)"; then
-    log "SKIP ${full}:${branch} (no branch protection — 404; not weakened, just absent)"
-    count_skip_nobp=$((count_skip_nobp+1)); continue
+  # Read existing protection. Distinguish a genuine 404 (no branch protection →
+  # safe to skip) from permission / rate-limit / transient API errors (fail
+  # CLOSED — never silently skip a repo we could not read, which would leave the
+  # v5 gate unenforced). gh prints the error body to stdout, so we inspect the
+  # exit code + the stderr detail, not emptiness.
+  prot_err="$(mktemp)"
+  if prot="$(gh api "repos/${full}/branches/${branch}/protection" 2>"$prot_err")"; then
+    rm -f "$prot_err"
+  else
+    detail="$(tr '\n' ' ' < "$prot_err" 2>/dev/null)"; rm -f "$prot_err"
+    if printf '%s' "$detail" | grep -qiE "HTTP 404|Not Found|Branch not protected"; then
+      log "SKIP ${full}:${branch} (no branch protection — 404; not weakened, just absent)"
+      count_skip_nobp=$((count_skip_nobp+1)); continue
+    fi
+    err "${full}:${branch}: branch-protection read FAILED (not 404 — permission/API error; failing closed): ${detail}"
+    count_fail=$((count_fail+1)); continue
   fi
 
   # Existing contexts (new 'contexts' array OR legacy 'checks[].context').
