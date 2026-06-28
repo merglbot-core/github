@@ -114,21 +114,23 @@ for full in "${repos[@]}"; do
     [ -z "$branch" ] && { err "${full}: cannot resolve default branch"; count_fail=$((count_fail+1)); continue; }
   fi
 
-  # Read existing protection. Distinguish a genuine 404 (no branch protection →
-  # safe to skip) from permission / rate-limit / transient API errors (fail
-  # CLOSED — never silently skip a repo we could not read, which would leave the
-  # v5 gate unenforced). gh prints the error body to stdout, so we inspect the
-  # exit code + the stderr detail, not emptiness.
-  prot_err="$(mktemp)"
-  if prot="$(gh api "repos/${full}/branches/${branch}/protection" 2>"$prot_err")"; then
-    rm -f "$prot_err"
-  else
-    detail="$(tr '\n' ' ' < "$prot_err" 2>/dev/null)"; rm -f "$prot_err"
-    if printf '%s' "$detail" | grep -qiE "HTTP 404|Not Found|Branch not protected"; then
-      log "SKIP ${full}:${branch} (no branch protection — 404; not weakened, just absent)"
-      count_skip_nobp=$((count_skip_nobp+1)); continue
-    fi
-    err "${full}:${branch}: branch-protection read FAILED (not 404 — permission/API error; failing closed): ${detail}"
+  # Classify branch protection by the EXPLICIT `.protected` boolean on the branch
+  # object — never by text-matching an API error message (which a locale change,
+  # rate-limit, or transient/auth error could spoof into a false "absent"). A
+  # failure to READ the branch is a real error and fails CLOSED (never a silent
+  # skip that would leave the v5 gate unenforced).
+  if ! protected="$(gh api "repos/${full}/branches/${branch}" --jq '.protected' 2>/dev/null)"; then
+    err "${full}:${branch}: branch read FAILED (missing/permission/API — failing closed, not skipped)"
+    count_fail=$((count_fail+1)); continue
+  fi
+  if [ "$protected" != "true" ]; then
+    log "SKIP ${full}:${branch} (branch protection absent: .protected=${protected}; not weakened, just absent)"
+    count_skip_nobp=$((count_skip_nobp+1)); continue
+  fi
+  # Protected → read the full protection config (succeeds for a protected branch;
+  # a failure here is also a real error and fails closed).
+  if ! prot="$(gh api "repos/${full}/branches/${branch}/protection" 2>/dev/null)"; then
+    err "${full}:${branch}: protected=true but protection read FAILED (failing closed)"
     count_fail=$((count_fail+1)); continue
   fi
 
