@@ -1,0 +1,74 @@
+name: v5 Required Check Sync (Merglbot PR Assistant v5)
+
+# Ensures "Merglbot PR Assistant v5" is a required status check across the
+# App-installed orgs, ADDITIVELY + IDEMPOTENTLY (existing checks + enforce_admins
+# preserved). Cron runs in DRY-RUN and fails on drift (a repo with branch
+# protection but missing v5 = a new repo to cover); dispatch with apply=true to
+# enforce. Repos without branch protection are skipped (not force-created).
+# Merglevsky-cz + lrtch are intentionally excluded until the App is installed
+# (a required check the App never runs would hard-block all merges there).
+
+on:
+  schedule:
+    - cron: "30 7 * * 1"  # weekly Monday 07:30 UTC
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Apply (enforce) instead of dry-run drift report."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v5-required-check-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync v5 required check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout merglbot-core/github (self)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Sync / detect drift for the v5 required check
+        env:
+          # Enterprise token with administration:write across the App-installed
+          # orgs (branch-protection PUT requires admin). Same secret the ENT
+          # governance workflows use.
+          GH_TOKEN: ${{ secrets.ENTERPRISE_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          orgs=(
+            merglbot-core merglbot-public merglbot-denatura merglbot-shared
+            merglbot-proteinaco merglbot-ruzovyslon merglbot-milan-private
+            merglbot-extractors merglbot-autodoplnky merglbot-hodinarstvibechyne
+            merglbot-kiteboarding merglbot-cerano
+          )
+          args=()
+          for o in "${orgs[@]}"; do args+=(--org "$o"); done
+          chmod +x scripts/governance/apply-v5-required-check.sh
+          if [ "${{ inputs.apply }}" = "true" ]; then
+            scripts/governance/apply-v5-required-check.sh "${args[@]}" --apply --yes | tee /tmp/v5sync.log
+          else
+            scripts/governance/apply-v5-required-check.sh "${args[@]}" --dry-run | tee /tmp/v5sync.log
+          fi
+
+      - name: Fail on drift (dry-run only)
+        if: ${{ github.event_name == 'schedule' || inputs.apply != true }}
+        run: |
+          set -euo pipefail
+          missing="$(grep -c 'WOULD-ADD' /tmp/v5sync.log || true)"
+          nobp="$(grep -c 'SKIP ' /tmp/v5sync.log || true)"
+          echo "Repos with branch protection but missing v5: ${missing:-0}"
+          echo "Repos without branch protection (cannot enforce v5): ${nobp:-0}"
+          if [ "${missing:-0}" -gt 0 ]; then
+            echo "::error::${missing} repo(s) require the v5 check but do not have it — re-run with apply=true (or let the next cron apply)."
+            exit 1
+          fi
