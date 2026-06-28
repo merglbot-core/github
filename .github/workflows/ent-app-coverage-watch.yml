@@ -2,10 +2,16 @@ name: ENT App + v5 Coverage Watch (drift detector)
 
 # Daily read-only drift detector for fleet-wide PR-Assistant coverage. It does NOT
 # mutate anything — it surfaces gaps an agent/owner must close:
-#   - a NEW org (not in the SSOT allowlist) — the App install is org-admin-manual;
-#   - an org where the App is not "All repositories";  (reported as a manual TODO)
+#   - a NEW org not in the SSOT allowlist (BEST-EFFORT only — see below);
 #   - a protected repo missing the required check "Merglbot PR Assistant v5".
-# On any drift it fails and upserts a single tracking issue.
+# It FAILS CLOSED: any non-404 API error makes the scan INCONCLUSIVE (never a silent
+# "no drift"), and on drift/inconclusive it fails and upserts a single tracking issue.
+#
+# Authoritative-source caveat: new-org detection uses /user/orgs, which only returns
+# orgs the token is a member of — a brand-new org the token is not yet in is invisible
+# here. The authoritative coverage controls are the manually-maintained SSOT list +
+# the owner's org-creation process / App-installation review; this workflow does not
+# claim complete enterprise coverage on its own.
 
 on:
   schedule:
@@ -40,52 +46,89 @@ jobs:
         run: |
           set -euo pipefail
           report="$(mktemp)"
+          errfile="$(mktemp)"   # one line per non-404 API error → scan is partial
           drift=0
 
-          # 1) New org not in SSOT (App install is org-admin-manual → owner action).
-          echo "## New orgs (not in SSOT — install the App, then add to allowlists)" >> "$report"
+          # Read a gh api endpoint. Returns 0 + stdout on success; 44 on an EXPECTED
+          # 404 (absent resource); 1 on any OTHER error (rate-limit/403/network/5xx),
+          # which is recorded so an incomplete scan can never masquerade as "no drift".
+          # (The errfile write survives the command-substitution subshell.)
+          gh_read() {
+            local out err
+            err="$(mktemp)"
+            if out="$(gh api "$@" 2>"$err")"; then rm -f "$err"; printf '%s' "$out"; return 0; fi
+            if grep -qiE 'HTTP 404|Not Found|Branch not protected' "$err"; then rm -f "$err"; return 44; fi
+            echo "gh api $*: $(tr '\n' ' ' < "$err" | head -c 300)" >> "$errfile"
+            rm -f "$err"; return 1
+          }
+
+          # 1) New org not in SSOT. NOTE: /user/orgs is BEST-EFFORT — it only returns
+          # orgs the token is a member of, so a brand-new org the token is not yet in
+          # is invisible here. The authoritative coverage control is the SSOT list
+          # (manually maintained) + the owner's org-creation process / App-install
+          # review; this check is a convenience cross-reference, not a completeness
+          # guarantee.
+          echo "## New orgs vs SSOT (best-effort via /user/orgs — NOT authoritative)" >> "$report"
           new_orgs=0
-          while IFS= read -r org; do
-            [ -z "$org" ] && continue
-            case " $SSOT_ORGS " in
-              *" $org "*) : ;;
-              *) echo "- $org" >> "$report"; new_orgs=$((new_orgs+1)); drift=1 ;;
-            esac
-          done < <(gh api /user/orgs --paginate --jq '.[].login' 2>/dev/null || true)
-          [ "$new_orgs" -eq 0 ] && echo "- (none)" >> "$report"
+          if orgs_seen="$(gh_read /user/orgs --paginate --jq '.[].login')"; then
+            while IFS= read -r org; do
+              [ -z "$org" ] && continue
+              case " $SSOT_ORGS " in
+                *" $org "*) : ;;
+                *) echo "- $org (not in SSOT)" >> "$report"; new_orgs=$((new_orgs+1)); drift=1 ;;
+              esac
+            done <<< "$orgs_seen"
+            [ "$new_orgs" -eq 0 ] && echo "- (none beyond SSOT, best-effort)" >> "$report"
+          else
+            echo "- (inconclusive — /user/orgs unavailable; see scan errors)" >> "$report"
+          fi
 
           # 2) Protected repos in App-installed orgs missing the v5 required check.
           echo "" >> "$report"
           echo "## Protected repos missing the '$V5_CHECK' required check" >> "$report"
           missing=0
           for org in $APP_ORGS; do
+            if ! repos_list="$(gh_read "orgs/${org}/repos" --paginate --jq '.[] | select(.archived==false) | .name')"; then
+              echo "- (could not enumerate ${org} — scan partial)" >> "$report"
+              continue
+            fi
             while IFS= read -r repo; do
               [ -z "$repo" ] && continue
               full="${org}/${repo}"
-              branch="$(gh api "repos/${full}" --jq '.default_branch' 2>/dev/null || true)"
-              [ -z "$branch" ] && continue
-              isprot="$(gh api "repos/${full}/branches/${branch}" --jq '.protected' 2>/dev/null || echo "error")"
-              [ "$isprot" != "true" ] && continue   # no BP → tracked separately (issue #665)
-              # Exact whole-line match against the required-check contexts (covers
-              # both the legacy 'contexts' array and the newer 'checks[].context').
-              if gh api "repos/${full}/branches/${branch}/protection" \
-                   --jq '(.required_status_checks.contexts // [])[], (.required_status_checks.checks // [])[].context' 2>/dev/null \
-                   | grep -qxF "$V5_CHECK"; then
-                : # v5 already required
-              else
-                echo "- ${full}:${branch}" >> "$report"; missing=$((missing+1)); drift=1
+              if ! branch="$(gh_read "repos/${full}" --jq '.default_branch')"; then continue; fi
+              # `.protected` boolean: false = no BP (tracked in #665), not a drift.
+              if ! isprot="$(gh_read "repos/${full}/branches/${branch}" --jq '.protected')"; then continue; fi
+              [ "$isprot" != "true" ] && continue
+              if ctx="$(gh_read "repos/${full}/branches/${branch}/protection" \
+                   --jq '(.required_status_checks.contexts // [])[], (.required_status_checks.checks // [])[].context')"; then
+                if ! printf '%s\n' "$ctx" | grep -qxF "$V5_CHECK"; then
+                  echo "- ${full}:${branch}" >> "$report"; missing=$((missing+1)); drift=1
+                fi
               fi
-            done < <(gh api "orgs/${org}/repos" --paginate --jq '.[] | select(.archived==false) | .name' 2>/dev/null || true)
+            done <<< "$repos_list"
           done
           [ "$missing" -eq 0 ] && echo "- (none)" >> "$report"
 
+          # Fail CLOSED: any non-404 API error means the scan was incomplete, so a
+          # clean "drift=0" cannot be asserted. Treat inconclusive as drift.
+          scan_errors="$(grep -c . "$errfile" || true)"
+          inconclusive=0
+          if [ "${scan_errors:-0}" -gt 0 ]; then
+            inconclusive=1; drift=1
+            echo "" >> "$report"
+            echo "## ⚠️ Scan INCOMPLETE — ${scan_errors} API error(s); result is INCONCLUSIVE (not 'no drift')" >> "$report"
+            sed 's/^/- /' "$errfile" >> "$report"
+          fi
+
+          delim="DRIFT_REPORT_${GITHUB_RUN_ID:-0}_${GITHUB_RUN_ATTEMPT:-0}"
           {
-            echo "report<<EOF"
+            echo "report<<${delim}"
             cat "$report"
-            echo "EOF"
+            echo "${delim}"
             echo "drift=${drift}"
+            echo "inconclusive=${inconclusive}"
           } >> "$GITHUB_OUTPUT"
-          echo "Drift=${drift} (new_orgs=${new_orgs}, repos_missing_v5=${missing})"
+          echo "drift=${drift} inconclusive=${inconclusive} (new_orgs=${new_orgs}, repos_missing_v5=${missing}, scan_errors=${scan_errors:-0})"
 
       - name: Upsert tracking issue on drift
         if: ${{ steps.drift.outputs.drift == '1' }}
@@ -102,8 +145,12 @@ jobs:
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$TRACKING_TITLE" --body "$body"
           fi
 
-      - name: Fail the run on drift
+      - name: Fail the run on drift or incomplete scan
         if: ${{ steps.drift.outputs.drift == '1' }}
         run: |
-          echo "::error::ENT coverage drift detected — see the tracking issue."
+          if [ "${{ steps.drift.outputs.inconclusive }}" = "1" ]; then
+            echo "::error::Coverage scan was INCOMPLETE (API errors) — cannot assert 'no drift'. See the tracking issue."
+          else
+            echo "::error::ENT coverage drift detected — see the tracking issue."
+          fi
           exit 1
