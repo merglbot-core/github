@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Purpose: Ensure "Merglbot PR Assistant v5" is a REQUIRED status check on each
+# Purpose: Ensure "Merglbot PR Assistant v6" is a REQUIRED status check on each
 # target repo's default branch — ADDITIVELY (all existing required checks are
 # preserved) and IDEMPOTENTLY (repos that already require it are skipped).
 #
@@ -20,7 +20,7 @@
 # Default mode is dry-run. --apply requires --yes.
 set -euo pipefail
 
-V5_CHECK="Merglbot PR Assistant v5"
+V6_CHECK="Merglbot PR Assistant v6"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SETTER="${SCRIPT_DIR}/update-branch-protection.sh"
 
@@ -36,7 +36,7 @@ err()  { printf '%s %s\n' "[$(date +'%Y-%m-%d %H:%M:%S')] [ERROR]" "$*" >&2; }
 
 usage() {
   cat <<'EOF'
-Ensure "Merglbot PR Assistant v5" is a required status check across the fleet,
+Ensure "Merglbot PR Assistant v6" is a required status check across the fleet,
 additively and idempotently, preserving all other branch-protection settings.
 
 Usage:
@@ -54,7 +54,7 @@ Options:
 Notes:
   - Repos without existing branch protection are SKIPPED (logged), never created.
   - enforce_admins is never modified (owner break-glass preserved).
-  - The exact check context is "Merglbot PR Assistant v5" (byte-for-byte the name
+  - The exact check context is "Merglbot PR Assistant v6" (byte-for-byte the name
     the gate publishes).
 EOF
 }
@@ -104,7 +104,7 @@ while IFS= read -r r; do [ -n "$r" ] && uniq+=("$r"); done < <(printf '%s\n' "${
 repos=("${uniq[@]}")
 
 mode="DRY-RUN"; [ "$APPLY" = true ] && mode="APPLY"
-log "Mode=${mode} | targets=${#repos[@]} | check='${V5_CHECK}'"
+log "Mode=${mode} | targets=${#repos[@]} | check='${V6_CHECK}'"
 
 count_ok=0 count_added=0 count_skip_nobp=0 count_fail=0
 for full in "${repos[@]}"; do
@@ -140,7 +140,7 @@ for full in "${repos[@]}"; do
     | (if ($c|length)>0 then $c else [ .required_status_checks.checks[]?.context // empty ] end)[]')
 
   for c in "${existing[@]:-}"; do
-    if [ "$c" = "$V5_CHECK" ]; then
+    if [ "$c" = "$V6_CHECK" ]; then
       log "OK   ${full}:${branch} (already requires v5)"; count_ok=$((count_ok+1)); continue 2
     fi
   done
@@ -148,7 +148,7 @@ for full in "${repos[@]}"; do
   # Build the full desired set = existing ∪ v5, passed to the canonical setter.
   setter_args=(--repo "$full" --branch "$branch")
   for c in "${existing[@]:-}"; do [ -n "$c" ] && setter_args+=(--check "$c"); done
-  setter_args+=(--check "$V5_CHECK")
+  setter_args+=(--check "$V6_CHECK")
 
   if [ "$APPLY" = true ]; then
     if "$SETTER" "${setter_args[@]}" --apply --yes >/dev/null; then
