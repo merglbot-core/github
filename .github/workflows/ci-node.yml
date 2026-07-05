@@ -4,7 +4,7 @@
 # Usage:
 #   jobs:
 #     ci:
-#       uses: merglbot-core/github/.github/workflows/ci-node.yml@v2
+#       uses: merglbot-core/github/.github/workflows/ci-node.yml@<sha>  # vX.Y.Z
 #       with:
 #         node-version: '20'
 #         package-manager: 'pnpm'

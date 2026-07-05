@@ -4,7 +4,7 @@
 # Usage:
 #   jobs:
 #     gitleaks:
-#       uses: merglbot-core/github/.github/workflows/security-gitleaks.yml@v2
+#       uses: merglbot-core/github/.github/workflows/security-gitleaks.yml@<sha>  # vX.Y.Z
 #       with:
 #         fail-on-detection: true  # Optional: fail if secrets found
 #

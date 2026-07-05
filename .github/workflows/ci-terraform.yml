@@ -4,7 +4,7 @@
 # Usage:
 #   jobs:
 #     terraform:
-#       uses: merglbot-core/github/.github/workflows/ci-terraform.yml@v2
+#       uses: merglbot-core/github/.github/workflows/ci-terraform.yml@<sha>  # vX.Y.Z
 #       with:
 #         terraform-version: '1.6'
 #

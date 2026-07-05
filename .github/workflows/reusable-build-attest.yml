@@ -6,7 +6,7 @@
 # Usage in caller workflow:
 #   jobs:
 #     build:
-#       uses: merglbot-github-workflows/.github/workflows/reusable-build-attest.yml@main
+#       uses: merglbot-core/github/.github/workflows/reusable-build-attest.yml@<sha>  # vX.Y.Z
 #       with:
 #         image_name: website
 #         dockerfile: ./Dockerfile
