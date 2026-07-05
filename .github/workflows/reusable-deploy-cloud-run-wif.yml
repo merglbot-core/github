@@ -255,10 +255,42 @@ jobs:
           INPUT_DOCKERFILE: ${{ inputs.dockerfile }}
           INPUT_IMAGE_NAME: ${{ inputs.image_name }}
         run: |
-          IMAGE="${ARTIFACT_LOCATION}-docker.pkg.dev/${ARTIFACT_PROJECT_ID}/${ARTIFACT_REPOSITORY}/${INPUT_IMAGE_NAME}:${{ github.sha }}"
-          docker build -t "$IMAGE" -f "$INPUT_DOCKERFILE" .
-          docker push "$IMAGE"
+          set -euo pipefail
+          IMAGE_BASE="${ARTIFACT_LOCATION}-docker.pkg.dev/${ARTIFACT_PROJECT_ID}/${ARTIFACT_REPOSITORY}/${INPUT_IMAGE_NAME}"
+          TAG="${{ github.sha }}"
+
+          docker build -t "${IMAGE_BASE}:${TAG}" -f "$INPUT_DOCKERFILE" .
+
+          # Push and capture digest directly from push output (most reliable)
+          PUSH_OUTPUT=$(docker push "${IMAGE_BASE}:${TAG}" 2>&1 | tee /dev/stderr)
+
+          # Extract digest from push output (format: "digest: sha256:xxx size: yyy")
+          DIGEST=$(echo "$PUSH_OUTPUT" | grep -oP 'digest: \Ksha256:[a-f0-9]+' | tail -1)
+
+          if [ -z "$DIGEST" ]; then
+            echo "::warning::Could not parse digest from push output, trying docker inspect..."
+            # Fallback to docker inspect with retries
+            for attempt in {1..5}; do
+              FULL_IMAGE_WITH_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE_BASE}:${TAG}" 2>/dev/null || true)
+              if [ -n "$FULL_IMAGE_WITH_DIGEST" ]; then
+                DIGEST="${FULL_IMAGE_WITH_DIGEST#*@}"
+                break
+              fi
+              echo "Digest not yet available (attempt ${attempt}/5). Retrying in 2s..."
+              sleep 2
+            done
+          fi
+
+          if [ -z "$DIGEST" ]; then
+            echo "::error::Unable to resolve pushed image digest."
+            exit 1
+          fi
+
+          # Scan + deploy by immutable digest instead of the mutable :<sha> tag
+          # (tag can be re-pushed in the registry; the digest cannot).
+          IMAGE="${IMAGE_BASE}@${DIGEST}"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          echo "✅ Image pushed: ${IMAGE} (tag: ${TAG})"
 
       # Container Security: Trivy scan
       # - SARIF is non-blocking (Code Scanning visibility)
