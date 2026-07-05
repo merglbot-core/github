@@ -6,7 +6,7 @@
 # Usage in caller workflow:
 #   jobs:
 #     scorecard:
-#       uses: merglbot-github-workflows/.github/workflows/reusable-security-scorecard.yml@main
+#       uses: merglbot-core/github/.github/workflows/reusable-security-scorecard.yml@<sha>  # vX.Y.Z
 #       with:
 #         minimum_score: 7.0
 #       secrets:

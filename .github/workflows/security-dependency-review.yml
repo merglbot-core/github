@@ -4,7 +4,7 @@
 # Usage:
 #   jobs:
 #     dependency-review:
-#       uses: merglbot-core/github/.github/workflows/security-dependency-review.yml@v2
+#       uses: merglbot-core/github/.github/workflows/security-dependency-review.yml@<sha>  # vX.Y.Z
 #       with:
 #         fail-on-severity: moderate  # Optional: critical, high, moderate, low
 #
