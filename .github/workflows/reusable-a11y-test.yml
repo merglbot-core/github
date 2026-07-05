@@ -6,7 +6,7 @@
 # Usage in caller workflow:
 #   jobs:
 #     a11y:
-#       uses: merglbot-github-workflows/.github/workflows/reusable-a11y-test.yml@main
+#       uses: merglbot-core/github/.github/workflows/reusable-a11y-test.yml@<sha>  # vX.Y.Z
 #       with:
 #         url: https://staging.merglbot.ai
 #         standard: WCAG2AA

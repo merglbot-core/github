@@ -4,7 +4,7 @@
 # Usage:
 #   jobs:
 #     ci:
-#       uses: merglbot-core/github/.github/workflows/ci-python.yml@v2
+#       uses: merglbot-core/github/.github/workflows/ci-python.yml@<sha>  # vX.Y.Z
 #       with:
 #         python-version: '3.11'
 #
