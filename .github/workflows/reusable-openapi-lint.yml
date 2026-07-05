@@ -6,7 +6,7 @@
 # Usage in caller workflow:
 #   jobs:
 #     lint:
-#       uses: merglbot-github-workflows/.github/workflows/reusable-openapi-lint.yml@main
+#       uses: merglbot-core/github/.github/workflows/reusable-openapi-lint.yml@<sha>  # vX.Y.Z
 #       with:
 #         spec_path: openapi.yml
 #

@@ -4,7 +4,7 @@
 # Usage:
 #   jobs:
 #     pr-checks:
-#       uses: merglbot-core/github/.github/workflows/utility-pr-checks.yml@v2
+#       uses: merglbot-core/github/.github/workflows/utility-pr-checks.yml@<sha>  # vX.Y.Z
 #       with:
 #         pull-request-number: ${{ github.event.pull_request.number }}
 #
