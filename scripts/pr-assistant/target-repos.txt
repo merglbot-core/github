@@ -1,77 +1,18 @@
-# Derived compatibility artifact for PR Assistant rollout tooling.
-# Generated from scripts/pr-assistant/repo-policy-manifest.json
-# Inventory policy source: scripts/pr-assistant/repo-policy-inventory-policy.json
-# Regenerate / verify:
-#   python3 scripts/pr-assistant/repo-policy-manifest.py sync-target-repos --check
-#   python3 scripts/pr-assistant/repo-policy-manifest.py sync-target-repos --write
-# Enabled copy-deploy targets only. canonical_self entries stay in the manifest and coverage audit only.
+# Platform scope (exclude Merglevsky-cz entirely).
+# One repo per line. Regenerated weekly from merglbot-public/docs/ENT_ORG_ALLOWLIST.md
+# via ent-scope-refresh.yml. DO NOT hand-edit; changes are overwritten.
+# Used by:
+# - deploy-v3.sh (copy PR Assistant workflow)
+# - improvement digest (cross-repo metrics)
+# Excludes merglbot-core/github (canonical workflow source; do not deploy copy into itself).
 
-merglbot-autodoplnky/autodoplnky-web
-
-merglbot-cerano/cerano-web
-merglbot-cerano/feed-generator
-merglbot-cerano/product-forecasting
-merglbot-cerano/viz-api
-
-# NOTE: Advisory docs pilot repo; keep classifier-wins-over-hint behavior authoritative in orchestrator runtime.
 merglbot-core/agents-orchestrator
-# NOTE: Prompt-contract peer; included in enterprise rollout but not in the advisory docs pilot scope.
 merglbot-core/ai_prompts
 merglbot-core/dataform
 merglbot-core/fb-viz-api
+merglbot-core/github-security-auditor
 merglbot-core/infra
-# NOTE: High-visibility internal app; enterprise rollout target with human-merge-only governance.
 merglbot-core/merglbot-admin
-# NOTE: Advisory docs pilot repo; refresh rollout copy before broader rollout waves.
 merglbot-core/platform
 merglbot-core/project-management-app
-# NOTE: Repo slug intentionally ends with a trailing hyphen.
 merglbot-core/tf-modules-
-
-merglbot-denatura/denatura-fb-viz
-merglbot-denatura/marketing-planning
-merglbot-denatura/marketing_actions_detector
-
-merglbot-extractors/abra-flexi-extractor
-merglbot-extractors/cerano-forecast-exporter
-merglbot-extractors/denatura-additional-costs-extractor
-# NOTE: No active PR Assistant review owner in the 2026-05-31 rollout audit; keep out of required-check scope until ownership is deployed.
-merglbot-extractors/denatura-forecast-exporter
-merglbot-extractors/denatura-shoptet-export-extractor
-merglbot-extractors/facebook-extractor
-# NOTE: No active PR Assistant review owner in the 2026-05-31 rollout audit; keep out of required-check scope until ownership is deployed.
-merglbot-extractors/ga4-extractor
-merglbot-extractors/heureka-costs-extractor
-merglbot-extractors/ruzovyslon-forecast-exporter
-merglbot-extractors/shoptet-extractor
-
-merglbot-hodinarstvibechyne/hodinarstvi-web
-
-merglbot-kiteboarding/kiteboarding-web
-
-merglbot-milan-private/fakturoid
-merglbot-milan-private/plane_so
-
-merglbot-proteinaco/abc_product_material_analysis
-merglbot-proteinaco/basket-analysis
-merglbot-proteinaco/btf-legacy-implementation
-merglbot-proteinaco/btf-viz
-# NOTE: No active PR Assistant review owner in the 2026-05-31 rollout audit; keep out of required-check scope until ownership is deployed.
-merglbot-proteinaco/cac-crc-exporter
-merglbot-proteinaco/proteinaco-forecast-exporter
-# NOTE: New Proteinaco GMC feed migration repo; bootstrap PR installs repo-local PR Assistant workflow before runtime implementation.
-merglbot-proteinaco/proteinaco-gmc-feed-enhancer
-merglbot-proteinaco/proteinaco-web
-merglbot-proteinaco/viz-api
-
-# NOTE: SSOT pilot repo; advisory docs hint remains non-authoritative review metadata.
-merglbot-public/docs
-merglbot-public/kazdavterina-web
-merglbot-public/livero-web
-merglbot-public/website
-
-merglbot-ruzovyslon/business_forecasting
-merglbot-ruzovyslon/data-pipelines
-merglbot-ruzovyslon/kbc_data_quality_metodology
-merglbot-ruzovyslon/ruzovyslon-web
-merglbot-ruzovyslon/viz-api
