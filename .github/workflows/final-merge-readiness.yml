@@ -3,6 +3,16 @@ name: Final Merge Readiness
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+    # Self-test scope: this repo hosts the evaluator source; the readiness
+    # check is NOT a required check here (required = ci + Merglbot PR
+    # Assistant v6). Run it only when the evaluator surface changes to stop
+    # paying ~17 billed min on every unrelated PR sync (incl. Dependabot
+    # bursts). Repos where the gate is the real closeout surface (the two
+    # acquisition-analysis repos) have their own workflow copies - unaffected.
+    paths:
+      - 'scripts/pr-assistant/final-merge-readiness.py'
+      - '.github/policies/final-merge-readiness.json'
+      - '.github/workflows/final-merge-readiness.yml'
 
 permissions:
   actions: read
