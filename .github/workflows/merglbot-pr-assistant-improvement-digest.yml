@@ -3,7 +3,7 @@ name: Merglbot PR Assistant Improvement Digest
 on:
   schedule:
     # Daily at 06:30 UTC
-    - cron: '30 6 * * *'
+    - cron: '30 6 * * 1'
 
   workflow_dispatch:
     inputs:
