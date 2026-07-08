@@ -28,3 +28,21 @@ Every consumer **must** follow [Rulebook v2](https://github.com/merglbot-public/
 2. Follow MERGLBOT reusable workflow guidelines (least-privilege permissions, WIF, concurrency).
 3. Document the workflow in this table.
 4. Update consuming repos + branch protection rules if new statuses are required.
+
+## reusable-docs-governance.yml
+
+SSOT-aware documentation obligation gate (docs-governance program, 2026-07). Deterministic
+classifier (port of the agents-orchestrator `documentationObligation` semantics): an impactful
+code PR must carry docs evidence — same-PR markdown, a `MERGLBOT_DOCS_SYNC: merglbot-public/docs#<pr>`
+reference, or the `docs-impact: none` label + `DOCS_IMPACT_NONE_REASON:` line. Repo→SSOT-doc
+mapping comes from `config/ssot-map.snapshot.json` (snapshot of `merglbot-public/docs/ssot-map.yaml`).
+`mode: advisory` (default) never fails; `mode: enforce` fails only on `missing`; `unknown` is
+fail-open in both. Check name for branch protection: **`docs-governance`**.
+
+```yaml
+jobs:
+  docs-governance:
+    uses: merglbot-core/github/.github/workflows/reusable-docs-governance.yml@<pinned-sha>
+    with:
+      mode: advisory
+```

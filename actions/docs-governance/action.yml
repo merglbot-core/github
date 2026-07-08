@@ -1,0 +1,32 @@
+name: docs-governance
+description: >
+  SSOT-aware documentation obligation check. Deterministic classifier (port of the
+  agents-orchestrator documentationObligation semantics): impactful code changes must
+  carry docs evidence — same-PR markdown, a MERGLBOT_DOCS_SYNC SSOT-PR reference, or an
+  explicit docs-impact:none waiver with reason. Advisory mode always passes (warnings
+  only); enforce mode fails the job on `missing`.
+inputs:
+  mode:
+    description: advisory | enforce
+    required: false
+    default: advisory
+  impact-prefixes:
+    description: Comma-separated path prefixes that count as impactful (overrides snapshot defaults)
+    required: false
+    default: ""
+  evidence-globs:
+    description: Reserved for future per-repo evidence overrides
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: docs-governance check
+      shell: bash
+      env:
+        DG_MODE: ${{ inputs.mode }}
+        DG_IMPACT_PREFIXES: ${{ inputs.impact-prefixes }}
+        DG_EVENT_PATH: ${{ github.event_path }}
+        DG_REPO: ${{ github.repository }}
+        DG_ACTION_PATH: ${{ github.action_path }}
+      run: node "$DG_ACTION_PATH/check.mjs"
