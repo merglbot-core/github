@@ -1,0 +1,46 @@
+name: reusable-docs-governance
+# SSOT-aware documentation obligation gate (docs-governance program, 2026-07).
+# advisory mode (default): warnings only, always green. enforce: fails on `missing`.
+# Check name consumed by branch protection: `docs-governance`.
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: advisory | enforce
+        type: string
+        required: false
+        default: advisory
+      impact-prefixes:
+        description: comma-separated override of impactful path prefixes
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  docs-governance:
+    name: docs-governance
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/checkout@v4
+        with:
+          repository: merglbot-core/github
+          path: .docs-governance-hub
+          sparse-checkout: |
+            actions/docs-governance
+            config/ssot-map.snapshot.json
+      - name: docs-governance
+        env:
+          DG_MODE: ${{ inputs.mode }}
+          DG_IMPACT_PREFIXES: ${{ inputs['impact-prefixes'] }}
+          DG_EVENT_PATH: ${{ github.event_path }}
+          DG_REPO: ${{ github.repository }}
+          DG_ACTION_PATH: ${{ github.workspace }}/.docs-governance-hub/actions/docs-governance
+        run: node "$DG_ACTION_PATH/check.mjs"
