@@ -63,6 +63,8 @@ process_repo() {
     set -e
     gh repo clone "$repo" "$tmp/r" -- --depth 1 -q
     cd "$tmp/r"
+    git config user.name "merglbot-docs-governance"
+    git config user.email "platform+docs-governance@merglbot.ai"
     git checkout -qb ci/docs-governance-advisory
     mkdir -p .github/workflows
     printf '%s\n' "$WRAPPER" > .github/workflows/docs-governance.yml
