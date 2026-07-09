@@ -46,6 +46,11 @@ process_repo() {
   if gh api "repos/$repo/contents/.github/workflows/docs-governance.yml" >/dev/null 2>&1; then
     echo "SKIP  $repo (wrapper exists)"; return 0
   fi
+  local open_pr
+  open_pr=$(gh pr list -R "$repo" --head ci/docs-governance-advisory --state open --json number --jq length 2>/dev/null || echo 0)
+  if [[ "${open_pr:-0}" != "0" ]]; then
+    echo "SKIP  $repo (advisory PR already open)"; return 0
+  fi
   if [[ "$APPLY" -ne 1 ]]; then
     echo "PLAN  $repo"; return 0
   fi
@@ -68,8 +73,7 @@ flip to enforce follows after a clean soak."
       --body "Adds the estate-wide **advisory** docs-governance check (never fails builds — warnings only). Reusable workflow: \`merglbot-core/github/reusable-docs-governance.yml@${PIN}\`. Evidence routes: same-PR markdown / \`MERGLBOT_DOCS_SYNC: merglbot-public/docs#<pr>\` / \`docs-impact: none\` label + reason. Flip to enforce follows after 1–2 weeks clean soak (separate PR).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)" | tail -1
-  )
-  local rc=$?
+  ) && local rc=0 || local rc=$?
   rm -rf "$tmp"
   if [[ $rc -eq 0 ]]; then echo "OPENED $repo"; else echo "FAILED $repo (rc=$rc) — continuing"; fi
   return 0
