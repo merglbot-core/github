@@ -49,7 +49,7 @@ process_repo() {
     echo "SKIP  $repo (wrapper exists)"; return 0
   fi
   local open_pr
-  if ! open_pr=$(gh pr list -R "$repo" --head ci/docs-governance-advisory --state open --json number --jq length 2>/dev/null); then
+  if ! open_pr=$(gh pr list -R "$repo" --head "${repo%%/*}:ci/docs-governance-advisory" --state open --json number --jq length 2>/dev/null); then
     echo "SKIP  $repo (open-PR lookup failed - fail-closed, retry next run)"; return 0
   fi
   if [[ "${open_pr:-0}" != "0" ]]; then
