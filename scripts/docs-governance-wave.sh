@@ -1,6 +1,6 @@
 #!/bin/bash
 # docs-governance adoption wave: opens a thin advisory wrapper PR in each target repo.
-# Usage: scripts/docs-governance-wave.sh <pinned-sha> [--batch N] [--apply]
+# Usage: scripts/docs-governance-wave.sh <pinned-sha> [--batch=N] [--apply]
 # Dry-run by default (prints the plan); --apply executes. One bad repo never
 # aborts the wave (per-repo failure tolerance); repos with the wrapper are skipped.
 set -euo pipefail
@@ -16,7 +16,7 @@ for arg in "$@"; do
     *) if [[ -z "$PIN" ]]; then PIN="$arg"; else BATCH="$arg"; fi ;;
   esac
 done
-[[ -n "$PIN" ]] || { echo "usage: docs-governance-wave.sh <pinned-sha> [--batch N] [--apply]" >&2; exit 2; }
+[[ -n "$PIN" ]] || { echo "usage: docs-governance-wave.sh <pinned-sha> [--batch=N] [--apply]" >&2; exit 2; }
 [[ "$PIN" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: pin must be a full 40-hex commit SHA (immutable), got: $PIN" >&2; exit 2; }
 [[ "$BATCH" =~ ^[1-9][0-9]*$ ]] || { echo "FATAL: --batch must be a positive integer, got: $BATCH" >&2; exit 2; }
 MANIFEST="$(dirname "$0")/docs-governance-wave-repos.txt"
