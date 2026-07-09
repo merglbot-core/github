@@ -78,7 +78,7 @@ flip to enforce follows after a clean soak."
     # dedup above guarantees no open PR on this branch; force-push clears any
     # stale remote branch left by a previously closed/failed attempt
     git push -q --force origin ci/docs-governance-advisory
-    gh pr create --title "ci: advisory docs-governance check" \
+    gh pr create --head ci/docs-governance-advisory --title "ci: advisory docs-governance check" \
       --body "Adds the estate-wide **advisory** docs-governance check (never fails builds — warnings only). Reusable workflow: \`merglbot-core/github/reusable-docs-governance.yml@${PIN}\`. Evidence routes: same-PR markdown / \`MERGLBOT_DOCS_SYNC: merglbot-public/docs#<pr>\` / \`docs-impact: none\` label + reason. Flip to enforce follows after 1–2 weeks clean soak (separate PR).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)" | tail -1
