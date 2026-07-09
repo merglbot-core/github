@@ -17,6 +17,7 @@ for arg in "$@"; do
   esac
 done
 [[ -n "$PIN" ]] || { echo "usage: docs-governance-wave.sh <pinned-sha> [--batch N] [--apply]" >&2; exit 2; }
+[[ "$PIN" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: pin must be a full 40-hex commit SHA (immutable), got: $PIN" >&2; exit 2; }
 MANIFEST="$(dirname "$0")/docs-governance-wave-repos.txt"
 
 # Pre-flight: the reusable workflow MUST exist at the pinned SHA (guards the
@@ -47,7 +48,9 @@ process_repo() {
     echo "SKIP  $repo (wrapper exists)"; return 0
   fi
   local open_pr
-  open_pr=$(gh pr list -R "$repo" --head ci/docs-governance-advisory --state open --json number --jq length 2>/dev/null || echo 0)
+  if ! open_pr=$(gh pr list -R "$repo" --head ci/docs-governance-advisory --state open --json number --jq length 2>/dev/null); then
+    echo "SKIP  $repo (open-PR lookup failed - fail-closed, retry next run)"; return 0
+  fi
   if [[ "${open_pr:-0}" != "0" ]]; then
     echo "SKIP  $repo (advisory PR already open)"; return 0
   fi
