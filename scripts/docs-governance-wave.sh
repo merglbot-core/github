@@ -12,7 +12,7 @@ for arg in "$@"; do
   case "$arg" in
     --apply) APPLY=1 ;;
     --batch=*) BATCH="${arg#--batch=}" ;;
-    --batch) : ;; # value handled via --batch=N form only
+    --batch) echo "FATAL: use --batch=N (bare --batch has no value)" >&2; exit 2 ;;
     *) if [[ -z "$PIN" ]]; then PIN="$arg"; else BATCH="$arg"; fi ;;
   esac
 done
