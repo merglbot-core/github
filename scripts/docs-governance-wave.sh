@@ -18,6 +18,7 @@ for arg in "$@"; do
 done
 [[ -n "$PIN" ]] || { echo "usage: docs-governance-wave.sh <pinned-sha> [--batch N] [--apply]" >&2; exit 2; }
 [[ "$PIN" =~ ^[0-9a-f]{40}$ ]] || { echo "FATAL: pin must be a full 40-hex commit SHA (immutable), got: $PIN" >&2; exit 2; }
+[[ "$BATCH" =~ ^[1-9][0-9]*$ ]] || { echo "FATAL: --batch must be a positive integer, got: $BATCH" >&2; exit 2; }
 MANIFEST="$(dirname "$0")/docs-governance-wave-repos.txt"
 
 # Pre-flight: the reusable workflow MUST exist at the pinned SHA (guards the
@@ -71,7 +72,9 @@ process_repo() {
 Thin wrapper for merglbot-core/github reusable-docs-governance (mode: advisory
 - never fails; warnings only). Part of the 2026-07 docs-governance program;
 flip to enforce follows after a clean soak."
-    git push -q origin ci/docs-governance-advisory
+    # dedup above guarantees no open PR on this branch; force-push clears any
+    # stale remote branch left by a previously closed/failed attempt
+    git push -q --force origin ci/docs-governance-advisory
     gh pr create --title "ci: advisory docs-governance check" \
       --body "Adds the estate-wide **advisory** docs-governance check (never fails builds — warnings only). Reusable workflow: \`merglbot-core/github/reusable-docs-governance.yml@${PIN}\`. Evidence routes: same-PR markdown / \`MERGLBOT_DOCS_SYNC: merglbot-public/docs#<pr>\` / \`docs-impact: none\` label + reason. Flip to enforce follows after 1–2 weeks clean soak (separate PR).
 
