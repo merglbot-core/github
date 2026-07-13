@@ -1,0 +1,223 @@
+name: Reusable — Cloud Run deploy-on-merge (safe)
+
+# Deploy an ALREADY-BUILT, digest-pinned image to Cloud Run with a self-verifying,
+# auto-rolling-back rollout — the sanctioned "deploy happens on merge, not by hand" path.
+#
+# Safety model (mirrors the local-deploy design, but runs in CI so nothing is hidden from
+# oversight and there are no local credentials):
+#   PRE  — the image is digest-pinned (@sha256:…) and built from THIS repo's green main by the
+#          build-attest workflow whose `image_digest` output the caller passes in. Project is
+#          checked against the merglbot allow/deny globs (defense-in-depth; scope is really set
+#          by which repos install the caller — never Merglevsky-cz / lrtch).
+#   DEPLOY — `--no-traffic` first: the new revision gets 0% traffic, so ANY failure below leaves
+#          the previous revision serving 100% (auto-safe).
+#   POST-1 — the new revision is Ready and its running digest == the intended digest.
+#   POST-2 — health: probe the candidate revision's tagged URL. 2xx/3xx → promote 100%.
+#          Unreachable (ingress-restricted / LB-fronted) → canary: shift a small %, soak while
+#          scanning the new revision's logs for errors, then ramp to 100% or roll back. 5xx →
+#          roll back. Rollback = shift 100% back to the recorded anchor revision.
+# Reporting — a job summary always; a Slack alert ONLY on failure/rollback (daily digest is a
+#          separate scheduled aggregator over these runs).
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: 'Cloud Run service name'
+        required: true
+        type: string
+      project_id:
+        description: 'Target GCP project id (must match merglbot-* allow globs)'
+        required: true
+        type: string
+      region:
+        description: 'Cloud Run region'
+        required: false
+        type: string
+        default: europe-west1
+      image:
+        description: 'Full digest-pinned image ref (registry/image@sha256:...) — e.g. the build-attest image_digest output'
+        required: true
+        type: string
+      health_path:
+        description: 'HTTP health path probed on the candidate revision'
+        required: false
+        type: string
+        default: /health
+      canary_pct:
+        description: 'Traffic % for the canary stage when the direct probe is unreachable'
+        required: false
+        type: number
+        default: 10
+      soak_seconds:
+        description: 'Canary soak window (seconds) scanning the new revision for errors'
+        required: false
+        type: number
+        default: 90
+    secrets:
+      wif_provider:
+        required: true
+      wif_service_account:
+        required: true
+      slack_webhook:
+        required: false
+    outputs:
+      deployed_revision:
+        description: 'The new revision name'
+        value: ${{ jobs.deploy.outputs.deployed_revision }}
+      promoted:
+        description: 'true if traffic was shifted to the new revision, false if rolled back / held'
+        value: ${{ jobs.deploy.outputs.promoted }}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write  # WIF OIDC
+    outputs:
+      deployed_revision: ${{ steps.rollout.outputs.deployed_revision }}
+      promoted: ${{ steps.rollout.outputs.promoted }}
+    steps:
+      - name: Resolve WIF parameters
+        id: wif
+        shell: bash
+        env:
+          INPUT_WIF_PROVIDER: ${{ secrets.wif_provider }}
+          INPUT_WIF_SERVICE_ACCOUNT: ${{ secrets.wif_service_account }}
+        run: |
+          set -euo pipefail
+          SSOT_WIF_PROVIDER="projects/671585034644/locations/global/workloadIdentityPools/github-actions/providers/github-oidc"
+          echo "::add-mask::$INPUT_WIF_PROVIDER"
+          echo "::add-mask::$INPUT_WIF_SERVICE_ACCOUNT"
+          [ -n "$INPUT_WIF_PROVIDER" ] || { echo "::error::wif_provider empty"; exit 1; }
+          [ -n "$INPUT_WIF_SERVICE_ACCOUNT" ] || { echo "::error::wif_service_account empty"; exit 1; }
+          if [ "$INPUT_WIF_PROVIDER" != "$SSOT_WIF_PROVIDER" ]; then
+            echo "::error::wif_provider must be the merglbot-seed SSOT provider ($SSOT_WIF_PROVIDER)"; exit 1
+          fi
+          if [[ "$INPUT_WIF_SERVICE_ACCOUNT" == *@merglbot.iam.gserviceaccount.com ]]; then
+            echo "::error::wif_service_account points to the DELETE_REQUESTED legacy 'merglbot' project"; exit 1
+          fi
+          { printf 'provider=%s\n' "$INPUT_WIF_PROVIDER"; printf 'sa=%s\n' "$INPUT_WIF_SERVICE_ACCOUNT"; } >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to GCP (WIF)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
+        with:
+          workload_identity_provider: ${{ steps.wif.outputs.provider }}
+          service_account: ${{ steps.wif.outputs.sa }}
+          token_format: 'access_token'
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@6a7c903a70c8625ed6700fa299f5ddb4ca6022e9  # v3.0.1
+
+      - name: Deploy → verify → health-gate → promote or rollback
+        id: rollout
+        shell: bash
+        env:
+          PROJECT: ${{ inputs.project_id }}
+          SERVICE: ${{ inputs.service_name }}
+          REGION: ${{ inputs.region }}
+          IMAGE: ${{ inputs.image }}
+          HEALTH_PATH: ${{ inputs.health_path }}
+          CANARY_PCT: ${{ inputs.canary_pct }}
+          SOAK: ${{ inputs.soak_seconds }}
+        run: |
+          set -uo pipefail
+          fail() { echo "::error::$*"; echo "promoted=false" >> "$GITHUB_OUTPUT"; { echo "### ❌ Deploy failed"; echo "$*"; } >> "$GITHUB_STEP_SUMMARY"; exit 1; }
+
+          # --- PRE (scope + digest-pin; defense-in-depth) ---------------------------------------
+          case "$IMAGE" in *@sha256:*) : ;; *) fail "image not digest-pinned: $IMAGE";; esac
+          case "$IMAGE" in europe-west1-docker.pkg.dev/merglbot-artifacts/*) : ;; *) fail "image not in merglbot-artifacts registry: $IMAGE";; esac
+          case "$PROJECT" in
+            merglbot-*-prd|merglbot-*-main|merglbot-networking|merglbot-*-stg) : ;;
+            *) fail "project '$PROJECT' not in the merglbot deploy allowlist";;
+          esac
+          case "$PROJECT" in mb-*|sys-*|*-analytics*|*-etl*|*-test*|test-*) fail "project '$PROJECT' matches a deny glob";; esac
+          DIGEST="${IMAGE##*@}"; SHORT="${DIGEST#sha256:}"; SHORT="${SHORT:0:9}"; CAND="cand-${SHORT}"
+          echo "Deploying $SERVICE @ $DIGEST to $PROJECT/$REGION"
+
+          # --- PRE-2 rollback anchor ------------------------------------------------------------
+          ANCHOR_REV="$(gcloud run services describe "$SERVICE" --project="$PROJECT" --region="$REGION" --format='value(status.latestReadyRevisionName)' 2>/dev/null)"
+          [ -n "$ANCHOR_REV" ] || fail "cannot describe service $SERVICE in $PROJECT (does it exist? does the deploy SA have run.viewer/run.developer?)"
+          echo "Rollback anchor: $ANCHOR_REV"
+
+          # --- DEPLOY (--no-traffic) ------------------------------------------------------------
+          gcloud run deploy "$SERVICE" --project="$PROJECT" --region="$REGION" \
+            --image="$IMAGE" --no-traffic --tag "$CAND" --quiet >/dev/null 2>deploy.err \
+            || fail "gcloud run deploy failed: $(tail -3 deploy.err)"
+          NEW_REV="$(gcloud run services describe "$SERVICE" --project="$PROJECT" --region="$REGION" --format='value(status.latestCreatedRevisionName)' 2>/dev/null)"
+          [ -n "$NEW_REV" ] || fail "could not determine new revision"
+          echo "deployed_revision=$NEW_REV" >> "$GITHUB_OUTPUT"
+          echo "New revision $NEW_REV at 0% traffic (anchor $ANCHOR_REV still 100%)"
+
+          # --- POST-1 (serving control-plane) ---------------------------------------------------
+          READY="$(gcloud run revisions describe "$NEW_REV" --project="$PROJECT" --region="$REGION" --format='value(status.conditions[0].status)' 2>/dev/null)"
+          RUN_DIGEST="$(gcloud run revisions describe "$NEW_REV" --project="$PROJECT" --region="$REGION" --format='value(status.imageDigest)' 2>/dev/null)"
+          if [ "$READY" != "True" ]; then
+            gcloud run revisions delete "$NEW_REV" --project="$PROJECT" --region="$REGION" --quiet >/dev/null 2>&1 || true
+            fail "POST-1: new revision not Ready ($READY) — no traffic shifted (auto-safe)"
+          fi
+          case "$RUN_DIGEST" in *"${DIGEST#sha256:}"*) : ;; "") : ;; *) fail "POST-1: running digest ($RUN_DIGEST) != intended ($DIGEST)";; esac
+          echo "POST-1 OK: $NEW_REV Ready, digest matches, 0% traffic"
+
+          # --- POST-2 (health) → promote or rollback --------------------------------------------
+          rollback() {
+            gcloud run services update-traffic "$SERVICE" --project="$PROJECT" --region="$REGION" \
+              --to-revisions="$ANCHOR_REV=100" --remove-tags "$CAND" --quiet >/dev/null 2>&1 || true
+            gcloud run revisions delete "$NEW_REV" --project="$PROJECT" --region="$REGION" --quiet >/dev/null 2>&1 || true
+            echo "promoted=false" >> "$GITHUB_OUTPUT"
+            { echo "### ↩️ Rolled back"; echo "- service: \`$SERVICE\` ($PROJECT)"; echo "- reason: $1"; echo "- restored: \`$ANCHOR_REV\`"; } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::rolled back: $1"; exit 1
+          }
+          promote() {
+            gcloud run services update-traffic "$SERVICE" --project="$PROJECT" --region="$REGION" \
+              --to-revisions="$NEW_REV=100" --remove-tags "$CAND" --quiet >/dev/null 2>&1 \
+              || fail "promote (traffic shift) failed"
+            echo "promoted=true" >> "$GITHUB_OUTPUT"
+            { echo "### ✅ Deployed"; echo "- service: \`$SERVICE\` ($PROJECT/$REGION)"; echo "- revision: \`$NEW_REV\`"; echo "- digest: \`$DIGEST\`"; echo "- health: $1"; } >> "$GITHUB_STEP_SUMMARY"
+            echo "DONE: $SERVICE now serving $NEW_REV"
+          }
+          TAG_URL="$(gcloud run services describe "$SERVICE" --project="$PROJECT" --region="$REGION" --format=json 2>/dev/null \
+            | CAND="$CAND" python3 -c 'import json,sys,os; d=json.load(sys.stdin); print(next((t.get("url","") for t in d["status"].get("traffic",[]) if t.get("tag")==os.environ["CAND"]),""))')"
+          CODE=000
+          if [ -n "$TAG_URL" ]; then
+            TOK="$(gcloud auth print-identity-token 2>/dev/null)"
+            for _ in 1 2 3 4; do
+              CODE="$(curl -sS -m 12 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOK" "${TAG_URL}${HEALTH_PATH}" 2>/dev/null || echo 000)"
+              case "$CODE" in 2*|3*) break;; esac; sleep 4
+            done
+            echo "POST-2 direct probe ${TAG_URL}${HEALTH_PATH} -> HTTP $CODE"
+          fi
+          case "$CODE" in
+            2*|3*) promote "direct probe HTTP $CODE" ;;
+            5*)    rollback "direct health probe HTTP $CODE" ;;
+            *)
+              PCT="${CANARY_PCT:-10}"
+              echo "POST-2 direct probe unreachable (ingress-restricted?) — canary ${PCT}% soak ${SOAK}s"
+              gcloud run services update-traffic "$SERVICE" --project="$PROJECT" --region="$REGION" \
+                --to-revisions="$NEW_REV=$PCT,$ANCHOR_REV=$((100-PCT))" --quiet >/dev/null 2>&1 \
+                || rollback "canary traffic-split failed"
+              END=$(( $(date +%s) + ${SOAK:-90} )); BAD=0
+              while [ "$(date +%s)" -lt "$END" ]; do
+                ERR="$(gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.revision_name=\"$NEW_REV\" AND severity>=ERROR" --project="$PROJECT" --freshness=2m --limit=1 --format='value(severity)' 2>/dev/null | head -1)"
+                [ -n "$ERR" ] && { BAD=1; break; }; sleep 15
+              done
+              if [ "$BAD" = "1" ]; then rollback "canary soak saw ERROR logs on $NEW_REV"; else promote "canary ${PCT}% soak clean → 100%"; fi ;;
+          esac
+
+      - name: Alert on failure/rollback
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          HOOK: ${{ secrets.slack_webhook }}
+          SERVICE: ${{ inputs.service_name }}
+          PROJECT: ${{ inputs.project_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          payload="$(python3 -c 'import json,os;print(json.dumps({"text":"🚨 Cloud Run deploy FAILED/rolled-back: %s (%s)\n%s"%(os.environ["SERVICE"],os.environ["PROJECT"],os.environ["RUN_URL"])}))')"
+          curl -sS -m 10 -X POST -H 'Content-type: application/json' -d "$payload" "$HOOK" >/dev/null 2>&1 || true
