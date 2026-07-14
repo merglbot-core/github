@@ -519,6 +519,7 @@ jobs:
             --timezone "Europe/Prague"
             --mode "$MODE"
             --include-tenant "ruzovyslon"
+            --allow-empty-specs
             --auto-utc-minute "15"
             --auto-local-hour "9"
             --auto-local-hour "11"
@@ -606,6 +607,7 @@ jobs:
             --mode "$MODE"
             --patch-date-local "$PATCH_DATE_LOCAL_D2"
             --include-tenant "ruzovyslon"
+            --allow-empty-specs
             --auto-utc-minute "15"
             --auto-local-hour "9"
             --auto-local-hour "11"
