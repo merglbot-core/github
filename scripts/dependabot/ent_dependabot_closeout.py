@@ -1736,6 +1736,12 @@ def latest_merglbot_dispatch_run(repo: str, workflow_id: int | str, head_ref: st
     return None
 
 
+def classify_merglbot_trigger_error(message: str) -> str:
+    if "403" in message or "Resource not accessible" in message:
+        return "app_capability:issue_comment_write_missing_or_denied"
+    return f"merglbot_review_comment_failed:{message}"
+
+
 def trigger_merglbot_review(repo: str, number: int, head_ref: str, head_sha: str) -> dict[str, Any]:
     # v6 migrated PR review from the v3 `workflow_dispatch` workflow to the local worker fleet,
     # which is triggered by a `@merglbot review` comment (and auto-fires on PR open/sync). The old
@@ -1770,11 +1776,7 @@ def wait_for_merglbot(repo: str, number: int, head_ref: str, head_sha: str, *, a
     try:
         dispatch = trigger_merglbot_review(repo, number, head_ref, head_sha)
     except GhError as exc:
-        message = str(exc)
-        if "403" in message or "Resource not accessible" in message:
-            blocker = "app_capability:issue_comment_write_missing_or_denied"
-        else:
-            blocker = f"merglbot_review_comment_failed:{message}"
+        blocker = classify_merglbot_trigger_error(str(exc))
         return {
             "ok": False,
             "blockers": [blocker],
@@ -3296,6 +3298,31 @@ The following **2 organizations** are in ENT scope.
         ["empty diff"],
         "https://github.com/o/r/actions/runs/1",
     )
+    # comment-trigger review path (v6): trigger posts the canonical comment and reports it
+    assert classify_merglbot_trigger_error("HTTP 403: Forbidden") == "app_capability:issue_comment_write_missing_or_denied"
+    assert classify_merglbot_trigger_error("Resource not accessible by integration") == "app_capability:issue_comment_write_missing_or_denied"
+    assert classify_merglbot_trigger_error("boom") == "merglbot_review_comment_failed:boom"
+    global post_comment_with_stdin
+    previous_post_comment = post_comment_with_stdin
+    stub_calls: list[tuple[str, int, str]] = []
+
+    def _stub_post_comment(repo: str, number: int, body: str) -> str:
+        stub_calls.append((repo, number, body))
+        return "https://github.com/o/r/pull/7#issuecomment-1"
+
+    post_comment_with_stdin = _stub_post_comment
+    try:
+        dispatch = trigger_merglbot_review("o/r", 7, "dependabot/x", "a" * 40)
+    finally:
+        post_comment_with_stdin = previous_post_comment
+    assert stub_calls == [("o/r", 7, MERGLBOT_REVIEW_TRIGGER_COMMENT)]
+    assert dispatch == {
+        "method": "comment_trigger",
+        "trigger_comment": MERGLBOT_REVIEW_TRIGGER_COMMENT,
+        "comment_url": "https://github.com/o/r/pull/7#issuecomment-1",
+        "ref": "dependabot/x",
+        "head_sha": "a" * 40,
+    }
     print(json.dumps({"ok": True, "self_test": "passed"}))
     return 0
 
