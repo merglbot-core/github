@@ -28,6 +28,9 @@ from urllib.request import Request, urlopen
 
 DEPENDABOT_LOGINS = {"dependabot[bot]", "app/dependabot"}
 MERGLBOT_REVIEW_WORKFLOW_NAME = "Merglbot PR Assistant v3 (On-Demand Multi-Model)"
+# v6 (the local worker fleet) is comment-triggered; the retired v3 workflow_dispatch workflow
+# above no longer exists in enrolled repos. This is the canonical trigger the fleet listens for.
+MERGLBOT_REVIEW_TRIGGER_COMMENT = os.environ.get("ENT_DEPENDABOT_REVIEW_TRIGGER_COMMENT", "@merglbot review")
 OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 REPOSITORY_RE = re.compile(r"\[`([^`]+/[^`]+)`\]\(https://github.com/[^)]+\).*\|\s*Active\s*\|")
 MERGLBOT_REVIEW_WAIT_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REVIEW_WAIT_SECONDS", "1500"))
@@ -1734,32 +1737,20 @@ def latest_merglbot_dispatch_run(repo: str, workflow_id: int | str, head_ref: st
 
 
 def trigger_merglbot_review(repo: str, number: int, head_ref: str, head_sha: str) -> dict[str, Any]:
-    workflow = find_merglbot_review_workflow(repo)
-    workflow_id = workflow.get("id") or workflow.get("path")
-    if not workflow_id:
-        raise GhError("merglbot_review_workflow_id_missing")
-    payload = {
-        "ref": head_ref,
-        "inputs": merglbot_dispatch_inputs(number, head_sha),
-    }
-    endpoint = repo_endpoint(repo, f"actions/workflows/{workflow_id}/dispatches")
-    gh_api_json_with_input(endpoint, payload, method="POST")
-    run: dict[str, Any] | None = None
-    deadline = time.time() + min(MERGLBOT_REVIEW_POLL_SECONDS * 2, 120)
-    while time.time() <= deadline:
-        time.sleep(5)
-        run = latest_merglbot_dispatch_run(repo, workflow_id, head_ref, head_sha)
-        if run:
-            break
+    # v6 migrated PR review from the v3 `workflow_dispatch` workflow to the local worker fleet,
+    # which is triggered by a `@merglbot review` comment (and auto-fires on PR open/sync). The old
+    # dispatch path raised merglbot_review_workflow_missing in every enrolled repo (the v3 workflow
+    # is retired), which surfaced as repo_enrollment:merglbot_workflow_dispatch_missing and blocked
+    # the whole closeout. Post the canonical trigger comment instead; the fleet reviews the current
+    # head and publishes the check-run/receipt that verify_merglbot() reads in wait_for_merglbot()'s
+    # poll loop. Merge safety is unchanged — the closeout still only merges on an approved receipt.
+    comment_url = post_comment_with_stdin(repo, number, MERGLBOT_REVIEW_TRIGGER_COMMENT)
     return {
-        "method": "workflow_dispatch",
-        "workflow_name": workflow.get("name"),
-        "workflow_id": workflow_id,
-        "workflow_path": workflow.get("path"),
+        "method": "comment_trigger",
+        "trigger_comment": MERGLBOT_REVIEW_TRIGGER_COMMENT,
+        "comment_url": comment_url,
         "ref": head_ref,
         "head_sha": head_sha,
-        "run_url": None if not run else run.get("html_url"),
-        "run_id": None if not run else run.get("id"),
     }
 
 
@@ -1780,19 +1771,15 @@ def wait_for_merglbot(repo: str, number: int, head_ref: str, head_sha: str, *, a
         dispatch = trigger_merglbot_review(repo, number, head_ref, head_sha)
     except GhError as exc:
         message = str(exc)
-        if "merglbot_review_workflow_missing" in message:
-            blocker = "repo_enrollment:merglbot_workflow_dispatch_missing"
-        elif "workflow_dispatch" in message and "trigger" in message:
-            blocker = "repo_enrollment:merglbot_workflow_dispatch_missing"
-        elif "403" in message or "Resource not accessible" in message:
-            blocker = "app_capability:actions_write_missing_or_denied"
+        if "403" in message or "Resource not accessible" in message:
+            blocker = "app_capability:issue_comment_write_missing_or_denied"
         else:
-            blocker = f"merglbot_workflow_dispatch_failed:{message}"
+            blocker = f"merglbot_review_comment_failed:{message}"
         return {
             "ok": False,
             "blockers": [blocker],
             "dispatch": {
-                "method": "workflow_dispatch",
+                "method": "comment_trigger",
                 "ref": head_ref,
                 "head_sha": head_sha,
             },
