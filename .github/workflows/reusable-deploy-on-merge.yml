@@ -112,7 +112,7 @@ jobs:
           token_format: 'access_token'
 
       - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@6a7c903a70c8625ed6700fa299f5ddb4ca6022e9  # v3.0.1
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db  # v3.0.1
 
       - name: Deploy → verify → health-gate → promote or rollback
         id: rollout
