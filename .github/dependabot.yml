@@ -8,12 +8,19 @@ updates:
       prefix: "ci"
       include: "scope"
     groups:
+      merglbot-reusable-workflows:
+        # Fold all merglbot-core/github reusable-workflow SHA/major bumps into ONE
+        # PR (keeper trusted-lane eligible). No update-types = every update type.
+        patterns:
+          - "merglbot-core/github"
       # Group actions minor/patch bumps into one PR: fewer PRs means fewer
       # CI+CodeQL runs (Actions-minutes optimization, round 2). Majors stay
       # individual; the update interval is unchanged.
       actions-minor-patch:
         patterns:
           - "*"
+        exclude-patterns:
+          - "merglbot-core/github"
         update-types:
           - "minor"
           - "patch"
