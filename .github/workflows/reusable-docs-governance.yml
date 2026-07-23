@@ -26,12 +26,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 1
-      - uses: actions/checkout@v4
+      # Pin the governance CODE + config to the SAME hub commit the caller pinned
+      # this reusable workflow to (job.workflow_sha / job.workflow_repository reflect
+      # the CALLED workflow file — unlike github.workflow_sha, which is the caller's).
+      # Without this, a consumer pinned to hub@SHA_X still executed check.mjs and
+      # ssot-map.snapshot.json from mutable hub main (transitive supply-chain gap).
+      - name: Resolve pinned hub governance ref
+        id: hubref
+        env:
+          JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          JOB_WORKFLOW_REPO: ${{ job.workflow_repository }}
+        run: |
+          # Fall back to the hub repo + this workflow's SHA if job.workflow_* is
+          # unavailable on this runner version, so the checkout always pins a commit.
+          repo="${JOB_WORKFLOW_REPO:-merglbot-core/github}"
+          ref="${JOB_WORKFLOW_SHA:-${GITHUB_SHA}}"
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "docs-governance code pinned to $repo@$ref"
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          repository: merglbot-core/github
+          repository: ${{ steps.hubref.outputs.repo }}
+          ref: ${{ steps.hubref.outputs.ref }}
           path: .docs-governance-hub
           sparse-checkout: |
             actions/docs-governance
