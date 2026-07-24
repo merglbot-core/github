@@ -28,7 +28,11 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          fetch-depth: 1
+          # Full history: PR runs check out a SHALLOW synthetic merge commit, so
+          # base...HEAD merge-base is unsatisfiable at depth 1 — check.mjs only
+          # deepens the BASE side and silently degrades to
+          # DOCS_GOVERNANCE_STATE: unknown (fail-open) on every consumer (#724).
+          fetch-depth: 0
       # Pin the governance CODE + config to the SAME hub commit the caller pinned
       # this reusable workflow to (job.workflow_sha / job.workflow_repository reflect
       # the CALLED workflow file — unlike github.workflow_sha, which is the caller's).
