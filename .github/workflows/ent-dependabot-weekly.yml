@@ -1,0 +1,112 @@
+name: ENT Dependabot Weekly Closeout
+
+on:
+  schedule:
+    # Monday 07:30 UTC = 08:30 CET / 09:30 CEST for Europe/Prague.
+    # Scheduled 30 minutes after ent-scope-refresh.yml (Monday 07:00 UTC).
+    # In Actions, closeout resolves live scope from ENT_ORG_ALLOWLIST.md plus
+    # non-archived/non-fork repository metadata; the repo-local scope file is
+    # only a generated mirror for local single_repo diagnostics.
+    - cron: "30 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Use dry-run for manual validation; scheduled runs use apply."
+        required: true
+        type: choice
+        options:
+          - dry-run
+          - apply
+        default: dry-run
+      repo_scope:
+        description: "Scope selector"
+        required: true
+        type: choice
+        options:
+          - all
+          - single_repo
+        default: single_repo
+      single_repo:
+        description: "owner/repo when repo_scope=single_repo; defaults to safe docs smoke"
+        required: false
+        type: string
+        default: merglbot-public/docs
+      max_prs_per_repo:
+        description: "0 means unlimited"
+        required: false
+        type: number
+        default: 0
+      slack_notify:
+        description: "Post telemetry to Slack"
+        required: false
+        type: boolean
+        default: true
+      pr_allowlist:
+        description: "Optional owner/repo#PR or PR URLs approved for manual apply mode"
+        required: false
+        type: string
+      approval_note:
+        description: "Human approval note or approval packet URL for manual apply mode"
+        required: false
+        type: string
+      approval_issue_url:
+        description: "Optional GitHub issue URL containing the apply approval packet"
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  issues: write
+  pull-requests: write
+  statuses: read
+
+# Concurrency:
+#   - Group is keyed by effective mode. Scheduled runs are always `apply`.
+#     Manual `apply` runs share that same queue, so they cannot race the
+#     scheduled weekly closeout over overlapping repository state.
+#   - Manual `dry-run` runs use a separate group and may supersede older
+#     dry-runs. Dry-runs do not write repository state.
+#   - cancel-in-progress is true only for manual dry-runs. No `apply` run is
+#     cancelled by a later operator dispatch; apply work queues instead.
+#
+# Verified locking and cancellation safety contract (cross-run):
+#   - The reusable workflow ent-dependabot-autonomous-closeout.yml declares
+#     its own concurrency block:
+#       group: ent-dependabot-autonomous-closeout-${mode}
+#       cancel-in-progress: ${mode != 'apply'}
+#     This means every `apply` call, including `all` vs `single_repo`, queues
+#     behind the same non-cancelling lock. Non-mutating dry-runs can be
+#     superseded by newer dry-runs.
+concurrency:
+  group: ent-dependabot-weekly-closeout-${{ inputs.mode || 'apply' }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'dry-run' }}
+
+jobs:
+  # Reusable workflow input contract:
+  #   - max_fix_iterations and max_review_iterations are declared in
+  #     ent-dependabot-autonomous-closeout.yml under on.workflow_call.inputs
+  #     with type: number and default: 5. Passing the literal 2 here
+  #     matches that declared type; YAML deserializes 2 as integer/number.
+  #   - The 2-iteration cap intentionally defers PRs needing more loops to
+  #     the next scheduled run; the SLA is documented in
+  #     docs/finops/ghau-waste-ent-dependabot-weekly-timeout.md.
+  weekly-closeout:
+    uses: ./.github/workflows/ent-dependabot-autonomous-closeout.yml
+    with:
+      mode: ${{ github.event_name == 'schedule' && 'apply' || github.event.inputs.mode || 'dry-run' }}
+      repo_scope: ${{ github.event_name == 'schedule' && 'all' || github.event.inputs.repo_scope || 'single_repo' }}
+      single_repo: ${{ github.event.inputs.single_repo || '' }}
+      max_parallel_repos: 3
+      max_prs_per_repo: ${{ fromJSON(github.event_name == 'schedule' && '0' || github.event.inputs.max_prs_per_repo || '0') }}
+      max_fix_iterations: 2
+      max_review_iterations: 2
+      allow_policy_alignment: true
+      comment_report: true
+      tracking_issue: "https://github.com/merglbot-public/docs/issues/636"
+      slack_notify: ${{ github.event_name == 'schedule' && true || fromJSON(github.event.inputs.slack_notify || 'true') }}
+      pr_allowlist: ${{ github.event.inputs.pr_allowlist || '' }}
+      approval_note: ${{ github.event_name == 'schedule' && 'scheduled weekly run' || github.event.inputs.approval_note || '' }}
+      approval_issue_url: ${{ github.event.inputs.approval_issue_url || '' }}
+    secrets: inherit

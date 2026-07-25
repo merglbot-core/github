@@ -137,7 +137,8 @@ The `automated-release.yml` workflow handles:
 - Changelog generation
 - Tag creation
 - GitHub Release creation
-- Slack notifications
+- Explicit release outcomes (`release_created`, `release_already_exists`, `release_skipped_no_version`)
+- Slack notifications for newly created releases only
 - Artifact building
 
 ### Trigger Methods
@@ -325,7 +326,7 @@ node scripts/release/generate-changelog.js \
 
 ## 🔗 Related Documentation
 
-- [MERGLBOT Release Management Standards](https://docs.merglbot.ai/merglbot/release-management)
+- [MERGLBOT Release Management Standards](https://github.com/merglbot-core/github/blob/main/docs/release-management/README.md)
 - [CI/CD Pipeline Documentation](../ci-cd/README.md)
 - [Monitoring and Alerting](../monitoring/README.md)
 - [Security Policies](../security/README.md)

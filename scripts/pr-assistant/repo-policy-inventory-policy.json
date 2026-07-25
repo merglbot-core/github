@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "baseline_date": "2026-03-31",
+  "baseline_artifact": "scripts/pr-assistant/baselines/2026-03-31/repo-policy-coverage-baseline.json",
+  "canonical_source": {
+    "repo": "merglbot-core/github",
+    "workflow_path": ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
+    "step1_path": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh"
+  },
+  "required_orgs": [
+    "merglbot-autodoplnky",
+    "merglbot-cerano",
+    "merglbot-core",
+    "merglbot-denatura",
+    "merglbot-extractors",
+    "merglbot-hodinarstvibechyne",
+    "merglbot-kiteboarding",
+    "merglbot-milan-private",
+    "merglbot-proteinaco",
+    "merglbot-public",
+    "merglbot-ruzovyslon",
+    "merglbot-shared"
+  ],
+  "excluded_orgs": [
+    "Merglevsky-cz",
+    "lrtch"
+  ],
+  "excluded_repos": [],
+  "default_rollout_tier": "client",
+  "repo_defaults": {
+    "enabled": true,
+    "rollout_tier": "client",
+    "admission_state": "baseline_only",
+    "human_merge_only": true,
+    "review_owner_policy": "hard_gate",
+    "deploy_mode": "copy_target",
+    "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+    "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+    "notes": ""
+  },
+  "org_defaults": {
+    "merglbot-autodoplnky": {
+      "rollout_tier": "client"
+    },
+    "merglbot-cerano": {
+      "rollout_tier": "client"
+    },
+    "merglbot-core": {
+      "rollout_tier": "core"
+    },
+    "merglbot-denatura": {
+      "rollout_tier": "client"
+    },
+    "merglbot-extractors": {
+      "rollout_tier": "client"
+    },
+    "merglbot-hodinarstvibechyne": {
+      "rollout_tier": "client"
+    },
+    "merglbot-kiteboarding": {
+      "rollout_tier": "client"
+    },
+    "merglbot-milan-private": {
+      "rollout_tier": "private"
+    },
+    "merglbot-proteinaco": {
+      "rollout_tier": "client"
+    },
+    "merglbot-public": {
+      "rollout_tier": "public"
+    },
+    "merglbot-ruzovyslon": {
+      "rollout_tier": "client"
+    },
+    "merglbot-shared": {
+      "rollout_tier": "shared"
+    }
+  },
+  "repo_overrides": {
+    "merglbot-core/agents-orchestrator": {
+      "admission_state": "advisory_docs_pilot",
+      "notes": "Advisory docs pilot repo; keep classifier-wins-over-hint behavior authoritative in orchestrator runtime."
+    },
+    "merglbot-core/ai_prompts": {
+      "notes": "Prompt-contract peer; included in enterprise rollout but not in the advisory docs pilot scope."
+    },
+    "merglbot-denatura/denatura-btf-data": {
+      "enabled": false,
+      "review_owner_policy": "no_owner",
+      "notes": "Archived/inert repo; explicitly included in the 51-repo delivery matrix as no_owner."
+    },
+    "merglbot-extractors/denatura-forecast-exporter": {
+      "review_owner_policy": "no_owner",
+      "notes": "No active PR Assistant review owner in the 2026-05-31 rollout audit; keep out of required-check scope until ownership is deployed."
+    },
+    "merglbot-extractors/ga4-extractor": {
+      "review_owner_policy": "no_owner",
+      "notes": "No active PR Assistant review owner in the 2026-05-31 rollout audit; keep out of required-check scope until ownership is deployed."
+    },
+    "merglbot-core/github": {
+      "deploy_mode": "canonical_self",
+      "expected_workflow": ".github/workflows/merglbot-pr-assistant-v3-on-demand.yml",
+      "notes": "Canonical source repo; included in manifest as a self-managed target and excluded from copy deploy."
+    },
+    "merglbot-core/merglbot-admin": {
+      "notes": "High-visibility internal app; enterprise rollout target with human-merge-only governance."
+    },
+    "merglbot-core/platform": {
+      "admission_state": "advisory_docs_pilot",
+      "notes": "Advisory docs pilot repo; refresh rollout copy before broader rollout waves."
+    },
+    "merglbot-core/tf-modules-": {
+      "notes": "Repo slug intentionally ends with a trailing hyphen."
+    },
+    "merglbot-proteinaco/cac-crc-exporter": {
+      "review_owner_policy": "no_owner",
+      "notes": "No active PR Assistant review owner in the 2026-05-31 rollout audit; keep out of required-check scope until ownership is deployed."
+    },
+    "merglbot-public/docs": {
+      "admission_state": "advisory_docs_pilot",
+      "notes": "SSOT pilot repo; advisory docs hint remains non-authoritative review metadata."
+    },
+    "merglbot-shared/workflows_shared": {
+      "enabled": false,
+      "review_owner_policy": "no_owner",
+      "notes": "Archived/inert repo; explicitly included in the 51-repo delivery matrix as no_owner."
+    }
+  }
+}

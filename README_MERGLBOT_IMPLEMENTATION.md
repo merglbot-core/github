@@ -19,8 +19,8 @@ This repository contains the comprehensive implementation of MERGLBOT (Work Arch
 #### Issue #18: Bot Configuration Files
 - **Location**: `/bot-configs/`
   - `copilot-config.yml` - GitHub Copilot organization settings
-  - `.cursorbot` - Cursor AI configuration
-  - `.cursorrules` - Cursor coding rules
+  - legacy bot config templates removed
+  - legacy IDE-specific coding rules removed
 - **Status**: ✅ COMPLETE
 
 #### Issue #19: Automated Release Workflows
@@ -96,7 +96,7 @@ Add to repository settings:
   - `GCP_WIF_PROVIDER` - For GCP authentication
   - `GCP_WIF_SERVICE_ACCOUNT` - Service account email
 
-#### 4. Cursor IDE Configuration
+#### 4. Agent Configuration
 Copy to each repository root:
 ```bash
 cp bot-configs/.cursorbot .
@@ -223,7 +223,7 @@ chmod +x /path/to/project/.git/hooks/pre-commit
 
 ### 4. Configure bot settings
 ```bash
-# Copy Cursor configuration
+# Copy supported agent configuration
 cp bot-configs/.cursorbot /path/to/project/
 cp bot-configs/.cursorrules /path/to/project/
 

@@ -13,7 +13,47 @@ On any PR in any Merglbot repository, comment:
 @merglbot review
 ```
 
-This triggers a multi-model review using **Claude Sonnet 4.5 + GPT-5.1 (HIGH reasoning)**.
+This triggers a review-only multi-model review using **`claude-opus-4-7` with adaptive thinking + `effort=max`** and **`gpt-5.4` (`reasoning_effort=high`)**, with final synthesis on OpenAI **`gpt-5.4` (`reasoning_effort=high`)**.
+
+Review output is intentionally **review-only**. Closeout remains a separate handoff path and final merge stays **`human_merge_only`**.
+
+The review comment now also carries advisory docs metadata:
+- `docs_follow_up_hint`: `likely_required`, `not_observed`, or `none`
+- `suggested_docs_targets`: JSON array of advisory repo-relative targets for `merglbot-public/docs`, or `[]`
+- `docs_signal_basis`: always `review_output_only`
+
+These fields are soft review metadata only. They do not add a required check, they do not create a merge blocker, and `documentation_obligation_state` remains non-authoritative review output rather than docs-classifier truth.
+
+The review comment must also carry a visible **Merglbot Review Receipt** and
+matching hidden markers so autonomous closeout can prove current-head review
+truth. Required markers are:
+
+- `MERGLBOT_REVIEW_RECEIPT_SCHEMA_VERSION`
+- `MERGLBOT_REVIEW_HEAD_SHA`
+- `MERGLBOT_REVIEW_VERDICT`
+- `MERGLBOT_REVIEW_STATUS`
+- `MERGLBOT_PR_CHECK_SURFACE`
+- `MERGLBOT_RUN_ID`
+- `MERGLBOT_RUN_URL`
+
+Use `scripts/pr-assistant/verify-review-receipt.py --repo <owner/repo> --pr
+<number>` to emit the JSON verifier contract for closeout lanes. The verifier
+also checks that `MERGLBOT_RUN_ID` belongs to the PR Assistant workflow path and
+validates `MERGLBOT_RUN_URL` against the PR URL host, so the contract works on
+GitHub Enterprise hosts without hard-coding `github.com`. `ok=true` is reserved
+for current-head `status=success` with `verdict=approved_for_closeout`; blocked
+or failed receipts remain parseable evidence but are not merge approval.
+
+The PR Assistant receipt is intentionally fail-closed for review evidence, but
+documentation advisory metadata must not override the explicit review verdict.
+If the generated review reports `approved_for_closeout`, the hidden
+`MERGLBOT_REVIEW_VERDICT` must remain `approved_for_closeout` even when
+`documentation_obligation_state` is `unknown`. Invalid documentation obligation
+tokens normalize to `unknown` advisory metadata instead of forcing
+`blocked_missing_authority`. The metrics artifact mirrors the same lowercase
+`review_receipt.verdict` value that appears in the visible review receipt and
+hidden markers, while the legacy top-level `verdict` field remains available
+for historical dashboards.
 
 For lighter review: `@merglbot review --light`
 
@@ -21,9 +61,12 @@ For lighter review: `@merglbot review --light`
 
 ## Current Workflow Location
 
-- **Source**: `.github/workflows/merglbot-pr-assistant-v3-on-demand.yml`
-- **Tag**: `merglbot-core/github@v3.1.0`
-- **Coverage**: 100% (15 repos across 6 organizations)
+- **Canonical source**: `merglbot-core/github/.github/workflows/merglbot-pr-assistant-v3-on-demand.yml`
+- **Deployed copy** (per target repo): `.github/workflows/merglbot-pr-v3-on-demand.yml` via `scripts/pr-assistant/deploy-v3.sh`
+- **Inventory policy**: `scripts/pr-assistant/repo-policy-inventory-policy.json`
+- **Coverage SSOT**: generated `scripts/pr-assistant/repo-policy-manifest.json`
+- **Coverage baseline**: `scripts/pr-assistant/baselines/2026-03-29/repo-policy-coverage-baseline.json`
+- **Scope sync automation**: `.github/workflows/merglbot-pr-assistant-manifest-sync.yml`
 
 ---
 

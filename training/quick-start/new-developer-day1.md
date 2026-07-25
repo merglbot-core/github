@@ -304,9 +304,9 @@ If you have access to GitHub Copilot:
 2. Authenticate with your GitHub account
 3. Test: Open a `.js` file and start typing a function
 
-### 5.2 Cursor IDE (Optional)
+### 5.2 Optional AI IDE
 
-If you prefer Cursor:
+If you prefer an AI IDE:
 
 ```bash
 # Download from https://cursor.sh
@@ -379,8 +379,7 @@ After completing Day 1:
 
 ## 🎓 Learning Resources
 
-- [MERGLBOT Standards Repository](https://github.com/merglbot-public/docs)
-- [Internal Documentation](https://docs.merglbot.ai)
+- [Merglbot Documentation Index (SSOT)](https://github.com/merglbot-public/docs/blob/main/DOCUMENTATION_INDEX.md)
 - [Team Wiki](https://wiki.merglbot.ai)
 - [Training Videos](https://training.merglbot.ai)
 

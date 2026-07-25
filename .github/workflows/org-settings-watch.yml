@@ -20,14 +20,16 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Load expected settings
         id: baseline
         run: |
           # Load organizations from baseline
-          ORGS=$(jq -r '.organizations[]' config/expected-org-settings.json | tr '\n' ' ')
+          ORGS="$(jq -r '.organizations[]' config/expected-org-settings.json | paste -sd ' ' -)"
           echo "orgs=$ORGS" >> "$GITHUB_OUTPUT"
+          ORG_COUNT=$(jq -r '.organizations | length' config/expected-org-settings.json)
+          echo "org_count=$ORG_COUNT" >> "$GITHUB_OUTPUT"
           
           # Load expected values
           EXPECTED_ACTIONS=$(jq -r '.expected_settings.actions.allowed_actions' config/expected-org-settings.json)
@@ -97,7 +99,7 @@ jobs:
           else
             echo "### ✅ No Configuration Drift" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "All 10 organizations match the expected baseline configuration." >> "$GITHUB_STEP_SUMMARY"
+            echo "All ${{ steps.baseline.outputs.org_count }} organizations match the expected baseline configuration." >> "$GITHUB_STEP_SUMMARY"
             echo "drift_found=false" >> "$GITHUB_OUTPUT"
           fi
 

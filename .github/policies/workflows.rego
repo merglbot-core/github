@@ -23,6 +23,7 @@ deny[msg] {
 deny[msg] {
   input.jobs[job_name]
   not input.jobs[job_name]["timeout-minutes"]
+  not input.jobs[job_name].uses
   msg := sprintf("Job '%v' must have timeout-minutes to prevent hung workflows", [job_name])
 }
 

@@ -6,7 +6,7 @@
 # Usage in caller workflow:
 #   jobs:
 #     a11y:
-#       uses: merglbot-github-workflows/.github/workflows/reusable-a11y-test.yml@main
+#       uses: merglbot-core/github/.github/workflows/reusable-a11y-test.yml@<sha>  # vX.Y.Z
 #       with:
 #         url: https://staging.merglbot.ai
 #         standard: WCAG2AA
@@ -50,10 +50,10 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node.js
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '20'
 
@@ -115,7 +115,7 @@ jobs:
           echo "violations=$TOTAL_VIOLATIONS" >> $GITHUB_OUTPUT
 
       - name: Upload Reports
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
           name: a11y-reports
@@ -135,10 +135,10 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node.js
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '20'
 
@@ -171,7 +171,7 @@ jobs:
           echo "pa11y_issues=$TOTAL_ISSUES" >> $GITHUB_OUTPUT
 
       - name: Upload Pa11y Reports
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
           name: pa11y-reports

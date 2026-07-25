@@ -21,7 +21,7 @@ Welcome to the merglbot.ai Team Training Hub! This directory contains comprehens
 
 - **Module 2.1:** [AI Coding Assistants Overview](./bots/01-ai-assistants-overview.md) ✅
 - **Module 2.2:** GitHub Copilot Best Practices (WIP - Coming Soon)
-- **Module 2.3:** Cursor IDE Workshop (WIP - Coming Soon)
+- **Module 2.3:** AI IDE Workshop (WIP - Coming Soon)
 - **Module 2.4:** Code Review with AI (WIP - Coming Soon)
 - **Module 2.5:** Safety & Compliance (WIP - Coming Soon)
 
@@ -135,8 +135,7 @@ We continuously improve our training materials based on your feedback:
 
 ## 🔗 Additional Resources
 
-- [Merglbot Docs (SSOT)](https://github.com/merglbot-public/docs)
-- [merglbot.ai Platform Documentation](https://docs.merglbot.ai)
+- [Merglbot Documentation Index (SSOT)](https://github.com/merglbot-public/docs/blob/main/DOCUMENTATION_INDEX.md)
 - [Security Incident Reports Archive](../docs/security/incidents)
 - [Release Notes History](../docs/releases)
 

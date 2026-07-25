@@ -1,0 +1,2383 @@
+name: Forecast D-1 Readiness Guardrail (per-tenant slots, Europe/Prague)
+
+on:
+  schedule:
+    # GitHub cron is UTC. To keep 08:20–15:20 Europe/Prague stable across DST, we schedule a UTC superset
+    # and let the script auto-NOOP outside the local execution window.
+    #
+    # Local window (Europe/Prague):
+    # - CET  (UTC+1): 08:20–15:20 local -> 07:20–14:20 UTC
+    # - CEST (UTC+2): 08:20–15:20 local -> 06:20–13:20 UTC
+    #
+    # UTC superset: 06:20–14:20 UTC (9 crons). Script gating yields exactly 8 local runs/day.
+    # Round 2 (Actions-minutes, owner-approved): the general hourly poll is
+    # consolidated from 8 local runs/day (08:20-15:20 hourly) to 4 local runs
+    # (08:20, 10:20, 12:20, 15:20 Europe/Prague). Dedicated per-tenant slots
+    # below are unchanged. UTC superset per local slot (CET+CEST), script
+    # auto-NOOP gating unchanged.
+    - cron: "20 6 * * *"
+    - cron: "20 7 * * *"
+    - cron: "20 8 * * *"
+    - cron: "20 9 * * *"
+    - cron: "20 10 * * *"
+    - cron: "20 11 * * *"
+    - cron: "20 13 * * *"
+    - cron: "20 14 * * *"
+
+    # Denatura (CZ+SK) dedicated runs at 08:15 and 10:15 Europe/Prague.
+    # GitHub cron is UTC, so we schedule a UTC superset and gate inside the script (DST-safe).
+    #
+    # 08:15 Europe/Prague:
+    # - CET  (UTC+1): 08:15 local -> 07:15 UTC
+    # - CEST (UTC+2): 08:15 local -> 06:15 UTC
+    #
+    # 10:15 Europe/Prague:
+    # - CET  (UTC+1): 10:15 local -> 09:15 UTC
+    # - CEST (UTC+2): 10:15 local -> 08:15 UTC
+    - cron: "15 6 * * *"
+    - cron: "15 7 * * *"
+    - cron: "15 8 * * *"
+    - cron: "15 9 * * *"
+
+    # Ruzovyslon dedicated runs at 09:15 and 11:15 Europe/Prague.
+    # GitHub cron is UTC; we reuse the 15 7/8/9 entries above and add 15 10 for CET 11:15.
+    #
+    # 09:15 Europe/Prague:
+    # - CET  (UTC+1): 09:15 local -> 08:15 UTC (already scheduled above)
+    # - CEST (UTC+2): 09:15 local -> 07:15 UTC (already scheduled above)
+    #
+    # 11:15 Europe/Prague:
+    # - CET  (UTC+1): 11:15 local -> 10:15 UTC
+    # - CEST (UTC+2): 11:15 local -> 09:15 UTC (already scheduled above)
+    - cron: "15 10 * * *"
+
+    # Autodoplnky dedicated runs at 09:05 and 12:05 Europe/Prague.
+    # GitHub cron is UTC, so we schedule a UTC superset and gate inside the script (DST-safe).
+    #
+    # 09:05 Europe/Prague:
+    # - CET  (UTC+1): 09:05 local -> 08:05 UTC
+    # - CEST (UTC+2): 09:05 local -> 07:05 UTC
+    #
+    # 12:05 Europe/Prague:
+    # - CET  (UTC+1): 12:05 local -> 11:05 UTC
+    # - CEST (UTC+2): 12:05 local -> 10:05 UTC
+    - cron: "5 7 * * *"
+    - cron: "5 8 * * *"
+    - cron: "5 10 * * *"
+    - cron: "5 11 * * *"
+
+    # Cerano + Livero dedicated runs at 09:00 and 11:00 Europe/Prague.
+    # GitHub cron is UTC, so we schedule a UTC superset and gate inside the script (DST-safe).
+    #
+    # 09:00 Europe/Prague:
+    # - CET  (UTC+1): 09:00 local -> 08:00 UTC (already scheduled below)
+    # - CEST (UTC+2): 09:00 local -> 07:00 UTC
+    #
+    # 11:00 Europe/Prague:
+    # - CET  (UTC+1): 11:00 local -> 10:00 UTC
+    # - CEST (UTC+2): 11:00 local -> 09:00 UTC (already scheduled below)
+    - cron: "0 7 * * *"
+    - cron: "0 10 * * *"
+
+    # Daily success-rate report at 10:00 Europe/Prague (DST-safe via UTC superset + script NOOP gating).
+    # - CEST (UTC+2): 10:00 local -> 08:00 UTC
+    # - CET  (UTC+1): 10:00 local -> 09:00 UTC
+    - cron: "0 8 * * *"
+    - cron: "0 9 * * *"
+
+  workflow_dispatch:
+    inputs:
+      patch_date_local:
+        description: "Date to check (YYYY-MM-DD, Europe/Prague). Default: yesterday."
+        required: false
+        type: string
+      dry_run:
+        description: "Skip Slack notifications"
+        required: false
+        type: boolean
+        default: true
+      send_test_slack_messages:
+        description: "Send synthetic test Slack messages for all isolated scopes (no BigQuery). Requires dry_run=false."
+        required: false
+        type: boolean
+        default: false
+      send_success_rate:
+        description: "Also send daily 30d success-rate message (10:00-style)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write  # For WIF/OIDC
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Forecast D-1 readiness
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'schedule' && (startsWith(github.event.schedule, '20 ') || startsWith(github.event.schedule, '15 ') || startsWith(github.event.schedule, '5 ') || startsWith(github.event.schedule, '0 ')))
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Validate send_test_slack_messages requires dry_run=false
+        if: github.event_name == 'workflow_dispatch' && inputs.send_test_slack_messages == true && inputs.dry_run == true
+        run: |
+          echo "::warning::send_test_slack_messages=true requires dry_run=false to actually send Slack messages."
+
+      - name: Authenticate to GCP via WIF (and install gcloud/bq/gsutil)
+        if: inputs.send_test_slack_messages != true
+        uses: ./.github/actions/setup-gcp-auth
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - name: Run forecast D-1 readiness
+        id: guardrail
+        # NOTE: We intentionally do NOT run the "core" (non-isolated) scope on `5 *` schedules.
+        # Minute 5 is reserved for the isolated `autodoplnky` slot (see dedicated steps below).
+        if: >-
+          ${{
+            inputs.send_test_slack_messages != true &&
+            (
+              github.event_name == 'workflow_dispatch' ||
+              (github.event_name == 'schedule' && (startsWith(github.event.schedule, '20 ') || startsWith(github.event.schedule, '15 ') || startsWith(github.event.schedule, '0 ')))
+            )
+          }}
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL: ${{ inputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-out"
+
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+          )
+          if [[ -n "${PATCH_DATE_LOCAL:-}" ]]; then
+            CMD+=( --patch-date-local "$PATCH_DATE_LOCAL" )
+          fi
+
+          EXTRA_ARGS=()
+          if [[ "${MODE}" == "auto" ]]; then
+            case "${GITHUB_EVENT_SCHEDULE:-}" in
+              15\ *)
+                EXTRA_ARGS+=( --include-tenant "denatura" --auto-utc-minute "15" --auto-local-hour "8" --auto-local-hour "10" )
+                ;;
+              20\ *)
+                EXTRA_ARGS+=( --exclude-tenant "denatura" --exclude-tenant "cerano" --exclude-tenant "livero" --exclude-tenant "proteinaco" --exclude-tenant "ruzovyslon" --exclude-tenant "autodoplnky" --allow-empty-specs )
+                ;;
+              0\ *)
+                EXTRA_ARGS+=( --include-tenant "cerano" --include-tenant "livero" --auto-utc-minute "0" --auto-local-hour "9" --auto-local-hour "11" )
+                ;;
+            esac
+          fi
+          if [[ "${#EXTRA_ARGS[@]}" -gt 0 ]]; then
+            CMD+=( "${EXTRA_ARGS[@]}" )
+          fi
+
+          SCOPE_LABEL="all"
+          if [[ "${MODE}" == "auto" ]]; then
+            case "${GITHUB_EVENT_SCHEDULE:-}" in
+              15\ *) SCOPE_LABEL="denatura" ;;
+              0\ *) SCOPE_LABEL="cerano+livero" ;;
+              20\ *) SCOPE_LABEL="core" ;;
+            esac
+          fi
+
+          printf 'Running:'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          EXIT=0
+          "${CMD[@]}" || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+          echo "scope_label=${SCOPE_LABEL}" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"slot={_v('slot')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"required_policy={_v('required_policy')}")
+          print(f"required_failed={_v('required_failed', '0')}")
+          print(f"optional_failed={_v('optional_failed', '0')}")
+          print(f"required_total={_v('required_total', '0')}")
+          print(f"optional_total={_v('optional_total', '0')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+            echo "required_failed=0" >> "$GITHUB_OUTPUT"
+            echo "optional_failed=0" >> "$GITHUB_OUTPUT"
+            echo "required_total=0" >> "$GITHUB_OUTPUT"
+            echo "optional_total=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run forecast D-2 readiness (info only)
+        id: guardrail_d2
+        # NOTE: Same as D-1: core D-2 is intentionally skipped on `5 *` (autodoplnky-only schedules).
+        if: >-
+          ${{
+            inputs.send_test_slack_messages != true &&
+            (
+              github.event_name == 'workflow_dispatch' ||
+              (github.event_name == 'schedule' && (startsWith(github.event.schedule, '20 ') || startsWith(github.event.schedule, '15 ') || startsWith(github.event.schedule, '0 ')))
+            )
+          }}
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL_D1: ${{ steps.guardrail.outputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-out-d2"
+          mkdir -p "$OUTDIR"
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+
+          PATCH_DATE_LOCAL_D1="${PATCH_DATE_LOCAL_D1:-}"
+          if [ -z "${PATCH_DATE_LOCAL_D1}" ]; then
+            echo "ℹ️ Missing D-1 patch_date_local; skipping D-2 run."
+            echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+            echo "status=NOOP" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PATCH_DATE_LOCAL_D2="$(
+            PATCH_DATE_LOCAL_D1="$PATCH_DATE_LOCAL_D1" python - <<'PY'
+          from datetime import date, timedelta
+          import os
+
+          d = date.fromisoformat(os.environ["PATCH_DATE_LOCAL_D1"])
+          print((d - timedelta(days=1)).isoformat())
+          PY
+          )"
+
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+            --patch-date-local "$PATCH_DATE_LOCAL_D2"
+          )
+
+          EXTRA_ARGS=()
+          if [[ "${MODE}" == "auto" ]]; then
+            case "${GITHUB_EVENT_SCHEDULE:-}" in
+              15\ *)
+                EXTRA_ARGS+=( --include-tenant "denatura" --auto-utc-minute "15" --auto-local-hour "8" --auto-local-hour "10" )
+                ;;
+              20\ *)
+                EXTRA_ARGS+=( --exclude-tenant "denatura" --exclude-tenant "cerano" --exclude-tenant "livero" --exclude-tenant "proteinaco" --exclude-tenant "ruzovyslon" --exclude-tenant "autodoplnky" --allow-empty-specs )
+                ;;
+              0\ *)
+                EXTRA_ARGS+=( --include-tenant "cerano" --include-tenant "livero" --auto-utc-minute "0" --auto-local-hour "9" --auto-local-hour "11" )
+                ;;
+            esac
+          fi
+          if [[ "${#EXTRA_ARGS[@]}" -gt 0 ]]; then
+            CMD+=( "${EXTRA_ARGS[@]}" )
+          fi
+
+          printf 'Running:'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          EXIT=0
+          "${CMD[@]}" || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"slot={_v('slot')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"required_policy={_v('required_policy')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=${PATCH_DATE_LOCAL_D2}" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run forecast D-1 readiness (Proteinaco)
+        id: guardrail_proteinaco
+        if: inputs.send_test_slack_messages != true && github.event_name == 'schedule' && startsWith(github.event.schedule, '20 ')
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL: ${{ inputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-out-proteinaco"
+
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+            --include-tenant "proteinaco"
+            --auto-utc-minute "20"
+            --auto-local-hour "9"
+            --auto-local-hour "11"
+          )
+          if [[ -n "${PATCH_DATE_LOCAL:-}" ]]; then
+            CMD+=( --patch-date-local "$PATCH_DATE_LOCAL" )
+          fi
+
+          printf 'Running (proteinaco):'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          EXIT=0
+          "${CMD[@]}" || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+          echo "scope_label=proteinaco" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"slot={_v('slot')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"required_policy={_v('required_policy')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run forecast D-2 readiness (Proteinaco, info only)
+        id: guardrail_d2_proteinaco
+        if: inputs.send_test_slack_messages != true && github.event_name == 'schedule' && startsWith(github.event.schedule, '20 ')
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL_D1: ${{ steps.guardrail_proteinaco.outputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-out-d2-proteinaco"
+          mkdir -p "$OUTDIR"
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+
+          PATCH_DATE_LOCAL_D1="${PATCH_DATE_LOCAL_D1:-}"
+          if [ -z "${PATCH_DATE_LOCAL_D1}" ]; then
+            echo "ℹ️ Missing Proteinaco D-1 patch_date_local; skipping D-2 run."
+            echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+            echo "status=NOOP" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PATCH_DATE_LOCAL_D2="$(
+            PATCH_DATE_LOCAL_D1="$PATCH_DATE_LOCAL_D1" python - <<'PY'
+          from datetime import date, timedelta
+          import os
+
+          d = date.fromisoformat(os.environ["PATCH_DATE_LOCAL_D1"])
+          print((d - timedelta(days=1)).isoformat())
+          PY
+          )"
+
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+            --patch-date-local "$PATCH_DATE_LOCAL_D2"
+            --include-tenant "proteinaco"
+            --auto-utc-minute "20"
+            --auto-local-hour "9"
+            --auto-local-hour "11"
+          )
+
+          printf 'Running (proteinaco D-2):'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          EXIT=0
+          "${CMD[@]}" || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"slot={_v('slot')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"required_policy={_v('required_policy')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run forecast D-1 readiness (Ruzovyslon)
+        id: guardrail_ruzovyslon
+        if: inputs.send_test_slack_messages != true && github.event_name == 'schedule' && startsWith(github.event.schedule, '15 ')
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL: ${{ inputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-out-ruzovyslon"
+
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+            --include-tenant "ruzovyslon"
+            --allow-empty-specs
+            --auto-utc-minute "15"
+            --auto-local-hour "9"
+            --auto-local-hour "11"
+          )
+          if [[ -n "${PATCH_DATE_LOCAL:-}" ]]; then
+            CMD+=( --patch-date-local "$PATCH_DATE_LOCAL" )
+          fi
+
+          printf 'Running (ruzovyslon):'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          EXIT=0
+          "${CMD[@]}" || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+          echo "scope_label=ruzovyslon" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"slot={_v('slot')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"required_policy={_v('required_policy')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run forecast D-2 readiness (Ruzovyslon, info only)
+        id: guardrail_d2_ruzovyslon
+        if: inputs.send_test_slack_messages != true && github.event_name == 'schedule' && startsWith(github.event.schedule, '15 ')
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL_D1: ${{ steps.guardrail_ruzovyslon.outputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-out-d2-ruzovyslon"
+          mkdir -p "$OUTDIR"
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+
+          PATCH_DATE_LOCAL_D1="${PATCH_DATE_LOCAL_D1:-}"
+          if [ -z "${PATCH_DATE_LOCAL_D1}" ]; then
+            echo "ℹ️ Missing Ruzovyslon D-1 patch_date_local; skipping D-2 run."
+            echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+            echo "status=NOOP" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PATCH_DATE_LOCAL_D2="$(
+            PATCH_DATE_LOCAL_D1="$PATCH_DATE_LOCAL_D1" python - <<'PY'
+          from datetime import date, timedelta
+          import os
+
+          d = date.fromisoformat(os.environ["PATCH_DATE_LOCAL_D1"])
+          print((d - timedelta(days=1)).isoformat())
+          PY
+          )"
+
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+            --patch-date-local "$PATCH_DATE_LOCAL_D2"
+            --include-tenant "ruzovyslon"
+            --allow-empty-specs
+            --auto-utc-minute "15"
+            --auto-local-hour "9"
+            --auto-local-hour "11"
+          )
+
+          printf 'Running (ruzovyslon D-2):'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          EXIT=0
+          "${CMD[@]}" || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"slot={_v('slot')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"required_policy={_v('required_policy')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run forecast D-1 readiness (Autodoplnky)
+        id: guardrail_autodoplnky
+        if: inputs.send_test_slack_messages != true && github.event_name == 'schedule' && startsWith(github.event.schedule, '5 ')
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL: ${{ inputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-out-autodoplnky"
+
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+            --include-tenant "autodoplnky"
+            --auto-utc-minute "5"
+            --auto-local-hour "9"
+            --auto-local-hour "12"
+          )
+          if [[ -n "${PATCH_DATE_LOCAL:-}" ]]; then
+            CMD+=( --patch-date-local "$PATCH_DATE_LOCAL" )
+          fi
+
+          printf 'Running (autodoplnky):'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          EXIT=0
+          "${CMD[@]}" || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+          echo "scope_label=autodoplnky" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"slot={_v('slot')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"required_policy={_v('required_policy')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run forecast D-2 readiness (Autodoplnky, info only)
+        id: guardrail_d2_autodoplnky
+        if: inputs.send_test_slack_messages != true && github.event_name == 'schedule' && startsWith(github.event.schedule, '5 ')
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL_D1: ${{ steps.guardrail_autodoplnky.outputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-out-d2-autodoplnky"
+          mkdir -p "$OUTDIR"
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+
+          PATCH_DATE_LOCAL_D1="${PATCH_DATE_LOCAL_D1:-}"
+          if [ -z "${PATCH_DATE_LOCAL_D1}" ]; then
+            echo "ℹ️ Missing Autodoplnky D-1 patch_date_local; skipping D-2 run."
+            echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+            echo "status=NOOP" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PATCH_DATE_LOCAL_D2="$(
+            PATCH_DATE_LOCAL_D1="$PATCH_DATE_LOCAL_D1" python - <<'PY'
+          from datetime import date, timedelta
+          import os
+
+          d = date.fromisoformat(os.environ["PATCH_DATE_LOCAL_D1"])
+          print((d - timedelta(days=1)).isoformat())
+          PY
+          )"
+
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+            --patch-date-local "$PATCH_DATE_LOCAL_D2"
+            --include-tenant "autodoplnky"
+            --auto-utc-minute "5"
+            --auto-local-hour "9"
+            --auto-local-hour "12"
+          )
+
+          printf 'Running (autodoplnky D-2):'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          EXIT=0
+          "${CMD[@]}" || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"slot={_v('slot')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"required_policy={_v('required_policy')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "slot=" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "required_policy=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Add report to step summary
+        if: always() && steps.guardrail.outputs.outdir != '' && steps.guardrail.outputs.status != 'NOOP'
+        run: |
+          MD_FILE="${{ steps.guardrail.outputs.outdir }}/forecast_d1_readiness_report.md"
+          echo "## ✅ Forecast D-1 readiness" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -f "$MD_FILE" ]; then
+            head -n 200 "$MD_FILE" >> "$GITHUB_STEP_SUMMARY"
+            if [ "$(wc -l < "$MD_FILE")" -gt 200 ]; then
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "*... Report truncated. See artifacts for full report.*" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "❌ No report generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "---" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Exit code: ${{ steps.guardrail.outputs.exit_code }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Status: ${{ steps.guardrail.outputs.status }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Slot: ${{ steps.guardrail.outputs.slot }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Required policy: ${{ steps.guardrail.outputs.required_policy }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Patch date (local): ${{ steps.guardrail.outputs.patch_date_local }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Required failed: ${{ steps.guardrail.outputs.required_failed }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Optional failed: ${{ steps.guardrail.outputs.optional_failed }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload guardrail artifacts
+        if: always() && steps.guardrail.outputs.outdir != '' && steps.guardrail.outputs.status != 'NOOP'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: forecast-d1-readiness-${{ github.run_id }}
+          path: |
+            ${{ steps.guardrail.outputs.outdir }}/
+            ${{ steps.guardrail_d2.outputs.outdir }}/
+          retention-days: 90
+
+      - name: Upload Proteinaco guardrail artifacts
+        if: always() && steps.guardrail_proteinaco.outputs.outdir != '' && steps.guardrail_proteinaco.outputs.status != 'NOOP'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: forecast-d1-readiness-proteinaco-${{ github.run_id }}
+          path: |
+            ${{ steps.guardrail_proteinaco.outputs.outdir }}/
+            ${{ steps.guardrail_d2_proteinaco.outputs.outdir }}/
+          retention-days: 90
+
+      - name: Upload Ruzovyslon guardrail artifacts
+        if: always() && steps.guardrail_ruzovyslon.outputs.outdir != '' && steps.guardrail_ruzovyslon.outputs.status != 'NOOP'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: forecast-d1-readiness-ruzovyslon-${{ github.run_id }}
+          path: |
+            ${{ steps.guardrail_ruzovyslon.outputs.outdir }}/
+            ${{ steps.guardrail_d2_ruzovyslon.outputs.outdir }}/
+          retention-days: 90
+
+      - name: Upload Autodoplnky guardrail artifacts
+        if: always() && steps.guardrail_autodoplnky.outputs.outdir != '' && steps.guardrail_autodoplnky.outputs.status != 'NOOP'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: forecast-d1-readiness-autodoplnky-${{ github.run_id }}
+          path: |
+            ${{ steps.guardrail_autodoplnky.outputs.outdir }}/
+            ${{ steps.guardrail_d2_autodoplnky.outputs.outdir }}/
+          retention-days: 90
+
+      - name: Generate test Slack artifacts (all scopes)
+        id: test_slack_artifacts
+        if: github.event_name == 'workflow_dispatch' && inputs.send_test_slack_messages == true
+        run: |
+          set -euo pipefail
+
+          BASE="forecast-d1-readiness-slack-test"
+          rm -rf "$BASE"
+
+          BASE="$BASE" python - <<'PY'
+          import csv
+          from datetime import datetime, timedelta, timezone
+          import json
+          import os
+          from pathlib import Path
+          from zoneinfo import ZoneInfo
+
+          base = Path(os.environ.get("BASE", "forecast-d1-readiness-slack-test"))
+          tz = ZoneInfo("Europe/Prague")
+          now = datetime.now(tz=tz).replace(second=0, microsecond=0)
+          offset = now.utcoffset() or timedelta(0)
+          offset_hours = int(offset.total_seconds() // 3600)
+
+          patch_d1 = (now.date() - timedelta(days=1)).isoformat()
+          patch_d2 = (now.date() - timedelta(days=2)).isoformat()
+
+          REPORT_FIELDS = [
+              "project_id",
+              "tenant",
+              "country",
+              "slot",
+              "required_policy",
+              "patch_date_local",
+              "is_required",
+              "table_fq",
+              "status",
+              "reason",
+              "row_count",
+              "sessions_sum",
+              "revenue_db_sum",
+              "transactions_db_sum",
+              "actuals_sum",
+              "cost_sum",
+              "cost_present",
+              "error_snippet",
+              "status_13",
+              "reason_13",
+              "table_fq_14",
+              "domain",
+              "status_14",
+              "reason_14",
+              "row_count_14",
+              "sessions_sum_14",
+              "revenue_db_sum_14",
+              "transactions_db_sum_14",
+              "actuals_sum_14",
+              "cost_sum_14",
+              "cost_present_14",
+              "error_snippet_14",
+          ]
+          CHANNEL_FIELDS = [
+              "tenant",
+              "country",
+              "channel",
+              "row_count",
+              "revenue_db_sum",
+              "cost_sum",
+              "cost_present",
+              "status",
+              "reason",
+          ]
+          CHANNEL14_FIELDS = [
+              "tenant",
+              "country",
+              "channel",
+              "row_count",
+              "sessions_sum",
+              "revenue_db_sum",
+              "transactions_db_sum",
+              "actuals_sum",
+              "cost_sum",
+              "cost_present",
+              "status",
+              "reason",
+          ]
+
+          def _utc_hour(local_hour: int) -> int:
+              return (local_hour - offset_hours) % 24
+
+          def _schedule(minute: int, local_hour: int) -> str:
+              return f"{minute} {_utc_hour(local_hour)} * * *"
+
+          def _now_local_iso(local_hour: int, minute: int) -> str:
+              return now.replace(hour=local_hour, minute=minute).isoformat()
+
+          def _write_json(path: Path, payload: dict) -> None:
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+          def _write_csv(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
+              path.parent.mkdir(parents=True, exist_ok=True)
+              with path.open("w", encoding="utf-8", newline="") as f:
+                  w = csv.DictWriter(f, fieldnames=fieldnames)
+                  w.writeheader()
+                  for r in rows:
+                      w.writerow({k: ("" if r.get(k) is None else r.get(k)) for k in fieldnames})
+
+          def _make_scope(
+              *,
+              scope: str,
+              label: str,
+              minute: int,
+              local_hour: int,
+              items: list[dict],
+          ) -> dict[str, str]:
+              outdir = base / scope / "out"
+              outdir_d2 = base / scope / "out-d2"
+              outdir.mkdir(parents=True, exist_ok=True)
+              outdir_d2.mkdir(parents=True, exist_ok=True)
+
+              sched = _schedule(minute, local_hour)
+              now_local = _now_local_iso(local_hour, minute)
+              slot = f"{local_hour:02d}"
+
+              def _summary(patch_date: str) -> dict:
+                  return {
+                      "status": "PASS",
+                      "slot": slot,
+                      "required_policy": "all",
+                      "timezone": "Europe/Prague",
+                      "patch_date_local": patch_date,
+                      "github_event_schedule": sched,
+                      "now_local": now_local,
+                      "checked_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+                      "pipelines_total": len(items),
+                      "required_total": len(items),
+                      "required_failed": 0,
+                      "optional_total": 0,
+                      "optional_failed": 0,
+                      "mode": "auto",
+                      "kind": "readiness",
+                      "spec_filters": {
+                          "include_tenant": [],
+                          "exclude_tenant": [],
+                          "include_country": [],
+                          "exclude_country": [],
+                      },
+                  }
+
+              _write_json(outdir / "forecast_d1_readiness_summary.json", _summary(patch_d1))
+              _write_json(outdir_d2 / "forecast_d1_readiness_summary.json", _summary(patch_d2))
+
+              report_rows_d1: list[dict] = []
+              report_rows_d2: list[dict] = []
+              ch_rows_d1: list[dict] = []
+              ch_rows_d2: list[dict] = []
+              ch14_rows_d1: list[dict] = []
+              ch14_rows_d2: list[dict] = []
+
+              for it in items:
+                  tenant = it["tenant"]
+                  country = it["country"]
+                  domain = it.get("domain", "")
+                  channels = it.get("channels", [])
+                  channels14 = it.get("channels14", channels)
+
+                  def _report_row(*, patch_date: str, sessions: float, rev: float, tx: float, cost: float) -> dict:
+                      actuals = abs(sessions) + abs(rev) + abs(tx)
+                      return {
+                          "project_id": "slack-test",
+                          "tenant": tenant,
+                          "country": country,
+                          "slot": slot,
+                          "required_policy": "all",
+                          "patch_date_local": patch_date,
+                          "is_required": "yes",
+                          "table_fq": f"slack_test.visualisation_final.{tenant}_{country}_table",
+                          "status": "PASS",
+                          "reason": "",
+                          "row_count": "123",
+                          "sessions_sum": f"{sessions:.6f}",
+                          "revenue_db_sum": f"{rev:.6f}",
+                          "transactions_db_sum": f"{tx:.6f}",
+                          "actuals_sum": f"{actuals:.6f}",
+                          "cost_sum": f"{cost:.6f}",
+                          "cost_present": "yes",
+                          "error_snippet": "",
+                          "status_13": "PASS",
+                          "reason_13": "",
+                          "table_fq_14": f"slack_test.visualisation_final.14_{tenant}_{country}_union",
+                          "domain": domain,
+                          "status_14": "PASS",
+                          "reason_14": "",
+                          "row_count_14": "10",
+                          "sessions_sum_14": f"{sessions:.6f}",
+                          "revenue_db_sum_14": f"{rev:.6f}",
+                          "transactions_db_sum_14": f"{tx:.6f}",
+                          "actuals_sum_14": f"{actuals:.6f}",
+                          "cost_sum_14": f"{cost:.6f}",
+                          "cost_present_14": "yes",
+                          "error_snippet_14": "",
+                      }
+
+                  report_rows_d1.append(_report_row(patch_date=patch_d1, sessions=100.0, rev=1000.0, tx=1.0, cost=200.0))
+                  report_rows_d2.append(_report_row(patch_date=patch_d2, sessions=80.0, rev=800.0, tx=1.0, cost=160.0))
+
+                  for ch in channels:
+                      ch_rows_d1.append(
+                          {
+                              "tenant": tenant,
+                              "country": country,
+                              "channel": ch,
+                              "row_count": "50",
+                              "revenue_db_sum": "1000.000000",
+                              "cost_sum": "200.000000",
+                              "cost_present": "yes",
+                              "status": "OK",
+                              "reason": "",
+                          }
+                      )
+                      ch_rows_d2.append(
+                          {
+                              "tenant": tenant,
+                              "country": country,
+                              "channel": ch,
+                              "row_count": "40",
+                              "revenue_db_sum": "800.000000",
+                              "cost_sum": "160.000000",
+                              "cost_present": "yes",
+                              "status": "OK",
+                              "reason": "",
+                          }
+                      )
+
+                  for ch in channels14:
+                      ch14_rows_d1.append(
+                          {
+                              "tenant": tenant,
+                              "country": country,
+                              "channel": ch,
+                              "row_count": "10",
+                              "sessions_sum": "100.000000",
+                              "revenue_db_sum": "1000.000000",
+                              "transactions_db_sum": "1.000000",
+                              "actuals_sum": "1101.000000",
+                              "cost_sum": "200.000000",
+                              "cost_present": "yes",
+                              "status": "OK",
+                              "reason": "",
+                          }
+                      )
+                      ch14_rows_d2.append(
+                          {
+                              "tenant": tenant,
+                              "country": country,
+                              "channel": ch,
+                              "row_count": "10",
+                              "sessions_sum": "80.000000",
+                              "revenue_db_sum": "800.000000",
+                              "transactions_db_sum": "1.000000",
+                              "actuals_sum": "881.000000",
+                              "cost_sum": "160.000000",
+                              "cost_present": "yes",
+                              "status": "OK",
+                              "reason": "",
+                          }
+                      )
+
+              _write_csv(outdir / "forecast_d1_readiness_report.csv", REPORT_FIELDS, report_rows_d1)
+              _write_csv(outdir / "forecast_d1_readiness_channels_report.csv", CHANNEL_FIELDS, ch_rows_d1)
+              _write_csv(outdir / "forecast_d1_readiness_channels14_report.csv", CHANNEL14_FIELDS, ch14_rows_d1)
+
+              _write_csv(outdir_d2 / "forecast_d1_readiness_report.csv", REPORT_FIELDS, report_rows_d2)
+              _write_csv(outdir_d2 / "forecast_d1_readiness_channels_report.csv", CHANNEL_FIELDS, ch_rows_d2)
+              _write_csv(outdir_d2 / "forecast_d1_readiness_channels14_report.csv", CHANNEL14_FIELDS, ch14_rows_d2)
+
+              return {
+                  f"{scope}_status": "PASS",
+                  f"{scope}_outdir": str(outdir),
+                  f"{scope}_outdir_d2": str(outdir_d2),
+                  f"{scope}_scope_label": f"TEST {label}",
+              }
+
+          base.mkdir(parents=True, exist_ok=True)
+          outputs: dict[str, str] = {}
+
+          outputs.update(
+              _make_scope(
+                  scope="denatura",
+                  label="denatura",
+                  minute=15,
+                  local_hour=8,
+                  items=[
+                      {"tenant": "denatura", "country": "cz", "domain": "denatura.cz", "channels": ["Google ads pmax", "Facebook"]},
+                      {"tenant": "denatura", "country": "sk", "domain": "denatura.sk", "channels": ["Google ads pmax", "Facebook"]},
+                  ],
+              )
+          )
+          outputs.update(
+              _make_scope(
+                  scope="cerano_livero",
+                  label="cerano+livero",
+                  minute=0,
+                  local_hour=9,
+                  items=[
+                      {"tenant": "cerano", "country": "cz", "domain": "cerano.cz", "channels": ["Google Ads", "Facebook"]},
+                      {"tenant": "livero", "country": "cz", "domain": "livero.cz", "channels": ["Google Ads", "Facebook"]},
+                  ],
+              )
+          )
+          outputs.update(
+              _make_scope(
+                  scope="proteinaco",
+                  label="proteinaco",
+                  minute=20,
+                  local_hour=9,
+                  items=[
+                      {"tenant": "proteinaco", "country": "cz", "domain": "proteinaco.cz", "channels": ["Google Ads", "Facebook"]},
+                  ],
+              )
+          )
+          outputs.update(
+              _make_scope(
+                  scope="ruzovyslon",
+                  label="ruzovyslon",
+                  minute=15,
+                  local_hour=9,
+                  items=[
+                      {"tenant": "ruzovyslon", "country": "cz", "domain": "ruzovyslon.cz", "channels": ["Google ads pmax"]},
+                  ],
+              )
+          )
+          outputs.update(
+              _make_scope(
+                  scope="autodoplnky",
+                  label="autodoplnky",
+                  minute=5,
+                  local_hour=9,
+                  items=[
+                      {"tenant": "autodoplnky", "country": "cz", "domain": "autodoplnky.cz", "channels": ["Google Ads", "Facebook"]},
+                  ],
+              )
+          )
+
+          out_path = Path(os.environ["GITHUB_OUTPUT"])  # provided by Actions
+          with out_path.open("a", encoding="utf-8") as f:
+              for k, v in outputs.items():
+                  f.write(f"{k}={v}\n")
+          PY
+
+      - name: Slack alert (PASS/FAIL)
+        if: >-
+          ${{
+            always() &&
+            inputs.dry_run != true &&
+            (
+              inputs.send_test_slack_messages == true ||
+              (steps.guardrail.outputs.exit_code != '' && steps.guardrail.outputs.status != 'NOOP') ||
+              (steps.guardrail_proteinaco.outputs.exit_code != '' && steps.guardrail_proteinaco.outputs.status != 'NOOP') ||
+              (steps.guardrail_ruzovyslon.outputs.exit_code != '' && steps.guardrail_ruzovyslon.outputs.status != 'NOOP') ||
+              (steps.guardrail_autodoplnky.outputs.exit_code != '' && steps.guardrail_autodoplnky.outputs.status != 'NOOP')
+            )
+          }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL_FINAL_DATA_ALERTS || secrets.SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MAIN_STATUS: ${{ steps.guardrail.outputs.status }}
+          OUTDIR: ${{ steps.guardrail.outputs.outdir }}
+          OUTDIR_D2: ${{ steps.guardrail_d2.outputs.outdir }}
+          SCOPE_LABEL: ${{ steps.guardrail.outputs.scope_label }}
+          DENATURA_STATUS: ${{ steps.test_slack_artifacts.outputs.denatura_status }}
+          DENATURA_OUTDIR: ${{ steps.test_slack_artifacts.outputs.denatura_outdir }}
+          DENATURA_OUTDIR_D2: ${{ steps.test_slack_artifacts.outputs.denatura_outdir_d2 }}
+          DENATURA_SCOPE_LABEL: ${{ steps.test_slack_artifacts.outputs.denatura_scope_label }}
+          CERANO_LIVERO_STATUS: ${{ steps.test_slack_artifacts.outputs.cerano_livero_status }}
+          CERANO_LIVERO_OUTDIR: ${{ steps.test_slack_artifacts.outputs.cerano_livero_outdir }}
+          CERANO_LIVERO_OUTDIR_D2: ${{ steps.test_slack_artifacts.outputs.cerano_livero_outdir_d2 }}
+          CERANO_LIVERO_SCOPE_LABEL: ${{ steps.test_slack_artifacts.outputs.cerano_livero_scope_label }}
+          PROTEINACO_STATUS: ${{ steps.guardrail_proteinaco.outputs.status || steps.test_slack_artifacts.outputs.proteinaco_status }}
+          PROTEINACO_OUTDIR: ${{ steps.guardrail_proteinaco.outputs.outdir || steps.test_slack_artifacts.outputs.proteinaco_outdir }}
+          PROTEINACO_OUTDIR_D2: ${{ steps.guardrail_d2_proteinaco.outputs.outdir || steps.test_slack_artifacts.outputs.proteinaco_outdir_d2 }}
+          PROTEINACO_SCOPE_LABEL: ${{ steps.guardrail_proteinaco.outputs.scope_label || steps.test_slack_artifacts.outputs.proteinaco_scope_label }}
+          RUZOVYSLON_STATUS: ${{ steps.guardrail_ruzovyslon.outputs.status || steps.test_slack_artifacts.outputs.ruzovyslon_status }}
+          RUZOVYSLON_OUTDIR: ${{ steps.guardrail_ruzovyslon.outputs.outdir || steps.test_slack_artifacts.outputs.ruzovyslon_outdir }}
+          RUZOVYSLON_OUTDIR_D2: ${{ steps.guardrail_d2_ruzovyslon.outputs.outdir || steps.test_slack_artifacts.outputs.ruzovyslon_outdir_d2 }}
+          RUZOVYSLON_SCOPE_LABEL: ${{ steps.guardrail_ruzovyslon.outputs.scope_label || steps.test_slack_artifacts.outputs.ruzovyslon_scope_label }}
+          AUTODOPLNKY_STATUS: ${{ steps.guardrail_autodoplnky.outputs.status || steps.test_slack_artifacts.outputs.autodoplnky_status }}
+          AUTODOPLNKY_OUTDIR: ${{ steps.guardrail_autodoplnky.outputs.outdir || steps.test_slack_artifacts.outputs.autodoplnky_outdir }}
+          AUTODOPLNKY_OUTDIR_D2: ${{ steps.guardrail_d2_autodoplnky.outputs.outdir || steps.test_slack_artifacts.outputs.autodoplnky_outdir_d2 }}
+          AUTODOPLNKY_SCOPE_LABEL: ${{ steps.guardrail_autodoplnky.outputs.scope_label || steps.test_slack_artifacts.outputs.autodoplnky_scope_label }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SLACK_WEBHOOK_URL}" ]; then
+            echo "ℹ️ No Slack webhook secret configured (SLACK_WEBHOOK_URL_FINAL_DATA_ALERTS or SLACK_WEBHOOK_URL); skipping Slack notification."
+            exit 0
+          fi
+
+          build_payload() {
+          python - <<'PY'
+          import csv
+          from collections import defaultdict
+          from datetime import datetime, timedelta
+          import json
+          import os
+
+          summary_path = os.environ.get("SUMMARY_JSON", "")
+          report_csv = os.environ.get("REPORT_CSV", "")
+          channels_csv = os.environ.get("CHANNELS_CSV", "")
+          channels14_csv = os.environ.get("CHANNELS14_CSV", "")
+          summary_path_d2 = os.environ.get("SUMMARY_JSON_D2", "")
+          report_csv_d2 = os.environ.get("REPORT_CSV_D2", "")
+          channels_csv_d2 = os.environ.get("CHANNELS_CSV_D2", "")
+          channels14_csv_d2 = os.environ.get("CHANNELS14_CSV_D2", "")
+          run_url = os.environ.get("RUN_URL", "")
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+          scope_label = (os.environ.get("SCOPE_LABEL", "") or "").strip()
+
+          from scripts.guardrails.slack_formatter import (
+              _to_float,
+              _to_int,
+              render_table_section_mrkdwn,
+              slack_escape,
+          )
+
+          EPS = 1e-9  # Float tolerance for "non-zero" sums (avoid precision noise)
+
+          # Slack Block Kit limits / readability caps
+          MAX_TENANTS_DISPLAY = 15
+          MAX_REQ_FAILURES_DISPLAY = 10
+          MAX_OPT_FAILURES_DISPLAY = 5
+          MAX_CHANNEL_LINES_PER_TENANT = 25
+
+          status = "?"
+          slot = ""
+          policy = ""
+          patch_date = ""
+          now_local = ""
+          gh_schedule = ""
+          req_failed = 0
+          opt_failed = 0
+          req_total = 0
+          opt_total = 0
+          patch_date_d2 = ""
+          try:
+              with open(summary_path, "r", encoding="utf-8") as f:
+                  s = json.load(f)
+              status = str(s.get("status", "?"))
+              slot = str(s.get("slot", "") or "")
+              policy = str(s.get("required_policy", "") or "")
+              patch_date = str(s.get("patch_date_local", "") or "")
+              now_local = str(s.get("now_local", "") or "")
+              gh_schedule = str(s.get("github_event_schedule", "") or "")
+              req_failed = _to_int(s.get("required_failed"))
+              opt_failed = _to_int(s.get("optional_failed"))
+              req_total = _to_int(s.get("required_total"))
+              opt_total = _to_int(s.get("optional_total"))
+          except Exception:
+              pass
+
+          try:
+              if summary_path_d2 and os.path.exists(summary_path_d2):
+                  with open(summary_path_d2, "r", encoding="utf-8") as f:
+                      s2 = json.load(f)
+                  patch_date_d2 = str(s2.get("patch_date_local", "") or "")
+          except Exception:
+              pass
+
+          req_ok = max(0, req_total - req_failed)
+
+          tz_abbrev = "Europe/Prague"
+          try:
+              dt = datetime.fromisoformat(now_local)
+              off = dt.utcoffset()
+              if off == timedelta(hours=1):
+                  tz_abbrev = "CET"
+              elif off == timedelta(hours=2):
+                  tz_abbrev = "CEST"
+          except Exception:
+              pass
+
+          slot_disp = ""
+          try:
+              if slot and slot.isdigit():
+                  minute = 0
+                  try:
+                      parts = (gh_schedule or "").strip().split()
+                      if len(parts) >= 2 and parts[0].isdigit():
+                          m = int(parts[0])
+                          if 0 <= m <= 59:
+                              minute = m
+                  except Exception:
+                      minute = 0
+                  slot_disp = f"{int(slot):02d}:{minute:02d}"
+          except Exception:
+              pass
+
+          status_norm = (status or "").strip().upper()
+          if status_norm == "FAIL" or req_failed > 0:
+              icon = "🔴"
+              if req_failed > 0:
+                  title_text = f"Forecast D-1 Readiness: FAIL ({req_failed} required failures)"
+              else:
+                  title_text = "Forecast D-1 Readiness: FAIL (see details)"
+          elif opt_failed > 0:
+              icon = "⚠️"
+              title_text = f"Forecast D-1 Readiness: PASS ({opt_failed} optional warnings)"
+          elif status_norm == "PASS":
+              icon = "✅"
+              title_text = "Forecast D-1 Readiness: ALL PASS"
+          else:
+              icon = "❓"
+              title_text = f"Forecast D-1 Readiness: UNKNOWN (status={status_norm or '?'})"
+
+          header_info_parts: list[str] = []
+          if scope_label:
+              header_info_parts.append(f"Scope: {scope_label}")
+          header_info_parts.append(f"📅 D-1 {patch_date or '?'} | D-2 {patch_date_d2 or '?'}")
+          time_part = slot_disp or (slot if slot else "?")
+          header_info_parts.append(f"🕐 {time_part} {tz_abbrev}")
+          header_info_parts.append(f"Policy: {policy or '?'}")
+
+          header_info_plain = " | ".join(header_info_parts).strip()
+          header_text_plain = f"{icon} {title_text}" + (f" — {header_info_plain}" if header_info_plain else "")
+
+          info_mrkdwn_parts: list[str] = []
+          if scope_label:
+              info_mrkdwn_parts.append(f"Scope: `{slack_escape(scope_label)}`")
+          info_mrkdwn_parts.append(
+              f"📅 D-1 `{slack_escape(patch_date or '?')}` | D-2 `{slack_escape(patch_date_d2 or '?')}`"
+          )
+          info_mrkdwn_parts.append(f"🕐 `{slack_escape(time_part)} {tz_abbrev}`")
+          info_mrkdwn_parts.append(f"Policy: `{slack_escape(policy or '?')}`")
+
+          header_info_mrkdwn = " | ".join(info_mrkdwn_parts).strip()
+          header_mrkdwn = f"{icon} *{slack_escape(title_text)}*" + (f" — {header_info_mrkdwn}" if header_info_mrkdwn else "")
+
+          blocks: list[dict] = []
+          blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": header_mrkdwn}})
+
+          tenant_map: dict[str, list[dict[str, object]]] = defaultdict(list)
+          report_map_d2: dict[tuple[str, str], dict[str, object]] = {}
+          channels_map: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
+          channels_map_d2: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
+          channels14_map: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
+          channels14_map_d2: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
+          req_fail_list: list[tuple[str, str, str, str, str]] = []
+          opt_fail_list: list[tuple[str, str, str, str, str]] = []
+
+          try:
+              if channels_csv and os.path.exists(channels_csv):
+                  with open(channels_csv, "r", encoding="utf-8", newline="") as f:
+                      reader = csv.DictReader(f)
+                      for row in reader:
+                          tenant = (row.get("tenant") or "").strip() or "?"
+                          country = (row.get("country") or "").strip() or "?"
+                          channel = (row.get("channel") or "").strip() or "?"
+                          st = (row.get("status") or "").strip() or "?"
+                          reason = (row.get("reason") or "").strip()
+                          row_count = _to_int(row.get("row_count"))
+                          revenue_db_sum = _to_float(row.get("revenue_db_sum"))
+                          cost_sum = _to_float(row.get("cost_sum"))
+                          cost_present = (row.get("cost_present") or "").strip().lower()
+                          channels_map[(tenant.lower(), country.lower())].append(
+                              {
+                                  "channel": channel,
+                                  "status": st,
+                                  "reason": reason,
+                                  "row_count": row_count,
+                                  "revenue_db_sum": revenue_db_sum,
+                                  "cost_sum": cost_sum,
+                                  "cost_present": cost_present,
+                              }
+                          )
+          except Exception as exc:
+              import sys
+
+              msg = str(exc).replace("\n", " ").replace("\r", " ").strip()
+              if len(msg) > 200:
+                  msg = msg[:200] + "…"
+              print(
+                  f"⚠️ Failed to parse channels CSV (forecast_d1_readiness_channels_report.csv): {exc.__class__.__name__}: {msg}",
+                  file=sys.stderr,
+              )
+
+          try:
+              if channels14_csv and os.path.exists(channels14_csv):
+                  with open(channels14_csv, "r", encoding="utf-8", newline="") as f:
+                      reader = csv.DictReader(f)
+                      for row in reader:
+                          tenant = (row.get("tenant") or "").strip() or "?"
+                          country = (row.get("country") or "").strip() or "?"
+                          channel = (row.get("channel") or "").strip() or "?"
+                          st = (row.get("status") or "").strip() or "?"
+                          reason = (row.get("reason") or "").strip()
+                          row_count = _to_int(row.get("row_count"))
+                          actuals_sum = _to_float(row.get("actuals_sum"))
+                          channels14_map[(tenant.lower(), country.lower())].append(
+                              {
+                                  "channel": channel,
+                                  "status": st,
+                                  "reason": reason,
+                                  "row_count": row_count,
+                                  "actuals_sum": actuals_sum,
+                              }
+                          )
+          except Exception as exc:
+              import sys
+
+              msg = str(exc).replace("\n", " ").replace("\r", " ").strip()
+              if len(msg) > 200:
+                  msg = msg[:200] + "…"
+              print(
+                  f"⚠️ Failed to parse channels14 CSV (forecast_d1_readiness_channels14_report.csv): {exc.__class__.__name__}: {msg}",
+                  file=sys.stderr,
+              )
+
+          try:
+              if channels_csv_d2 and os.path.exists(channels_csv_d2):
+                  with open(channels_csv_d2, "r", encoding="utf-8", newline="") as f:
+                      reader = csv.DictReader(f)
+                      for row in reader:
+                          tenant = (row.get("tenant") or "").strip() or "?"
+                          country = (row.get("country") or "").strip() or "?"
+                          channel = (row.get("channel") or "").strip() or "?"
+                          st = (row.get("status") or "").strip() or "?"
+                          reason = (row.get("reason") or "").strip()
+                          row_count = _to_int(row.get("row_count"))
+                          revenue_db_sum = _to_float(row.get("revenue_db_sum"))
+                          cost_sum = _to_float(row.get("cost_sum"))
+                          cost_present = (row.get("cost_present") or "").strip().lower()
+                          channels_map_d2[(tenant.lower(), country.lower())].append(
+                              {
+                                  "channel": channel,
+                                  "status": st,
+                                  "reason": reason,
+                                  "row_count": row_count,
+                                  "revenue_db_sum": revenue_db_sum,
+                                  "cost_sum": cost_sum,
+                                  "cost_present": cost_present,
+                              }
+                          )
+          except Exception as exc:
+              import sys
+
+              msg = str(exc).replace("\n", " ").replace("\r", " ").strip()
+              if len(msg) > 200:
+                  msg = msg[:200] + "…"
+              print(
+                  f"⚠️ Failed to parse channels CSV D-2 (forecast_d1_readiness_channels_report.csv): {exc.__class__.__name__}: {msg}",
+                  file=sys.stderr,
+              )
+
+          try:
+              if channels14_csv_d2 and os.path.exists(channels14_csv_d2):
+                  with open(channels14_csv_d2, "r", encoding="utf-8", newline="") as f:
+                      reader = csv.DictReader(f)
+                      for row in reader:
+                          tenant = (row.get("tenant") or "").strip() or "?"
+                          country = (row.get("country") or "").strip() or "?"
+                          channel = (row.get("channel") or "").strip() or "?"
+                          st = (row.get("status") or "").strip() or "?"
+                          reason = (row.get("reason") or "").strip()
+                          row_count = _to_int(row.get("row_count"))
+                          actuals_sum = _to_float(row.get("actuals_sum"))
+                          channels14_map_d2[(tenant.lower(), country.lower())].append(
+                              {
+                                  "channel": channel,
+                                  "status": st,
+                                  "reason": reason,
+                                  "row_count": row_count,
+                                  "actuals_sum": actuals_sum,
+                              }
+                          )
+          except Exception as exc:
+              import sys
+
+              msg = str(exc).replace("\n", " ").replace("\r", " ").strip()
+              if len(msg) > 200:
+                  msg = msg[:200] + "…"
+              print(
+                  f"⚠️ Failed to parse channels14 CSV D-2 (forecast_d1_readiness_channels14_report.csv): {exc.__class__.__name__}: {msg}",
+                  file=sys.stderr,
+              )
+
+          try:
+              with open(report_csv, "r", encoding="utf-8", newline="") as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      tenant = (row.get("tenant") or "").strip() or "?"
+                      country = (row.get("country") or "").strip() or "?"
+                      st = (row.get("status") or "").strip() or "?"
+                      reason = (row.get("reason") or "").strip()
+                      is_req = (row.get("is_required") or "").strip() == "yes"
+                      row_count = _to_int(row.get("row_count"))
+                      actuals_sum = _to_float(row.get("actuals_sum"))
+                      revenue_db_sum = _to_float(row.get("revenue_db_sum"))
+                      cost_sum = _to_float(row.get("cost_sum"))
+                      cost_present = (row.get("cost_present") or "").strip().lower()
+                      status_13 = (row.get("status_13") or "").strip() or st
+                      reason_13 = (row.get("reason_13") or "").strip()
+                      table_fq_14 = (row.get("table_fq_14") or "").strip()
+                      domain = (row.get("domain") or "").strip()
+                      status_14 = (row.get("status_14") or "").strip()
+                      reason_14 = (row.get("reason_14") or "").strip()
+                      row_count_14 = _to_int(row.get("row_count_14"))
+                      actuals_sum_14 = _to_float(row.get("actuals_sum_14"))
+                      revenue_db_sum_14 = _to_float(row.get("revenue_db_sum_14"))
+                      cost_sum_14 = _to_float(row.get("cost_sum_14"))
+                      cost_present_14 = (row.get("cost_present_14") or "").strip().lower()
+
+                      tenant_map[tenant].append(
+                          {
+                              "country": country,
+                              "status": st,
+                              "reason": reason,
+                              "is_required": is_req,
+                              "row_count": row_count,
+                              "actuals_sum": actuals_sum,
+                              "revenue_db_sum": revenue_db_sum,
+                              "cost_sum": cost_sum,
+                              "cost_present": cost_present,
+                              "status_13": status_13,
+                              "reason_13": reason_13,
+                              "table_fq_14": table_fq_14,
+                              "domain": domain,
+                              "status_14": status_14,
+                              "reason_14": reason_14,
+                              "row_count_14": row_count_14,
+                              "actuals_sum_14": actuals_sum_14,
+                              "revenue_db_sum_14": revenue_db_sum_14,
+                              "cost_sum_14": cost_sum_14,
+                              "cost_present_14": cost_present_14,
+                          }
+                      )
+
+                      if st == "FAIL":
+                          if is_req:
+                              req_fail_list.append((tenant.lower(), tenant, country.lower(), country, reason))
+                          else:
+                              opt_fail_list.append((tenant.lower(), tenant, country.lower(), country, reason))
+          except Exception:
+              pass
+
+          try:
+              if report_csv_d2 and os.path.exists(report_csv_d2):
+                  with open(report_csv_d2, "r", encoding="utf-8", newline="") as f:
+                      reader = csv.DictReader(f)
+                      for row in reader:
+                          tenant = (row.get("tenant") or "").strip() or "?"
+                          country = (row.get("country") or "").strip() or "?"
+                          st = (row.get("status") or "").strip() or "?"
+                          reason = (row.get("reason") or "").strip()
+                          row_count = _to_int(row.get("row_count"))
+                          actuals_sum = _to_float(row.get("actuals_sum"))
+                          revenue_db_sum = _to_float(row.get("revenue_db_sum"))
+                          cost_sum = _to_float(row.get("cost_sum"))
+                          cost_present = (row.get("cost_present") or "").strip().lower()
+                          status_13 = (row.get("status_13") or "").strip() or st
+                          table_fq_14 = (row.get("table_fq_14") or "").strip()
+                          domain = (row.get("domain") or "").strip()
+                          status_14 = (row.get("status_14") or "").strip()
+                          row_count_14 = _to_int(row.get("row_count_14"))
+                          actuals_sum_14 = _to_float(row.get("actuals_sum_14"))
+                          revenue_db_sum_14 = _to_float(row.get("revenue_db_sum_14"))
+                          cost_sum_14 = _to_float(row.get("cost_sum_14"))
+                          tenant_country = (tenant.lower(), country.lower())
+                          report_map_d2[tenant_country] = {
+                              "country": country,
+                              "status": st,
+                              "reason": reason,
+                              "row_count": row_count,
+                              "actuals_sum": actuals_sum,
+                              "revenue_db_sum": revenue_db_sum,
+                              "cost_sum": cost_sum,
+                              "cost_present": cost_present,
+                              "status_13": status_13,
+                              "table_fq_14": table_fq_14,
+                              "domain": domain,
+                              "status_14": status_14,
+                              "row_count_14": row_count_14,
+                              "actuals_sum_14": actuals_sum_14,
+                              "revenue_db_sum_14": revenue_db_sum_14,
+                              "cost_sum_14": cost_sum_14,
+                          }
+          except Exception:
+              pass
+
+          tenant_items: list[tuple[int, int, str, str]] = []
+          for tenant, entries in tenant_map.items():
+              has_req_fail = any(str(e.get("status", "")) == "FAIL" and bool(e.get("is_required")) for e in entries)
+              has_opt_fail = any(str(e.get("status", "")) == "FAIL" and (not bool(e.get("is_required"))) for e in entries)
+              tenant_items.append((0 if has_req_fail else 1, 0 if has_opt_fail else 1, tenant.lower(), tenant))
+          tenant_items.sort()
+
+          tenant_limit = MAX_TENANTS_DISPLAY
+          for _, _, _, tenant in tenant_items[:tenant_limit]:
+              entries = tenant_map.get(tenant, [])
+              decorated: list[tuple[int, int, str, int]] = []
+              for idx, e in enumerate(entries):
+                  country = str(e.get("country", "") or "?")
+                  st = str(e.get("status", "") or "?")
+                  is_req = bool(e.get("is_required"))
+                  fail_rank = 0 if st == "FAIL" else 1
+                  sev_rank = 0 if (st == "FAIL" and is_req) else 1 if st == "FAIL" else 2
+                  decorated.append((fail_rank, sev_rank, country.lower(), idx))
+              decorated.sort()
+
+              def _icon14(entry: dict[str, object]) -> str:
+                  table_fq_14 = str(entry.get("table_fq_14", "") or "")
+                  if not table_fq_14.strip():
+                      return "—"
+                  st14 = str(entry.get("status_14", "") or "").strip().upper()
+                  if st14 == "PASS":
+                      return "✅"
+                  if st14 == "FAIL":
+                      return "❌"
+                  return "❓"
+
+              def _rev_cost_icons(
+                  *, status_13: str, revenue_db_sum: float, cost_sum: float, cost_present: str, missing: bool = False
+              ) -> tuple[str, str]:
+                  if missing:
+                      return "—", "—"
+                  if status_13 == "PASS":
+                      rev_icon = "✅" if abs(revenue_db_sum) > EPS else "⚠️"
+                      if cost_present == "yes":
+                          cost_icon = "✅" if abs(cost_sum) > EPS else "⚠️"
+                      else:
+                          cost_icon = "⚠️"
+                      return rev_icon, cost_icon
+                  return "❌", "❌"
+
+              row_items: list[tuple[str, list[str], str]] = []
+              row_items.append(
+                  ("country/channel", ["D1 rev", "D1 cost", "D1 14", "D2 rev", "D2 cost", "D2 14"], "")
+              )
+
+              channel_lines_added = 0
+              channel_lines_truncated = False
+              for _, _, _, idx in decorated:
+                  e = entries[idx]
+                  country = str(e.get("country", "") or "?")
+                  st = str(e.get("status", "") or "?")
+                  reason = str(e.get("reason", "") or "").strip()
+                  is_req = bool(e.get("is_required"))
+                  row_count = _to_int(e.get("row_count"))
+                  actuals_sum = _to_float(e.get("actuals_sum"))
+                  revenue_db_sum = _to_float(e.get("revenue_db_sum"))
+                  cost_sum = _to_float(e.get("cost_sum"))
+                  cost_present = str(e.get("cost_present", "") or "").strip().lower()
+                  status_13 = str(e.get("status_13", "") or "").strip() or st
+                  table_fq_14 = str(e.get("table_fq_14", "") or "")
+                  domain = str(e.get("domain", "") or "")
+                  status_14 = str(e.get("status_14", "") or "").strip()
+                  row_count_14 = _to_int(e.get("row_count_14"))
+                  actuals_sum_14 = _to_float(e.get("actuals_sum_14"))
+                  revenue_db_sum_14 = _to_float(e.get("revenue_db_sum_14"))
+                  cost_sum_14 = _to_float(e.get("cost_sum_14"))
+
+                  tenant_country_d2 = (str(tenant).strip().lower(), str(country).strip().lower())
+                  e2 = report_map_d2.get(tenant_country_d2, {})
+                  missing_d2 = not bool(e2)
+                  status_13_d2 = str(e2.get("status_13", "") or "").strip().upper()
+                  rev_sum_d2 = _to_float(e2.get("revenue_db_sum"))
+                  cost_sum_d2 = _to_float(e2.get("cost_sum"))
+                  cost_present_d2 = str(e2.get("cost_present", "") or "").strip().lower()
+
+                  d1_rev_icon, d1_cost_icon = _rev_cost_icons(
+                      status_13=status_13, revenue_db_sum=revenue_db_sum, cost_sum=cost_sum, cost_present=cost_present
+                  )
+                  d2_rev_icon, d2_cost_icon = _rev_cost_icons(
+                      status_13=status_13_d2,
+                      revenue_db_sum=rev_sum_d2,
+                      cost_sum=cost_sum_d2,
+                      cost_present=cost_present_d2,
+                      missing=missing_d2,
+                  )
+                  d1_14_icon = _icon14(e)
+                  d2_14_icon = "—" if missing_d2 else _icon14(e2)
+
+                  if st == "PASS":
+                      icon = "✅"
+                      suffix = ""
+                  else:
+                      icon = "❌" if is_req else "⚠️"
+                      det = reason or "FAIL"
+                      if det.startswith("14_"):
+                          det = (
+                              f"{det} (domain={domain or '?'}, rows={row_count_14}, sum_14={actuals_sum_14:.6f}, "
+                              f"rev_14={revenue_db_sum_14:.6f}, cost_14={cost_sum_14:.6f})"
+                          )
+                      elif det in ("no_rows_for_date", "actuals_zero"):
+                          det = (
+                              f"{det} ({row_count} rows, sum={actuals_sum:.6f}, "
+                              f"rev={revenue_db_sum:.6f}, cost={cost_sum:.6f})"
+                          )
+                      else:
+                          det = f"{det} (rev={revenue_db_sum:.6f}, cost={cost_sum:.6f})"
+                      suffix = f" — `{slack_escape(det)}`"
+
+                  row_items.append(
+                      (
+                          f"{icon} {slack_escape(country)}",
+                          [d1_rev_icon, d1_cost_icon, d1_14_icon, d2_rev_icon, d2_cost_icon, d2_14_icon],
+                          suffix,
+                      )
+                  )
+
+                  if not channel_lines_truncated:
+                      tenant_country = (str(tenant).strip().lower(), str(country).strip().lower())
+                      ch_items = channels_map.get(tenant_country, [])
+                      ch_items_d2 = channels_map_d2.get(tenant_country, [])
+                      ch_d2_map = {
+                          (str(x.get("channel", "") or "").strip().casefold()): x for x in ch_items_d2 if isinstance(x, dict)
+                      }
+                      ch14_items = channels14_map.get(tenant_country, [])
+                      ch14_items_d2 = channels14_map_d2.get(tenant_country, [])
+                      ch14_map = {
+                          (str(x.get("channel", "") or "").strip().casefold()): x for x in ch14_items if isinstance(x, dict)
+                      }
+                      ch14_d2_map = {
+                          (str(x.get("channel", "") or "").strip().casefold()): x for x in ch14_items_d2 if isinstance(x, dict)
+                      }
+
+                      for ch in ch_items:
+                          if channel_lines_added >= MAX_CHANNEL_LINES_PER_TENANT:
+                              row_items.append(("  • _(channel details truncated; see artifact)_", ["", "", "", "", "", ""], ""))
+                              channel_lines_truncated = True
+                              break
+
+                          ch_name = str(ch.get("channel", "") or "?")
+                          ch_status = str(ch.get("status", "") or "?").strip().upper()
+                          ch_reason = str(ch.get("reason", "") or "").strip()
+                          ch_rev = _to_float(ch.get("revenue_db_sum"))
+                          ch_cost = _to_float(ch.get("cost_sum"))
+                          ch_cost_present = str(ch.get("cost_present", "") or "").strip().lower()
+
+                          table_fq_14_d2 = str(e2.get("table_fq_14", "") or "") if not missing_d2 else ""
+                          status_14_d2 = str(e2.get("status_14", "") or "").strip().upper() if not missing_d2 else ""
+
+                          d1_14_icon_ch = "—"
+                          if table_fq_14.strip():
+                              if (status_14 or "").strip().upper() != "PASS":
+                                  d1_14_icon_ch = "❌"
+                              else:
+                                  ch14 = ch14_map.get(ch_name.strip().casefold(), {})
+                                  if not ch14:
+                                      d1_14_icon_ch = "⚠️"
+                                  else:
+                                      ch14_status = str(ch14.get("status", "") or "?").strip().upper()
+                                      ch14_row_count = _to_int(ch14.get("row_count"))
+                                      ch14_actuals_sum = _to_float(ch14.get("actuals_sum"))
+                                      if ch14_status in ("SKIP", "ERROR"):
+                                          d1_14_icon_ch = "⚠️"
+                                      else:
+                                          d1_14_icon_ch = "✅" if (ch14_row_count > 0 and abs(ch14_actuals_sum) > EPS) else "⚠️"
+
+                          d2_14_icon_ch = "—" if missing_d2 else "⚠️"
+                          if missing_d2:
+                              d2_14_icon_ch = "—"
+                          elif not table_fq_14_d2.strip():
+                              d2_14_icon_ch = "—"
+                          elif status_14_d2 != "PASS":
+                              d2_14_icon_ch = "❌"
+                          else:
+                              ch14_2 = ch14_d2_map.get(ch_name.strip().casefold(), {})
+                              if not ch14_2:
+                                  d2_14_icon_ch = "⚠️"
+                              else:
+                                  ch14_2_status = str(ch14_2.get("status", "") or "?").strip().upper()
+                                  ch14_2_row_count = _to_int(ch14_2.get("row_count"))
+                                  ch14_2_actuals_sum = _to_float(ch14_2.get("actuals_sum"))
+                                  if ch14_2_status in ("SKIP", "ERROR"):
+                                      d2_14_icon_ch = "⚠️"
+                                  else:
+                                      d2_14_icon_ch = "✅" if (ch14_2_row_count > 0 and abs(ch14_2_actuals_sum) > EPS) else "⚠️"
+
+                          if status_13 != "PASS":
+                              d1_rev_icon = "❌"
+                              d1_cost_icon = "❌"
+                              suffix = ""
+                          elif ch_status in ("SKIP", "ERROR"):
+                              d1_rev_icon = "⚠️"
+                              d1_cost_icon = "⚠️"
+                              suffix = f" — `{slack_escape(ch_reason or ch_status)}`" if (ch_reason or ch_status) else ""
+                          else:
+                              d1_rev_icon = "✅" if abs(ch_rev) > EPS else "⚠️"
+                              if ch_cost_present == "yes":
+                                  d1_cost_icon = "✅" if abs(ch_cost) > EPS else "⚠️"
+                              else:
+                                  d1_cost_icon = "⚠️"
+                              suffix = ""
+
+                          ch2 = ch_d2_map.get(ch_name.strip().casefold(), {})
+                          if not ch2:
+                              d2_rev_icon = "—" if missing_d2 else "⚠️"
+                              d2_cost_icon = "—" if missing_d2 else "⚠️"
+                              if not suffix and not missing_d2:
+                                  suffix = " — `D-2:missing_channel_row`"
+                          else:
+                              ch2_status = str(ch2.get("status", "") or "?").strip().upper()
+                              ch2_reason = str(ch2.get("reason", "") or "").strip()
+                              ch2_rev = _to_float(ch2.get("revenue_db_sum"))
+                              ch2_cost = _to_float(ch2.get("cost_sum"))
+                              ch2_cost_present = str(ch2.get("cost_present", "") or "").strip().lower()
+                              if status_13_d2 != "PASS":
+                                  d2_rev_icon = "❌"
+                                  d2_cost_icon = "❌"
+                              elif ch2_status in ("SKIP", "ERROR"):
+                                  d2_rev_icon = "⚠️"
+                                  d2_cost_icon = "⚠️"
+                                  if not suffix and (ch2_reason or ch2_status):
+                                      suffix = f" — `D-2:{slack_escape(ch2_reason or ch2_status)}`"
+                              else:
+                                  d2_rev_icon = "✅" if abs(ch2_rev) > EPS else "⚠️"
+                                  if ch2_cost_present == "yes":
+                                      d2_cost_icon = "✅" if abs(ch2_cost) > EPS else "⚠️"
+                                  else:
+                                      d2_cost_icon = "⚠️"
+
+                          row_items.append(
+                              (
+                                  f"  • {slack_escape(ch_name)}",
+                                  [d1_rev_icon, d1_cost_icon, d1_14_icon_ch, d2_rev_icon, d2_cost_icon, d2_14_icon_ch],
+                                  suffix,
+                              )
+                          )
+                          channel_lines_added += 1
+
+              section_text = render_table_section_mrkdwn(tenant=tenant, row_items=row_items)
+
+              blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": section_text}})
+
+          if len(tenant_items) > tenant_limit:
+              blocks.append(
+                  {
+                      "type": "section",
+                      "text": {
+                          "type": "mrkdwn",
+                          "text": f"_(+{len(tenant_items) - tenant_limit} more tenants in artifact)_",
+                      },
+                  }
+              )
+
+          blocks.append({"type": "divider"})
+
+          req_mark = "✓" if req_failed == 0 else "❌"
+          ctx = (
+              f"📅 D-1 `{slack_escape(patch_date or '?')}` | D-2 `{slack_escape(patch_date_d2 or '?')}`  |  🕐 `{slack_escape(time_part)} {tz_abbrev}`  |  "
+              f"Policy: `{slack_escape(policy or '?')}`  |  Required: {req_ok}/{req_total} {req_mark}"
+          )
+          if opt_total > 0:
+              opt_mark = "⚠️" if opt_failed > 0 else "✓"
+              ctx += f"  |  Optional: {opt_failed}/{opt_total} {opt_mark}"
+
+          blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": ctx}]})
+
+          if req_failed > 0:
+              req_fail_list.sort()
+              lines = [f"• `{t}/{c}` — {r}" for _, t, _, c, r in req_fail_list[:MAX_REQ_FAILURES_DISPLAY]]
+              if len(req_fail_list) > MAX_REQ_FAILURES_DISPLAY:
+                  lines.append(f"… (+{len(req_fail_list) - MAX_REQ_FAILURES_DISPLAY} more)")
+              blocks.append(
+                  {
+                      "type": "section",
+                      "text": {
+                          "type": "mrkdwn",
+                          "text": f"*🔴 Required failures ({req_failed}):*\n" + "\n".join(lines),
+                      },
+                  }
+              )
+
+          if opt_failed > 0:
+              opt_fail_list.sort()
+              lines = [f"• `{t}/{c}` — {r}" for _, t, _, c, r in opt_fail_list[:MAX_OPT_FAILURES_DISPLAY]]
+              if len(opt_fail_list) > MAX_OPT_FAILURES_DISPLAY:
+                  lines.append(f"… (+{len(opt_fail_list) - MAX_OPT_FAILURES_DISPLAY} more)")
+              blocks.append(
+                  {
+                      "type": "section",
+                      "text": {
+                          "type": "mrkdwn",
+                          "text": f"*⚠️ Optional warnings ({opt_failed}):*\n" + "\n".join(lines),
+                      },
+                  }
+              )
+
+          if run_url:
+              blocks.append(
+                  {
+                      "type": "actions",
+                      "elements": [
+                          {
+                              "type": "button",
+                              "text": {"type": "plain_text", "text": "View Run Details"},
+                              "url": run_url,
+                          }
+                      ],
+                  }
+              )
+
+          payload = {"text": slack_escape(header_text_plain), "blocks": blocks}
+          print(json.dumps(payload))
+          PY
+          }
+
+          post_scope() {
+            local outdir="$1"
+            local outdir_d2="$2"
+            local scope_label="${3:-}"
+
+            local summary_json="${outdir}/forecast_d1_readiness_summary.json"
+            local report_csv="${outdir}/forecast_d1_readiness_report.csv"
+            local channels_csv="${outdir}/forecast_d1_readiness_channels_report.csv"
+            local channels14_csv="${outdir}/forecast_d1_readiness_channels14_report.csv"
+
+            local summary_json_d2="${outdir_d2}/forecast_d1_readiness_summary.json"
+            local report_csv_d2="${outdir_d2}/forecast_d1_readiness_report.csv"
+            local channels_csv_d2="${outdir_d2}/forecast_d1_readiness_channels_report.csv"
+            local channels14_csv_d2="${outdir_d2}/forecast_d1_readiness_channels14_report.csv"
+
+            local payload="$(
+              SUMMARY_JSON="$summary_json" \
+              REPORT_CSV="$report_csv" \
+              CHANNELS_CSV="$channels_csv" \
+              CHANNELS14_CSV="$channels14_csv" \
+              SUMMARY_JSON_D2="$summary_json_d2" \
+              REPORT_CSV_D2="$report_csv_d2" \
+              CHANNELS_CSV_D2="$channels_csv_d2" \
+              CHANNELS14_CSV_D2="$channels14_csv_d2" \
+              RUN_URL="$RUN_URL" \
+              GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
+              SCOPE_LABEL="$scope_label" \
+                build_payload
+            )"
+
+            curl -sS -X POST "$SLACK_WEBHOOK_URL" \
+              -H 'Content-Type: application/json' \
+              --data "$payload"
+          }
+
+          if [[ -n "${MAIN_STATUS:-}" && "${MAIN_STATUS}" != "NOOP" && -n "${OUTDIR:-}" ]]; then
+            post_scope "$OUTDIR" "$OUTDIR_D2" "${SCOPE_LABEL:-main}"
+          fi
+
+          if [[ -n "${PROTEINACO_STATUS:-}" && "${PROTEINACO_STATUS}" != "NOOP" && -n "${PROTEINACO_OUTDIR:-}" ]]; then
+            post_scope "$PROTEINACO_OUTDIR" "$PROTEINACO_OUTDIR_D2" "${PROTEINACO_SCOPE_LABEL:-proteinaco}"
+          fi
+
+          if [[ -n "${RUZOVYSLON_STATUS:-}" && "${RUZOVYSLON_STATUS}" != "NOOP" && -n "${RUZOVYSLON_OUTDIR:-}" ]]; then
+            post_scope "$RUZOVYSLON_OUTDIR" "$RUZOVYSLON_OUTDIR_D2" "${RUZOVYSLON_SCOPE_LABEL:-ruzovyslon}"
+          fi
+
+          if [[ -n "${AUTODOPLNKY_STATUS:-}" && "${AUTODOPLNKY_STATUS}" != "NOOP" && -n "${AUTODOPLNKY_OUTDIR:-}" ]]; then
+            post_scope "$AUTODOPLNKY_OUTDIR" "$AUTODOPLNKY_OUTDIR_D2" "${AUTODOPLNKY_SCOPE_LABEL:-autodoplnky}"
+          fi
+
+          if [[ -n "${DENATURA_STATUS:-}" && "${DENATURA_STATUS}" != "NOOP" && -n "${DENATURA_OUTDIR:-}" ]]; then
+            post_scope "$DENATURA_OUTDIR" "$DENATURA_OUTDIR_D2" "${DENATURA_SCOPE_LABEL:-denatura}"
+          fi
+
+          if [[ -n "${CERANO_LIVERO_STATUS:-}" && "${CERANO_LIVERO_STATUS}" != "NOOP" && -n "${CERANO_LIVERO_OUTDIR:-}" ]]; then
+            post_scope "$CERANO_LIVERO_OUTDIR" "$CERANO_LIVERO_OUTDIR_D2" "${CERANO_LIVERO_SCOPE_LABEL:-cerano+livero}"
+          fi
+
+      - name: Fail workflow if guardrail failed
+        if: >-
+          ${{
+            inputs.send_test_slack_messages != true &&
+            (
+              (steps.guardrail.outputs.exit_code != '' && steps.guardrail.outputs.exit_code != '0') ||
+              (steps.guardrail_proteinaco.outputs.exit_code != '' && steps.guardrail_proteinaco.outputs.exit_code != '0') ||
+              (steps.guardrail_ruzovyslon.outputs.exit_code != '' && steps.guardrail_ruzovyslon.outputs.exit_code != '0') ||
+              (steps.guardrail_autodoplnky.outputs.exit_code != '' && steps.guardrail_autodoplnky.outputs.exit_code != '0')
+            )
+          }}
+        run: exit 1
+
+  stats_30d:
+    name: Forecast D-1 success rate (30d)
+    if: >-
+      ${{
+        (github.event_name == 'schedule' && (github.event.schedule == '0 8 * * *' || github.event.schedule == '0 9 * * *')) ||
+        (github.event_name == 'workflow_dispatch' && inputs.send_success_rate == true)
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Authenticate to GCP via WIF (and install gcloud/bq/gsutil)
+        uses: ./.github/actions/setup-gcp-auth
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - name: Run success rate (30d)
+        id: stats
+        continue-on-error: true
+        env:
+          PATCH_DATE_LOCAL: ${{ inputs.patch_date_local }}
+          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          OUTDIR="forecast-d1-readiness-stats-out"
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+
+          CMD=(
+            python scripts/guardrails/forecast_d1_readiness.py
+            --outdir "$OUTDIR"
+            --timezone "Europe/Prague"
+            --mode "$MODE"
+            --kind "success_rate_30d"
+          )
+          if [[ -n "${PATCH_DATE_LOCAL:-}" ]]; then
+            CMD+=( --patch-date-local "$PATCH_DATE_LOCAL" )
+          fi
+
+          printf 'Running:'
+          printf ' %q' "${CMD[@]}"
+          printf '\n'
+          EXIT=0
+          "${CMD[@]}" || EXIT=$?
+
+          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          if [ -f "$SUMMARY_JSON" ]; then
+            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          p = Path(os.environ["SUMMARY_JSON"])
+          s = json.loads(p.read_text(encoding="utf-8"))
+
+          def _v(key: str, default: str = "") -> str:
+              v = s.get(key, default)
+              return "" if v is None else str(v)
+
+          print(f"status={_v('status')}")
+          print(f"patch_date_local={_v('patch_date_local')}")
+          print(f"window_start={_v('window_start')}")
+          print(f"window_end={_v('window_end')}")
+          print(f"window_start_d2={_v('window_start_d2')}")
+          print(f"window_end_d2={_v('window_end_d2')}")
+          print(f"days={_v('days', '30')}")
+          print(f"errors_total={_v('errors_total', '0')}")
+          PY
+          else
+            echo "status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
+            echo "window_start=" >> "$GITHUB_OUTPUT"
+            echo "window_end=" >> "$GITHUB_OUTPUT"
+            echo "window_start_d2=" >> "$GITHUB_OUTPUT"
+            echo "window_end_d2=" >> "$GITHUB_OUTPUT"
+            echo "days=30" >> "$GITHUB_OUTPUT"
+            echo "errors_total=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload stats artifacts
+        if: always() && steps.stats.outputs.outdir != ''
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: forecast-d1-readiness-stats-${{ github.run_id }}
+          path: ${{ steps.stats.outputs.outdir }}/
+          retention-days: 90
+
+      - name: Slack alert (30d success rate)
+        if: always() && steps.stats.outputs.status != 'NOOP' && inputs.dry_run != true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL_FINAL_DATA_ALERTS || secrets.SLACK_WEBHOOK_URL }}
+          OUTDIR: ${{ steps.stats.outputs.outdir }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SLACK_WEBHOOK_URL}" ]; then
+            echo "ℹ️ No Slack webhook secret configured (SLACK_WEBHOOK_URL_FINAL_DATA_ALERTS or SLACK_WEBHOOK_URL); skipping Slack notification."
+            exit 0
+          fi
+
+          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
+          REPORT_CSV="${OUTDIR}/forecast_d1_readiness_success_rate_report.csv"
+          CHANNELS_CSV="${OUTDIR}/forecast_d1_readiness_success_rate_channels_report.csv"
+          CHANNELS14_CSV="${OUTDIR}/forecast_d1_readiness_success_rate_channels14_report.csv"
+
+          PAYLOAD="$(
+            SUMMARY_JSON="$SUMMARY_JSON" \
+            REPORT_CSV="$REPORT_CSV" \
+            CHANNELS_CSV="$CHANNELS_CSV" \
+            CHANNELS14_CSV="$CHANNELS14_CSV" \
+            RUN_URL="$RUN_URL" \
+              python - <<'PY'
+          import csv
+          from collections import defaultdict
+          from datetime import datetime, timedelta
+          import json
+          import os
+
+          summary_path = os.environ.get("SUMMARY_JSON", "")
+          report_csv = os.environ.get("REPORT_CSV", "")
+          channels_csv = os.environ.get("CHANNELS_CSV", "")
+          channels14_csv = os.environ.get("CHANNELS14_CSV", "")
+          run_url = os.environ.get("RUN_URL", "")
+
+          from scripts.guardrails.slack_formatter import _to_int, render_table_section_mrkdwn, slack_escape
+
+          # Slack Block Kit limits / readability caps
+          MAX_TENANTS_DISPLAY = 15
+          MAX_CHANNEL_LINES_PER_TENANT = 25
+
+          # Color thresholds
+          GREEN_AT = 90
+          YELLOW_AT = 70
+
+          def rate_cell(v: object) -> str:
+              s = str(v or "").strip()
+              if not s:
+                  return "—"
+              try:
+                  p = int(float(s))
+              except Exception:
+                  return "—"
+              if p >= GREEN_AT:
+                  return f"🟩{p}%"
+              if p >= YELLOW_AT:
+                  return f"🟨{p}%"
+              return f"🟥{p}%"
+
+          status = "?"
+          patch_date = ""
+          now_local = ""
+          gh_schedule = ""
+          window_start = ""
+          window_end = ""
+          window_start_d2 = ""
+          window_end_d2 = ""
+          days = "30"
+          errors_total = 0
+          try:
+              with open(summary_path, "r", encoding="utf-8") as f:
+                  s = json.load(f)
+              status = str(s.get("status", "?"))
+              patch_date = str(s.get("patch_date_local", "") or "")
+              now_local = str(s.get("now_local", "") or "")
+              gh_schedule = str(s.get("github_event_schedule", "") or "")
+              window_start = str(s.get("window_start", "") or "")
+              window_end = str(s.get("window_end", "") or "")
+              window_start_d2 = str(s.get("window_start_d2", "") or "")
+              window_end_d2 = str(s.get("window_end_d2", "") or "")
+              days = str(s.get("days", "30") or "30")
+              errors_total = _to_int(s.get("errors_total"))
+          except Exception:
+              pass
+
+          tz_abbrev = "Europe/Prague"
+          try:
+              dt = datetime.fromisoformat(now_local)
+              off = dt.utcoffset()
+              if off == timedelta(hours=1):
+                  tz_abbrev = "CET"
+              elif off == timedelta(hours=2):
+                  tz_abbrev = "CEST"
+          except Exception:
+              pass
+
+          time_part = "10:00"
+          try:
+              parts = (gh_schedule or "").strip().split()
+              if len(parts) >= 2 and parts[0].isdigit():
+                  m = int(parts[0])
+                  if 0 <= m <= 59:
+                      time_part = f"10:{m:02d}"
+          except Exception:
+              pass
+
+          icon = "✅" if errors_total == 0 else "⚠️"
+          title_text = "Forecast D-1 Readiness: 30d Success Rate"
+          header_mrkdwn = (
+              f"{icon} *{slack_escape(title_text)}* — "
+              f"📅 D-1 `{slack_escape(window_start or '?')}`→`{slack_escape(window_end or '?')}` "
+              f"| D-2 `{slack_escape(window_start_d2 or '?')}`→`{slack_escape(window_end_d2 or '?')}` "
+              f"| 🕐 `{slack_escape(time_part)} {tz_abbrev}`"
+          )
+
+          blocks: list[dict] = []
+          blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": header_mrkdwn}})
+
+          tenant_map: dict[str, list[dict[str, object]]] = defaultdict(list)
+          channels_map: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
+          channels14_map: dict[tuple[str, str, str], dict[str, object]] = {}
+
+          try:
+              with open(report_csv, "r", encoding="utf-8", newline="") as f:
+                  reader = csv.DictReader(f)
+                  for row in reader:
+                      tenant = (row.get("tenant") or "").strip() or "?"
+                      country = (row.get("country") or "").strip() or "?"
+                      tenant_map[tenant].append(row)
+          except Exception:
+              pass
+
+          try:
+              if channels_csv and os.path.exists(channels_csv):
+                  with open(channels_csv, "r", encoding="utf-8", newline="") as f:
+                      reader = csv.DictReader(f)
+                      for row in reader:
+                          tenant = (row.get("tenant") or "").strip() or "?"
+                          country = (row.get("country") or "").strip() or "?"
+                          channels_map[(tenant.lower(), country.lower())].append(row)
+          except Exception:
+              pass
+
+          try:
+              if channels14_csv and os.path.exists(channels14_csv):
+                  with open(channels14_csv, "r", encoding="utf-8", newline="") as f:
+                      reader = csv.DictReader(f)
+                      for row in reader:
+                          tenant = (row.get("tenant") or "").strip() or "?"
+                          country = (row.get("country") or "").strip() or "?"
+                          channel = (row.get("channel") or "").strip() or "?"
+                          channels14_map[(tenant.lower(), country.lower(), channel.casefold())] = row
+          except Exception:
+              pass
+
+          tenant_items = sorted([(t.lower(), t) for t in tenant_map.keys()])
+          for _, tenant in tenant_items[:MAX_TENANTS_DISPLAY]:
+              entries = tenant_map.get(tenant, [])
+              decorated_entries: list[tuple[str, dict[str, object]]] = []
+              for r in entries:
+                  c = str(r.get("country") or "").lower()
+                  decorated_entries.append((c, r))
+              decorated_entries.sort()
+              entries_sorted = [r for _, r in decorated_entries]
+
+              row_items: list[tuple[str, list[str], str]] = []
+              row_items.append(("country/channel", ["D1 rev", "D1 cost", "D1 14", "D2 rev", "D2 cost", "D2 14"], ""))
+
+              channel_lines_added = 0
+              channel_lines_truncated = False
+              for r in entries_sorted:
+                  country = (r.get("country") or "?").strip()
+                  d1_rev = rate_cell(r.get("d1_rev_rate"))
+                  d1_cost = rate_cell(r.get("d1_cost_rate"))
+                  d1_14 = rate_cell(r.get("d1_14_rate"))
+                  d2_rev = rate_cell(r.get("d2_rev_rate"))
+                  d2_cost = rate_cell(r.get("d2_cost_rate"))
+                  d2_14 = rate_cell(r.get("d2_14_rate"))
+                  row_items.append((f"✅ {slack_escape(country)}", [d1_rev, d1_cost, d1_14, d2_rev, d2_cost, d2_14], ""))
+
+                  if not channel_lines_truncated:
+                      ch_items = channels_map.get((tenant.lower(), country.lower()), [])
+                      for ch in ch_items:
+                          if channel_lines_added >= MAX_CHANNEL_LINES_PER_TENANT:
+                              row_items.append(("  • _(channel details truncated; see artifact)_", ["", "", "", "", "", ""], ""))
+                              channel_lines_truncated = True
+                              break
+                          ch_name = (ch.get("channel") or "?").strip()
+                          d1_rev = rate_cell(ch.get("d1_rev_rate"))
+                          d1_cost = rate_cell(ch.get("d1_cost_rate"))
+                          d2_rev = rate_cell(ch.get("d2_rev_rate"))
+                          d2_cost = rate_cell(ch.get("d2_cost_rate"))
+                          ch14 = channels14_map.get((tenant.lower(), country.lower(), ch_name.casefold()), {})
+                          d1_14 = rate_cell(ch14.get("d1_14_rate"))
+                          d2_14 = rate_cell(ch14.get("d2_14_rate"))
+                          row_items.append((f"  • {slack_escape(ch_name)}", [d1_rev, d1_cost, d1_14, d2_rev, d2_cost, d2_14], ""))
+                          channel_lines_added += 1
+
+              section_text = render_table_section_mrkdwn(tenant=tenant, row_items=row_items)
+              blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": section_text}})
+
+          if len(tenant_items) > MAX_TENANTS_DISPLAY:
+              blocks.append(
+                  {
+                      "type": "section",
+                      "text": {
+                          "type": "mrkdwn",
+                          "text": f"_(+{len(tenant_items) - MAX_TENANTS_DISPLAY} more tenants in artifact)_",
+                      },
+                  }
+              )
+
+          if run_url:
+              blocks.append(
+                  {
+                      "type": "actions",
+                      "elements": [
+                          {
+                              "type": "button",
+                              "text": {"type": "plain_text", "text": "View Run Details"},
+                              "url": run_url,
+                          }
+                      ],
+                  }
+              )
+
+          payload = {"text": slack_escape(title_text), "blocks": blocks}
+          print(json.dumps(payload))
+          PY
+          )"
+
+          curl -sS -X POST "$SLACK_WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            --data "$PAYLOAD"
+
+      - name: Fail workflow if stats failed
+        if: steps.stats.outputs.exit_code != '0'
+        run: exit 1

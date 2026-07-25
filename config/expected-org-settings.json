@@ -3,20 +3,21 @@
   "title": "Merglbot Enterprise Expected Organization Settings",
   "description": "Baseline configuration for all Merglbot organizations. Used by org-settings-watch.yml to detect drift.",
   "version": "1.0.1",
-  "last_updated": "2026-01-31",
+  "last_updated": "2026-07-25",
   
   "organizations": [
+    "merglbot-autodoplnky",
+    "merglbot-cerano",
     "merglbot-core",
-    "merglbot-shared",
-    "merglbot-public", 
     "merglbot-denatura",
     "merglbot-extractors",
-    "merglbot-proteinaco",
-    "merglbot-ruzovyslon",
-    "merglbot-milan-private",
-    "merglbot-autodoplnky",
     "merglbot-hodinarstvibechyne",
-    "merglbot-kiteboarding"
+    "merglbot-kiteboarding",
+    "merglbot-milan-private",
+    "merglbot-proteinaco",
+    "merglbot-public",
+    "merglbot-ruzovyslon",
+    "merglbot-shared"
   ],
   
   "expected_settings": {

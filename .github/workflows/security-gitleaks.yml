@@ -4,7 +4,7 @@
 # Usage:
 #   jobs:
 #     gitleaks:
-#       uses: merglbot-core/github/.github/workflows/security-gitleaks.yml@v2
+#       uses: merglbot-core/github/.github/workflows/security-gitleaks.yml@<sha>  # vX.Y.Z
 #       with:
 #         fail-on-detection: true  # Optional: fail if secrets found
 #
@@ -70,17 +70,37 @@ jobs:
           echo "path=$config_path" >> "$GITHUB_OUTPUT"
       
       - name: Checkout code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          fetch-depth: 0  # Full history for comprehensive scanning
+          fetch-depth: 1  # scan runs with --no-git (working tree only); full history was never read  # Full history for comprehensive scanning
           persist-credentials: false
+
+      - name: Scrub checkout auth metadata (avoid false positives)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # actions/checkout may add temporary auth headers / includeIf credentials.
+          # Secret scanners must not treat these as repo leaks.
+          if [ -d .git ]; then
+            git config --local --unset-all http.https://github.com/.extraheader || true
+
+            # Remove includeIf entries pointing to temporary credential configs.
+            # (actions/checkout normally removes these in its post-step, but scanners run before that.)
+            while IFS= read -r key; do
+              [ -z "$key" ] && continue
+              git config --local --unset-all "$key" || true
+            done < <(git config --local --name-only --get-regexp '^includeif\.gitdir:' || true)
+          fi
       
       - name: Install Gitleaks CLI
         run: |
           set -euo pipefail
-          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
-          tar -xzf gitleaks_8.18.4_linux_x64.tar.gz
-          sudo mv gitleaks /usr/local/bin/
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          wget -q -O "$tmp_dir/gitleaks.tgz" https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+          tar -xzf "$tmp_dir/gitleaks.tgz" -C "$tmp_dir" gitleaks
+          sudo mv "$tmp_dir/gitleaks" /usr/local/bin/
           gitleaks version
       
       - name: Run Gitleaks
@@ -93,15 +113,59 @@ jobs:
           
           # Run gitleaks and generate SARIF report
           if [ "${{ inputs.fail-on-detection }}" = "true" ]; then
-            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --verbose --no-git
+            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --redact --no-git
           else
-            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --verbose --no-git || true
+            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --redact --no-git || true
           fi
+
+      - name: Summarize findings (redacted)
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f gitleaks-report.sarif ]; then
+            echo "## Gitleaks results (redacted)" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "- No SARIF report found." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "## Gitleaks results (redacted)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          findings_count="$(jq -r '(.runs[0].results // []) | length' gitleaks-report.sarif 2>/dev/null || echo 0)"
+          echo "- Findings: **${findings_count}**" >> "$GITHUB_STEP_SUMMARY"
+
+          jq -r '
+            (.runs[0].results // [])[0:20][] |
+            "- `\(.ruleId // "unknown")` — `\((.locations[0].physicalLocation.artifactLocation.uri // "unknown"))\(
+              if ((.locations[0].physicalLocation.region.startLine // null) | type) == "number"
+              then ":" + (.locations[0].physicalLocation.region.startLine | tostring)
+              else ""
+              end
+            )`"
+          ' gitleaks-report.sarif >> "$GITHUB_STEP_SUMMARY" || true
+
+          if [ "${findings_count}" -gt 20 ]; then
+            echo "- … plus $((findings_count - 20)) more" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload gitleaks report (SARIF, redacted)
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: gitleaks-report-sarif
+          path: gitleaks-report.sarif
+          if-no-files-found: ignore
+          retention-days: 7
       
       - name: Upload SARIF report
         if: always()
         continue-on-error: true  # SARIF upload may fail in reusable workflow context due to token permissions
-        uses: github/codeql-action/upload-sarif@cdefb33c0f6224e58673d9004f47f7cb3e328b89  # v4.31.10
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81  # v4.37.3
         with:
           sarif_file: gitleaks-report.sarif
           category: gitleaks
@@ -109,7 +173,7 @@ jobs:
       
       - name: Comment on PR (if secrets found)
         if: failure() && github.event.pull_request.number
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8.0.0
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           github-token: ${{ github.token }}
           script: |

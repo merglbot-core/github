@@ -4,7 +4,7 @@
 # Usage:
 #   jobs:
 #     dependency-review:
-#       uses: merglbot-core/github/.github/workflows/security-dependency-review.yml@v2
+#       uses: merglbot-core/github/.github/workflows/security-dependency-review.yml@<sha>  # vX.Y.Z
 #       with:
 #         fail-on-severity: moderate  # Optional: critical, high, moderate, low
 #
@@ -51,12 +51,12 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8  # v6.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       
       - name: Run Dependency Review
-        uses: actions/dependency-review-action@3c4e3dcb1aa7874d2c16be7d79418e9b7efd6261  # v4.8.2
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48  # v4.9.0
         with:
           fail-on-severity: ${{ inputs.fail-on-severity }}
           deny-licenses: ${{ inputs.deny-licenses }}
@@ -66,6 +66,6 @@ jobs:
           vulnerability-check: true
           license-check: true
           
-          # Retry configuration for API rate limits
-          retry-on-snapshot-warnings: true
-          retry-on-snapshot-warnings-timeout: 600
+          # Do not block required PR checks waiting for dependency snapshots
+          # that these repos do not produce; the default is fail-fast.
+          retry-on-snapshot-warnings: false

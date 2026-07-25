@@ -15,14 +15,18 @@ Shared GitHub Actions workflows that can be called from other repositories.
 
 **Available Workflows:**
 - [Browse all workflows in `.github/workflows/`](https://github.com/merglbot-core/github/tree/main/.github/workflows)
+- `ent-dependabot-weekly.yml` - scheduled weekly ENT Dependabot closeout
+- `ent-dependabot-autonomous-closeout.yml` - reusable evidence-gated Dependabot closeout workflow
 
 **Usage Example:**
 ```yaml
 # In your repo's .github/workflows/deploy.yml
 jobs:
   deploy:
-    # Pin to a specific version tag (e.g., v1) or a commit SHA
-    uses: merglbot-core/github/.github/workflows/deploy-cloud-run.yml@v1
+    # Default policy: pin to an immutable merged commit SHA.
+    # Use a stable tag only if that workflow has an explicitly approved versioned release channel.
+    # For reusable-deploy-cloud-run-wif.yml, current platform policy is merged SHA pinning only.
+    uses: merglbot-core/github/.github/workflows/reusable-deploy-cloud-run-wif.yml@<commit_sha>
     with:
       service-name: my-service
       region: europe-west1
