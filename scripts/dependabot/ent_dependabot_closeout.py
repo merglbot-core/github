@@ -79,7 +79,10 @@ REQUIRED_CHECK_TAXONOMY = {
         "stale_or_pending_analysis_context",
         "stale_or_pending_security_context",
     },
-    "missing_workflow_enrollment": set(),  # blocker string: repo_enrollment:merglbot_workflow_dispatch_missing
+    # RETIRED: historical blocker string repo_enrollment:merglbot_workflow_dispatch_missing.
+    # The v6 review migration removed the v3 workflow_dispatch trigger path, so this
+    # blocker is no longer emitted; the key is kept for orchestrator-taxonomy completeness.
+    "missing_workflow_enrollment": set(),
     "real_ci_failure": {
         "check_failed_real",
     },

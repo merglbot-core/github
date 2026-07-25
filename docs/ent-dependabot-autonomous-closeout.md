@@ -160,26 +160,33 @@ the GHAU waste lane documented in
 ## Required Check Taxonomy
 
 The orchestrator classifies required-check blockers into a canonical taxonomy.
-Each abstract category maps to one or more concrete classification strings
+Each active abstract category maps to concrete classification strings
 emitted by `classify_required_check_blocker()`:
 
 | Canonical taxonomy name | Concrete categories | Healing action |
 |---|---|---|
 | `rerunnable_check` | `stale_or_pending_analysis_context`, `stale_or_pending_security_context`, `pending_or_never_emits`, `skipped_analysis_context`, `skipped_or_neutral` | `diagnose_or_rerun_required_check` |
 | `stale_required_context` | `stale_or_pending_analysis_context`, `stale_or_pending_security_context` | `diagnose_or_rerun_required_check` |
-| `missing_workflow_enrollment` | blocker string `repo_enrollment:merglbot_workflow_dispatch_missing` | Fail closed; separate enrollment lane |
+| `missing_workflow_enrollment` | RETIRED — no longer emitted (historical blocker string `repo_enrollment:merglbot_workflow_dispatch_missing`) | n/a (retired) |
 | `real_ci_failure` | `check_failed_real` | `start_minimal_pr_branch_fix_loop` |
 | `policy_required_but_never_emits` | `pending_or_never_emits` | `diagnose_or_rerun_required_check` |
+
+Categories outside the mapped sets (for example
+`unknown_required_check_state` or `lookup_failed`) fall through to the
+conservative `classify_before_mutation` healing action.
 
 `rerunnable_check` is a superset: any category whose healing action is
 `diagnose_or_rerun_required_check`. `stale_required_context` is the subset
 that specifically represents analysis/security checks that were once required
 but are now pending or stale due to branch-protection drift. The
-`missing_workflow_enrollment` category is not a check-state classification but
-a Merglbot-dispatch blocker recorded when the target repo lacks the expected
-review workflow. `policy_required_but_never_emits` captures checks that are
-listed in branch protection but have no workflow or app configured to ever
-emit a status for the PR's commit.
+`missing_workflow_enrollment` category is RETIRED: it was a Merglbot-dispatch
+blocker recorded when a target repo lacked the v3 on-demand review workflow.
+The v6 review migration replaced that `workflow_dispatch` path with the
+`@merglbot review` comment trigger and auto-fire on PR open/sync, so the
+blocker is no longer emitted; the name is kept only for historical
+orchestrator-taxonomy completeness. `policy_required_but_never_emits`
+captures checks that are listed in branch protection but have no workflow or
+app configured to ever emit a status for the PR's commit.
 
 ## Merge Gate
 
