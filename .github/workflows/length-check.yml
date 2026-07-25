@@ -16,8 +16,18 @@ jobs:
         env:
           TITLE: ${{ github.event.pull_request.title }}
           BODY: ${{ github.event.pull_request.body }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           set -euo pipefail
+          # Dependabot PR bodies are machine-generated changelogs and routinely
+          # exceed the human-PR body budget; the check made every dependabot PR
+          # permanently UNSTABLE (non-required failure), so the CLEAN-only
+          # merge-babysitter could never merge an approved cohort (2026-07-06).
+          # Waive length limits for dependabot; humans keep the budget.
+          if [ "$AUTHOR" = "dependabot[bot]" ]; then
+            echo "✅ dependabot PR — machine-generated body, length check waived"
+            exit 0
+          fi
           max_title=100
           max_body=4000
           [ ${#TITLE} -le $max_title ] || { echo "❌ PR title too long (${#TITLE} > $max_title)"; exit 1; }

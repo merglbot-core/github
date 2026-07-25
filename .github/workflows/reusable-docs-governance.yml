@@ -1,0 +1,69 @@
+name: reusable-docs-governance
+# SSOT-aware documentation obligation gate (docs-governance program, 2026-07).
+# advisory mode (default): warnings only, always green. enforce: fails on `missing`.
+# Check name consumed by branch protection: `docs-governance`.
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: advisory | enforce
+        type: string
+        required: false
+        default: advisory
+      impact-prefixes:
+        description: comma-separated override of impactful path prefixes
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  docs-governance:
+    name: docs-governance
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: PR runs check out a SHALLOW synthetic merge commit, so
+          # base...HEAD merge-base is unsatisfiable at depth 1 — check.mjs only
+          # deepens the BASE side and silently degrades to
+          # DOCS_GOVERNANCE_STATE: unknown (fail-open) on every consumer (#724).
+          fetch-depth: 0
+      # Pin the governance CODE + config to the SAME hub commit the caller pinned
+      # this reusable workflow to (job.workflow_sha / job.workflow_repository reflect
+      # the CALLED workflow file — unlike github.workflow_sha, which is the caller's).
+      # Without this, a consumer pinned to hub@SHA_X still executed check.mjs and
+      # ssot-map.snapshot.json from mutable hub main (transitive supply-chain gap).
+      - name: Resolve pinned hub governance ref
+        id: hubref
+        env:
+          JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          JOB_WORKFLOW_REPO: ${{ job.workflow_repository }}
+        run: |
+          # Fall back to the hub repo + this workflow's SHA if job.workflow_* is
+          # unavailable on this runner version, so the checkout always pins a commit.
+          repo="${JOB_WORKFLOW_REPO:-merglbot-core/github}"
+          ref="${JOB_WORKFLOW_SHA:-${GITHUB_SHA}}"
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "docs-governance code pinned to $repo@$ref"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.hubref.outputs.repo }}
+          ref: ${{ steps.hubref.outputs.ref }}
+          path: .docs-governance-hub
+          sparse-checkout: |
+            actions/docs-governance
+            config/ssot-map.snapshot.json
+      - name: docs-governance
+        env:
+          DG_MODE: ${{ inputs.mode }}
+          DG_IMPACT_PREFIXES: ${{ inputs['impact-prefixes'] }}
+          DG_EVENT_PATH: ${{ github.event_path }}
+          DG_REPO: ${{ github.repository }}
+          DG_ACTION_PATH: ${{ github.workspace }}/.docs-governance-hub/actions/docs-governance
+        run: node "$DG_ACTION_PATH/check.mjs"

@@ -10,13 +10,17 @@ on:
     # - CEST (UTC+2): 08:20–15:20 local -> 06:20–13:20 UTC
     #
     # UTC superset: 06:20–14:20 UTC (9 crons). Script gating yields exactly 8 local runs/day.
+    # Round 2 (Actions-minutes, owner-approved): the general hourly poll is
+    # consolidated from 8 local runs/day (08:20-15:20 hourly) to 4 local runs
+    # (08:20, 10:20, 12:20, 15:20 Europe/Prague). Dedicated per-tenant slots
+    # below are unchanged. UTC superset per local slot (CET+CEST), script
+    # auto-NOOP gating unchanged.
     - cron: "20 6 * * *"
     - cron: "20 7 * * *"
     - cron: "20 8 * * *"
     - cron: "20 9 * * *"
     - cron: "20 10 * * *"
     - cron: "20 11 * * *"
-    - cron: "20 12 * * *"
     - cron: "20 13 * * *"
     - cron: "20 14 * * *"
 
@@ -126,10 +130,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.11"
 
@@ -515,6 +519,7 @@ jobs:
             --timezone "Europe/Prague"
             --mode "$MODE"
             --include-tenant "ruzovyslon"
+            --allow-empty-specs
             --auto-utc-minute "15"
             --auto-local-hour "9"
             --auto-local-hour "11"
@@ -602,6 +607,7 @@ jobs:
             --mode "$MODE"
             --patch-date-local "$PATCH_DATE_LOCAL_D2"
             --include-tenant "ruzovyslon"
+            --allow-empty-specs
             --auto-utc-minute "15"
             --auto-local-hour "9"
             --auto-local-hour "11"
@@ -2047,10 +2053,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.11"
 

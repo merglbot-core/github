@@ -1,0 +1,20 @@
+{
+  "_comment": "Snapshot of merglbot-public/docs ssot-map.yaml (SSOT). Refreshed by the ssot-map-snapshot-sync workflow; staleness audited by docs-keeper. Do not edit by hand.",
+  "version": 1,
+  "synced_from": "merglbot-public/docs@ssot-map.yaml",
+  "defaults": {
+    "impact_prefixes": ["apps/", "packages/", "src/", "services/", "scripts/", "tools/", "terraform/", ".github/workflows/"],
+    "impact_files": ["package.json", "pyproject.toml", "Dockerfile"],
+    "evidence": "local_md_or_ssot_sync"
+  },
+  "repos": {
+    "merglbot-core/platform": {"ssot_docs": ["MERGLBOT_PR_ASSISTANT_V6.md", "GCP_ARCHITECTURE_V2_CANONICAL.md"]},
+    "merglbot-core/agents-orchestrator": {"ssot_docs": ["MERGLBOT_PR_ASSISTANT_V6.md"]},
+    "merglbot-core/infra": {"ssot_docs": ["IAC_STANDARDS.md", "GCP_ARCHITECTURE_V2_CANONICAL.md"]},
+    "merglbot-core/github": {"ssot_docs": ["MERGLBOT_REUSABLE_WORKFLOWS.md", "MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md"]},
+    "merglbot-core/merglbot-admin": {"ssot_docs": ["MERGLBOT_ADMIN_KNOWLEDGE_OPERATIONS.md"]},
+    "merglbot-core/dataform": {"ssot_docs": ["GCP_ARCHITECTURE_V2_CANONICAL.md"]},
+    "merglbot-extractors/shoptet-extractor": {"ssot_docs": ["MERGLBOT_SHOPTET_EXTRACTOR_PRODUCTION.md"]},
+    "merglbot-public/docs": {"impact_prefixes": [], "evidence": "self"}
+  }
+}

@@ -13,7 +13,7 @@ On any PR in any Merglbot repository, comment:
 @merglbot review
 ```
 
-This triggers a review-only multi-model review using **`claude-opus-4-6` + `gpt-5.4` (`reasoning_effort=high`)** with **final synthesis on OpenAI `gpt-5.4` (`reasoning_effort=high`)**.
+This triggers a review-only multi-model review using **`claude-opus-4-7` with adaptive thinking + `effort=max`** and **`gpt-5.4` (`reasoning_effort=high`)**, with final synthesis on OpenAI **`gpt-5.4` (`reasoning_effort=high`)**.
 
 Review output is intentionally **review-only**. Closeout remains a separate handoff path and final merge stays **`human_merge_only`**.
 

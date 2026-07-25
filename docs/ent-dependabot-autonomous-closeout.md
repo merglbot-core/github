@@ -7,9 +7,10 @@ status: "active"
 
 # ENT Dependabot Autonomous Closeout
 
-`ENT Dependabot Weekly Closeout` runs every Sunday at `13:00 UTC` and calls
+`ENT Dependabot Weekly Closeout` runs every Monday at `07:30 UTC` and calls
 `ENT Dependabot Autonomous Closeout`, the reusable workflow that scans the
-canonical 42-repo Merglbot ENT scope from `merglbot-public/docs/REPOSITORY_MAP.md`.
+dynamic Merglbot ENT scope from `merglbot-public/docs/ENT_ORG_ALLOWLIST.md`
+plus live non-archived/non-fork GitHub repository metadata.
 
 ## Canonical SSOT Dependencies
 
@@ -53,8 +54,8 @@ Platform policy authority remains in `merglbot-public/docs`:
   so monorepo PRs are not closed solely by dependency name.
   Close comments must include evidence, successor/main proof when applicable,
   workflow run URL, and a reopen condition.
-- The workflow does not deploy, run Terraform apply, mutate secrets, change
-  default branches, or bypass branch protection.
+- The workflow does not deploy, run Terraform state-changing operations, mutate
+  secrets, change default branches, or circumvent branch protection.
 - Cross-org GitHub API authority should come from the GitHub App secrets
   `ENT_DEPENDABOT_APP_ID` and `ENT_DEPENDABOT_APP_PRIVATE_KEY`. The engine mints
   short-lived installation tokens per repository owner and fails closed when the
@@ -66,12 +67,12 @@ Platform policy authority remains in `merglbot-public/docs`:
   `@merglbot review --light` comment path is not used by the ENT weekly apply
   lane because GitHub App comments do not carry a trusted author association.
 - When `autonomous_fix_loop=true`, current-head Merglbot `changes_required`,
-  Cursor blockers, and real CI failures are not treated as final closeout
+  third-party review-bot blockers, and real CI failures are not treated as final closeout
   blockers in dry-run. They are classified as `WOULD_START_AUTONOMOUS_FIX_LOOP`
   or `WOULD_HEAL_REQUIRED_CHECKS` with a findings ledger and the expected
   prompt-library close-loop contract. The write-capable fix loop is deliberately
   a separate orchestrator lane: it may push only minimal commits to the existing
-  Dependabot branch, must rerun Merglbot/Cursor/current-head gates after every
+  Dependabot branch, must rerun Merglbot/third-party review-bot/current-head gates after every
   new head, and may merge only through squash `--match-head-commit` after
   post-fix approval. This follows `Autonomous PR Close-Loop v1` and
   `MERGLBOT_PR_REVIEW_AUTONOMOUS_AUTOMERGE_V1`.
@@ -84,11 +85,12 @@ Platform policy authority remains in `merglbot-public/docs`:
   `401 Bad credentials` after invalidating the owner token cache. A second 401
   is classified as an installation/capability blocker, not silently retried
   indefinitely.
-- Local `single_repo` diagnostics validate against the repo-local
-  `scripts/dependabot/ent_repository_scope.txt` mirror to stay inside the
-  canonical 42-repo boundary without unnecessary cross-repo auth. GitHub Actions
-  `single_repo` runs validate against canonical remote `REPOSITORY_MAP.md` on
-  `main`, and `all` plus multi-owner `cohort` runs require GitHub App auth.
+- Local `single_repo` diagnostics may validate against the repo-local
+  `scripts/dependabot/ent_repository_scope.txt` generated mirror to stay inside
+  the last refreshed ENT boundary without unnecessary cross-repo auth. GitHub
+  Actions runs resolve the authoritative scope from `ENT_ORG_ALLOWLIST.md` plus
+  live non-archived/non-fork repository metadata, and `all` plus multi-owner
+  `cohort` runs require GitHub App auth.
 - Canonical GitHub App setup and permission authority lives in
   `merglbot-public/docs/ENT_DEPENDABOT_GITHUB_APP_SETUP.md`; repo-local setup
   docs are implementation mirrors only.
@@ -151,6 +153,9 @@ Reusable callers may also enable `autonomous_fix_loop`,
 orchestrator PR close-loop waves. Those inputs are intentionally kept off manual
 `workflow_dispatch` to preserve GitHub's 10-input limit and do not by themselves
 perform semantic code edits inside GitHub Actions.
+The weekly caller uses `max_fix_iterations=2` and `max_review_iterations=2` for
+the GHAU waste lane documented in
+`docs/finops/ghau-waste-ent-dependabot-weekly-timeout.md`.
 
 ## Required Check Taxonomy
 
@@ -186,15 +191,32 @@ Every merged Dependabot PR must prove:
 - the latest Merglbot PR Assistant receipt is current-head and
   `approved_for_closeout`; if the receipt was missing or stale, the closeout
   engine must have triggered a head-bound `workflow_dispatch` review and then
-  verified the emitted receipt markers,
-- Cursor Bugbot has a current-head pass when available, or the receipt records
-  that Cursor was absent/neutral/skipping and not required,
+  verified the emitted receipt markers. The only exception is a current-head
+  `blocked_missing_authority` receipt for a PR already proven
+  `VALIDATED_WORKFLOW_REF_ONLY`; in that case the closeout validator's
+  workflow-ref authority may satisfy the docs-authority gap, but any real
+  `changes_required` review verdict remains a hard blocker,
+- third-party review-bot has a current-head pass when available, or the receipt records
+  that third-party review-bot was absent/neutral/skipping and not required,
 - the merge uses squash with `--match-head-commit`.
 
 If a close-loop lane pushed a fix commit, the final merge gate must additionally
 prove that the newest Merglbot receipt covers the post-fix head and that the
 stale-findings ledger was closed by a new head or a documented false-positive
 rationale. Same-head "no new findings" is not sufficient.
+
+## Sibling PR Head Churn
+
+The apply lane processes each repository as a queue, but Dependabot sibling PRs
+can still change while the lane is waiting for current-head review evidence.
+For example, merging one dependency PR can cause GitHub/Dependabot to refresh
+another PR's branch, invalidating the review receipt that was just requested.
+When the closeout engine detects that the live PR head no longer matches the
+head it dispatched or verified, it must fail fast for that head, refresh the PR,
+and retry within the bounded `max_review_iterations` budget. After any merge or
+close action in a repository, previously blocked sibling PRs must be eligible
+for re-evaluation because their merge state, required checks, or review head may
+have changed.
 
 ## Policy Alignment
 

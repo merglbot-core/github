@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import copy
+import hashlib
 import json
 import os
 import pathlib
@@ -21,6 +22,7 @@ from typing import Any
 ALLOWED_ROLLOUT_TIERS = {"core", "public", "client", "private", "shared"}
 ALLOWED_ADMISSION_STATES = {"baseline_only", "advisory_docs_pilot"}
 ALLOWED_DEPLOY_MODES = {"copy_target", "canonical_self"}
+ALLOWED_REVIEW_OWNER_POLICIES = {"hard_gate", "advisory", "no_owner"}
 DEFAULT_MANIFEST_PATH = "scripts/pr-assistant/repo-policy-manifest.json"
 DEFAULT_POLICY_PATH = "scripts/pr-assistant/repo-policy-inventory-policy.json"
 DEFAULT_TARGET_LIST_PATH = "scripts/pr-assistant/target-repos.txt"
@@ -30,6 +32,7 @@ REQUIRED_REPO_FIELDS = (
     "rollout_tier",
     "admission_state",
     "human_merge_only",
+    "review_owner_policy",
     "deploy_mode",
     "expected_workflow",
     "notes",
@@ -42,6 +45,12 @@ CONTRACT_MARKERS = (
     "MERGLBOT_DOCUMENTATION_OBLIGATION_STATE:",
     "MERGLBOT_CLOSEOUT_MODE:",
 )
+PR_ASSISTANT_V3_DISABLED_VARIABLE = "MERGLBOT_PR_ASSISTANT_V3_DISABLED"
+PR_ASSISTANT_REVIEW_CHECK_BY_OWNER = {
+    "v3": "Merglbot PR Assistant v3",
+    "v4": "Merglbot PR Assistant v4",
+}
+PR_ASSISTANT_REVIEW_CHECK_NAMES = set(PR_ASSISTANT_REVIEW_CHECK_BY_OWNER.values())
 
 
 @dataclass
@@ -157,6 +166,22 @@ def parse_args() -> argparse.Namespace:
         "--token-env",
         default="GITHUB_TOKEN",
         help="Environment variable containing a GitHub token for API reads.",
+    )
+
+    owner_alignment_parser = subparsers.add_parser(
+        "verify-review-owner-alignment",
+        help="Audit active PR Assistant owner variables against branch-protection required checks.",
+    )
+    owner_alignment_parser.add_argument(
+        "--token-env",
+        default="GITHUB_TOKEN",
+        help="Environment variable containing a GitHub token for API reads.",
+    )
+    owner_alignment_parser.add_argument(
+        "--repo",
+        action="append",
+        default=[],
+        help="Limit the audit to one repo. May be passed multiple times.",
     )
 
     verify_parser = subparsers.add_parser(
@@ -294,6 +319,7 @@ def validate_repo_override(override: dict[str, Any], path: pathlib.Path, *, labe
         "rollout_tier",
         "admission_state",
         "human_merge_only",
+        "review_owner_policy",
         "deploy_mode",
         "expected_workflow",
         "expected_step1",
@@ -313,6 +339,10 @@ def validate_repo_override(override: dict[str, Any], path: pathlib.Path, *, labe
         )
     if "human_merge_only" in override and override["human_merge_only"] is not True:
         raise SystemExit(f"{path} {label}.human_merge_only must stay true")
+    if "review_owner_policy" in override and override["review_owner_policy"] not in ALLOWED_REVIEW_OWNER_POLICIES:
+        raise SystemExit(
+            f"{path} {label}.review_owner_policy must be one of {sorted(ALLOWED_REVIEW_OWNER_POLICIES)}"
+        )
     if "deploy_mode" in override and override["deploy_mode"] not in ALLOWED_DEPLOY_MODES:
         raise SystemExit(f"{path} {label}.deploy_mode must be one of {sorted(ALLOWED_DEPLOY_MODES)}")
     if "expected_workflow" in override:
@@ -424,6 +454,17 @@ def validate_manifest(
         if human_merge_only is not True:
             raise SystemExit(f"{manifest_path} repos[{index}].human_merge_only must stay true")
 
+        review_owner_policy = repo_entry["review_owner_policy"]
+        if review_owner_policy not in ALLOWED_REVIEW_OWNER_POLICIES:
+            raise SystemExit(
+                f"{manifest_path} repos[{index}].review_owner_policy must be one of "
+                f"{sorted(ALLOWED_REVIEW_OWNER_POLICIES)}"
+            )
+        if not enabled and review_owner_policy != "no_owner":
+            raise SystemExit(
+                f"{manifest_path} repos[{index}] disabled repos must use review_owner_policy=no_owner"
+            )
+
         deploy_mode = repo_entry["deploy_mode"]
         if deploy_mode not in ALLOWED_DEPLOY_MODES:
             raise SystemExit(
@@ -516,7 +557,7 @@ def get_token(token_env: str) -> str:
     return token
 
 
-def github_request(path: str, token: str) -> Any:
+def github_request(path: str, token: str, *, allow_http_statuses: tuple[int, ...] = ()) -> Any:
     url = f"https://api.github.com{path}"
     request = urllib.request.Request(
         url,
@@ -531,6 +572,12 @@ def github_request(path: str, token: str) -> Any:
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.URLError as exc:
+        if isinstance(exc, urllib.error.HTTPError):
+            if exc.code == 404 or exc.code in allow_http_statuses:
+                return None
+            raise SystemExit(
+                f"GitHub API {exc.code} for {path}: {exc.read().decode('utf-8', errors='replace')}"
+            ) from exc
         reason = str(exc.reason)
         if "CERTIFICATE_VERIFY_FAILED" not in reason:
             raise SystemExit(f"GitHub API transport error for {path}: {exc}") from exc
@@ -553,10 +600,6 @@ def github_request(path: str, token: str) -> Any:
                 f"GitHub API TLS validation failed for {path} and gh fallback returned: {stderr}"
             )
         return json.loads(result.stdout)
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            return None
-        raise SystemExit(f"GitHub API {exc.code} for {path}: {exc.read().decode('utf-8', errors='replace')}") from exc
 
 
 def github_paginated_request(path: str, token: str) -> list[dict[str, Any]]:
@@ -595,8 +638,6 @@ def read_live_inventory(policy: dict[str, Any], token: str) -> tuple[list[str], 
     for org in visible_orgs:
         repo_payload = github_paginated_request(f"/orgs/{org}/repos?type=all&sort=full_name&direction=asc", token)
         for repo in repo_payload:
-            if repo.get("archived"):
-                continue
             full_name = repo["full_name"]
             if full_name in excluded_repos:
                 continue
@@ -679,6 +720,202 @@ def get_repo_default_branch(repo: str, token: str) -> str | None:
     return data.get("default_branch")
 
 
+def get_actions_variable(
+    repo: str,
+    name: str,
+    token: str,
+    *,
+    repo_private: bool | None = None,
+) -> tuple[str | None, str]:
+    org, repo_name = repo.split("/", 1)
+    repo_variable = github_request(
+        f"/repos/{repo}/actions/variables/{urllib.parse.quote(name, safe='')}",
+        token,
+        allow_http_statuses=(403,),
+    )
+    if isinstance(repo_variable, dict) and "value" in repo_variable:
+        return str(repo_variable.get("value") or ""), "repo"
+
+    org_variable = github_request(
+        f"/orgs/{org}/actions/variables/{urllib.parse.quote(name, safe='')}",
+        token,
+        allow_http_statuses=(403,),
+    )
+    if not isinstance(org_variable, dict) or "value" not in org_variable:
+        return None, "unset"
+
+    visibility = str(org_variable.get("visibility") or "")
+    if visibility == "all":
+        return str(org_variable.get("value") or ""), f"org:{visibility}"
+    if visibility == "private":
+        if repo_private is False:
+            return None, "org:private_not_applied"
+        return str(org_variable.get("value") or ""), f"org:{visibility}"
+    if visibility == "selected":
+        repos = github_paginated_request(
+            f"/orgs/{org}/actions/variables/{urllib.parse.quote(name, safe='')}/repositories",
+            token,
+        )
+        selected = {
+            str(entry.get("full_name") or f"{org}/{entry.get('name')}")
+            for entry in repos
+            if isinstance(entry, dict)
+        }
+        if repo in selected or f"{org}/{repo_name}" in selected:
+            return str(org_variable.get("value") or ""), "org:selected"
+        return None, "org:selected_not_applied"
+    return str(org_variable.get("value") or ""), f"org:{visibility or 'unknown'}"
+
+
+def get_branch_required_checks(repo: str, default_branch: str | None, token: str) -> tuple[list[str], str]:
+    if not default_branch:
+        return [], "missing_default_branch"
+    encoded_branch = urllib.parse.quote(default_branch, safe="")
+    data = github_request(
+        f"/repos/{repo}/branches/{encoded_branch}/protection/required_status_checks",
+        token,
+        allow_http_statuses=(403,),
+    )
+    if data is None:
+        return [], "unavailable_or_not_configured"
+    contexts = {str(context) for context in (data.get("contexts") or []) if context}
+    for check in data.get("checks") or []:
+        if isinstance(check, dict) and check.get("context"):
+            contexts.add(str(check["context"]))
+    return sorted(contexts), "configured"
+
+
+def bool_variable_is_true(value: str | None) -> bool:
+    return str(value or "").strip().lower() == "true"
+
+
+def determine_active_review_owner(
+    *,
+    enabled: bool,
+    workflow_present: bool,
+    v3_disabled_value: str | None,
+) -> tuple[str, str | None, str]:
+    if not enabled:
+        return "none", None, "repo_disabled"
+    if bool_variable_is_true(v3_disabled_value):
+        return "v4", PR_ASSISTANT_REVIEW_CHECK_BY_OWNER["v4"], "v3_disabled_variable_true"
+    if workflow_present:
+        return "v3", PR_ASSISTANT_REVIEW_CHECK_BY_OWNER["v3"], "v3_workflow_present"
+    return "none", None, "no_active_review_surface"
+
+
+def evaluate_branch_protection_review_owner(
+    *,
+    active_review_owner: str,
+    required_checks: list[str],
+    review_owner_policy: str = "hard_gate",
+    enabled: bool = True,
+) -> dict[str, Any]:
+    if review_owner_policy not in ALLOWED_REVIEW_OWNER_POLICIES:
+        raise ValueError(f"Unsupported review_owner_policy: {review_owner_policy}")
+
+    required_review_checks = sorted(
+        check for check in required_checks if check in PR_ASSISTANT_REVIEW_CHECK_NAMES
+    )
+    expected_check = PR_ASSISTANT_REVIEW_CHECK_BY_OWNER.get(active_review_owner)
+    if review_owner_policy == "hard_gate" and expected_check:
+        mismatched = [check for check in required_review_checks if check != expected_check]
+    else:
+        mismatched = required_review_checks
+
+    mismatch_reason = None
+    remediation: list[str] = []
+    if review_owner_policy == "hard_gate" and not expected_check:
+        status = "branch_protection_review_owner_mismatch"
+        mismatch_reason = "hard_gate_without_active_review_owner"
+        remediation = [
+            "deploy_or_enable_active_merglbot_review_owner",
+            "or_change_review_owner_policy_to_advisory_or_no_owner",
+        ]
+    elif review_owner_policy == "hard_gate" and expected_check not in required_review_checks:
+        status = "branch_protection_review_owner_mismatch"
+        mismatch_reason = "hard_gate_missing_required_review_check"
+        remediation = [f"add_required_status_check:{expected_check}"]
+        if mismatched:
+            remediation.append(
+                "remove_mismatched_merglbot_required_checks:" + ",".join(mismatched)
+            )
+    elif review_owner_policy == "hard_gate" and mismatched:
+        status = "branch_protection_review_owner_mismatch"
+        mismatch_reason = "required_review_check_does_not_match_active_owner"
+        remediation = ["remove_mismatched_merglbot_required_checks:" + ",".join(mismatched)]
+    elif review_owner_policy == "hard_gate":
+        status = "aligned"
+
+    elif review_owner_policy == "advisory" and required_review_checks:
+        status = "branch_protection_review_owner_mismatch"
+        mismatch_reason = "advisory_policy_has_required_review_check"
+        remediation = [
+            "remove_merglbot_required_status_checks:" + ",".join(required_review_checks),
+            "or_change_review_owner_policy_to_hard_gate",
+        ]
+    elif review_owner_policy == "advisory":
+        status = "advisory"
+
+    elif active_review_owner != "none":
+        status = "branch_protection_review_owner_mismatch"
+        mismatch_reason = "no_owner_policy_has_active_review_owner"
+        remediation = [
+            "disable_merglbot_review_surface",
+            "or_change_review_owner_policy_to_advisory_or_hard_gate",
+        ]
+    elif required_review_checks:
+        status = "branch_protection_review_owner_mismatch"
+        mismatch_reason = "no_owner_policy_has_required_review_check"
+        remediation = ["remove_merglbot_required_status_checks:" + ",".join(required_review_checks)]
+    else:
+        status = "no_owner"
+        if enabled:
+            remediation = ["deploy_or_enable_active_merglbot_review_owner_before_required_check"]
+
+    return {
+        "status": status,
+        "review_owner_policy": review_owner_policy,
+        "allowed_merge_policy": {
+            "hard_gate": "active_merglbot_owner_must_be_required_status_check",
+            "advisory": "merglbot_signal_is_advisory_not_branch_protection_gate",
+            "no_owner": "no_merglbot_owner_or_required_check_allowed",
+        }[review_owner_policy],
+        "expected_check": expected_check,
+        "required_review_checks": required_review_checks,
+        "mismatched_required_review_checks": mismatched,
+        "mismatch_reason": mismatch_reason,
+        "remediation": remediation,
+    }
+
+
+def build_review_owner_alignment_payload(
+    rows: list[dict[str, Any]],
+    mismatches: list[dict[str, Any]],
+    *,
+    excluded_orgs: list[str] | None = None,
+) -> dict[str, Any]:
+    classification_counts = {
+        policy: sum(1 for row in rows if row["review_owner_policy"] == policy)
+        for policy in sorted(ALLOWED_REVIEW_OWNER_POLICIES)
+    }
+    return {
+        "schema_version": 2,
+        "audit": "pr_assistant_review_owner_branch_protection_alignment",
+        "delivery_scope": {
+            "included_repo_count": len(rows),
+            "excluded_orgs": sorted(excluded_orgs or []),
+        },
+        "status": "failed" if mismatches else "passed",
+        "reason": "branch_protection_review_owner_mismatch" if mismatches else "aligned",
+        "repo_count": len(rows),
+        "classification_counts": classification_counts,
+        "mismatch_count": len(mismatches),
+        "mismatches": mismatches,
+        "repos": rows,
+    }
+
+
 def get_file(repo: str, path: str, token: str) -> tuple[str | None, str | None]:
     encoded_path = urllib.parse.quote(path, safe="/")
     data = github_request(f"/repos/{repo}/contents/{encoded_path}", token)
@@ -688,6 +925,92 @@ def get_file(repo: str, path: str, token: str) -> tuple[str | None, str | None]:
         return None, None
     content = base64.b64decode(data["content"]).decode("utf-8")
     return content, data.get("sha")
+
+
+def git_blob_sha(data: bytes) -> str:
+    return hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
+
+
+def get_canonical_source_file(canonical: dict[str, Any], path_key: str, token: str) -> tuple[str | None, str | None]:
+    path_value = canonical[path_key]
+    local_path = pathlib.Path(path_value)
+    if canonical.get("repo") == "merglbot-core/github" and local_path.is_file():
+        data = local_path.read_bytes()
+        return data.decode("utf-8"), git_blob_sha(data)
+    return get_file(canonical["repo"], path_value, token)
+
+
+def audit_review_owner_alignment(
+    manifest: dict[str, Any],
+    token_env: str,
+    *,
+    repo_filter: list[str] | None = None,
+    excluded_orgs: list[str] | None = None,
+) -> dict[str, Any]:
+    token = get_token(token_env)
+    requested_repos = set(repo_filter or [])
+    unknown_repos = requested_repos - {entry["repo"] for entry in manifest["repos"]}
+    if unknown_repos:
+        raise SystemExit(f"Repo filter not present in manifest: {', '.join(sorted(unknown_repos))}")
+
+    rows: list[dict[str, Any]] = []
+    mismatches: list[dict[str, Any]] = []
+    for repo_entry in manifest["repos"]:
+        repo = repo_entry["repo"]
+        if requested_repos and repo not in requested_repos:
+            continue
+        repo_metadata = github_request(f"/repos/{repo}", token) or {}
+        default_branch = repo_metadata.get("default_branch") if isinstance(repo_metadata, dict) else None
+        repo_private = repo_metadata.get("private") if isinstance(repo_metadata.get("private"), bool) else None
+        workflow_content, _workflow_sha = get_file(repo, repo_entry["expected_workflow"], token)
+        workflow_present = workflow_content is not None
+        v3_disabled_value, v3_disabled_source = get_actions_variable(
+            repo,
+            PR_ASSISTANT_V3_DISABLED_VARIABLE,
+            token,
+            repo_private=repo_private,
+        )
+        active_owner, expected_check, owner_signal = determine_active_review_owner(
+            enabled=bool(repo_entry["enabled"]),
+            workflow_present=workflow_present,
+            v3_disabled_value=v3_disabled_value,
+        )
+        required_checks, branch_protection_state = get_branch_required_checks(repo, default_branch, token)
+        alignment = evaluate_branch_protection_review_owner(
+            active_review_owner=active_owner,
+            required_checks=required_checks,
+            review_owner_policy=repo_entry["review_owner_policy"],
+            enabled=bool(repo_entry["enabled"]),
+        )
+        row = {
+            "repo": repo,
+            "default_branch": default_branch,
+            "enabled": repo_entry["enabled"],
+            "review_owner_policy": repo_entry["review_owner_policy"],
+            "merglbot_gate_classification": repo_entry["review_owner_policy"],
+            "allowed_merge_policy": alignment["allowed_merge_policy"],
+            "workflow_present": workflow_present,
+            "active_review_owner": active_owner,
+            "active_review_owner_signal": owner_signal,
+            "expected_review_check": expected_check,
+            "v3_disabled_variable_source": v3_disabled_source,
+            "branch_protection_state": branch_protection_state,
+            "branch_protection_required_checks": required_checks,
+            "required_review_checks": alignment["required_review_checks"],
+            "alignment_status": alignment["status"],
+            "mismatch_reason": alignment["mismatch_reason"],
+            "remediation": alignment["remediation"],
+        }
+        rows.append(row)
+        if alignment["status"] == "branch_protection_review_owner_mismatch":
+            mismatch = {
+                **row,
+                "reason": alignment["mismatch_reason"] or "branch_protection_review_owner_mismatch",
+                "mismatched_required_review_checks": alignment["mismatched_required_review_checks"],
+            }
+            mismatches.append(mismatch)
+
+    return build_review_owner_alignment_payload(rows, mismatches, excluded_orgs=excluded_orgs)
 
 
 def audit_repo(
@@ -700,10 +1023,21 @@ def audit_repo(
     default_branch = get_repo_default_branch(repo, token)
     expected_step1 = repo_entry.get("expected_step1")
 
-    workflow_content, workflow_sha = get_file(repo, repo_entry["expected_workflow"], token)
+    if repo_entry["deploy_mode"] == "canonical_self":
+        canonical_entry = {
+            "repo": repo,
+            "workflow_path": repo_entry["expected_workflow"],
+            "step1_path": expected_step1,
+        }
+        workflow_content, workflow_sha = get_canonical_source_file(canonical_entry, "workflow_path", token)
+    else:
+        workflow_content, workflow_sha = get_file(repo, repo_entry["expected_workflow"], token)
     step1_content, step1_sha = (None, None)
     if expected_step1:
-        step1_content, step1_sha = get_file(repo, expected_step1, token)
+        if repo_entry["deploy_mode"] == "canonical_self":
+            step1_content, step1_sha = get_canonical_source_file(canonical_entry, "step1_path", token)
+        else:
+            step1_content, step1_sha = get_file(repo, expected_step1, token)
 
     review_boundary_marker_present = bool(
         workflow_content and "MERGLBOT_REVIEW_BOUNDARY: review_only" in workflow_content
@@ -713,7 +1047,7 @@ def audit_repo(
     )
     documentation_gate_present = bool(
         workflow_content
-        and "Documentation Obligation State: unknown" in workflow_content
+        and "DOCUMENTATION_OBLIGATION_STATE" in workflow_content
         and "blocked_missing_authority" in workflow_content
     )
 
@@ -779,11 +1113,11 @@ def audit_repo(
 def build_coverage_baseline(manifest: dict[str, Any], token_env: str) -> dict[str, Any]:
     token = get_token(token_env)
     canonical = manifest["canonical_source"]
-    canonical_workflow_content, canonical_workflow_sha = get_file(
-        canonical["repo"], canonical["workflow_path"], token
+    canonical_workflow_content, canonical_workflow_sha = get_canonical_source_file(
+        canonical, "workflow_path", token
     )
-    canonical_step1_content, canonical_step1_sha = get_file(
-        canonical["repo"], canonical["step1_path"], token
+    canonical_step1_content, canonical_step1_sha = get_canonical_source_file(
+        canonical, "step1_path", token
     )
     if not canonical_workflow_content or not canonical_workflow_sha:
         raise SystemExit("Unable to read canonical workflow from GitHub")
@@ -946,6 +1280,20 @@ def main() -> None:
             compare_json(pathlib.Path(args.check), payload)
         if not args.output and not args.check:
             print(json.dumps(payload, indent=2, sort_keys=False))
+        return
+
+    if args.command == "verify-review-owner-alignment":
+        policy = load_json(policy_path)
+        validate_inventory_policy(policy, policy_path)
+        payload = audit_review_owner_alignment(
+            manifest,
+            args.token_env,
+            repo_filter=args.repo,
+            excluded_orgs=policy["excluded_orgs"],
+        )
+        print(json.dumps(payload, indent=2, sort_keys=False))
+        if payload["mismatch_count"]:
+            raise SystemExit("branch_protection_review_owner_mismatch")
         return
 
     if args.command == "verify":

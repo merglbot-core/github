@@ -87,7 +87,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Validate WIF provider (SSOT)
         shell: bash
@@ -173,7 +173,7 @@ jobs:
       # - SARIF is non-blocking (Code Scanning visibility)
       # - Separate gate blocks deploy on CRITICAL (no gating softening)
       - name: Run Trivy vulnerability scanner (SARIF)
-        uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518  # v0.34.1
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.34.1
         continue-on-error: true
         with:
           version: 'v0.69.3'
@@ -186,7 +186,7 @@ jobs:
           ignore-unfixed: true
       
       - name: Upload Trivy results
-        uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13  # v4
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81  # v4
         if: ${{ always() && hashFiles('trivy-results.sarif') != '' }}
         continue-on-error: true  # Don't fail if SARIF upload has permission issues
         with:
@@ -194,7 +194,7 @@ jobs:
 
       - name: Run Trivy vulnerability scanner (gate)
         if: ${{ always() && steps.build.outcome == 'success' }}
-        uses: aquasecurity/trivy-action@e368e328979b113139d6f9068e03accaed98a518  # v0.34.1
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.34.1
         with:
           version: 'v0.69.3'
           image-ref: ${{ steps.build.outputs.full_image }}
@@ -205,7 +205,7 @@ jobs:
       
       # Container Security: SBOM Generation
       - name: Generate SBOM
-        uses: anchore/sbom-action@57aae528053a48a3f6235f2d9461b05fbcb7366d  # v0.23.1
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0.24.0
         with:
           image: ${{ steps.build.outputs.full_image }}
           format: 'cyclonedx-json'
@@ -220,7 +220,7 @@ jobs:
       
       # Container Security: Cosign Signing (Keyless with OIDC)
       - name: Install Cosign
-        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003  # v4.1.1
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
       
       - name: Sign container image
         run: |
