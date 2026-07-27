@@ -10,7 +10,6 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 MANIFEST_HELPER = REPO_ROOT / "scripts" / "pr-assistant" / "repo-policy-manifest.py"
 MANIFEST = REPO_ROOT / "scripts" / "pr-assistant" / "repo-policy-manifest.json"
 INVENTORY_POLICY = REPO_ROOT / "scripts" / "pr-assistant" / "repo-policy-inventory-policy.json"
-V3_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "merglbot-pr-assistant-v3-on-demand.yml"
 
 
 def load_manifest_helper():
@@ -27,14 +26,10 @@ class TriggerContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.helper = load_manifest_helper()
 
-    def test_invalid_v3_trigger_has_machine_readable_skip_receipt(self):
-        workflow = V3_WORKFLOW.read_text(encoding="utf-8")
-
-        self.assertIn("skip_reason: ${{ steps.get_pr.outputs.skip_reason }}", workflow)
-        self.assertIn("trigger_contract_status: ${{ steps.get_pr.outputs.trigger_contract_status }}", workflow)
-        self.assertIn("merglbot.pr_assistant.v3.trigger_skip.v1", workflow)
-        self.assertIn("invalid_v3_review_trigger", workflow)
-        self.assertIn("Merglbot PR Assistant v3 Trigger Skip", workflow)
+    # NOTE: test_invalid_v3_trigger_has_machine_readable_skip_receipt was removed
+    # 2026-07-27: it read .github/workflows/merglbot-pr-assistant-v3-on-demand.yml,
+    # which no longer exists (v3 lane retired estate-wide) — the test errored on
+    # FileNotFoundError at every run since the removal. (Found via hub#730.)
 
     def test_active_owner_uses_v4_when_v3_disabled(self):
         owner, expected_check, signal = self.helper.determine_active_review_owner(
@@ -153,8 +148,8 @@ class TriggerContractTests(unittest.TestCase):
             if entry["review_owner_policy"] == "no_owner"
         }
 
-        self.assertEqual(len(manifest["repos"]), 51)
-        self.assertEqual(counts["hard_gate"], 46)
+        self.assertEqual(len(manifest["repos"]), 52)
+        self.assertEqual(counts["hard_gate"], 47)
         self.assertEqual(counts["no_owner"], 5)
         self.assertEqual(counts["advisory"], 0)
         self.assertEqual(policy["excluded_orgs"], ["Merglevsky-cz", "lrtch"])
