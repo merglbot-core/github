@@ -6,6 +6,12 @@ on:
       - "scripts/policy-engine/**"
       - "tests/test_final_merge_readiness.py"
       - ".github/workflows/policy-engine-tests.yml"
+      # Contract test for the ci-python lint pins must run whenever EITHER side
+      # of the contract changes — the guarded workflow or the test itself.
+      # (unittest discover picks the file up; without these paths the test would
+      # exist but never run on the changes it guards.)
+      - ".github/workflows/ci-python.yml"
+      - "tests/test_ci_python_lint_pins_contract.py"
   workflow_dispatch:
 
 permissions:
