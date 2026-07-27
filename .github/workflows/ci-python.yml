@@ -20,7 +20,10 @@ on:
   workflow_call:
     inputs:
       python-version:
-        description: 'Python version to use'
+        description: >-
+          Python version to use. Minimum 3.10 when lint-tools includes black or
+          mypy: the hub fallback pins (black==26.5.1, mypy==2.3.0) declare
+          requires_python >=3.10. A validation step fails fast with guidance.
         type: string
         default: '3.11'
         required: false
@@ -86,6 +89,20 @@ jobs:
         run: |
           if [ -f requirements-dev.txt ]; then
             pip install -r requirements-dev.txt
+          fi
+          # Fail fast if the caller's interpreter cannot run the hub-pinned tools
+          # (v6 finding on #730): black==26.5.1 and mypy==2.3.0 declare
+          # requires_python >=3.10, so a <3.10 caller without repo-installed tools
+          # would die inside pip with a confusing resolver error. Every current
+          # estate caller runs 3.11/3.12 (sampled 2026-07-27); this guard protects
+          # external/legacy callers with an actionable message instead.
+          if [[ "${{ inputs.lint-tools }}" == *"black"* || "${{ inputs.lint-tools }}" == *"mypy"* ]]; then
+            pyv="${{ inputs.python-version }}"
+            maj="${pyv%%.*}"; rest="${pyv#*.}"; min="${rest%%.*}"
+            if ! [[ "$maj" =~ ^[0-9]+$ && "$min" =~ ^[0-9]+$ ]] || [ "$maj" -lt 3 ] || { [ "$maj" -eq 3 ] && [ "$min" -lt 10 ]; }; then
+              echo "::error::python-version '${pyv}' cannot run hub-pinned black==26.5.1 / mypy==2.3.0 (requires_python >=3.10). Either raise python-version, or ship the tool via requirements-dev.txt (a repo-installed tool always wins over the hub pin)."
+              exit 1
+            fi
           fi
           # Install linters based on inputs — repo-first with a PINNED hub default.
           # A bare `pip install ruff` resolves to whatever is latest at run time, so an
