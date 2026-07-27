@@ -87,15 +87,21 @@ jobs:
           if [ -f requirements-dev.txt ]; then
             pip install -r requirements-dev.txt
           fi
-          # Install linters based on inputs
+          # Install linters based on inputs — repo-first with a PINNED hub default.
+          # A bare `pip install ruff` resolves to whatever is latest at run time, so an
+          # upstream release flips CI estate-wide with zero repo changes (github#728:
+          # ruff 0.16.0 landed on a weekend and reddened mains that had no ruff pin of
+          # their own). If the repo ships the tool via requirements-dev.txt, that pin
+          # wins (command -v check); otherwise the hub installs an exact version.
+          # Bumping these pins = a deliberate hub PR, reviewed like any other change.
           if [[ "${{ inputs.lint-tools }}" == *"ruff"* ]]; then
-            pip install ruff
+            command -v ruff >/dev/null 2>&1 || pip install "ruff==0.16.0"
           fi
           if [[ "${{ inputs.lint-tools }}" == *"black"* ]]; then
-            pip install black
+            command -v black >/dev/null 2>&1 || pip install "black==26.5.1"
           fi
           if [[ "${{ inputs.lint-tools }}" == *"mypy"* ]]; then
-            pip install mypy
+            command -v mypy >/dev/null 2>&1 || pip install "mypy==2.3.0"
           fi
       
       - name: Run ruff
