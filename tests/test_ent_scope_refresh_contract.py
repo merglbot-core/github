@@ -20,10 +20,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ent-scope-refresh.yml"
 
 # The regeneration write site for the file the workflow DOES own. Anchoring on
-# the write expression (not just the path, which also appears in git add/diff
-# lines) keeps the reverse assertion non-vacuous: deleting the regen step
-# removes this anchor even if bookkeeping lines linger.
-SCOPE_MIRROR_WRITE_ANCHOR = "pathlib.Path('scripts/dependabot/ent_repository_scope.txt')"
+# BOTH the path construction and the write call (not just the path, which also
+# appears in git add/diff lines) keeps the reverse assertion non-vacuous:
+# deleting either half of the regen step removes an anchor even if
+# bookkeeping lines linger.
+SCOPE_MIRROR_PATH_ANCHOR = "pathlib.Path('scripts/dependabot/ent_repository_scope.txt')"
+SCOPE_MIRROR_WRITE_CALL_ANCHOR = "path.write_text("
 
 
 def _non_comment_lines(text: str) -> list[str]:
@@ -51,20 +53,18 @@ class EntScopeRefreshOwnershipContract(unittest.TestCase):
         )
 
     def test_still_regenerates_dependabot_scope_mirror(self) -> None:
-        # Guard the other direction non-vacuously: the regeneration WRITE SITE
-        # for the dependabot scope mirror must exist as executable workflow
-        # content (deleting the whole regen step would otherwise make the
-        # boundary test pass while silently killing the weekly refresh).
-        anchored = [
-            line
-            for line in _non_comment_lines(self.text)
-            if SCOPE_MIRROR_WRITE_ANCHOR in line
-        ]
-        self.assertTrue(
-            anchored,
-            "ent-scope-refresh.yml no longer contains the scope-mirror "
-            f"regeneration write site ({SCOPE_MIRROR_WRITE_ANCHOR})",
-        )
+        # Guard the other direction non-vacuously: BOTH halves of the
+        # regeneration write site (the target path construction AND the
+        # write call) must exist as executable workflow content — deleting
+        # the regen step, or just its write, would otherwise make the
+        # boundary test pass while silently killing the weekly refresh.
+        lines = _non_comment_lines(self.text)
+        for anchor in (SCOPE_MIRROR_PATH_ANCHOR, SCOPE_MIRROR_WRITE_CALL_ANCHOR):
+            self.assertTrue(
+                [line for line in lines if anchor in line],
+                "ent-scope-refresh.yml no longer contains the scope-mirror "
+                f"regeneration anchor {anchor!r}",
+            )
 
 
 if __name__ == "__main__":

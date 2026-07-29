@@ -14,10 +14,12 @@ refresh PRs against the canonical SSOT.
 
 The platform-wide canonical scope is defined in
 `merglbot-public/docs/REPOSITORY_MAP.md` and
-`merglbot-public/docs/ENT_ORG_ALLOWLIST.md`. The live repo count changes with
-the estate (73 non-archived, non-fork repos across 11 orgs with eligible repos
-as of 2026-07-29) — the regenerated
-`scripts/dependabot/ent_repository_scope.txt` is the current snapshot.
+`merglbot-public/docs/ENT_ORG_ALLOWLIST.md`. The committed
+`scripts/dependabot/ent_repository_scope.txt` is the last merged snapshot of
+the live per-org scan and its entry count changes with the estate — do not
+treat any number written here as current; the weekly refresh PR carries the
+authoritative diff (the 2026-07 fix note: the pre-fix mirror had collapsed to
+a stale 45-entry core-heavy list while the live scan resolved 73 repos).
 
 ## Files Refreshed in This Repo
 
@@ -44,10 +46,9 @@ Before merging a scope refresh PR, the following must hold:
 
 - `python3 scripts/pr-assistant/repo-policy-manifest.py verify` reports OK.
 - `rollout-audit` workflow passes against the refreshed baseline.
-- `scripts/dependabot/ent_repository_scope.txt` matches the live org scan
-  (73 repos across 11 orgs with eligible repos as of 2026-07-29; the exact
-  count changes with the estate — the fail-closed resolver plus the >40%
-  shrink guard in the workflow are the invariants, not a frozen number).
+- `scripts/dependabot/ent_repository_scope.txt` matches the live org scan —
+  the fail-closed resolver plus the >40% shrink guard in the workflow are the
+  invariants, not any frozen entry count.
 - Manifest/target counts are validated by their own `verify-manifest` gate
   (`repo-policy-manifest.json` remains the SSOT for pr-assistant enrollment;
   `merglbot-core/github` stays excluded from downstream targets and retained
