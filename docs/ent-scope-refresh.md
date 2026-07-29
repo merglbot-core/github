@@ -14,9 +14,10 @@ refresh PRs against the canonical SSOT.
 
 The platform-wide canonical scope is defined in
 `merglbot-public/docs/REPOSITORY_MAP.md` and
-`merglbot-public/docs/ENT_ORG_ALLOWLIST.md`. The current SSOT is **46 active
-repositories across 11 active organizations** (see RULEBOOK and the docs index
-for the latest snapshot).
+`merglbot-public/docs/ENT_ORG_ALLOWLIST.md`. The live repo count changes with
+the estate (73 non-archived, non-fork repos across 11 orgs with eligible repos
+as of 2026-07-29) — the regenerated
+`scripts/dependabot/ent_repository_scope.txt` is the current snapshot.
 
 ## Files Refreshed in This Repo
 
@@ -43,9 +44,14 @@ Before merging a scope refresh PR, the following must hold:
 
 - `python3 scripts/pr-assistant/repo-policy-manifest.py verify` reports OK.
 - `rollout-audit` workflow passes against the refreshed baseline.
-- Counts match the canonical SSOT: manifest 46, downstream target 45,
-  ENT scope 45, with `merglbot-core/github` excluded from downstream and
-  retained in the manifest as `canonical_self`.
+- `scripts/dependabot/ent_repository_scope.txt` matches the live org scan
+  (73 repos across 11 orgs with eligible repos as of 2026-07-29; the exact
+  count changes with the estate — the fail-closed resolver plus the >40%
+  shrink guard in the workflow are the invariants, not a frozen number).
+- Manifest/target counts are validated by their own `verify-manifest` gate
+  (`repo-policy-manifest.json` remains the SSOT for pr-assistant enrollment;
+  `merglbot-core/github` stays excluded from downstream targets and retained
+  in the manifest as `canonical_self`).
 - All Merglbot/CI/secret-scanning checks are terminal green on the exact head.
 
 ## Supersession
