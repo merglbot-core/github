@@ -56,7 +56,12 @@ jobs:
             --jq '.content' | base64 -d > .ent-scope/ENT_ORG_ALLOWLIST.md
           echo "Fetched ENT_ORG_ALLOWLIST.md $(wc -l < .ent-scope/ENT_ORG_ALLOWLIST.md) lines"
 
-      - name: Get app token for all allowlisted orgs (read-only repos:read)
+      # This token is used ONLY for pushing the branch / opening the PR in THIS repo.
+      # It must NOT be used for cross-org repo listing: an App installation token is
+      # always scoped to a single org, so a merglbot-core token silently sees nothing
+      # in the other 11 orgs (the 2026-05..07 scope-collapse regression). The resolver
+      # below mints its own per-org installation tokens from the App key instead.
+      - name: Get app installation token for merglbot-core (push/PR in this repo)
         id: all_orgs_token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
@@ -64,22 +69,32 @@ jobs:
           private-key: ${{ secrets.ENT_DEPENDABOT_APP_PRIVATE_KEY }}
           owner: merglbot-core
 
-      - name: Resolve ENT scope via API
+      - name: Resolve ENT scope via API (per-org App installation tokens)
         id: resolve
         env:
-          GH_TOKEN: ${{ steps.all_orgs_token.outputs.token }}
+          ENT_APP_CLIENT_ID: ${{ secrets.ENT_DEPENDABOT_APP_CLIENT_ID }}
+          ENT_APP_PRIVATE_KEY: ${{ secrets.ENT_DEPENDABOT_APP_PRIVATE_KEY }}
           ALLOWLIST_FILE: ${{ github.workspace }}/.ent-scope/ENT_ORG_ALLOWLIST.md
         run: |
           set -euo pipefail
           bash scripts/ent-scope/resolve-ent-scope.sh > .ent-scope/scope.json
           repo_count=$(jq '.repo_count' .ent-scope/scope.json)
+          # Shrink guard: the committed scope is the last known-good baseline. A big
+          # shrink means a credential/visibility regression, never real estate decay —
+          # fail closed instead of opening a scope-collapsing PR (v6 caught exactly
+          # this class on the 2026-07 weekly PRs).
+          old_count=$(grep -c '^merglbot-' scripts/dependabot/ent_repository_scope.txt || echo 0)
+          if [ "$old_count" -gt 0 ] && [ $((repo_count * 10)) -lt $((old_count * 6)) ]; then
+            echo "::error ::Resolved $repo_count repos but committed baseline has $old_count (>40% shrink) — failing closed."
+            exit 1
+          fi
           echo "repo_count=$repo_count" >> "$GITHUB_OUTPUT"
           {
             echo 'scope_json<<ENDSCOPE'
             cat .ent-scope/scope.json
             echo 'ENDSCOPE'
           } >> "$GITHUB_OUTPUT"
-          echo "Resolved $repo_count repos"
+          echo "Resolved $repo_count repos (baseline $old_count)"
 
       - name: Regenerate downstream SSOT files
         id: regen
@@ -141,6 +156,23 @@ jobs:
           name: ent-scope
           path: .ent-scope/
           retention-days: 90
+
+      - name: Close superseded weekly scope PRs (dedup)
+        if: steps.diff.outputs.drift_detected == 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ steps.all_orgs_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          # Each weekly run supersedes any still-open older scope PR (same generated
+          # files, staler data). Close them so skeletons never accumulate again.
+          gh pr list --repo "${{ github.repository }}" --state open \
+            --json number,headRefName \
+            --jq '.[] | select(.headRefName | startswith("merglbot/ent-scope-refresh-")) | .number' \
+          | while read -r pr; do
+            gh pr close "$pr" --repo "${{ github.repository }}" \
+              --comment "Superseded by this week's ent-scope-refresh run (${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}); a fresh scope PR follows. Branch kept."
+            echo "closed superseded scope PR #$pr"
+          done
 
       - name: Open PR if drift detected (not dry-run)
         if: steps.diff.outputs.drift_detected == 'true' && github.event.inputs.dry_run != 'true'
