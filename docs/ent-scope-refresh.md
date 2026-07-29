@@ -20,15 +20,20 @@ for the latest snapshot).
 
 ## Files Refreshed in This Repo
 
-A scope refresh PR updates the locally mirrored scope artifacts so the
-PR Assistant rollout-audit and ENT Dependabot lane operate against current
-truth:
+The weekly scope refresh PR updates exactly ONE file:
 
-- `scripts/dependabot/ent_repository_scope.txt` — ENT downstream scope mirror.
-- `scripts/pr-assistant/repo-policy-manifest.json` — managed repo policy
-  manifest (includes `merglbot-core/github` as `canonical_self`).
-- `scripts/pr-assistant/target-repos.txt` — copy-deploy target list rendered
-  from the manifest.
+- `scripts/dependabot/ent_repository_scope.txt` — ENT downstream scope mirror
+  (regenerated from the org allowlist + live per-org App scan).
+
+Intentionally NOT touched by the scope refresh (manifest-owned surfaces;
+see `tests/test_ent_scope_refresh_contract.py`):
+
+- `scripts/pr-assistant/repo-policy-manifest.json` — curated repo policy
+  manifest (includes `merglbot-core/github` as `canonical_self`); new repos
+  are enrolled by policy decision, not by org scan.
+- `scripts/pr-assistant/target-repos.txt` — compatibility artifact rendered
+  from the manifest via `repo-policy-manifest.py sync-target-repos --write`
+  and enforced by the `verify-manifest` CI gate.
 - `scripts/pr-assistant/baselines/<date>/repo-policy-coverage-baseline.json` —
   rollout coverage baseline used by `rollout-audit`.
 
