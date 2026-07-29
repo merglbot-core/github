@@ -34,6 +34,10 @@ jobs:
           python3 scripts/pr-assistant/final-merge-readiness.py --self-test
           python3 -m py_compile scripts/dependabot/ent_dependabot_closeout.py
           python3 scripts/dependabot/ent_dependabot_closeout.py --self-test
+      - name: Run repo contract tests (unittest discover collects TestCase only)
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
       - name: Validate PR Assistant rollout manifest
         run: |
           set -euo pipefail
