@@ -27,9 +27,8 @@ from urllib.request import Request, urlopen
 
 
 DEPENDABOT_LOGINS = {"dependabot[bot]", "app/dependabot"}
-MERGLBOT_REVIEW_WORKFLOW_NAME = "Merglbot PR Assistant v3 (On-Demand Multi-Model)"
-# v6 (the local worker fleet) is comment-triggered; the retired v3 workflow_dispatch workflow
-# above no longer exists in enrolled repos. This is the canonical trigger the fleet listens for.
+# v6 (the local worker fleet) is comment-triggered; the retired v3 workflow_dispatch path was
+# removed. This is the canonical trigger the fleet listens for.
 MERGLBOT_REVIEW_TRIGGER_COMMENT = os.environ.get("ENT_DEPENDABOT_REVIEW_TRIGGER_COMMENT", "@merglbot review")
 # The gate ignores bot/app-authored trigger comments (anti-loop floor); only flip this to true
 # when the job posts comments with an owner-attributed credential the gate trusts.
@@ -1737,33 +1736,6 @@ def mark_fix_loop_candidate(
     receipt.evidence.append(evidence)
     receipt.evidence.append(f"max_fix_iterations={max_fix_iterations}")
     receipt.evidence.append(f"max_review_iterations={max_review_iterations}")
-
-
-def find_merglbot_review_workflow(repo: str) -> dict[str, Any]:
-    workflows = gh_api_json(repo_endpoint(repo, "actions/workflows?per_page=100"))
-    for workflow in workflows.get("workflows", []):
-        if workflow.get("name") == MERGLBOT_REVIEW_WORKFLOW_NAME and workflow.get("state") == "active":
-            return workflow
-    for workflow in workflows.get("workflows", []):
-        if workflow.get("name") == MERGLBOT_REVIEW_WORKFLOW_NAME:
-            return workflow
-    raise GhError(f"merglbot_review_workflow_missing:{MERGLBOT_REVIEW_WORKFLOW_NAME}")
-
-
-def latest_merglbot_dispatch_run(repo: str, workflow_id: int | str, head_ref: str, head_sha: str) -> dict[str, Any] | None:
-    encoded_ref = quote(head_ref, safe="")
-    runs = gh_api_json(repo_endpoint(repo, f"actions/workflows/{workflow_id}/runs?event=workflow_dispatch&branch={encoded_ref}&per_page=10"))
-    for run in runs.get("workflow_runs", []):
-        if run.get("head_sha") == head_sha:
-            return {
-                "id": run.get("id"),
-                "status": run.get("status"),
-                "conclusion": run.get("conclusion"),
-                "html_url": run.get("html_url"),
-                "head_sha": run.get("head_sha"),
-                "head_branch": run.get("head_branch"),
-            }
-    return None
 
 
 def classify_merglbot_trigger_error(message: str) -> str:
