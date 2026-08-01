@@ -27,10 +27,13 @@ class ReusableBuildAttestPrePushContractTests(unittest.TestCase):
 
     def test_scan_precedes_any_candidate_push(self) -> None:
         local_build = step_position(self.text, "Build local image for pre-push scan")
+        reclaim = step_position(self.text, "Reclaim BuildKit cache before Trivy")
         scan = step_position(self.text, "Run Trivy vulnerability scan")
         auth = step_position(self.text, "Authenticate to GCP")
         candidate = step_position(self.text, "Build final image and push isolated candidate")
 
+        self.assertLess(local_build, reclaim)
+        self.assertLess(reclaim, scan)
         self.assertLess(local_build, scan)
         self.assertLess(scan, auth)
         self.assertLess(auth, candidate)
@@ -41,9 +44,41 @@ class ReusableBuildAttestPrePushContractTests(unittest.TestCase):
         self.assertIn("provenance: false", local_block)
         self.assertIn("sbom: false", local_block)
 
+        reclaim_block = self.text[reclaim:scan]
+        self.assertIn("if: inputs.scan", reclaim_block)
+        self.assertIn("BUILDER_NAME: ${{ steps.buildx.outputs.name }}", reclaim_block)
+        self.assertIn('if [ -z "$BUILDER_NAME" ]', reclaim_block)
+        self.assertEqual(
+            reclaim_block.count("docker image inspect --format '{{.Id}}'"),
+            2,
+        )
+        self.assertIn(
+            'docker buildx prune --builder "$BUILDER_NAME" --all --force',
+            reclaim_block,
+        )
+        self.assertIn('if [ -z "$BEFORE_ID" ] || [ "$BEFORE_ID" != "$AFTER_ID" ]', reclaim_block)
+
         scan_block = self.text[scan:step_position(self.text, "Upload Trivy SARIF")]
         self.assertIn("image-ref: ${{ steps.refs.outputs.local_ref }}", scan_block)
         self.assertIn("exit-code: '1'", scan_block)
+        self.assertNotIn("continue-on-error", scan_block)
+
+        sarif_block = self.text[
+            step_position(self.text, "Upload Trivy SARIF"):
+            step_position(self.text, "Validate WIF provider (SSOT)")
+        ]
+        self.assertIn("inputs.scan && always()", sarif_block)
+        self.assertIn("hashFiles('trivy-results.sarif') != ''", sarif_block)
+
+    def test_buildx_builder_is_addressable_for_scoped_cache_reclaim(self) -> None:
+        setup = step_position(self.text, "Set up Docker Buildx")
+        local_build = step_position(self.text, "Build local image for pre-push scan")
+        setup_block = self.text[setup:local_build]
+
+        self.assertIn("id: buildx", setup_block)
+        self.assertIn("driver: docker-container", setup_block)
+        self.assertNotIn("docker system prune", self.text)
+        self.assertNotIn("docker image prune", self.text)
 
     def test_candidate_is_isolated_until_digest_parity(self) -> None:
         candidate = step_position(self.text, "Build final image and push isolated candidate")
