@@ -143,7 +143,10 @@ jobs:
           printf 'candidate_ref=%s:candidate-%s-%s\n' "$IMAGE" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
+        id: buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          driver: docker-container
 
       # The first build is deliberately local-only. A failed Trivy scan must
       # not create an Artifact Registry digest or incur a Container Scanning
@@ -165,6 +168,32 @@ jobs:
           provenance: false
           sbom: false
 
+      # The Playwright-based callers can load multi-gigabyte images. Keep the
+      # tagged Docker image that Trivy must inspect, but discard the duplicate
+      # BuildKit cache after it has already been exported to the GHA backend.
+      # This avoids exhausting the hosted runner while Trivy unpacks layers.
+      - name: Reclaim BuildKit cache before Trivy
+        if: inputs.scan
+        shell: bash
+        env:
+          BUILDER_NAME: ${{ steps.buildx.outputs.name }}
+          LOCAL_REF: ${{ steps.refs.outputs.local_ref }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BUILDER_NAME" ]; then
+            echo "::error::setup-buildx did not return an addressable builder name"
+            exit 1
+          fi
+
+          BEFORE_ID="$(docker image inspect --format '{{.Id}}' "$LOCAL_REF")"
+          docker buildx prune --builder "$BUILDER_NAME" --all --force
+          AFTER_ID="$(docker image inspect --format '{{.Id}}' "$LOCAL_REF")"
+
+          if [ -z "$BEFORE_ID" ] || [ "$BEFORE_ID" != "$AFTER_ID" ]; then
+            echo "::error::BuildKit cache reclaim changed or removed the image selected for Trivy"
+            exit 1
+          fi
+
       # Trivy remains in the build job and remains fail-closed. Because it
       # scans the local tag, no candidate has been pushed if this step fails.
       - name: Run Trivy vulnerability scan
@@ -182,7 +211,10 @@ jobs:
           trivyignores: ${{ inputs.trivyignores }}
 
       - name: Upload Trivy SARIF
-        if: inputs.scan && always()
+        # A vulnerability result still uploads SARIF. A Trivy tool/runtime
+        # failure remains fail-closed but does not add a second missing-file
+        # failure that obscures the original cause.
+        if: inputs.scan && always() && hashFiles('trivy-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
         with:
           sarif_file: 'trivy-results.sarif'
