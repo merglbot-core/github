@@ -35,12 +35,15 @@ merglbot-extractors/abra-flexi-extractor
 merglbot-extractors/ads-campaign-builder
 merglbot-extractors/bing-ads-extractor
 merglbot-extractors/cerano-forecast-exporter
+merglbot-extractors/currency-rates-extractor
 merglbot-extractors/denatura-additional-costs-extractor
+merglbot-extractors/denatura-custom-tasks-extractor
 merglbot-extractors/denatura-forecast-exporter
 merglbot-extractors/denatura-marketing-planning-ingest
 merglbot-extractors/denatura-shoptet-export-extractor
 merglbot-extractors/facebook-extractor
 merglbot-extractors/ga4-extractor
+merglbot-extractors/gsheets-cost-extractor
 merglbot-extractors/heureka-costs-extractor
 merglbot-extractors/hodinarstvi-ads-text-revision
 merglbot-extractors/hodinarstvi-brand-demand-extractor
@@ -50,6 +53,8 @@ merglbot-extractors/pipeline-doctor
 merglbot-extractors/ruzovyslon-forecast-exporter
 merglbot-extractors/search-console-extractor
 merglbot-extractors/shoptet-extractor
+merglbot-extractors/sklik-costs-extractor
+merglbot-extractors/tiktok-costs-extractor
 merglbot-hodinarstvibechyne/hodinarstvi-web
 merglbot-kiteboarding/kiteboarding-web
 merglbot-milan-private/fakturoid
@@ -71,7 +76,3 @@ merglbot-public/docs
 merglbot-public/kazdavterina-web
 merglbot-public/livero-web
 merglbot-public/website
-merglbot-ruzovyslon/business_forecasting
-merglbot-ruzovyslon/kbc_data_quality_metodology
-merglbot-ruzovyslon/ruzovyslon-web
-merglbot-ruzovyslon/viz-api
