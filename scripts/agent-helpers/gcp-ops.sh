@@ -120,7 +120,13 @@ health_check() {
 
     local endpoints=(
         "https://www.merglbot.ai/health"
-        "https://admin.merglbot.ai/health"
+        # admin-portal: use the real backend health endpoint, not the SPA route.
+        # `/health` on admin is not an endpoint at all — it falls through to the SPA
+        # fallback and returns 200 text/html even when the backend is dead (false green),
+        # and it sits inside the static surface that merglbot-admin#688 is hardening.
+        # `/healthz` is the server-implemented JSON health check (see the admin Dockerfile
+        # HEALTHCHECK, which already probes /healthz).
+        "https://admin.merglbot.ai/healthz"
         "https://www.merglbot.ai/api/viz/denatura/health"
     )
 
