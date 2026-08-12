@@ -71,9 +71,10 @@ github:
 gcp:
   billing_account_id: "XXXX-XXXX-XXXX"
   billing_export:
-    project_id: "billing-project"
-    dataset: "billing_export"
+    project_id: "merglbot-platform-prd"
+    dataset: "billing_export_euw1"
     table_pattern: "gcp_billing_export_v1_*"
+    currency: "CZK"
 ```
 
 3. Configure thresholds in `config/thresholds.yml`:
@@ -85,19 +86,22 @@ github:
       max: 30
 
 gcp:
+  currency: CZK
   defaults:
-    total_monthly_usd: 1000
+    total_monthly: 23000
   projects:
     production-project:
-      total_monthly_usd: 2000
+      total_monthly: 46000
 ```
 
 ## 🔑 Authentication
 
 ### GitHub
-Set the `GITHUB_TOKEN` environment variable:
+Set a separately scoped token for enterprise and organization billing reads. Keep
+`GITHUB_TOKEN` distinct for optional issue creation:
 ```bash
-export GITHUB_TOKEN="ghp_your_personal_access_token"
+export ENTERPRISE_GITHUB_TOKEN="<enterprise-read-token>"
+export GITHUB_TOKEN="<run-token-for-issue-creation>"
 ```
 
 Required scopes:
@@ -110,7 +114,7 @@ For local development:
 gcloud auth application-default login
 ```
 
-For CI/CD, use Workload Identity Federation (recommended) or service account key.
+For CI/CD, use Workload Identity Federation. Service account JSON keys are not supported.
 
 ### Slack (Optional)
 Set the webhook URL:
@@ -167,12 +171,12 @@ Structured data with columns:
 - `service`: Service name
 - `metric`: Metric type
 - `value`: Numeric value
-- `currency`: USD/count
+- `currency`: source currency (`USD` for GitHub, billing-account currency for GCP) or `count`
 - `month`: Report month
 
 ### Markdown Report
 Human-readable report with:
-- Executive summary
+- Currency-separated executive summary (no invalid cross-currency grand total)
 - GitHub Enterprise breakdown
 - GCP project costs
 - Top services by cost
@@ -244,6 +248,8 @@ cost-monitoring/
 - Store secrets in GitHub Secrets or Secret Manager
 - Mask sensitive values in logs
 - Use minimal required permissions
+- Keep billing queries partition- and usage-time bounded with a 5 GiB maximum-bytes guard
+- Fail closed on missing data, query/schema errors, or mixed export currencies
 
 ## 🧪 Testing
 
@@ -274,9 +280,9 @@ The tool tracks:
 
 ### Common Issues
 
-1. **"Missing GITHUB_TOKEN"**
-   - Ensure the token is set in environment
-   - Verify token has required scopes
+1. **"Missing ENTERPRISE_GITHUB_TOKEN"**
+   - Ensure the separately scoped enterprise billing-read token is configured
+   - Verify the token has the required read scopes
 
 2. **"Failed to query BigQuery"**
    - Check GCP authentication
@@ -311,7 +317,7 @@ MIT License - see LICENSE file for details.
 
 ## 🎯 Roadmap
 
-- [ ] Multi-currency support
+- [x] Currency-aware source reporting without cross-currency aggregation
 - [ ] Predictive cost modeling
 - [ ] Custom report templates
 - [ ] Cost optimization recommendations
