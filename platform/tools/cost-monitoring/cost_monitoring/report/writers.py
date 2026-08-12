@@ -71,6 +71,9 @@ def write_markdown(path: str, data: Dict[str, Any]) -> None:
             for om in org_members:
                 f.write(f"| {om['org']} | {om['members']} |\n")
             f.write("\n")
+        elif github_data.get("member_census_status") == "not_collected_unpriced":
+            f.write("### Organization Members\n\n")
+            f.write("Not collected (Enterprise Cloud seat price is not configured).\n\n")
 
         # GCP Section
         f.write("## GCP Costs\n\n")

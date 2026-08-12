@@ -219,7 +219,8 @@ def display_github_summary(data: Dict[str, Any]):
     table.add_row("Copilot Cost", f"${copilot.get('monthly_cost_usd', 0):,.2f}")
     table.add_row("Enterprise Seats", str(ec.get("seats", 0)))
     table.add_row("Enterprise Cost", f"${ec.get('monthly_cost_usd', 0):,.2f}")
-    table.add_row("Total Members", str(data.get("total_members", 0)))
+    total_members = data.get("total_members")
+    table.add_row("Total Members", str(total_members) if total_members is not None else "Not collected")
     table.add_row("[bold]Total Cost[/bold]", f"[bold]${data.get('total_monthly_cost_usd', 0):,.2f}[/bold]")
 
     console.print(table)
