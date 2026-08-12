@@ -97,7 +97,7 @@ gcp:
 ## 🔑 Authentication
 
 ### GitHub
-Set a separately scoped token for enterprise and organization billing reads. Keep
+Set a separately scoped token for organization aggregate billing reads. Keep
 `GITHUB_TOKEN` distinct for optional issue creation:
 ```bash
 export ENTERPRISE_GITHUB_TOKEN="<enterprise-read-token>"
@@ -105,8 +105,16 @@ export GITHUB_TOKEN="<run-token-for-issue-creation>"
 ```
 
 Required scopes:
-- `read:org` - Read organization data
-- `read:enterprise` - Read enterprise billing data
+- classic PAT: `manage_billing:copilot` or `read:org`;
+- fine-grained PAT / GitHub App: organization `GitHub Copilot Business: read`
+  or `Administration: read`.
+
+The calling account must be an owner of every configured organization.
+
+The monitor uses only the aggregate organization Copilot billing response. It
+does not call the enterprise seat-list endpoint or ingest seat identities.
+Missing organizations are skipped, while authorization, billing-configuration,
+provider, and schema errors fail the report closed.
 
 ### GCP
 For local development:

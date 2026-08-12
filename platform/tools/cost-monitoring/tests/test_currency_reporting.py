@@ -11,6 +11,8 @@ def sample_data():
             "total_monthly_cost_usd": 100.0,
             "copilot": {"monthly_cost_usd": 100.0},
             "enterprise_cloud": {"monthly_cost_usd": 0.0},
+            "total_members": None,
+            "member_census_status": "not_collected_unpriced",
         },
         "gcp": {
             "currency": "CZK",
@@ -41,6 +43,7 @@ def test_markdown_keeps_github_usd_and_gcp_czk_separate(tmp_path):
     assert "**GCP Costs**: 2,000.00 CZK" in report
     assert "**Cross-currency total**: not calculated" in report
     assert "Total Monthly Cost" not in report
+    assert "Not collected (Enterprise Cloud seat price is not configured)." in report
 
 
 def test_csv_propagates_source_currencies():
