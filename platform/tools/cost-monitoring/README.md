@@ -97,9 +97,11 @@ gcp:
 ## 🔑 Authentication
 
 ### GitHub
-Set the `GITHUB_TOKEN` environment variable:
+Set a separately scoped token for enterprise and organization billing reads. Keep
+`GITHUB_TOKEN` distinct for optional issue creation:
 ```bash
-export GITHUB_TOKEN="ghp_your_personal_access_token"
+export ENTERPRISE_GITHUB_TOKEN="<enterprise-read-token>"
+export GITHUB_TOKEN="<run-token-for-issue-creation>"
 ```
 
 Required scopes:
@@ -278,9 +280,9 @@ The tool tracks:
 
 ### Common Issues
 
-1. **"Missing GITHUB_TOKEN"**
-   - Ensure the token is set in environment
-   - Verify token has required scopes
+1. **"Missing ENTERPRISE_GITHUB_TOKEN"**
+   - Ensure the separately scoped enterprise billing-read token is configured
+   - Verify the token has the required read scopes
 
 2. **"Failed to query BigQuery"**
    - Check GCP authentication

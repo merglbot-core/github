@@ -72,6 +72,9 @@ jobs:
         working-directory: platform/tools/cost-monitoring
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          # Read-only enterprise/org billing APIs require the separately scoped token.
+          ENTERPRISE_GITHUB_TOKEN: ${{ secrets.ENTERPRISE_GITHUB_TOKEN }}
+          # Keep the run token isolated to optional issue creation.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MONITOR_MONTH: ${{ inputs.month }}
           MONITOR_DRY_RUN: ${{ inputs.dry_run }}

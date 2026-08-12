@@ -138,3 +138,14 @@ def test_workflow_dry_run_suppresses_separate_ai_usage_notifier():
         "- name: Generate Step Summary", 1
     )[0]
     assert "if: github.event_name != 'workflow_dispatch' || inputs.dry_run != true" in ai_alert_block
+
+
+def test_workflow_separates_enterprise_reads_from_issue_token():
+    repo_root = Path(__file__).resolve().parents[4]
+    workflow = (repo_root / ".github/workflows/cost-monitoring.yml").read_text(encoding="utf-8")
+
+    generate_block = workflow.split("- name: Generate cost report", 1)[1].split("- name: AI Usage Telemetry Alerts", 1)[
+        0
+    ]
+    assert "ENTERPRISE_GITHUB_TOKEN: ${{ secrets.ENTERPRISE_GITHUB_TOKEN }}" in generate_block
+    assert "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in generate_block
