@@ -50,7 +50,6 @@ merglbot-extractors/hodinarstvi-brand-demand-extractor
 merglbot-extractors/hodinarstvi-forecast-exporter
 merglbot-extractors/pinterest-extractor
 merglbot-extractors/pipeline-doctor
-merglbot-extractors/ruzovyslon-forecast-exporter
 merglbot-extractors/search-console-extractor
 merglbot-extractors/shoptet-extractor
 merglbot-extractors/sklik-costs-extractor
