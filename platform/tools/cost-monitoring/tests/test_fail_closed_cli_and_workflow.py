@@ -89,6 +89,14 @@ def test_soft_fail_applies_only_to_threshold_alerts(monkeypatch, tmp_path):
         },
     )
     monkeypatch.setattr(cli_module, "write_all_reports", lambda *args, **kwargs: {})
+    notification_calls = []
+
+    def record_notification(*args, **kwargs):
+        notification_calls.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(cli_module, "send_cost_report_to_slack", record_notification)
+    monkeypatch.setattr(cli_module, "create_github_issue_for_alerts", record_notification)
 
     result = CliRunner().invoke(
         cli_module.cli,
@@ -106,6 +114,7 @@ def test_soft_fail_applies_only_to_threshold_alerts(monkeypatch, tmp_path):
     )
 
     assert result.exit_code == 0
+    assert notification_calls == []
 
 
 def test_workflow_does_not_blanket_suppress_generate_failures():
@@ -119,3 +128,13 @@ def test_workflow_does_not_blanket_suppress_generate_failures():
     assert "--soft-fail" in generate_block
     assert "|| EXIT=" not in generate_block
     assert '"${CMD[@]}"' in generate_block
+
+
+def test_workflow_dry_run_suppresses_separate_ai_usage_notifier():
+    repo_root = Path(__file__).resolve().parents[4]
+    workflow = (repo_root / ".github/workflows/cost-monitoring.yml").read_text(encoding="utf-8")
+
+    ai_alert_block = workflow.split("- name: AI Usage Telemetry Alerts (Budgets)", 1)[1].split(
+        "- name: Generate Step Summary", 1
+    )[0]
+    assert "if: github.event_name != 'workflow_dispatch' || inputs.dry_run != true" in ai_alert_block

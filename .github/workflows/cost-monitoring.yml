@@ -93,6 +93,10 @@ jobs:
 
       - name: AI Usage Telemetry Alerts (Budgets)
         id: ai_usage_alerts
+        # This is a separate notifier path from the main CLI. A workflow-dispatch
+        # dry run must suppress both paths; scheduled runs and normal dispatches
+        # still execute the budget alerts.
+        if: github.event_name != 'workflow_dispatch' || inputs.dry_run != true
         working-directory: platform/tools/cost-monitoring
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
