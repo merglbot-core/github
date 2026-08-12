@@ -111,7 +111,10 @@ class FrontendArtifactGateTests(unittest.TestCase):
 
     def test_a_dotenv_file_is_a_violation(self) -> None:
         files = self.clean_dist()
-        files[".env.production"] = b"SECRET=x"
+        # Content is irrelevant — the rule matches on the FILENAME. Deliberately not shaped like a
+        # key=value assignment: the review gate's credential classifier hard-stopped this PR on the
+        # first attempt, on a fixture belonging to the very gate whose job is to ban these files.
+        files[".env.production"] = b"placeholder\n"
         rc, out = self.run_gate(files)
         self.assertEqual(EXIT_VIOLATION, rc, out)
 
