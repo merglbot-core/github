@@ -14,15 +14,22 @@ logger = logging.getLogger(__name__)
 API = "https://api.github.com"
 
 
-def _headers() -> Dict[str, str]:
-    """Get headers with GitHub token for API calls."""
-    token = os.environ.get("GITHUB_TOKEN", "")
+def _enterprise_token() -> str:
+    """Return the separately scoped token used for enterprise billing reads."""
+
+    token = os.environ.get("ENTERPRISE_GITHUB_TOKEN", "")
     if not token:
-        raise RuntimeError("Missing GITHUB_TOKEN")
+        raise RuntimeError("Missing ENTERPRISE_GITHUB_TOKEN")
+    return token
+
+
+def _headers() -> Dict[str, str]:
+    """Get headers for read-only enterprise and organization API calls."""
+
     return {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
-        "Authorization": f"Bearer {token}",
+        "Authorization": f"Bearer {_enterprise_token()}",
     }
 
 
@@ -84,8 +91,8 @@ def collect_github(enterprise: str, orgs: List[str], pricing: Dict[str, float]) 
     """Collect all GitHub cost data."""
 
     # Validate authentication before any best-effort endpoint handling.
-    _headers()
-    gh = Github(os.environ["GITHUB_TOKEN"])
+    enterprise_token = _enterprise_token()
+    gh = Github(enterprise_token)
 
     # Collect org member counts
     org_members = []
