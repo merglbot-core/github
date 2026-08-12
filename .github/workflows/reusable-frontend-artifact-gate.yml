@@ -1,0 +1,90 @@
+# Frontend Build-Artifact Gate — reusable workflow
+#
+# Purpose: fail CI when a built `dist/` ships something it should not — a source map, an
+# undeclared artifact type, a missing hygiene file, or an image that is not in the frozen
+# inventory. S5 preventive components 3, 4 and 5a from the 2026-08-05 external security audit
+# (merglbot-core/infra#1912).
+#
+# Usage in a caller workflow, right after `npm run build`:
+#
+#   jobs:
+#     artifact-gate:
+#       uses: merglbot-core/github/.github/workflows/reusable-frontend-artifact-gate.yml@<sha>
+#       with:
+#         dist_path: dist
+#         baseline_path: security/frontend-artifact-contract.json
+#         extra_assets_path: packages        # optional; see below
+#
+# `extra_assets_path` is not decoration. merglbot-public/website#470 — the one confirmed
+# client-data leak in this estate — was twelve PNGs under `packages/*/src/**/assets/`, bundled
+# into dist by Vite AND republished through the npm package to every tenant web repo. Guarding
+# only `dist/` catches that one step too late.
+#
+# Exit codes from the gate, surfaced as the job result:
+#   0  contract holds
+#   1  violation — the artifact is wrong
+#   2  cannot conclude — no dist, no index.html, below the file floor, malformed baseline
+#
+# Both 1 and 2 fail the job. The distinction is for the human reading the log: 2 means the gate
+# could not form an opinion, which must never be mistaken for a pass.
+
+name: Reusable Frontend Artifact Gate
+
+on:
+  workflow_call:
+    inputs:
+      dist_path:
+        description: 'Path to the built artifact directory'
+        required: false
+        default: 'dist'
+        type: string
+      baseline_path:
+        description: 'Path to the artifact contract JSON'
+        required: false
+        default: 'security/frontend-artifact-contract.json'
+        type: string
+      extra_assets_path:
+        description: 'Optional extra directory to include in the image freeze (e.g. packages)'
+        required: false
+        default: ''
+        type: string
+      gate_ref:
+        description: 'Ref of merglbot-core/github to take the gate from'
+        required: false
+        default: 'main'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  artifact-gate:
+    name: Frontend artifact gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Checkout the gate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: merglbot-core/github
+          ref: ${{ inputs.gate_ref }}
+          path: .merglbot-gate
+
+      - name: Run the gate
+        env:
+          DIST_PATH: ${{ inputs.dist_path }}
+          BASELINE_PATH: ${{ inputs.baseline_path }}
+          EXTRA_ASSETS_PATH: ${{ inputs.extra_assets_path }}
+        run: |
+          set -euo pipefail
+          ARGS=(--dist "$DIST_PATH" --baseline "$BASELINE_PATH")
+          if [ -n "$EXTRA_ASSETS_PATH" ]; then
+            ARGS+=(--extra-assets "$EXTRA_ASSETS_PATH")
+          fi
+          # Deliberately NOT `|| true` and not piped: the exit code is the whole product of this
+          # job, and a pipe would replace it with the exit code of the last command in the pipe.
+          node .merglbot-gate/scripts/frontend-artifact-gate/gate.mjs "${ARGS[@]}"

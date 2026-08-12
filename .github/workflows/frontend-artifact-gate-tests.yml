@@ -1,0 +1,37 @@
+name: Frontend Artifact Gate Tests
+
+on:
+  pull_request:
+    paths:
+      - "scripts/frontend-artifact-gate/**"
+      - "tests/test_frontend_artifact_gate.py"
+      - ".github/workflows/frontend-artifact-gate-tests.yml"
+      # The reusable workflow is the only consumer of the gate's CLI contract (--dist,
+      # --baseline, --extra-assets). An edit there that drops a flag would leave the gate
+      # passing its own tests while doing nothing in every caller repo.
+      - ".github/workflows/reusable-frontend-artifact-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    name: Frontend Artifact Gate Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.11"
+
+      # No dependency install step on purpose: the gate is zero-dependency Node and the tests are
+      # stdlib-only. A gate that needs its own install is a gate that gets skipped when the
+      # install breaks.
+      - name: Run gate contract tests
+        run: python3 -m unittest discover -s tests -p "test_frontend_artifact_gate.py" -v
