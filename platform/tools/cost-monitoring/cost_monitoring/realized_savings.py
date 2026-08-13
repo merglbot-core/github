@@ -163,7 +163,7 @@ def classify_action(
         base.update(state="DATA_GAP", reason="export_freshness_missing")
         return base
     if int(health.get("missing_partition_days", 0)):
-        base.update(state="DATA_GAP", reason="missing_post_window_partitions")
+        base.update(state="DATA_GAP", reason="missing_equal_window_partitions")
         return base
     required_last_day = (action.post_end - timedelta(microseconds=1)).date()
     if latest_usage < required_last_day or latest_partition < required_last_day:
@@ -243,15 +243,19 @@ def _query_sql(actions: list[Action]) -> tuple[str, list[bigquery.QueryParameter
             """)
         health_parts.append(f"""
             SELECT @action_{index} AS action_id,
-                   COUNTIF(day NOT IN (SELECT partition_day FROM partitions)) AS missing_partition_days
-              FROM UNNEST(GENERATE_DATE_ARRAY(DATE(@cutoff_{index}), DATE(@post_end_{index}) - 1)) day
+                   COUNTIF(day NOT IN (SELECT partition_day FROM partition_inventory)) AS missing_partition_days
+              FROM UNNEST(GENERATE_DATE_ARRAY(
+                     DATE(@pre_start_{index}),
+                     DATE(TIMESTAMP_SUB(@post_end_{index}, INTERVAL 1 MICROSECOND)))) day
             """)
     earliest = min(action.pre_start for action in actions)
     latest = max(action.post_end for action in actions)
+    partition_start = earliest.replace(hour=0, minute=0, second=0, microsecond=0)
     parameters.extend(
         [
             bigquery.ScalarQueryParameter("earliest_usage", "TIMESTAMP", earliest),
             bigquery.ScalarQueryParameter("latest_usage", "TIMESTAMP", latest),
+            bigquery.ScalarQueryParameter("partition_start", "TIMESTAMP", partition_start),
             bigquery.ScalarQueryParameter("partition_end", "TIMESTAMP", datetime.now(UTC)),
         ]
     )
@@ -259,13 +263,18 @@ def _query_sql(actions: list[Action]) -> tuple[str, list[bigquery.QueryParameter
     WITH source AS (
       SELECT usage_start_time, _PARTITIONTIME AS partition_time, project.id AS project_id,
              service.description AS service, sku.description AS sku, currency, cost, credits
-        FROM `{CANONICAL_TABLE}`
-       WHERE _PARTITIONTIME >= @earliest_usage
+       FROM `{CANONICAL_TABLE}`
+       WHERE _PARTITIONTIME >= @partition_start
          AND _PARTITIONTIME < @partition_end
          AND usage_start_time >= @earliest_usage
          AND usage_start_time < @latest_usage
     ),
-    partitions AS (SELECT DISTINCT DATE(partition_time) AS partition_day FROM source),
+    partition_inventory AS (
+      SELECT DISTINCT DATE(_PARTITIONTIME) AS partition_day
+        FROM `{CANONICAL_TABLE}`
+       WHERE _PARTITIONTIME >= @partition_start
+         AND _PARTITIONTIME < @partition_end
+    ),
     matched AS ({' UNION ALL '.join(action_parts)}),
     currencies AS (SELECT DISTINCT action_id, currency FROM matched WHERE currency IS NOT NULL),
     periods AS (SELECT 'pre' AS period UNION ALL SELECT 'post'),
@@ -280,7 +289,8 @@ def _query_sql(actions: list[Action]) -> tuple[str, list[bigquery.QueryParameter
     health AS ({' UNION ALL '.join(health_parts)}),
     freshness AS (
       SELECT MAX(DATE(usage_start_time)) AS latest_usage_date,
-             MAX(DATE(partition_time)) AS latest_partition_date FROM source
+             (SELECT MAX(partition_day) FROM partition_inventory) AS latest_partition_date
+        FROM source
     )
     SELECT aggregate_rows.*, health.missing_partition_days,
            freshness.latest_usage_date, freshness.latest_partition_date
@@ -300,12 +310,15 @@ def query_aggregates(
     config.maximum_bytes_billed = MAXIMUM_BYTES_BILLED
     try:
         job = client.query(sql, job_config=config)
-        processed = int(job.total_bytes_processed or 0)
-        if processed > MAXIMUM_BYTES_BILLED:
-            raise RealizedSavingsError("BigQuery dry-run estimate exceeds the 5 GiB safety cap")
         if query_dry_run:
+            processed = int(job.total_bytes_processed or 0)
+            if processed > MAXIMUM_BYTES_BILLED:
+                raise RealizedSavingsError("BigQuery dry-run estimate exceeds the 5 GiB safety cap")
             return [], {}, processed
         raw_rows = list(job.result())
+        processed = int(job.total_bytes_processed or 0)
+        if processed > MAXIMUM_BYTES_BILLED:
+            raise RealizedSavingsError("BigQuery query exceeded the 5 GiB safety cap")
     except RealizedSavingsError:
         raise
     except Exception as exc:
@@ -404,6 +417,59 @@ def verify(
             "raw_provider_payloads_emitted": 0,
         },
     }
+
+
+def receipt_fingerprint(receipt: dict[str, Any]) -> str:
+    """Return a stable hash for a sanitized verdict, excluding run metadata."""
+
+    actions = sorted(receipt.get("actions", []), key=lambda item: str(item.get("action_id", "")))
+    payload = {
+        "schema_version": receipt.get("schema_version"),
+        "verdict": receipt.get("verdict"),
+        "billing_table": receipt.get("billing_table"),
+        "config_sha256": receipt.get("config_sha256"),
+        "window_days": receipt.get("window_days"),
+        "actions": [
+            {
+                "action_id": item.get("action_id"),
+                "cutoff": item.get("cutoff"),
+                "eligible_at": item.get("eligible_at"),
+                "state": item.get("state"),
+                "reason": item.get("reason"),
+                "amounts_by_currency": item.get("amounts_by_currency", {}),
+            }
+            for item in actions
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def attach_delivery_state(receipt: dict[str, Any], previous_receipt: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Mark only a new eligible verdict for delivery; ordinary waiting stays silent."""
+
+    fingerprint = receipt_fingerprint(receipt)
+    previous_fingerprint = receipt_fingerprint(previous_receipt) if previous_receipt else None
+    if receipt.get("verdict") == "NOT_ELIGIBLE_YET":
+        transition = "SILENT_WAITING"
+    elif previous_fingerprint == fingerprint:
+        transition = "SILENT_UNCHANGED"
+    else:
+        transition = "DELIVER_NEW_VERDICT"
+    receipt["delivery"] = {"fingerprint": fingerprint, "transition": transition}
+    return receipt
+
+
+def read_previous_receipt(path: str | Path) -> dict[str, Any]:
+    """Load one aggregate-only prior receipt and reject unrelated state."""
+
+    try:
+        receipt = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("Previous realized-savings receipt is unreadable") from exc
+    if not isinstance(receipt, dict) or receipt.get("billing_table") != CANONICAL_TABLE:
+        raise ValueError("Previous realized-savings receipt has an invalid schema")
+    return receipt
 
 
 def write_receipt(path: str | Path, receipt: dict[str, Any]) -> None:

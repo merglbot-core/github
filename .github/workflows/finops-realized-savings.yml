@@ -12,6 +12,7 @@ on:
         default: true
 
 permissions:
+  actions: read
   contents: read
   id-token: write
 
@@ -42,17 +43,44 @@ jobs:
       - name: Install verifier
         run: python -m pip install -e platform/tools/cost-monitoring
 
+      - name: Restore prior aggregate verdict state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          artifact_id="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=finops-realized-savings-state&per_page=10" \
+            --jq '.artifacts | map(select(.expired == false)) | sort_by(.created_at) | reverse | .[0].id // empty')"
+          if [ -n "$artifact_id" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > /tmp/finops-state.zip
+            unzip -p /tmp/finops-state.zip realized-savings.json > /tmp/previous-realized-savings.json
+          fi
+
       - name: Verify equal windows
+        id: verify
         working-directory: platform/tools/cost-monitoring
         env:
           QUERY_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.query_dry_run || false }}
         run: |
           set -euo pipefail
           ARGS=(realized-savings --config config/realized-savings.yml --out reports/realized-savings.json)
+          if [ -s /tmp/previous-realized-savings.json ]; then
+            ARGS+=(--previous /tmp/previous-realized-savings.json)
+          fi
           if [ "$QUERY_DRY_RUN" = "true" ]; then
             ARGS+=(--query-dry-run)
           fi
           python -m cost_monitoring.cli "${ARGS[@]}"
+          {
+            echo "verdict=$(jq -r '.verdict' reports/realized-savings.json)"
+            echo "transition=$(jq -r '.delivery.transition' reports/realized-savings.json)"
+            echo "fingerprint=$(jq -r '.delivery.fingerprint' reports/realized-savings.json)"
+            if jq -e '.query_dry_run == true' reports/realized-savings.json > /dev/null; then
+              echo "artifact_name=finops-realized-savings-dry-run-${GITHUB_RUN_ID}"
+            else
+              echo "artifact_name=finops-realized-savings-state"
+            fi
+          } >> "$GITHUB_OUTPUT"
 
       - name: Publish aggregate-only summary
         if: always() && hashFiles('platform/tools/cost-monitoring/reports/realized-savings.json') != ''
@@ -68,6 +96,7 @@ jobs:
           print(f"- Verdict: `{receipt['verdict']}`")
           print(f"- Query dry-run: `{receipt['query_dry_run']}`")
           print(f"- Bytes processed: `{receipt['total_bytes_processed']}` (cap 5 GiB)")
+          print(f"- Delivery transition: `{receipt['delivery']['transition']}`")
           for state, count in sorted(counts.items()):
               print(f"- {state}: `{count}`")
           print("- Portfolio/cross-currency total: `not calculated`")
@@ -77,6 +106,19 @@ jobs:
         if: always() && hashFiles('platform/tools/cost-monitoring/reports/realized-savings.json') != ''
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: finops-realized-savings-${{ github.run_id }}
+          name: ${{ steps.verify.outputs.artifact_name }}
           path: platform/tools/cost-monitoring/reports/realized-savings.json
           retention-days: 90
+
+      - name: Deliver new aggregate verdict
+        if: steps.verify.outputs.transition == 'DELIVER_NEW_VERDICT'
+        env:
+          VERDICT: ${{ steps.verify.outputs.verdict }}
+          FINGERPRINT: ${{ steps.verify.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          if [ "$VERDICT" = "REALIZED" ]; then
+            echo "::notice title=New FinOps equal-window verdict::REALIZED; sanitized receipt fingerprint ${FINGERPRINT}"
+          else
+            echo "::warning title=New FinOps equal-window verdict::${VERDICT}; sanitized receipt fingerprint ${FINGERPRINT}"
+          fi

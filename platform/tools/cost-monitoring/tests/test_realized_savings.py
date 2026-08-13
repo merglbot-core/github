@@ -69,7 +69,7 @@ def test_missing_partitions_are_data_gap():
         eligible_time(item),
     )
     assert result["state"] == "DATA_GAP"
-    assert result["reason"] == "missing_post_window_partitions"
+    assert result["reason"] == "missing_equal_window_partitions"
 
 
 def test_negative_credits_are_reflected_in_net_savings():
@@ -124,14 +124,25 @@ def test_query_has_exact_source_partition_usage_and_five_gib_guards():
     sql, parameters = realized_savings._query_sql([action()])
     names = {parameter.name for parameter in parameters}
     assert f"`{realized_savings.CANONICAL_TABLE}`" in sql
-    assert "_PARTITIONTIME >= @earliest_usage" in sql
+    assert "_PARTITIONTIME >= @partition_start" in sql
+    assert "_PARTITIONTIME >= @earliest_usage" not in sql
     assert "_PARTITIONTIME < @partition_end" in sql
     assert "usage_start_time >= @earliest_usage" in sql
     assert "usage_start_time < @latest_usage" in sql
     assert "cost + IFNULL" in sql
     assert " AS window" not in sql
     assert "STRPOS(LOWER(sku), LOWER(needle))" in sql
-    assert {"earliest_usage", "latest_usage", "partition_end"} <= names
+    assert "DATE(TIMESTAMP_SUB(@post_end_0, INTERVAL 1 MICROSECOND))" in sql
+    assert sql.count(f"`{realized_savings.CANONICAL_TABLE}`") == 2
+    assert {"earliest_usage", "latest_usage", "partition_start", "partition_end"} <= names
+
+
+def test_partition_start_is_utc_midnight_before_exact_usage_start():
+    item = action(cutoff=datetime(2026, 1, 31, 19, 21, 43, tzinfo=UTC))
+    _, parameters = realized_savings._query_sql([item])
+    values = {parameter.name: parameter.value for parameter in parameters if hasattr(parameter, "value")}
+    assert values["earliest_usage"] == datetime(2026, 1, 1, 19, 21, 43, tzinfo=UTC)
+    assert values["partition_start"] == datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class DryRunClient:
@@ -144,6 +155,19 @@ class DryRunClient:
         self.sql = sql
         self.config = job_config
         return SimpleNamespace(total_bytes_processed=self.processed)
+
+
+class LiveQueryJob:
+    total_bytes_processed = None
+
+    def result(self):
+        self.total_bytes_processed = 4321
+        return []
+
+
+class LiveQueryClient:
+    def query(self, sql, job_config):
+        return LiveQueryJob()
 
 
 def test_bounded_query_dry_run_reads_no_rows():
@@ -160,6 +184,15 @@ def test_query_dry_run_fails_if_provider_estimate_exceeds_cap():
     client = DryRunClient(realized_savings.MAXIMUM_BYTES_BILLED + 1)
     with pytest.raises(realized_savings.RealizedSavingsError, match="exceeds the 5 GiB"):
         realized_savings.query_aggregates(client, [action()], query_dry_run=True)
+
+
+def test_live_query_records_final_processed_bytes_after_completion():
+    result_rows, result_health, processed = realized_savings.query_aggregates(
+        LiveQueryClient(), [action()], query_dry_run=False
+    )
+    assert result_rows == []
+    assert result_health == {}
+    assert processed == 4321
 
 
 def test_versioned_config_keeps_secret_unstarted_and_actions_independent():
@@ -179,3 +212,49 @@ def test_versioned_config_keeps_secret_unstarted_and_actions_independent():
     secret = next(item for item in actions if item.action_id == "secret_retention_full_expansion")
     assert secret.cutoff is None
     assert secret.expansion_receipt_sha256 is None
+
+
+def receipt(verdict="REALIZED", state="REALIZED", amount=40):
+    return {
+        "schema_version": 1,
+        "billing_table": realized_savings.CANONICAL_TABLE,
+        "config_sha256": "a" * 64,
+        "window_days": 30,
+        "generated_at": "2026-01-01T00:00:00Z",
+        "verdict": verdict,
+        "actions": [
+            {
+                "action_id": "test-action",
+                "cutoff": "2026-01-01T00:00:00Z",
+                "eligible_at": "2026-03-05T00:00:00Z",
+                "state": state,
+                "reason": "equal_window_reduction_verified",
+                "amounts_by_currency": {"CZK": {"realized_savings": amount}},
+            }
+        ],
+    }
+
+
+def test_waiting_delivery_is_always_silent():
+    current = receipt(verdict="NOT_ELIGIBLE_YET", state="NOT_ELIGIBLE_YET", amount=0)
+    result = realized_savings.attach_delivery_state(current)
+    assert result["delivery"]["transition"] == "SILENT_WAITING"
+
+
+def test_new_eligible_verdict_is_delivered_once():
+    current = receipt()
+    first = realized_savings.attach_delivery_state(current.copy())
+    previous = current.copy()
+    previous["generated_at"] = "2026-01-02T00:00:00Z"
+    previous["total_bytes_processed"] = 123456
+    previous["delivery"] = {"transition": "DELIVER_NEW_VERDICT", "fingerprint": "ignored"}
+    repeated = realized_savings.attach_delivery_state(current.copy(), previous)
+    assert first["delivery"]["transition"] == "DELIVER_NEW_VERDICT"
+    assert repeated["delivery"]["transition"] == "SILENT_UNCHANGED"
+
+
+def test_changed_eligible_verdict_is_delivered_again():
+    previous = receipt(amount=40)
+    current = receipt(verdict="MISMATCH", state="MISMATCH", amount=0)
+    result = realized_savings.attach_delivery_state(current, previous)
+    assert result["delivery"]["transition"] == "DELIVER_NEW_VERDICT"

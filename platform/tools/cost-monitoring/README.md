@@ -145,6 +145,14 @@ The Secret Manager scenario stays `NOT_ELIGIBLE_YET` until both a full-expansion
 timestamp and its immutable owner/hook receipt SHA-256 are committed to the
 measurement contract. The unreceipted 2026-08-07 bulk destruction is excluded.
 
+Scheduled runs restore the last non-dry-run aggregate receipt and hash only the
+stable verdict payload. Ordinary waiting and unchanged verdicts remain silent;
+only a new `REALIZED`, `MISMATCH`, or `DATA_GAP` state emits a workflow
+annotation. Dry-run artifacts are isolated from this state. The authorized
+FinOps closeout consumer links the resulting aggregate artifact fingerprint to
+the closed audit issue; this least-privilege workflow does not receive a
+cross-repository write token.
+
 ### Slack (Optional)
 Set the webhook URL:
 ```bash
