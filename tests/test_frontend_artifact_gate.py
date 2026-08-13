@@ -243,5 +243,50 @@ class FrontendArtifactGateTests(unittest.TestCase):
         self.assertEqual(EXIT_CANNOT_CONCLUDE, rc, out)
 
 
+class SourceIsReviewableTests(unittest.TestCase):
+    """Source that git treats as binary is source nobody reviews.
+
+    This gate spent its whole first life unreviewed. `gate.mjs` carried two literal NUL bytes as a
+    glob-expansion sentinel, which makes the entire file binary to git: `git diff` reported
+    `Bin 0 -> 8332 bytes`, `--numstat` gave `-` for both counts, and all 202 lines were absent from
+    every diff the review gate fetched. No engine ever saw a line of it.
+
+    What made it expensive was the shape of the symptom. The PR reported
+    `blocked_missing_authority` with `ACTIONABLE_FINDINGS_COUNT: unknown` — indistinguishable from a
+    permissions problem, and it sat waiting for an authority grant that would have merged 202
+    unreviewed lines.
+
+    Bytes, not `git check-attr`: `.gitattributes` can force a diff for a file that is still binary
+    in fact, which would make this pass while the reviewer still sees nothing.
+    """
+
+    TEXT_SUFFIXES = {".mjs", ".js", ".cjs", ".py", ".sh", ".json", ".yml", ".yaml", ".md", ".txt"}
+
+    def test_no_tracked_source_file_contains_a_nul_byte(self) -> None:
+        checked = 0
+        offenders = []
+        for directory in ("scripts", "tests"):
+            root = REPO_ROOT / directory
+            if not root.is_dir():
+                continue
+            for path in root.rglob("*"):
+                if not path.is_file() or path.suffix not in self.TEXT_SUFFIXES:
+                    continue
+                checked += 1
+                if b"\x00" in path.read_bytes():
+                    offenders.append(str(path.relative_to(REPO_ROOT)))
+        # A guard that scanned nothing would pass forever; assert it had material to work on.
+        self.assertGreater(checked, 5, "scanned too few files to be a guard")
+        self.assertEqual([], offenders, "these files are binary to git and cannot be reviewed")
+
+    def test_the_gate_itself_is_text(self) -> None:
+        """Named separately from the sweep above.
+
+        If someone later narrows the sweep's directory list, the file this whole suite exists for
+        must still be covered.
+        """
+        self.assertNotIn(b"\x00", GATE.read_bytes())
+
+
 if __name__ == "__main__":
     unittest.main()
