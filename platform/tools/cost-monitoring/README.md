@@ -124,6 +124,27 @@ gcloud auth application-default login
 
 For CI/CD, use Workload Identity Federation. Service account JSON keys are not supported.
 
+## Equal-window realized savings
+
+The durable FinOps verifier compares independent 30-day pre/post windows only
+after the configured billing lag. It reads only the canonical
+`merglbot-platform-prd.billing_export_euw1` standard export, enforces both
+`_PARTITIONTIME` and usage-time bounds, and hard-caps the single aggregate query
+at 5 GiB. Receipts never include billing rows or identities and never calculate
+a cross-action or cross-currency grand total.
+
+```bash
+# Safe provider-side byte estimate; no billing rows are read.
+cost-monitor realized-savings --query-dry-run
+
+# Scheduled verification (read-only aggregate query).
+cost-monitor realized-savings --out reports/realized-savings.json
+```
+
+The Secret Manager scenario stays `NOT_ELIGIBLE_YET` until both a full-expansion
+timestamp and its immutable owner/hook receipt SHA-256 are committed to the
+measurement contract. The unreceipted 2026-08-07 bulk destruction is excluded.
+
 ### Slack (Optional)
 Set the webhook URL:
 ```bash
