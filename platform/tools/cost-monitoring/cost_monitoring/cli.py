@@ -22,6 +22,13 @@ from .alerting.thresholds import evaluate_all_thresholds, format_alert_message
 from .monitor.gcp_monitor import collect_gcp
 from .monitor.github_monitor import collect_github
 from .report.writers import write_all_reports
+from .realized_savings import (
+    RealizedSavingsError,
+    attach_delivery_state as attach_realized_savings_delivery_state,
+    read_previous_receipt as read_previous_realized_savings_receipt,
+    verify as verify_realized_savings,
+    write_receipt,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -136,6 +143,37 @@ def generate(month, config, thresholds, outdir, formats, dry_run, soft_fail):
         console.print(f"\n[red]Fatal cost-monitoring error ({error_class})[/red]")
         logger.error("Fatal cost-monitoring error (%s)", error_class)
         sys.exit(1)
+
+
+@cli.command("realized-savings")
+@click.option("--config", default="config/realized-savings.yml", help="Path to the action measurement contract")
+@click.option("--out", default="reports/realized-savings.json", help="Sanitized aggregate receipt path")
+@click.option("--previous", default=None, help="Prior aggregate receipt used only to suppress unchanged delivery")
+@click.option("--as-of", default=None, help="UTC ISO-8601 evaluation time (tests/manual replay only)")
+@click.option("--query-dry-run", is_flag=True, default=False, help="Estimate bytes without reading billing rows")
+def realized_savings(config, out, previous, as_of, query_dry_run):
+    """Verify equal 30-day pre/post FinOps billing windows."""
+
+    try:
+        evaluation_time = None
+        if as_of:
+            evaluation_time = dt.datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+            if evaluation_time.tzinfo is None:
+                raise ValueError("--as-of must include a timezone")
+        receipt = verify_realized_savings(
+            config,
+            as_of=evaluation_time,
+            query_dry_run=query_dry_run,
+        )
+        previous_receipt = read_previous_realized_savings_receipt(previous) if previous else None
+        receipt = attach_realized_savings_delivery_state(receipt, previous_receipt)
+        write_receipt(out, receipt)
+        console.print(receipt["verdict"])
+    except click.exceptions.Exit:
+        raise
+    except (OSError, ValueError, RealizedSavingsError) as exc:
+        console.print(f"[red]Realized-savings verifier failed closed ({type(exc).__name__})[/red]")
+        raise click.exceptions.Exit(1) from None
 
 
 @cli.command()
