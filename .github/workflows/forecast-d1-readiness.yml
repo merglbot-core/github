@@ -39,18 +39,6 @@ on:
     - cron: "15 8 * * *"
     - cron: "15 9 * * *"
 
-    # Ruzovyslon dedicated runs at 09:15 and 11:15 Europe/Prague.
-    # GitHub cron is UTC; we reuse the 15 7/8/9 entries above and add 15 10 for CET 11:15.
-    #
-    # 09:15 Europe/Prague:
-    # - CET  (UTC+1): 09:15 local -> 08:15 UTC (already scheduled above)
-    # - CEST (UTC+2): 09:15 local -> 07:15 UTC (already scheduled above)
-    #
-    # 11:15 Europe/Prague:
-    # - CET  (UTC+1): 11:15 local -> 10:15 UTC
-    # - CEST (UTC+2): 11:15 local -> 09:15 UTC (already scheduled above)
-    - cron: "15 10 * * *"
-
     # Autodoplnky dedicated runs at 09:05 and 12:05 Europe/Prague.
     # GitHub cron is UTC, so we schedule a UTC superset and gate inside the script (DST-safe).
     #
@@ -180,14 +168,18 @@ jobs:
             CMD+=( --patch-date-local "$PATCH_DATE_LOCAL" )
           fi
 
-          EXTRA_ARGS=()
+          # The Ruzovyslon runtime was decommissioned and its readiness lane
+          # cannot produce a meaningful result. Keep it out of both scheduled
+          # and manual broad scopes until an independently verified runtime is
+          # introduced.
+          EXTRA_ARGS=( --exclude-tenant "ruzovyslon" )
           if [[ "${MODE}" == "auto" ]]; then
             case "${GITHUB_EVENT_SCHEDULE:-}" in
               15\ *)
                 EXTRA_ARGS+=( --include-tenant "denatura" --auto-utc-minute "15" --auto-local-hour "8" --auto-local-hour "10" )
                 ;;
               20\ *)
-                EXTRA_ARGS+=( --exclude-tenant "denatura" --exclude-tenant "cerano" --exclude-tenant "livero" --exclude-tenant "proteinaco" --exclude-tenant "ruzovyslon" --exclude-tenant "autodoplnky" --allow-empty-specs )
+                EXTRA_ARGS+=( --exclude-tenant "denatura" --exclude-tenant "cerano" --exclude-tenant "livero" --exclude-tenant "proteinaco" --exclude-tenant "autodoplnky" --allow-empty-specs )
                 ;;
               0\ *)
                 EXTRA_ARGS+=( --include-tenant "cerano" --include-tenant "livero" --auto-utc-minute "0" --auto-local-hour "9" --auto-local-hour "11" )
@@ -303,14 +295,14 @@ jobs:
             --patch-date-local "$PATCH_DATE_LOCAL_D2"
           )
 
-          EXTRA_ARGS=()
+          EXTRA_ARGS=( --exclude-tenant "ruzovyslon" )
           if [[ "${MODE}" == "auto" ]]; then
             case "${GITHUB_EVENT_SCHEDULE:-}" in
               15\ *)
                 EXTRA_ARGS+=( --include-tenant "denatura" --auto-utc-minute "15" --auto-local-hour "8" --auto-local-hour "10" )
                 ;;
               20\ *)
-                EXTRA_ARGS+=( --exclude-tenant "denatura" --exclude-tenant "cerano" --exclude-tenant "livero" --exclude-tenant "proteinaco" --exclude-tenant "ruzovyslon" --exclude-tenant "autodoplnky" --allow-empty-specs )
+                EXTRA_ARGS+=( --exclude-tenant "denatura" --exclude-tenant "cerano" --exclude-tenant "livero" --exclude-tenant "proteinaco" --exclude-tenant "autodoplnky" --allow-empty-specs )
                 ;;
               0\ *)
                 EXTRA_ARGS+=( --include-tenant "cerano" --include-tenant "livero" --auto-utc-minute "0" --auto-local-hour "9" --auto-local-hour "11" )
@@ -467,153 +459,6 @@ jobs:
           )
 
           printf 'Running (proteinaco D-2):'
-          printf ' %q' "${CMD[@]}"
-          printf '\n'
-          EXIT=0
-          "${CMD[@]}" || EXIT=$?
-
-          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
-          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
-
-          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
-          if [ -f "$SUMMARY_JSON" ]; then
-            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          import os
-          from pathlib import Path
-
-          p = Path(os.environ["SUMMARY_JSON"])
-          s = json.loads(p.read_text(encoding="utf-8"))
-
-          def _v(key: str, default: str = "") -> str:
-              v = s.get(key, default)
-              return "" if v is None else str(v)
-
-          print(f"status={_v('status')}")
-          print(f"slot={_v('slot')}")
-          print(f"patch_date_local={_v('patch_date_local')}")
-          print(f"required_policy={_v('required_policy')}")
-          PY
-          else
-            echo "status=FAIL" >> "$GITHUB_OUTPUT"
-            echo "slot=" >> "$GITHUB_OUTPUT"
-            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
-            echo "required_policy=" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Run forecast D-1 readiness (Ruzovyslon)
-        id: guardrail_ruzovyslon
-        if: inputs.send_test_slack_messages != true && github.event_name == 'schedule' && startsWith(github.event.schedule, '15 ')
-        continue-on-error: true
-        env:
-          PATCH_DATE_LOCAL: ${{ inputs.patch_date_local }}
-          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
-          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
-        run: |
-          set -euo pipefail
-          OUTDIR="forecast-d1-readiness-out-ruzovyslon"
-
-          CMD=(
-            python scripts/guardrails/forecast_d1_readiness.py
-            --outdir "$OUTDIR"
-            --timezone "Europe/Prague"
-            --mode "$MODE"
-            --include-tenant "ruzovyslon"
-            --allow-empty-specs
-            --auto-utc-minute "15"
-            --auto-local-hour "9"
-            --auto-local-hour "11"
-          )
-          if [[ -n "${PATCH_DATE_LOCAL:-}" ]]; then
-            CMD+=( --patch-date-local "$PATCH_DATE_LOCAL" )
-          fi
-
-          printf 'Running (ruzovyslon):'
-          printf ' %q' "${CMD[@]}"
-          printf '\n'
-          EXIT=0
-          "${CMD[@]}" || EXIT=$?
-
-          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
-          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
-          echo "scope_label=ruzovyslon" >> "$GITHUB_OUTPUT"
-
-          SUMMARY_JSON="${OUTDIR}/forecast_d1_readiness_summary.json"
-          if [ -f "$SUMMARY_JSON" ]; then
-            SUMMARY_JSON="$SUMMARY_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          import os
-          from pathlib import Path
-
-          p = Path(os.environ["SUMMARY_JSON"])
-          s = json.loads(p.read_text(encoding="utf-8"))
-
-          def _v(key: str, default: str = "") -> str:
-              v = s.get(key, default)
-              return "" if v is None else str(v)
-
-          print(f"status={_v('status')}")
-          print(f"slot={_v('slot')}")
-          print(f"patch_date_local={_v('patch_date_local')}")
-          print(f"required_policy={_v('required_policy')}")
-          PY
-          else
-            echo "status=FAIL" >> "$GITHUB_OUTPUT"
-            echo "slot=" >> "$GITHUB_OUTPUT"
-            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
-            echo "required_policy=" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Run forecast D-2 readiness (Ruzovyslon, info only)
-        id: guardrail_d2_ruzovyslon
-        if: inputs.send_test_slack_messages != true && github.event_name == 'schedule' && startsWith(github.event.schedule, '15 ')
-        continue-on-error: true
-        env:
-          PATCH_DATE_LOCAL_D1: ${{ steps.guardrail_ruzovyslon.outputs.patch_date_local }}
-          MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'auto' }}
-          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
-        run: |
-          set -euo pipefail
-          OUTDIR="forecast-d1-readiness-out-d2-ruzovyslon"
-          mkdir -p "$OUTDIR"
-          echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
-
-          PATCH_DATE_LOCAL_D1="${PATCH_DATE_LOCAL_D1:-}"
-          if [ -z "${PATCH_DATE_LOCAL_D1}" ]; then
-            echo "ℹ️ Missing Ruzovyslon D-1 patch_date_local; skipping D-2 run."
-            echo "outdir=${OUTDIR}" >> "$GITHUB_OUTPUT"
-            echo "exit_code=0" >> "$GITHUB_OUTPUT"
-            echo "status=NOOP" >> "$GITHUB_OUTPUT"
-            echo "slot=" >> "$GITHUB_OUTPUT"
-            echo "patch_date_local=" >> "$GITHUB_OUTPUT"
-            echo "required_policy=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          PATCH_DATE_LOCAL_D2="$(
-            PATCH_DATE_LOCAL_D1="$PATCH_DATE_LOCAL_D1" python - <<'PY'
-          from datetime import date, timedelta
-          import os
-
-          d = date.fromisoformat(os.environ["PATCH_DATE_LOCAL_D1"])
-          print((d - timedelta(days=1)).isoformat())
-          PY
-          )"
-
-          CMD=(
-            python scripts/guardrails/forecast_d1_readiness.py
-            --outdir "$OUTDIR"
-            --timezone "Europe/Prague"
-            --mode "$MODE"
-            --patch-date-local "$PATCH_DATE_LOCAL_D2"
-            --include-tenant "ruzovyslon"
-            --allow-empty-specs
-            --auto-utc-minute "15"
-            --auto-local-hour "9"
-            --auto-local-hour "11"
-          )
-
-          printf 'Running (ruzovyslon D-2):'
           printf ' %q' "${CMD[@]}"
           printf '\n'
           EXIT=0
@@ -838,16 +683,6 @@ jobs:
           path: |
             ${{ steps.guardrail_proteinaco.outputs.outdir }}/
             ${{ steps.guardrail_d2_proteinaco.outputs.outdir }}/
-          retention-days: 90
-
-      - name: Upload Ruzovyslon guardrail artifacts
-        if: always() && steps.guardrail_ruzovyslon.outputs.outdir != '' && steps.guardrail_ruzovyslon.outputs.status != 'NOOP'
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
-        with:
-          name: forecast-d1-readiness-ruzovyslon-${{ github.run_id }}
-          path: |
-            ${{ steps.guardrail_ruzovyslon.outputs.outdir }}/
-            ${{ steps.guardrail_d2_ruzovyslon.outputs.outdir }}/
           retention-days: 90
 
       - name: Upload Autodoplnky guardrail artifacts
@@ -1183,17 +1018,6 @@ jobs:
           )
           outputs.update(
               _make_scope(
-                  scope="ruzovyslon",
-                  label="ruzovyslon",
-                  minute=15,
-                  local_hour=9,
-                  items=[
-                      {"tenant": "ruzovyslon", "country": "cz", "domain": "ruzovyslon.cz", "channels": ["Google ads pmax"]},
-                  ],
-              )
-          )
-          outputs.update(
-              _make_scope(
                   scope="autodoplnky",
                   label="autodoplnky",
                   minute=5,
@@ -1219,7 +1043,6 @@ jobs:
               inputs.send_test_slack_messages == true ||
               (steps.guardrail.outputs.exit_code != '' && steps.guardrail.outputs.status != 'NOOP') ||
               (steps.guardrail_proteinaco.outputs.exit_code != '' && steps.guardrail_proteinaco.outputs.status != 'NOOP') ||
-              (steps.guardrail_ruzovyslon.outputs.exit_code != '' && steps.guardrail_ruzovyslon.outputs.status != 'NOOP') ||
               (steps.guardrail_autodoplnky.outputs.exit_code != '' && steps.guardrail_autodoplnky.outputs.status != 'NOOP')
             )
           }}
@@ -1242,10 +1065,6 @@ jobs:
           PROTEINACO_OUTDIR: ${{ steps.guardrail_proteinaco.outputs.outdir || steps.test_slack_artifacts.outputs.proteinaco_outdir }}
           PROTEINACO_OUTDIR_D2: ${{ steps.guardrail_d2_proteinaco.outputs.outdir || steps.test_slack_artifacts.outputs.proteinaco_outdir_d2 }}
           PROTEINACO_SCOPE_LABEL: ${{ steps.guardrail_proteinaco.outputs.scope_label || steps.test_slack_artifacts.outputs.proteinaco_scope_label }}
-          RUZOVYSLON_STATUS: ${{ steps.guardrail_ruzovyslon.outputs.status || steps.test_slack_artifacts.outputs.ruzovyslon_status }}
-          RUZOVYSLON_OUTDIR: ${{ steps.guardrail_ruzovyslon.outputs.outdir || steps.test_slack_artifacts.outputs.ruzovyslon_outdir }}
-          RUZOVYSLON_OUTDIR_D2: ${{ steps.guardrail_d2_ruzovyslon.outputs.outdir || steps.test_slack_artifacts.outputs.ruzovyslon_outdir_d2 }}
-          RUZOVYSLON_SCOPE_LABEL: ${{ steps.guardrail_ruzovyslon.outputs.scope_label || steps.test_slack_artifacts.outputs.ruzovyslon_scope_label }}
           AUTODOPLNKY_STATUS: ${{ steps.guardrail_autodoplnky.outputs.status || steps.test_slack_artifacts.outputs.autodoplnky_status }}
           AUTODOPLNKY_OUTDIR: ${{ steps.guardrail_autodoplnky.outputs.outdir || steps.test_slack_artifacts.outputs.autodoplnky_outdir }}
           AUTODOPLNKY_OUTDIR_D2: ${{ steps.guardrail_d2_autodoplnky.outputs.outdir || steps.test_slack_artifacts.outputs.autodoplnky_outdir_d2 }}
@@ -2010,10 +1829,6 @@ jobs:
             post_scope "$PROTEINACO_OUTDIR" "$PROTEINACO_OUTDIR_D2" "${PROTEINACO_SCOPE_LABEL:-proteinaco}"
           fi
 
-          if [[ -n "${RUZOVYSLON_STATUS:-}" && "${RUZOVYSLON_STATUS}" != "NOOP" && -n "${RUZOVYSLON_OUTDIR:-}" ]]; then
-            post_scope "$RUZOVYSLON_OUTDIR" "$RUZOVYSLON_OUTDIR_D2" "${RUZOVYSLON_SCOPE_LABEL:-ruzovyslon}"
-          fi
-
           if [[ -n "${AUTODOPLNKY_STATUS:-}" && "${AUTODOPLNKY_STATUS}" != "NOOP" && -n "${AUTODOPLNKY_OUTDIR:-}" ]]; then
             post_scope "$AUTODOPLNKY_OUTDIR" "$AUTODOPLNKY_OUTDIR_D2" "${AUTODOPLNKY_SCOPE_LABEL:-autodoplnky}"
           fi
@@ -2033,7 +1848,6 @@ jobs:
             (
               (steps.guardrail.outputs.exit_code != '' && steps.guardrail.outputs.exit_code != '0') ||
               (steps.guardrail_proteinaco.outputs.exit_code != '' && steps.guardrail_proteinaco.outputs.exit_code != '0') ||
-              (steps.guardrail_ruzovyslon.outputs.exit_code != '' && steps.guardrail_ruzovyslon.outputs.exit_code != '0') ||
               (steps.guardrail_autodoplnky.outputs.exit_code != '' && steps.guardrail_autodoplnky.outputs.exit_code != '0')
             )
           }}
