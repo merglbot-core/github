@@ -132,6 +132,18 @@
       "notes": ""
     },
     {
+      "repo": "merglbot-core/fleet-deck",
+      "enabled": true,
+      "rollout_tier": "core",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "review_owner_policy": "hard_gate",
+      "deploy_mode": "copy_target",
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": "Local Fleet Deck tool; repo intentionally carries no workflows (v6 fleet coverage) - expected_workflow is the schema-required legacy value, not a deployed file."
+    },
+    {
       "repo": "merglbot-core/github",
       "enabled": true,
       "rollout_tier": "core",
