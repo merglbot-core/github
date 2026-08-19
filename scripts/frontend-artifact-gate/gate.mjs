@@ -201,12 +201,24 @@ function main() {
   // Found by merglbot-core/merglbot-admin#744 review, which closed the same hole in admin's
   // separate build-side gate; this is the shared half.
   //
-  // The matcher is anchored to a COMMENT OPENER, not to the bare word. The spec forms are `//#`
-  // and `//@` (JS) and `/*#` (CSS, and JS block comments), so requiring one of them is what keeps
-  // ordinary content — a banner string, a variable named sourceMappingURL, a URL in a data table —
-  // from failing a build. A false RED here is not a harmless over-catch: it blocks a release, and
-  // the fix everyone reaches for is to stop trusting the check.
-  const SOURCE_MAPPING_DIRECTIVE = /(?:\/\/|\/\*)\s*[#@]\s*sourceMappingURL\s*=/
+  // The matcher is anchored to a comment opener AT THE START OF A LINE. Both halves are needed and
+  // each was learned the hard way:
+  //
+  //   * the bare word matches `const sourceMappingURL = …`;
+  //   * a comment opener alone still matches `const banner = "docs: //# sourceMappingURL=x"`,
+  //     because `//` can sit inside a string literal. Bundler runtime code and source-map tooling
+  //     quote this syntax routinely.
+  //
+  // A false RED here is not a harmless over-catch: it blocks a release, and the fix everyone
+  // reaches for is to stop trusting the check.
+  //
+  // Line-start is the discriminator that costs nothing, because a REAL inline directive is always
+  // emitted on its own line at the end of the file — that is how every bundler writes it.
+  //
+  // Known residual, and deliberate: a template literal holding the directive at line start still
+  // trips this, and a hand-placed mid-line directive would be missed. Neither is a shape a bundler
+  // emits, and the first fails safe while the second is not reachable by the setting this guards.
+  const SOURCE_MAPPING_DIRECTIVE = /^[ \t]*(?:\/\/|\/\*)\s*[#@]\s*sourceMappingURL\s*=/m
   //
   // 🔴 The scanned set is DERIVED from allowed_extensions, minus the types that are not text.
   // A second hand-kept list of "scannable" extensions is the shape that goes stale: the day a

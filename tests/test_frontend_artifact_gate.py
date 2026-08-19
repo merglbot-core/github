@@ -174,9 +174,40 @@ class FrontendArtifactGateTests(unittest.TestCase):
             b"const sourceMappingURL='x';\n"
             b"const banner='@sourceMappingURL=not-a-comment';\n"
             b'const doc="see #sourceMappingURL= in the spec";\n'
+            # 🔴 The case the comment-opener anchor alone did NOT cover: `//` inside a STRING.
+            # Source-map tooling and bundler runtime code quote this syntax routinely, so this is
+            # the shape that would have falsely blocked a release.
+            b'const quoted="docs: //# sourceMappingURL=example";\n'
+            b"const block='/*# sourceMappingURL=also-quoted */';\n"
         )
         rc, out = self.run_gate(files)
         self.assertEqual(EXIT_OK, rc, out)
+
+    def test_a_real_directive_at_line_start_is_still_caught_after_the_anchor(self) -> None:
+        """The counterpart to the case above — without it, tightening the matcher to line-start
+        could be satisfied by a matcher that never fires at all.
+
+        Line-start is what every bundler emits: the directive goes on its own line at end of file.
+        """
+        files = self.clean_dist()
+        files["assets/index-abc123.js"] = (
+            b'const quoted="docs: //# sourceMappingURL=example";\n'
+            b"//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ==\n"
+        )
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_VIOLATION, rc, out)
+        self.assertIn("index-abc123.js", out)
+
+    def test_an_indented_directive_is_caught(self) -> None:
+        """Leading whitespace is allowed before the opener: CSS maps and HTML-embedded scripts are
+        commonly indented, and requiring column zero would miss them."""
+        files = self.clean_dist()
+        files["assets/index-abc123.js"] = (
+            b"console.log(1)\n"
+            b"    //# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ==\n"
+        )
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_VIOLATION, rc, out)
 
     def test_the_scanned_set_follows_allowed_extensions_and_covers_svg(self) -> None:
         """SVG is an image by use and MARKUP by construction — it can hold a <script>, and so a
