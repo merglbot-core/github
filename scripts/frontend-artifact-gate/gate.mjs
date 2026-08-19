@@ -45,6 +45,10 @@ const EXIT_OK = 0
 const EXIT_VIOLATION = 1
 const EXIT_CANNOT_CONCLUDE = 2
 
+// Image types, used twice: the 5a content-hash freeze, and (minus .svg) the not-text exclusion for
+// the source-map byte scan. One list so the two cannot drift apart.
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico', '.avif'])
+
 function fail(message) {
   console.error(`✖ ${message}`)
 }
@@ -194,13 +198,39 @@ function main() {
   // sets build.sourcemap: true" was true for `true` and false for `'inline'`, which is the setting
   // a person reaches for when they want maps without extra requests.
   //
-  // Text types only, and `.html` is in the list on purpose: an inline-script build shape puts the
-  // directive inside index.html, where a scan restricted to script extensions would never look.
   // Found by merglbot-core/merglbot-admin#744 review, which closed the same hole in admin's
   // separate build-side gate; this is the shared half.
-  const SOURCE_MAPPING_DIRECTIVE = /[#@]\s*sourceMappingURL\s*=/
-  const SCANNABLE_TEXT = /\.(?:js|mjs|cjs|css|html)$/i
-  for (const f of files.filter((f) => SCANNABLE_TEXT.test(f))) {
+  //
+  // The matcher is anchored to a COMMENT OPENER, not to the bare word. The spec forms are `//#`
+  // and `//@` (JS) and `/*#` (CSS, and JS block comments), so requiring one of them is what keeps
+  // ordinary content — a banner string, a variable named sourceMappingURL, a URL in a data table —
+  // from failing a build. A false RED here is not a harmless over-catch: it blocks a release, and
+  // the fix everyone reaches for is to stop trusting the check.
+  const SOURCE_MAPPING_DIRECTIVE = /(?:\/\/|\/\*)\s*[#@]\s*sourceMappingURL\s*=/
+  //
+  // 🔴 The scanned set is DERIVED from allowed_extensions, minus the types that are not text.
+  // A second hand-kept list of "scannable" extensions is the shape that goes stale: the day a
+  // caller adds `.svg` (or `.json`, or `.xml`) to its contract, a fixed list silently stops
+  // covering the artifact it just approved — and svg in particular is markup that can carry a
+  // script. Deriving it means a newly allowed text type is scanned the moment it is allowed.
+  //
+  // Files outside allowed_extensions are already a violation above, so nothing is lost by
+  // scanning only allowed ones.
+  // 🔴 `.svg` is deliberately NOT here even though it is an image for the 5a freeze below. SVG is
+  // markup: it can hold a <script>, and therefore a directive. Classifying it by what it is used
+  // for rather than by what it is made of would skip exactly the allowed type most likely to
+  // carry executable text.
+  const NOT_TEXT = new Set([
+    ...[...IMAGE_EXTENSIONS].filter((e) => e !== '.svg'),
+    '.woff', '.woff2', '.ttf', '.otf', '.eot',
+    '.mp4', '.webm', '.mp3', '.wav',
+    '.pdf', '.zip', '.gz', '.br', '.wasm',
+  ])
+  const scannable = files.filter((f) => {
+    const ext = extname(f).toLowerCase()
+    return allowed.has(ext) && !NOT_TEXT.has(ext)
+  })
+  for (const f of scannable) {
     if (SOURCE_MAPPING_DIRECTIVE.test(readFileSync(join(dist, f), 'utf8'))) {
       // Names the FILE, never the directive's value — that value IS the map.
       violations.push(
@@ -215,11 +245,10 @@ function main() {
   const inv = baseline.image_inventory
   if (inv && inv.mode === 'frozen') {
     const known = new Map(inv.entries.map((e) => [e.sha256, e]))
-    const imageExts = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico', '.avif'])
     const roots = [dist, ...(extraAssets && existsSync(extraAssets) ? [extraAssets] : [])]
     for (const root of roots) {
       for (const f of walk(root)) {
-        if (!imageExts.has(extname(f).toLowerCase())) continue
+        if (!IMAGE_EXTENSIONS.has(extname(f).toLowerCase())) continue
         const digest = sha256(join(root, f))
         if (!known.has(digest)) {
           violations.push(

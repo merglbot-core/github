@@ -162,6 +162,60 @@ class FrontendArtifactGateTests(unittest.TestCase):
         rc, out = self.run_gate(files)
         self.assertEqual(EXIT_OK, rc, out)
 
+    def test_the_scan_does_not_fire_on_the_bare_word_or_an_unanchored_hash(self) -> None:
+        """False REDs are not a harmless over-catch: they block a release, and the fix everyone
+        reaches for is to stop trusting the check.
+
+        The directive's spec forms open a COMMENT (`//#`, `//@`, `/*#`). Content that merely
+        contains the word — a banner string, a variable, a URL in a data table — must not fail.
+        """
+        files = self.clean_dist()
+        files["assets/index-abc123.js"] = (
+            b"const sourceMappingURL='x';\n"
+            b"const banner='@sourceMappingURL=not-a-comment';\n"
+            b'const doc="see #sourceMappingURL= in the spec";\n'
+        )
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_OK, rc, out)
+
+    def test_the_scanned_set_follows_allowed_extensions_and_covers_svg(self) -> None:
+        """SVG is an image by use and MARKUP by construction — it can hold a <script>, and so a
+        directive. The scanned set is derived from allowed_extensions rather than hand-kept, so a
+        type is covered the moment a caller approves it.
+
+        Both halves in one case: the same .svg passes while clean and fails while carrying the
+        directive, so this cannot be satisfied by a gate that rejects every svg.
+        """
+        baseline = json.loads(json.dumps(BASELINE))
+        baseline["allowed_extensions"] = baseline["allowed_extensions"] + [".svg"]
+        clean_svg = b'<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+
+        files = self.clean_dist()
+        files["assets/logo-abc123.svg"] = clean_svg
+        rc, out = self.run_gate(files, baseline=baseline)
+        self.assertEqual(EXIT_OK, rc, out)
+
+        files["assets/logo-abc123.svg"] = (
+            b'<svg xmlns="http://www.w3.org/2000/svg"><script>0\n'
+            b"//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ==\n"
+            b"</script></svg>"
+        )
+        rc, out = self.run_gate(files, baseline=baseline)
+        self.assertEqual(EXIT_VIOLATION, rc, out)
+        self.assertIn("logo-abc123.svg", out)
+
+    def test_a_png_is_not_read_as_text_by_the_scan(self) -> None:
+        """The other side of deriving the set: binary types stay out, so a byte sequence in an
+        image cannot produce a false violation."""
+        files = self.clean_dist()
+        files["assets/pixel-abc123.png"] = (
+            b"\x89PNG\r\n\x1a\n//# sourceMappingURL=data:application/json;base64,eyJ2IjoxfQ=="
+        )
+        baseline = json.loads(json.dumps(BASELINE))
+        baseline["image_inventory"] = {"mode": "open"}
+        rc, out = self.run_gate(files, baseline=baseline)
+        self.assertEqual(EXIT_OK, rc, out)
+
     def test_a_dotenv_file_is_a_violation(self) -> None:
         files = self.clean_dist()
         # Content is irrelevant — the rule matches on the FILENAME. Deliberately not shaped like a
