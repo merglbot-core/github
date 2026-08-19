@@ -209,21 +209,18 @@ class FrontendArtifactGateTests(unittest.TestCase):
         rc, out = self.run_gate(files)
         self.assertEqual(EXIT_VIOLATION, rc, out)
 
-    def test_the_scanned_set_follows_allowed_extensions_and_covers_svg(self) -> None:
-        """SVG is an image by use and MARKUP by construction — it can hold a <script>, and so a
-        directive. The scanned set is derived from allowed_extensions rather than hand-kept, so a
-        type is covered the moment a caller approves it.
+    def test_svg_is_byte_scanned_even_though_it_is_an_image_type(self) -> None:
+        """SVG is an image by USE and markup by CONSTRUCTION — it can hold a <script>, and so a
+        directive. It is therefore in IMAGE_EXTENSIONS for the 5a freeze and deliberately NOT in
+        NOT_TEXT for this scan.
 
-        Both halves in one case: the same .svg passes while clean and fails while carrying the
-        directive, so this cannot be satisfied by a gate that rejects every svg.
+        Both directions in one case: the same .svg passes while clean and fails while carrying the
+        directive, so a gate that simply rejected every svg would not satisfy it.
         """
-        baseline = json.loads(json.dumps(BASELINE))
-        baseline["allowed_extensions"] = baseline["allowed_extensions"] + [".svg"]
         clean_svg = b'<svg xmlns="http://www.w3.org/2000/svg"></svg>'
-
         files = self.clean_dist()
         files["assets/logo-abc123.svg"] = clean_svg
-        rc, out = self.run_gate(files, baseline=baseline)
+        rc, out = self.run_gate(files)
         self.assertEqual(EXIT_OK, rc, out)
 
         files["assets/logo-abc123.svg"] = (
@@ -231,9 +228,61 @@ class FrontendArtifactGateTests(unittest.TestCase):
             b"//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ==\n"
             b"</script></svg>"
         )
-        rc, out = self.run_gate(files, baseline=baseline)
+        rc, out = self.run_gate(files)
         self.assertEqual(EXIT_VIOLATION, rc, out)
         self.assertIn("logo-abc123.svg", out)
+
+    def test_the_scanned_set_is_DERIVED_from_allowed_extensions(self) -> None:
+        """🔴 The property the case above cannot prove.
+
+        `.svg` is already in this suite's BASELINE, so appending it and watching the scan work is
+        satisfied just as well by a hard-coded scannable list that happens to contain `.svg` — a
+        test driven by the very constant it is checking. The first version of this case did exactly
+        that and proved nothing about derivation.
+
+        `.xml` is genuinely absent from BASELINE and absent from NOT_TEXT, so it can only enter the
+        scannable set by being derived from allowed_extensions. Three states pin it:
+
+          1. not allowed at all  → rejected as an undeclared TYPE (and never reaches the scan);
+          2. allowed and clean   → passes;
+          3. allowed and dirty   → caught by the byte scan.
+
+        State 3 is only reachable through derivation. Replace the derivation with a fixed list and
+        it fails.
+        """
+        dirty = (
+            b"<data>\n"
+            b"//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ==\n"
+            b"</data>"
+        )
+        self.assertNotIn(".xml", BASELINE["allowed_extensions"], "fixture would be vacuous")
+
+        files = self.clean_dist()
+        files["assets/data-abc123.xml"] = dirty
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_VIOLATION, rc, out)
+        self.assertIn(".xml", out, "not yet allowed: rejected as a TYPE, before any scan")
+
+        allowing = json.loads(json.dumps(BASELINE))
+        allowing["allowed_extensions"] = allowing["allowed_extensions"] + [".xml"]
+
+        files["assets/data-abc123.xml"] = b"<data></data>"
+        rc, out = self.run_gate(files, baseline=allowing)
+        self.assertEqual(EXIT_OK, rc, out)
+
+        files["assets/data-abc123.xml"] = dirty
+        rc, out = self.run_gate(files, baseline=allowing)
+        self.assertEqual(EXIT_VIOLATION, rc, out)
+        self.assertIn("sourceMappingURL", out)
+        self.assertIn("data-abc123.xml", out)
+
+    def test_the_pattern_cannot_span_a_newline(self) -> None:
+        """`\\s` matches a newline, so `\\s*` would join a bare `//` line to the next line and read
+        the pair as one directive. A real directive lives on a single line by construction."""
+        files = self.clean_dist()
+        files["assets/index-abc123.js"] = b"//\n# sourceMappingURL=data:application/json;base64,e30=\n"
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_OK, rc, out)
 
     def test_a_png_is_not_read_as_text_by_the_scan(self) -> None:
         """The other side of deriving the set: binary types stay out, so a byte sequence in an

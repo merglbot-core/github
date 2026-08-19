@@ -218,7 +218,11 @@ function main() {
   // Known residual, and deliberate: a template literal holding the directive at line start still
   // trips this, and a hand-placed mid-line directive would be missed. Neither is a shape a bundler
   // emits, and the first fails safe while the second is not reachable by the setting this guards.
-  const SOURCE_MAPPING_DIRECTIVE = /^[ \t]*(?:\/\/|\/\*)\s*[#@]\s*sourceMappingURL\s*=/m
+  // `[ \t]*` throughout rather than `\s*`: `\s` matches a NEWLINE, so `\s*` would let the pattern
+  // span lines and treat a bare `//` followed by a line starting `# sourceMappingURL=` as one
+  // directive. A directive lives on a single line by construction, so the narrower class is both
+  // more correct and cheaper.
+  const SOURCE_MAPPING_DIRECTIVE = /^[ \t]*(?:\/\/|\/\*)[ \t]*[#@][ \t]*sourceMappingURL[ \t]*=/m
   //
   // 🔴 The scanned set is DERIVED from allowed_extensions, minus the types that are not text.
   // A second hand-kept list of "scannable" extensions is the shape that goes stale: the day a
