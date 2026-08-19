@@ -19,6 +19,7 @@ merglbot-core/agents-orchestrator
 merglbot-core/ai_prompts
 merglbot-core/dataform
 merglbot-core/fb-viz-api
+merglbot-core/fleet-deck
 merglbot-core/infra
 # NOTE: High-visibility internal app; enterprise rollout target with human-merge-only governance.
 merglbot-core/merglbot-admin
