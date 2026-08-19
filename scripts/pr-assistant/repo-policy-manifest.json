@@ -132,6 +132,18 @@
       "notes": ""
     },
     {
+      "repo": "merglbot-core/fleet-deck",
+      "enabled": false,
+      "rollout_tier": "core",
+      "admission_state": "baseline_only",
+      "human_merge_only": true,
+      "review_owner_policy": "no_owner",
+      "deploy_mode": "copy_target",
+      "expected_workflow": ".github/workflows/merglbot-pr-v3-on-demand.yml",
+      "expected_step1": "scripts/pr-assistant/pr-assistant-step1-parallel-api-calls.sh",
+      "notes": "Local Fleet Deck tool with zero workflows by design; v6 review coverage comes from dynamic fleet discovery and the branch-protection required check, not from the v3 copy-deploy machinery, so the repo is enrolled as a disabled no_owner row."
+    },
+    {
       "repo": "merglbot-core/github",
       "enabled": true,
       "rollout_tier": "core",
