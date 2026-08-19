@@ -19,8 +19,6 @@ merglbot-core/agents-orchestrator
 merglbot-core/ai_prompts
 merglbot-core/dataform
 merglbot-core/fb-viz-api
-# NOTE: Local Fleet Deck tool; repo intentionally carries no workflows (v6 fleet coverage) - expected_workflow is the schema-required legacy value, not a deployed file.
-merglbot-core/fleet-deck
 merglbot-core/infra
 # NOTE: High-visibility internal app; enterprise rollout target with human-merge-only governance.
 merglbot-core/merglbot-admin
