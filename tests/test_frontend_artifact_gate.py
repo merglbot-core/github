@@ -109,6 +109,59 @@ class FrontendArtifactGateTests(unittest.TestCase):
         self.assertEqual(EXIT_VIOLATION, rc, out)
         self.assertIn("index-abc123.js.map", out)
 
+    def test_an_inline_source_map_is_a_violation_even_with_no_map_file(self) -> None:
+        """The half the `**/*.map` glob cannot see.
+
+        `build.sourcemap: 'inline'` writes no `.map` at all — it appends the whole map, base64
+        encoded, into the bundle. dist/ then looks exactly like a clean build while the original
+        sources ship inside a file that is already public.
+
+        The assertion that there is no `.map` in the fixture is load-bearing: without it this test
+        could pass on the filename rule and prove nothing about the byte scan.
+        """
+        files = self.clean_dist()
+        files["assets/index-abc123.js"] = (
+            b"console.log(1)\n"
+            b"//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ==\n"
+        )
+        self.assertFalse([f for f in files if f.endswith(".map")])
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_VIOLATION, rc, out)
+        self.assertIn("sourceMappingURL", out)
+        self.assertIn("index-abc123.js", out)
+
+    def test_an_inline_source_map_inside_index_html_is_a_violation(self) -> None:
+        """`.html` is a served text type, and an inline-script build shape puts the directive
+        there — where a scan restricted to script extensions would never look."""
+        files = self.clean_dist()
+        files["index.html"] = (
+            b"<!doctype html><script>console.log(1)\n"
+            b"//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ==\n"
+            b"</script>"
+        )
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_VIOLATION, rc, out)
+        self.assertIn("index.html", out)
+
+    def test_a_hidden_source_map_is_still_caught_by_the_filename_rule(self) -> None:
+        """The mirror case, pinned so the two halves are not confused for one another:
+        `sourcemap: 'hidden'` emits the FILE and omits the directive."""
+        files = self.clean_dist()
+        files["assets/index-abc123.js.map"] = b'{"version":3}'
+        self.assertNotIn(b"sourceMappingURL", files["assets/index-abc123.js"])
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_VIOLATION, rc, out)
+
+    def test_the_byte_scan_does_not_fire_on_an_ordinary_bundle(self) -> None:
+        """Both halves. A scan that flagged every JS file would satisfy the three tests above and
+        fail every real build — only this one tells them apart."""
+        files = self.clean_dist()
+        files["assets/index-abc123.js"] = (
+            b"const sourceMappingURL='not a directive';console.log(sourceMappingURL)"
+        )
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_OK, rc, out)
+
     def test_a_dotenv_file_is_a_violation(self) -> None:
         files = self.clean_dist()
         # Content is irrelevant — the rule matches on the FILENAME. Deliberately not shaped like a

@@ -12,6 +12,11 @@
 //     (Vite's default is `sourcemap: false` and no vite.config.js overrides it), so this is pure
 //     regression cover: it goes red the day someone sets `build.sourcemap: true`.
 //
+//   * A `sourceMappingURL` directive in the BYTES of a served text file — the other half of that
+//     ban. `sourcemap: 'inline'` writes no `.map` at all, so the filename rule above sees a clean
+//     build while the full source rides inside the bundle. Filenames catch `'hidden'`, the byte
+//     scan catches `'inline'`; neither is sufficient alone.
+//
 //   * Extension allowlist, NOT a denylist. "A new public artifact type appears" is the audit's own
 //     wording, and a denylist is open-by-default — it can only ever ban the types someone thought
 //     of. Filenames are content-hashed here, so a type-based rule never churns on a rebuild.
@@ -174,6 +179,34 @@ function main() {
       violations.push(
         `${f} has undeclared extension "${ext || '(none)'}" — a new public artifact TYPE must be ` +
           'added to allowed_extensions deliberately, with review',
+      )
+    }
+  }
+
+  // 🔴 A source map does not have to be a FILE, so the `**/*.map` glob above is only half the ban.
+  //
+  // `build.sourcemap: 'inline'` appends the whole map, base64-encoded, into the bundle itself as a
+  // `sourceMappingURL=data:` comment. No `.map` lands on disk, so dist/ looks exactly like a clean
+  // build while the original sources ship inside a file that is already public. `'hidden'` is the
+  // mirror case: the file exists and the comment does not.
+  //
+  // That makes this the check the header's own promise depends on — "it goes red the day someone
+  // sets build.sourcemap: true" was true for `true` and false for `'inline'`, which is the setting
+  // a person reaches for when they want maps without extra requests.
+  //
+  // Text types only, and `.html` is in the list on purpose: an inline-script build shape puts the
+  // directive inside index.html, where a scan restricted to script extensions would never look.
+  // Found by merglbot-core/merglbot-admin#744 review, which closed the same hole in admin's
+  // separate build-side gate; this is the shared half.
+  const SOURCE_MAPPING_DIRECTIVE = /[#@]\s*sourceMappingURL\s*=/
+  const SCANNABLE_TEXT = /\.(?:js|mjs|cjs|css|html)$/i
+  for (const f of files.filter((f) => SCANNABLE_TEXT.test(f))) {
+    if (SOURCE_MAPPING_DIRECTIVE.test(readFileSync(join(dist, f), 'utf8'))) {
+      // Names the FILE, never the directive's value — that value IS the map.
+      violations.push(
+        `${f} carries a sourceMappingURL directive, so its source travels with it to whoever the ` +
+          "bundle is served to. Set build.sourcemap=false; 'inline' and 'hidden' both defeat the " +
+          '**/*.map filename ban.',
       )
     }
   }
