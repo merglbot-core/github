@@ -12,6 +12,11 @@
 //     (Vite's default is `sourcemap: false` and no vite.config.js overrides it), so this is pure
 //     regression cover: it goes red the day someone sets `build.sourcemap: true`.
 //
+//   * A `sourceMappingURL` directive in the BYTES of a served text file — the other half of that
+//     ban. `sourcemap: 'inline'` writes no `.map` at all, so the filename rule above sees a clean
+//     build while the full source rides inside the bundle. Filenames catch `'hidden'`, the byte
+//     scan catches `'inline'`; neither is sufficient alone.
+//
 //   * Extension allowlist, NOT a denylist. "A new public artifact type appears" is the audit's own
 //     wording, and a denylist is open-by-default — it can only ever ban the types someone thought
 //     of. Filenames are content-hashed here, so a type-based rule never churns on a rebuild.
@@ -39,6 +44,10 @@ import { join, relative, extname, sep } from 'node:path'
 const EXIT_OK = 0
 const EXIT_VIOLATION = 1
 const EXIT_CANNOT_CONCLUDE = 2
+
+// Image types, used twice: the 5a content-hash freeze, and (minus .svg) the not-text exclusion for
+// the source-map byte scan. One list so the two cannot drift apart.
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico', '.avif'])
 
 function fail(message) {
   console.error(`✖ ${message}`)
@@ -178,15 +187,84 @@ function main() {
     }
   }
 
+  // 🔴 A source map does not have to be a FILE, so the `**/*.map` glob above is only half the ban.
+  //
+  // `build.sourcemap: 'inline'` appends the whole map, base64-encoded, into the bundle itself as a
+  // `sourceMappingURL=data:` comment. No `.map` lands on disk, so dist/ looks exactly like a clean
+  // build while the original sources ship inside a file that is already public. `'hidden'` is the
+  // mirror case: the file exists and the comment does not.
+  //
+  // That makes this the check the header's own promise depends on — "it goes red the day someone
+  // sets build.sourcemap: true" was true for `true` and false for `'inline'`, which is the setting
+  // a person reaches for when they want maps without extra requests.
+  //
+  // Found by merglbot-core/merglbot-admin#744 review, which closed the same hole in admin's
+  // separate build-side gate; this is the shared half.
+  //
+  // The matcher is anchored to a comment opener AT THE START OF A LINE. Both halves are needed and
+  // each was learned the hard way:
+  //
+  //   * the bare word matches `const sourceMappingURL = …`;
+  //   * a comment opener alone still matches `const banner = "docs: //# sourceMappingURL=x"`,
+  //     because `//` can sit inside a string literal. Bundler runtime code and source-map tooling
+  //     quote this syntax routinely.
+  //
+  // A false RED here is not a harmless over-catch: it blocks a release, and the fix everyone
+  // reaches for is to stop trusting the check.
+  //
+  // Line-start is the discriminator that costs nothing, because a REAL inline directive is always
+  // emitted on its own line at the end of the file — that is how every bundler writes it.
+  //
+  // Known residual, and deliberate: a template literal holding the directive at line start still
+  // trips this, and a hand-placed mid-line directive would be missed. Neither is a shape a bundler
+  // emits, and the first fails safe while the second is not reachable by the setting this guards.
+  // `[ \t]*` throughout rather than `\s*`: `\s` matches a NEWLINE, so `\s*` would let the pattern
+  // span lines and treat a bare `//` followed by a line starting `# sourceMappingURL=` as one
+  // directive. A directive lives on a single line by construction, so the narrower class is both
+  // more correct and cheaper.
+  const SOURCE_MAPPING_DIRECTIVE = /^[ \t]*(?:\/\/|\/\*)[ \t]*[#@][ \t]*sourceMappingURL[ \t]*=/m
+  //
+  // 🔴 The scanned set is DERIVED from allowed_extensions, minus the types that are not text.
+  // A second hand-kept list of "scannable" extensions is the shape that goes stale: the day a
+  // caller adds `.svg` (or `.json`, or `.xml`) to its contract, a fixed list silently stops
+  // covering the artifact it just approved — and svg in particular is markup that can carry a
+  // script. Deriving it means a newly allowed text type is scanned the moment it is allowed.
+  //
+  // Files outside allowed_extensions are already a violation above, so nothing is lost by
+  // scanning only allowed ones.
+  // 🔴 `.svg` is deliberately NOT here even though it is an image for the 5a freeze below. SVG is
+  // markup: it can hold a <script>, and therefore a directive. Classifying it by what it is used
+  // for rather than by what it is made of would skip exactly the allowed type most likely to
+  // carry executable text.
+  const NOT_TEXT = new Set([
+    ...[...IMAGE_EXTENSIONS].filter((e) => e !== '.svg'),
+    '.woff', '.woff2', '.ttf', '.otf', '.eot',
+    '.mp4', '.webm', '.mp3', '.wav',
+    '.pdf', '.zip', '.gz', '.br', '.wasm',
+  ])
+  const scannable = files.filter((f) => {
+    const ext = extname(f).toLowerCase()
+    return allowed.has(ext) && !NOT_TEXT.has(ext)
+  })
+  for (const f of scannable) {
+    if (SOURCE_MAPPING_DIRECTIVE.test(readFileSync(join(dist, f), 'utf8'))) {
+      // Names the FILE, never the directive's value — that value IS the map.
+      violations.push(
+        `${f} carries a sourceMappingURL directive, so its source travels with it to whoever the ` +
+          "bundle is served to. Set build.sourcemap=false; 'inline' and 'hidden' both defeat the " +
+          '**/*.map filename ban.',
+      )
+    }
+  }
+
   // 5a — image freeze by content hash.
   const inv = baseline.image_inventory
   if (inv && inv.mode === 'frozen') {
     const known = new Map(inv.entries.map((e) => [e.sha256, e]))
-    const imageExts = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico', '.avif'])
     const roots = [dist, ...(extraAssets && existsSync(extraAssets) ? [extraAssets] : [])]
     for (const root of roots) {
       for (const f of walk(root)) {
-        if (!imageExts.has(extname(f).toLowerCase())) continue
+        if (!IMAGE_EXTENSIONS.has(extname(f).toLowerCase())) continue
         const digest = sha256(join(root, f))
         if (!known.has(digest)) {
           violations.push(

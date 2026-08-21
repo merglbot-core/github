@@ -109,6 +109,193 @@ class FrontendArtifactGateTests(unittest.TestCase):
         self.assertEqual(EXIT_VIOLATION, rc, out)
         self.assertIn("index-abc123.js.map", out)
 
+    def test_an_inline_source_map_is_a_violation_even_with_no_map_file(self) -> None:
+        """The half the `**/*.map` glob cannot see.
+
+        `build.sourcemap: 'inline'` writes no `.map` at all — it appends the whole map, base64
+        encoded, into the bundle. dist/ then looks exactly like a clean build while the original
+        sources ship inside a file that is already public.
+
+        The assertion that there is no `.map` in the fixture is load-bearing: without it this test
+        could pass on the filename rule and prove nothing about the byte scan.
+        """
+        files = self.clean_dist()
+        files["assets/index-abc123.js"] = (
+            b"console.log(1)\n"
+            b"//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ==\n"
+        )
+        self.assertFalse([f for f in files if f.endswith(".map")])
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_VIOLATION, rc, out)
+        self.assertIn("sourceMappingURL", out)
+        self.assertIn("index-abc123.js", out)
+
+    def test_an_inline_source_map_inside_index_html_is_a_violation(self) -> None:
+        """`.html` is a served text type, and an inline-script build shape puts the directive
+        there — where a scan restricted to script extensions would never look."""
+        files = self.clean_dist()
+        files["index.html"] = (
+            b"<!doctype html><script>console.log(1)\n"
+            b"//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ==\n"
+            b"</script>"
+        )
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_VIOLATION, rc, out)
+        self.assertIn("index.html", out)
+
+    def test_a_hidden_source_map_is_still_caught_by_the_filename_rule(self) -> None:
+        """The mirror case, pinned so the two halves are not confused for one another:
+        `sourcemap: 'hidden'` emits the FILE and omits the directive."""
+        files = self.clean_dist()
+        files["assets/index-abc123.js.map"] = b'{"version":3}'
+        self.assertNotIn(b"sourceMappingURL", files["assets/index-abc123.js"])
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_VIOLATION, rc, out)
+
+    def test_the_byte_scan_does_not_fire_on_an_ordinary_bundle(self) -> None:
+        """Both halves. A scan that flagged every JS file would satisfy the three tests above and
+        fail every real build — only this one tells them apart."""
+        files = self.clean_dist()
+        files["assets/index-abc123.js"] = (
+            b"const sourceMappingURL='not a directive';console.log(sourceMappingURL)"
+        )
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_OK, rc, out)
+
+    def test_the_scan_does_not_fire_on_the_bare_word_or_an_unanchored_hash(self) -> None:
+        """False REDs are not a harmless over-catch: they block a release, and the fix everyone
+        reaches for is to stop trusting the check.
+
+        The directive's spec forms open a COMMENT (`//#`, `//@`, `/*#`). Content that merely
+        contains the word — a banner string, a variable, a URL in a data table — must not fail.
+        """
+        files = self.clean_dist()
+        files["assets/index-abc123.js"] = (
+            b"const sourceMappingURL='x';\n"
+            b"const banner='@sourceMappingURL=not-a-comment';\n"
+            b'const doc="see #sourceMappingURL= in the spec";\n'
+            # 🔴 The case the comment-opener anchor alone did NOT cover: `//` inside a STRING.
+            # Source-map tooling and bundler runtime code quote this syntax routinely, so this is
+            # the shape that would have falsely blocked a release.
+            b'const quoted="docs: //# sourceMappingURL=example";\n'
+            b"const block='/*# sourceMappingURL=also-quoted */';\n"
+        )
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_OK, rc, out)
+
+    def test_a_real_directive_at_line_start_is_still_caught_after_the_anchor(self) -> None:
+        """The counterpart to the case above — without it, tightening the matcher to line-start
+        could be satisfied by a matcher that never fires at all.
+
+        Line-start is what every bundler emits: the directive goes on its own line at end of file.
+        """
+        files = self.clean_dist()
+        files["assets/index-abc123.js"] = (
+            b'const quoted="docs: //# sourceMappingURL=example";\n'
+            b"//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ==\n"
+        )
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_VIOLATION, rc, out)
+        self.assertIn("index-abc123.js", out)
+
+    def test_an_indented_directive_is_caught(self) -> None:
+        """Leading whitespace is allowed before the opener: CSS maps and HTML-embedded scripts are
+        commonly indented, and requiring column zero would miss them."""
+        files = self.clean_dist()
+        files["assets/index-abc123.js"] = (
+            b"console.log(1)\n"
+            b"    //# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ==\n"
+        )
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_VIOLATION, rc, out)
+
+    def test_svg_is_byte_scanned_even_though_it_is_an_image_type(self) -> None:
+        """SVG is an image by USE and markup by CONSTRUCTION — it can hold a <script>, and so a
+        directive. It is therefore in IMAGE_EXTENSIONS for the 5a freeze and deliberately NOT in
+        NOT_TEXT for this scan.
+
+        Both directions in one case: the same .svg passes while clean and fails while carrying the
+        directive, so a gate that simply rejected every svg would not satisfy it.
+        """
+        clean_svg = b'<svg xmlns="http://www.w3.org/2000/svg"></svg>'
+        files = self.clean_dist()
+        files["assets/logo-abc123.svg"] = clean_svg
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_OK, rc, out)
+
+        files["assets/logo-abc123.svg"] = (
+            b'<svg xmlns="http://www.w3.org/2000/svg"><script>0\n'
+            b"//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ==\n"
+            b"</script></svg>"
+        )
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_VIOLATION, rc, out)
+        self.assertIn("logo-abc123.svg", out)
+
+    def test_the_scanned_set_is_DERIVED_from_allowed_extensions(self) -> None:
+        """🔴 The property the case above cannot prove.
+
+        `.svg` is already in this suite's BASELINE, so appending it and watching the scan work is
+        satisfied just as well by a hard-coded scannable list that happens to contain `.svg` — a
+        test driven by the very constant it is checking. The first version of this case did exactly
+        that and proved nothing about derivation.
+
+        `.xml` is genuinely absent from BASELINE and absent from NOT_TEXT, so it can only enter the
+        scannable set by being derived from allowed_extensions. Three states pin it:
+
+          1. not allowed at all  → rejected as an undeclared TYPE (and never reaches the scan);
+          2. allowed and clean   → passes;
+          3. allowed and dirty   → caught by the byte scan.
+
+        State 3 is only reachable through derivation. Replace the derivation with a fixed list and
+        it fails.
+        """
+        dirty = (
+            b"<data>\n"
+            b"//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ==\n"
+            b"</data>"
+        )
+        self.assertNotIn(".xml", BASELINE["allowed_extensions"], "fixture would be vacuous")
+
+        files = self.clean_dist()
+        files["assets/data-abc123.xml"] = dirty
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_VIOLATION, rc, out)
+        self.assertIn(".xml", out, "not yet allowed: rejected as a TYPE, before any scan")
+
+        allowing = json.loads(json.dumps(BASELINE))
+        allowing["allowed_extensions"] = allowing["allowed_extensions"] + [".xml"]
+
+        files["assets/data-abc123.xml"] = b"<data></data>"
+        rc, out = self.run_gate(files, baseline=allowing)
+        self.assertEqual(EXIT_OK, rc, out)
+
+        files["assets/data-abc123.xml"] = dirty
+        rc, out = self.run_gate(files, baseline=allowing)
+        self.assertEqual(EXIT_VIOLATION, rc, out)
+        self.assertIn("sourceMappingURL", out)
+        self.assertIn("data-abc123.xml", out)
+
+    def test_the_pattern_cannot_span_a_newline(self) -> None:
+        """`\\s` matches a newline, so `\\s*` would join a bare `//` line to the next line and read
+        the pair as one directive. A real directive lives on a single line by construction."""
+        files = self.clean_dist()
+        files["assets/index-abc123.js"] = b"//\n# sourceMappingURL=data:application/json;base64,e30=\n"
+        rc, out = self.run_gate(files)
+        self.assertEqual(EXIT_OK, rc, out)
+
+    def test_a_png_is_not_read_as_text_by_the_scan(self) -> None:
+        """The other side of deriving the set: binary types stay out, so a byte sequence in an
+        image cannot produce a false violation."""
+        files = self.clean_dist()
+        files["assets/pixel-abc123.png"] = (
+            b"\x89PNG\r\n\x1a\n//# sourceMappingURL=data:application/json;base64,eyJ2IjoxfQ=="
+        )
+        baseline = json.loads(json.dumps(BASELINE))
+        baseline["image_inventory"] = {"mode": "open"}
+        rc, out = self.run_gate(files, baseline=baseline)
+        self.assertEqual(EXIT_OK, rc, out)
+
     def test_a_dotenv_file_is_a_violation(self) -> None:
         files = self.clean_dist()
         # Content is irrelevant — the rule matches on the FILENAME. Deliberately not shaped like a

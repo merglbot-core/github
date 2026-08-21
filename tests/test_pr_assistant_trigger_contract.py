@@ -148,14 +148,15 @@ class TriggerContractTests(unittest.TestCase):
             if entry["review_owner_policy"] == "no_owner"
         }
 
-        self.assertEqual(len(manifest["repos"]), 52)
+        self.assertEqual(len(manifest["repos"]), 53)
         self.assertEqual(counts["hard_gate"], 47)
-        self.assertEqual(counts["no_owner"], 5)
+        self.assertEqual(counts["no_owner"], 6)
         self.assertEqual(counts["advisory"], 0)
         self.assertEqual(policy["excluded_orgs"], ["Merglevsky-cz", "lrtch"])
         self.assertEqual(
             no_owner_repos,
             {
+                "merglbot-core/fleet-deck",
                 "merglbot-denatura/denatura-btf-data",
                 "merglbot-extractors/denatura-forecast-exporter",
                 "merglbot-extractors/ga4-extractor",
