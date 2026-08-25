@@ -148,6 +148,15 @@ jobs:
         with:
           driver: docker-container
 
+      # Both builds must emit the same image config. BuildKit uses
+      # SOURCE_DATE_EPOCH for config, index, and filesystem timestamps; the
+      # checked-out commit timestamp is stable across the local scan build and
+      # the isolated candidate build.
+      - name: Resolve reproducible build epoch
+        id: build_epoch
+        shell: bash
+        run: printf 'value=%s\n' "$(git log -1 --pretty=%ct)" >> "$GITHUB_OUTPUT"
+
       # The first build is deliberately local-only. A failed Trivy scan must
       # not create an Artifact Registry digest or incur a Container Scanning
       # charge. Provenance and SBOM are produced by the identical final build
@@ -155,6 +164,8 @@ jobs:
       - name: Build local image for pre-push scan
         id: local_build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        env:
+          SOURCE_DATE_EPOCH: ${{ steps.build_epoch.outputs.value }}
         with:
           context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}
@@ -257,6 +268,8 @@ jobs:
       - name: Build final image and push isolated candidate
         id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        env:
+          SOURCE_DATE_EPOCH: ${{ steps.build_epoch.outputs.value }}
         with:
           context: ${{ inputs.context }}
           file: ${{ inputs.dockerfile }}

@@ -81,18 +81,31 @@ class ReusableBuildAttestPrePushContractTests(unittest.TestCase):
         self.assertNotIn("docker image prune", self.text)
 
     def test_candidate_is_isolated_until_digest_parity(self) -> None:
+        epoch = step_position(self.text, "Resolve reproducible build epoch")
+        local_build = step_position(self.text, "Build local image for pre-push scan")
         candidate = step_position(self.text, "Build final image and push isolated candidate")
         parity = step_position(self.text, "Verify candidate matches the locally scanned image")
         promotion = step_position(self.text, "Promote verified production tags")
         provenance = step_position(self.text, "Generate SLSA Provenance")
 
+        self.assertLess(epoch, local_build)
+        self.assertLess(local_build, candidate)
         self.assertLess(candidate, parity)
         self.assertLess(parity, promotion)
         self.assertLess(promotion, provenance)
 
+        epoch_block = self.text[epoch:local_build]
+        self.assertIn('git log -1 --pretty=%ct', epoch_block)
+        self.assertIn('id: build_epoch', epoch_block)
+        self.assertIn('>> "$GITHUB_OUTPUT"', epoch_block)
+
+        local_block = self.text[local_build:step_position(self.text, "Reclaim BuildKit cache before Trivy")]
+        self.assertIn("SOURCE_DATE_EPOCH: ${{ steps.build_epoch.outputs.value }}", local_block)
+
         candidate_block = self.text[candidate:parity]
         self.assertIn("tags: ${{ steps.refs.outputs.candidate_ref }}", candidate_block)
         self.assertNotIn("tags: ${{ steps.meta.outputs.tags }}", candidate_block)
+        self.assertIn("SOURCE_DATE_EPOCH: ${{ steps.build_epoch.outputs.value }}", candidate_block)
         self.assertIn("provenance: true", candidate_block)
         self.assertIn("sbom: true", candidate_block)
 
