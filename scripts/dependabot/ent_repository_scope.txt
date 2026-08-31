@@ -41,6 +41,7 @@ merglbot-extractors/abra-flexi-extractor
 merglbot-extractors/ads-campaign-builder
 merglbot-extractors/bing-ads-extractor
 merglbot-extractors/cerano-forecast-exporter
+merglbot-extractors/cerano-shoptet-export-extractor
 merglbot-extractors/currency-rates-extractor
 merglbot-extractors/denatura-additional-costs-extractor
 merglbot-extractors/denatura-custom-tasks-extractor
