@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify the latest Merglbot PR Assistant current-head review receipt.
 
-The script intentionally reads public GitHub PR/comment truth through `gh` and
+The script intentionally reads GitHub PR/check/comment truth through `gh` and
 prints one JSON object. It does not mutate GitHub state.
 """
 
@@ -193,7 +193,131 @@ def expected_run_url(pr_url: str, run_id: str) -> str:
     return f"{pr_url.split('/pull/', 1)[0]}/actions/runs/{run_id}"
 
 
+V6_APP_ID = 3518182
+V6_CHECK_NAME = "Merglbot PR Assistant v6"
+
+
+def verify_v6(repo: str, pr_number: int) -> dict[str, Any]:
+    """Read a complete current-head App inventory; never fall back to comments.
+
+    This is review evidence only. Callers still verify mutation authority and
+    all required checks immediately before any exact-head merge.
+    """
+    result: dict[str, Any] = {
+        "ok": False, "repo": repo, "pr_number": pr_number,
+        "assistant_version_requested": "v6", "assistant_version_detected": None,
+        "blockers": [], "evidence_source": "check_run_summary",
+    }
+    try:
+        pr = gh_json(["api", f"repos/{repo}/pulls/{pr_number}"])
+        head = pr["head"]["sha"]
+        if not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40}", head):
+            raise ValueError("invalid PR head")
+        result.update(head_sha=head, pr_url=pr["html_url"])
+        pages = gh_json([
+            "api", "--paginate", "--slurp",
+            f"repos/{repo}/commits/{head}/check-runs?per_page=100&filter=all",
+        ])
+        if not isinstance(pages, list) or not pages:
+            raise ValueError("missing inventory")
+        checks: list[dict[str, Any]] = []
+        totals: set[int] = set()
+        for page in pages:
+            if not isinstance(page, dict):
+                raise ValueError("invalid page")
+            total = page.get("total_count")
+            rows = page.get("check_runs")
+            if type(total) is not int or total < 0 or not isinstance(rows, list):
+                raise ValueError("invalid page schema")
+            totals.add(total)
+            for row in rows:
+                if (not isinstance(row, dict) or type(row.get("id")) is not int
+                        or not isinstance(row.get("name"), str)
+                        or row.get("head_sha") != head
+                        or not isinstance(row.get("app"), dict)
+                        or type(row["app"].get("id")) is not int):
+                    raise ValueError("invalid check schema")
+                checks.append(row)
+        ids = [row["id"] for row in checks]
+        if totals != {len(checks)} or len(set(ids)) != len(ids):
+            raise ValueError("incomplete or changing inventory")
+        result["observed_check_count"] = len(checks)
+        candidates = [row for row in checks
+                      if row["name"] == V6_CHECK_NAME and row["app"]["id"] == V6_APP_ID]
+        # A newer queued/failed round supersedes old approvals on the same head.
+        check = max(candidates, key=lambda row: row["id"]) if candidates else None
+        current = gh_json(["api", f"repos/{repo}/pulls/{pr_number}"])
+        if current["head"]["sha"] != head:
+            result["blockers"] = ["head_changed_during_read"]
+            result.update(head_sha=current["head"]["sha"], expected_head_sha=head,
+                          current_head_match=False, head_changed_during_review_wait=True)
+            return result
+        if check is None:
+            result["blockers"] = ["missing_canonical_current_head_v6_check"]
+            return result
+        result.update(check_run_id=check["id"], check_url=check.get("html_url"),
+                      producer_app_id=V6_APP_ID, assistant_version_detected="v6")
+        output = check.get("output")
+        if not isinstance(output, dict) or not isinstance(output.get("summary"), str):
+            raise ValueError("missing summary")
+        pairs = MARKER_RE.findall(output["summary"])
+        markers = {key: value.strip() for key, value in pairs}
+        if len(markers) != len(pairs):
+            result["blockers"] = ["duplicate_receipt_markers"]
+            return result
+        blockers = result["blockers"]
+        bare_family = len(re.findall(r"<!--\s*MERGLBOT_PR_ASSISTANT_V6\s*-->", output["summary"]))
+        if bare_family + int("MERGLBOT_PR_ASSISTANT_V6" in markers) != 1:
+            blockers.append("missing_or_duplicate_v6_family_marker")
+        elif not bare_family and markers.get("MERGLBOT_PR_ASSISTANT_V6") != "true":
+            blockers.append("invalid_v6_family_marker")
+        expected = {
+            "MERGLBOT_REVIEW_RECEIPT_SCHEMA_VERSION": "1",
+            "MERGLBOT_REVIEW_SOURCE": f"{repo}#{pr_number}",
+            "MERGLBOT_REVIEW_HEAD_SHA": head,
+            "MERGLBOT_RECEIPT_SURFACE": "check_run_summary",
+            "MERGLBOT_MARKER_STATUS": "parseable_receipt",
+            "MERGLBOT_REVIEW_STATUS": "success",
+            "MERGLBOT_REVIEW_VERDICT": "approved_for_closeout",
+            "MERGLBOT_PROVIDER_DEGRADED": "false",
+            "MERGLBOT_ACTIONABLE_FINDINGS_COUNT": "0",
+            "MERGLBOT_AUTONOMOUS_NEXT_ACTION": "safe_to_merge",
+        }
+        for key, value in expected.items():
+            if markers.get(key) != value:
+                blockers.append(f"invalid_or_missing:{key}")
+        if check.get("status") != "completed" or check.get("conclusion") != "success":
+            blockers.append("v6_check_not_completed_success")
+        engines = markers.get("MERGLBOT_LOCAL_PRIMARY_ENGINE_EVIDENCE", "").split(",")
+        produced = [entry for entry in engines
+                    if re.fullmatch(r"(?:codex|claude):(?:pass|fail)", entry.strip())]
+        # The trusted gate enforces required engines for its review mode.
+        # By-design lightweight single-engine reviews must remain eligible.
+        if not produced:
+            blockers.append("missing_produced_engine_evidence")
+        run_id = markers.get("MERGLBOT_RUN_ID", "")
+        if not run_id.startswith("pr-assistant-v6:") or run_id == "pr-assistant-v6:":
+            blockers.append("missing_or_invalid_v6_run_id")
+        result.update(
+            ok=not blockers, review_head_sha=markers.get("MERGLBOT_REVIEW_HEAD_SHA"),
+            current_head_match=markers.get("MERGLBOT_REVIEW_HEAD_SHA") == head,
+            verdict=markers.get("MERGLBOT_REVIEW_VERDICT"),
+            status=markers.get("MERGLBOT_REVIEW_STATUS"),
+            schema_version=markers.get("MERGLBOT_REVIEW_RECEIPT_SCHEMA_VERSION"),
+            provider_degraded=markers.get("MERGLBOT_PROVIDER_DEGRADED"),
+            actionable_findings_count=markers.get("MERGLBOT_ACTIONABLE_FINDINGS_COUNT"),
+            run_id=run_id,
+        )
+    except (RuntimeError, ValueError, KeyError, TypeError):
+        # Do not expose API response bodies, auth errors, or provider prose.
+        result["ok"] = False
+        result["blockers"] = ["DATA_GAP_v6_evidence_unavailable_or_incomplete"]
+    return result
+
+
 def verify(repo: str, pr_number: int, assistant_version: str = "v3") -> dict[str, Any]:
+    if assistant_version == "v6":
+        return verify_v6(repo, pr_number)
     pr = gh_json(
         ["pr", "view", str(pr_number), "--repo", repo, "--json", "headRefOid,url,state"]
     )
@@ -620,7 +744,7 @@ def main() -> int:
     parser.add_argument("--pr", type=int, help="Pull request number")
     parser.add_argument(
         "--assistant-version",
-        choices=("v3", "v4", "any"),
+        choices=("v3", "v4", "any", "v6"),
         default="v3",
         help="Receipt marker family to verify. Defaults to v3 for rollout compatibility.",
     )
