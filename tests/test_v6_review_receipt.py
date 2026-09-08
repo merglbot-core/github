@@ -55,7 +55,22 @@ class V6ReviewReceiptTests(unittest.TestCase):
         pr = {"head": {"sha": HEAD}, "html_url": "https://github.com/example/repo/pull/7"}
         end = copy.deepcopy(pr)
         end["head"]["sha"] = final_head
-        with patch.object(reader, "gh_json", side_effect=[pr, [{"total_count": 1, "check_suites": [{"id": 10, "app": {"id": reader.V6_APP_ID}, "head_sha": HEAD}]}], pages, end]) as api:
+        head_reads = 0
+        def get(args):
+            nonlocal head_reads
+            path = args[-1]
+            if "/pulls/" in path:
+                head_reads += 1
+                return copy.deepcopy(pr if head_reads == 1 else end)
+            if "/check-suites?" in path:
+                return [{"total_count": 1, "check_suites": [{"id": 10, "app": {"id": reader.V6_APP_ID}, "head_sha": HEAD}]}]
+            if "/check-runs?" in path:
+                return copy.deepcopy(pages)
+            if "/check-runs/" in path:
+                check_id = int(path.rsplit("/", 1)[1])
+                return copy.deepcopy(next(c for page in pages for c in page["check_runs"] if c["id"] == check_id))
+            raise AssertionError(path)
+        with patch.object(reader, "gh_json", side_effect=get) as api:
             result = reader.verify(REPO, 7, "v6")
         # Only the existing PR and the App check surface are queried.
         for call in api.call_args_list:
@@ -184,7 +199,8 @@ class V6ReviewReceiptTests(unittest.TestCase):
             if suite["id"] == 1001:
                 c.update(status="in_progress", conclusion=None)
             responses.append([{"total_count": 1, "check_runs": [c]}])
-        responses.append(pr)
+        responses.extend(copy.deepcopy(responses[1:]))
+        responses.extend([c, pr])
         with patch.object(reader, "gh_json", side_effect=responses):
             result = reader.verify(REPO, 7, "v6")
         self.assertFalse(result["ok"])
@@ -204,6 +220,48 @@ class V6ReviewReceiptTests(unittest.TestCase):
             r = reader.verify(REPO, 7, "v6")
         self.assertFalse(r["ok"])
         self.assertNotIn("PRIVATE_SENTINEL", str(r))
+
+    def test_same_head_mutation_new_round_and_final_check_failure(self):
+        # Two suites: the first receipt can mutate while a later suite is
+        # collected without changing the head or any inventory denominator.
+        for change in ("summary", "conclusion", "new_round", "late_selected", "unavailable"):
+            with self.subTest(change=change):
+                reads = 0
+                current = check(2)
+                calls = []
+                def get(args):
+                    nonlocal reads, current
+                    path = args[-1]
+                    calls.append(path)
+                    if "/pulls/" in path:
+                        return {"head": {"sha": HEAD}, "html_url": ""}
+                    if "/check-suites?" in path:
+                        reads += 1
+                        suites = [{"id": i, "app": {"id": reader.V6_APP_ID}, "head_sha": HEAD} for i in (10, 20)]
+                        return [{"total_count": 2, "check_suites": suites}]
+                    if "/check-suites/10/" in path:
+                        return [{"total_count": 1, "check_runs": [copy.deepcopy(current)]}]
+                    if "/check-suites/20/" in path:
+                        if change in ("summary", "late_selected"):
+                            if change == "summary" or reads == 2:
+                                current["output"]["summary"] = current["output"]["summary"].replace(
+                                    "FINDINGS_COUNT: 0", "FINDINGS_COUNT: 1")
+                        if change == "conclusion":
+                            current["conclusion"] = "failure"
+                        rows = [check(3)] if change == "new_round" and reads == 2 else []
+                        return [{"total_count": len(rows), "check_runs": rows}]
+                    if path.endswith("/check-runs/2"):
+                        if change == "unavailable":
+                            raise RuntimeError("PRIVATE_SENTINEL")
+                        return copy.deepcopy(current)
+                    raise AssertionError(path)
+                with patch.object(reader, "gh_json", side_effect=get):
+                    result = reader.verify(REPO, 7, "v6")
+                self.assertFalse(result["ok"], result)
+                self.assertNotIn("PRIVATE_SENTINEL", str(result))
+                self.assertLessEqual(reads, 2)
+                if change != "unavailable":
+                    self.assertIn("v6_evidence_changed_during_read", result["blockers"])
 
     def test_no_receipt_or_truncated_summary_blocks(self):
         self.assertFalse(self.evaluate([])["ok"])

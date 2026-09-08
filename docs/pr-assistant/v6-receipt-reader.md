@@ -19,6 +19,11 @@ consistency contradiction, even with zero reported findings.
 Partial, changing or malformed page inventories,
 duplicate markers and head changes during collection fail closed. GitHub
 errors produce a bounded DATA_GAP code without emitting response bodies.
+Before returning evidence, the reader compares two complete inventories and
+re-fetches the selected check, including its full output. A same-head receipt
+update or a newly observed round invalidates this read without retrying it.
+Sequential API reads cannot make a later merge atomic; final required-check
+and authority validation remains the caller's responsibility.
 
 This migration does not require obsolete Actions run URLs, documentation
 markers absent from V6, or legacy `github-actions[bot]` issue comments.

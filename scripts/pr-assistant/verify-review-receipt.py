@@ -220,6 +220,36 @@ def v6_inventory(path: str, key: str) -> list[dict[str, Any]]:
     return rows
 
 
+def v6_checks(repo: str, head: str) -> list[dict[str, Any]]:
+    suites = v6_inventory(
+        f"repos/{repo}/commits/{head}/check-suites?app_id={V6_APP_ID}", "check_suites")
+    checks: list[dict[str, Any]] = []
+    for suite in suites:
+        if (suite.get("head_sha") != head or not isinstance(suite.get("app"), dict)
+                or suite["app"].get("id") != V6_APP_ID):
+            raise ValueError("foreign suite")
+        rows = v6_inventory(
+            f"repos/{repo}/check-suites/{suite['id']}/check-runs?filter=all", "check_runs")
+        for row in rows:
+            if (not isinstance(row.get("name"), str) or row.get("head_sha") != head
+                    or not isinstance(row.get("app"), dict)
+                    or row["app"].get("id") != V6_APP_ID):
+                raise ValueError("invalid check schema")
+            checks.append(row)
+    if len({row["id"] for row in checks}) != len(checks):
+        raise ValueError("duplicate check across suites")
+    return checks
+
+
+def v6_evidence(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Include the complete output, not just verdict/count markers. Ignore only
+    # unrelated transport metadata; key ordering must not affect comparison.
+    keys = ("id", "name", "app", "head_sha", "status", "conclusion", "output",
+            "started_at", "completed_at", "pull_requests")
+    return [{key: row.get(key) for key in keys} for row in sorted(rows, key=lambda r: r["id"])
+            if row.get("name") == V6_CHECK_NAME]
+
+
 def verify_v6(repo: str, pr_number: int) -> dict[str, Any]:
     """Read a complete current-head App inventory; never fall back to comments.
 
@@ -237,29 +267,23 @@ def verify_v6(repo: str, pr_number: int) -> dict[str, Any]:
         if not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40}", head):
             raise ValueError("invalid PR head")
         result.update(head_sha=head, pr_url=pr["html_url"])
-        suites = v6_inventory(
-            f"repos/{repo}/commits/{head}/check-suites?app_id={V6_APP_ID}", "check_suites")
-        checks: list[dict[str, Any]] = []
-        for suite in suites:
-            if (suite.get("head_sha") != head or not isinstance(suite.get("app"), dict)
-                    or suite["app"].get("id") != V6_APP_ID):
-                raise ValueError("foreign suite")
-            rows = v6_inventory(
-                f"repos/{repo}/check-suites/{suite['id']}/check-runs?filter=all", "check_runs")
-            for row in rows:
-                if (not isinstance(row.get("name"), str) or row.get("head_sha") != head
-                        or not isinstance(row.get("app"), dict)
-                        or row["app"].get("id") != V6_APP_ID):
-                    raise ValueError("invalid check schema")
-                checks.append(row)
-        ids = [row["id"] for row in checks]
-        if len(set(ids)) != len(ids):
-            raise ValueError("duplicate check across suites")
+        checks = v6_checks(repo, head)
         result["observed_check_count"] = len(checks)
         candidates = [row for row in checks
                       if row["name"] == V6_CHECK_NAME and row["app"]["id"] == V6_APP_ID]
         # A newer queued/failed round supersedes old approvals on the same head.
         check = max(candidates, key=lambda row: row["id"]) if candidates else None
+        # A head is immutable; its checks are not. Reconcile the full inventory
+        # once, then re-fetch the selected receipt after page/suite collection.
+        # No retry loop and no claim of atomicity with a subsequent merge.
+        if v6_evidence(checks) != v6_evidence(v6_checks(repo, head)):
+            result["blockers"] = ["v6_evidence_changed_during_read"]
+            return result
+        if check is not None:
+            live = gh_json(["api", f"repos/{repo}/check-runs/{check['id']}"])
+            if not isinstance(live, dict) or v6_evidence([live]) != v6_evidence([check]):
+                result["blockers"] = ["v6_evidence_changed_during_read"]
+                return result
         current = gh_json(["api", f"repos/{repo}/pulls/{pr_number}"])
         if current["head"]["sha"] != head:
             result["blockers"] = ["head_changed_during_read"]
