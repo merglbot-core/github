@@ -1,8 +1,10 @@
 # V6 receipt reader for enterprise Dependabot closeout
 
 The enterprise closeout caller explicitly selects `--assistant-version v6`.
-The verifier reads the current PR head and every check-run page with
-`filter=all`, including superseded rounds. It selects the highest check ID
+The verifier reads the current PR head, all canonical App check suites and
+every suite check-run page with `filter=all`, including superseded rounds.
+The combined commit/check-runs endpoint has a 1000-suite ceiling and cannot
+by itself establish completeness. It selects the highest check ID
 for `Merglbot PR Assistant v6` produced by App 3518182. A newer pending or
 failed canonical round cannot be replaced by an older approval.
 

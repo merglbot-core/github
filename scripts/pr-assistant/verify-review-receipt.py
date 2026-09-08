@@ -197,6 +197,29 @@ V6_APP_ID = 3518182
 V6_CHECK_NAME = "Merglbot PR Assistant v6"
 
 
+def v6_inventory(path: str, key: str) -> list[dict[str, Any]]:
+    """Verify every page and its denominator, including empty inventories."""
+    pages = gh_json(["api", "--paginate", "--slurp", f"{path}&per_page=100"])
+    if not isinstance(pages, list) or not pages:
+        raise ValueError("missing inventory")
+    rows: list[dict[str, Any]] = []
+    totals: set[int] = set()
+    for page in pages:
+        if not isinstance(page, dict):
+            raise ValueError("invalid page")
+        total, items = page.get("total_count"), page.get(key)
+        if type(total) is not int or total < 0 or not isinstance(items, list) or len(items) > 100:
+            raise ValueError("invalid page schema")
+        totals.add(total)
+        for item in items:
+            if not isinstance(item, dict) or type(item.get("id")) is not int or item["id"] < 1:
+                raise ValueError("invalid inventory item")
+            rows.append(item)
+    if totals != {len(rows)} or len({row["id"] for row in rows}) != len(rows):
+        raise ValueError("incomplete or changing inventory")
+    return rows
+
+
 def verify_v6(repo: str, pr_number: int) -> dict[str, Any]:
     """Read a complete current-head App inventory; never fall back to comments.
 
@@ -214,33 +237,24 @@ def verify_v6(repo: str, pr_number: int) -> dict[str, Any]:
         if not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40}", head):
             raise ValueError("invalid PR head")
         result.update(head_sha=head, pr_url=pr["html_url"])
-        pages = gh_json([
-            "api", "--paginate", "--slurp",
-            f"repos/{repo}/commits/{head}/check-runs?per_page=100&filter=all",
-        ])
-        if not isinstance(pages, list) or not pages:
-            raise ValueError("missing inventory")
+        suites = v6_inventory(
+            f"repos/{repo}/commits/{head}/check-suites?app_id={V6_APP_ID}", "check_suites")
         checks: list[dict[str, Any]] = []
-        totals: set[int] = set()
-        for page in pages:
-            if not isinstance(page, dict):
-                raise ValueError("invalid page")
-            total = page.get("total_count")
-            rows = page.get("check_runs")
-            if type(total) is not int or total < 0 or not isinstance(rows, list):
-                raise ValueError("invalid page schema")
-            totals.add(total)
+        for suite in suites:
+            if (suite.get("head_sha") != head or not isinstance(suite.get("app"), dict)
+                    or suite["app"].get("id") != V6_APP_ID):
+                raise ValueError("foreign suite")
+            rows = v6_inventory(
+                f"repos/{repo}/check-suites/{suite['id']}/check-runs?filter=all", "check_runs")
             for row in rows:
-                if (not isinstance(row, dict) or type(row.get("id")) is not int
-                        or not isinstance(row.get("name"), str)
-                        or row.get("head_sha") != head
+                if (not isinstance(row.get("name"), str) or row.get("head_sha") != head
                         or not isinstance(row.get("app"), dict)
-                        or type(row["app"].get("id")) is not int):
+                        or row["app"].get("id") != V6_APP_ID):
                     raise ValueError("invalid check schema")
                 checks.append(row)
         ids = [row["id"] for row in checks]
-        if totals != {len(checks)} or len(set(ids)) != len(ids):
-            raise ValueError("incomplete or changing inventory")
+        if len(set(ids)) != len(ids):
+            raise ValueError("duplicate check across suites")
         result["observed_check_count"] = len(checks)
         candidates = [row for row in checks
                       if row["name"] == V6_CHECK_NAME and row["app"]["id"] == V6_APP_ID]

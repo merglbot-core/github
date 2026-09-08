@@ -55,12 +55,13 @@ class V6ReviewReceiptTests(unittest.TestCase):
         pr = {"head": {"sha": HEAD}, "html_url": "https://github.com/example/repo/pull/7"}
         end = copy.deepcopy(pr)
         end["head"]["sha"] = final_head
-        with patch.object(reader, "gh_json", side_effect=[pr, pages, end]) as api:
+        with patch.object(reader, "gh_json", side_effect=[pr, [{"total_count": 1, "check_suites": [{"id": 10, "app": {"id": reader.V6_APP_ID}, "head_sha": HEAD}]}], pages, end]) as api:
             result = reader.verify(REPO, 7, "v6")
         # Only the existing PR and the App check surface are queried.
         for call in api.call_args_list:
             self.assertNotIn("comments", " ".join(call.args[0]))
-        self.assertIn("filter=all", api.call_args_list[1].args[0][-1])
+        self.assertIn("check-suites?app_id=", api.call_args_list[1].args[0][-1])
+        self.assertIn("filter=all", api.call_args_list[2].args[0][-1])
         return result
 
     def test_complete_canonical_receipt_without_legacy_fields(self):
@@ -159,6 +160,33 @@ class V6ReviewReceiptTests(unittest.TestCase):
         for pages in cases:
             with self.subTest(pages=pages):
                 self.assertFalse(self.evaluate(pages=pages)["ok"])
+
+    def test_suite_inventory_cannot_hide_newer_failure(self):
+        suites = [{"id": i, "app": {"id": reader.V6_APP_ID}, "head_sha": HEAD}
+                  for i in range(1, 1002)]
+        pages = [{"total_count": len(suites), "check_suites": suites[i:i+100]}
+                 for i in range(0, len(suites), 100)]
+        pr = {"head": {"sha": HEAD}, "html_url": "https://github.com/example/repo/pull/7"}
+        responses = [pr, pages]
+        for suite in suites:
+            c = check(suite["id"])
+            if suite["id"] == 1001:
+                c.update(status="in_progress", conclusion=None)
+            responses.append([{"total_count": 1, "check_runs": [c]}])
+        responses.append(pr)
+        with patch.object(reader, "gh_json", side_effect=responses):
+            result = reader.verify(REPO, 7, "v6")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["check_run_id"], 1001)
+
+    def test_foreign_or_incomplete_suite_inventory_blocks(self):
+        pr = {"head": {"sha": HEAD}, "html_url": "https://github.com/example/repo/pull/7"}
+        for suite in [{"id": 1, "head_sha": HEAD, "app": None},
+                      {"id": 1, "head_sha": HEAD, "app": {"id": 123}}]:
+            with patch.object(reader, "gh_json", side_effect=[pr, [{"total_count": 1, "check_suites": [suite]}]]):
+                self.assertFalse(reader.verify(REPO, 7, "v6")["ok"])
+        with patch.object(reader, "gh_json", side_effect=[pr, [{"total_count": 2, "check_suites": []}]]):
+            self.assertFalse(reader.verify(REPO, 7, "v6")["ok"])
 
     def test_unavailable_api_does_not_expose_error_payload(self):
         with patch.object(reader, "gh_json", side_effect=RuntimeError("PRIVATE_SENTINEL")):
