@@ -14,6 +14,8 @@ findings, no provider degradation, `safe_to_merge`, a V6 run ID and at least
 one produced engine verdict (`pass` or `fail`) under the canonical V6 reader
 contract. The trusted gate enforces required engine coverage for its review
 mode; legitimate lightweight single-engine approvals remain eligible.
+An approved verdict with a produced engine `fail` blocks as an internal
+consistency contradiction, even with zero reported findings.
 Partial, changing or malformed page inventories,
 duplicate markers and head changes during collection fail closed. GitHub
 errors produce a bounded DATA_GAP code without emitting response bodies.

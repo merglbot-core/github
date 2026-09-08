@@ -97,6 +97,10 @@ class V6ReviewReceiptTests(unittest.TestCase):
             ("codex:pass,claude:skipped", True),
             ("codex:skipped,claude:pass", True),
             ("codex:skipped,claude:skipped", False),
+            ("codex:fail,claude:pass", False),
+            ("codex:pass,claude:fail", False),
+            ("codex:fail,claude:fail", False),
+            ("codex:fail,claude:skipped", False),
             ("codex:cancelled,claude:pending", False),
             ("codex:timeout,claude:error", False),
             ("pass,:pass", False), ("fake:pass", False), ("", False),
@@ -115,6 +119,13 @@ class V6ReviewReceiptTests(unittest.TestCase):
                 r = self.evaluate([newer, check()])
                 self.assertEqual(r["check_run_id"], 2)
                 self.assertFalse(r["ok"])
+
+    def test_older_pending_round_still_blocks_closeout(self):
+        pending = check(1)
+        pending.update(status="in_progress", conclusion=None)
+        result = self.evaluate([pending, check(2)])
+        self.assertFalse(result["ok"])
+        self.assertIn("v6_review_in_progress", result["blockers"])
 
     def test_foreign_producer_or_name_is_not_accepted(self):
         for field, value in [("app", {"id": 123}), ("name", "Other check")]:

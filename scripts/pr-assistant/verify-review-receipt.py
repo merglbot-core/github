@@ -280,6 +280,8 @@ def verify_v6(repo: str, pr_number: int) -> dict[str, Any]:
             result["blockers"] = ["duplicate_receipt_markers"]
             return result
         blockers = result["blockers"]
+        if any(row.get("status") != "completed" for row in candidates):
+            blockers.append("v6_review_in_progress")
         bare_family = len(re.findall(r"<!--\s*MERGLBOT_PR_ASSISTANT_V6\s*-->", output["summary"]))
         if bare_family + int("MERGLBOT_PR_ASSISTANT_V6" in markers) != 1:
             blockers.append("missing_or_duplicate_v6_family_marker")
@@ -309,6 +311,8 @@ def verify_v6(repo: str, pr_number: int) -> dict[str, Any]:
         # By-design lightweight single-engine reviews must remain eligible.
         if not produced:
             blockers.append("missing_produced_engine_evidence")
+        if any(re.fullmatch(r"(?:codex|claude):fail", entry.strip()) for entry in engines):
+            blockers.append("produced_fail_contradicts_approval")
         run_id = markers.get("MERGLBOT_RUN_ID", "")
         if not run_id.startswith("pr-assistant-v6:") or run_id == "pr-assistant-v6:":
             blockers.append("missing_or_invalid_v6_run_id")
