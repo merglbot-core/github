@@ -1,0 +1,66 @@
+schema_version: 1
+billing_table: merglbot-platform-prd.billing_export_euw1.gcp_billing_export_v1_01E453_6322D7_41E77E
+window_days: 30
+maximum_bytes_billed: 5368709120
+
+# Every selector is an independent attribution scenario. The verifier never
+# produces a portfolio grand total, so parent/child scopes cannot be double
+# counted and currencies cannot be combined.
+actions:
+  - id: gcs_cerano
+    cutoff: "2026-08-02T07:41:09Z"
+    project_ids: [merglbot-cerano-extract]
+    services: [Cloud Storage]
+    billing_lag_days: 3
+
+  - id: gcs_denatura
+    cutoff: "2026-08-03T05:53:24Z"
+    project_ids: [merglbot-denatura-extract]
+    services: [Cloud Storage]
+    billing_lag_days: 3
+
+  - id: bq07_monitor_pause
+    cutoff: "2026-08-07T20:02:04Z"
+    project_ids: [merglbot-cerano-main]
+    services: [BigQuery]
+    billing_lag_days: 3
+
+  - id: run01_v1_pause
+    cutoff: "2026-08-07T20:08:29Z"
+    project_ids: [proteinaco-main]
+    services: [Cloud Run]
+    billing_lag_days: 3
+
+  - id: orphan_cloud_armor
+    cutoff: "2026-08-08T19:09:55Z"
+    project_ids: [mb-portal-prd]
+    services: [Network Security]
+    sku_contains: [Cloud Armor]
+    billing_lag_days: 3
+
+  - id: legacy_admin_lb
+    cutoff: "2026-08-09T10:24:00Z"
+    project_ids: [mb-portal-prd]
+    services: [Compute Engine]
+    sku_contains: [Load Balancing, Forwarding Rule]
+    billing_lag_days: 3
+
+  - id: ruzovyslon_offboarding
+    cutoff: "2026-08-08T18:14:14.616Z"
+    project_ids:
+      - merglbot-ruzovyslon-extract
+      - merglbot-ruzovyslon-main
+      - ruzovyslon-data-extract
+      - ruzovyslon-main
+    billing_lag_days: 3
+    parent_scenario: RZ-01
+
+  # Fail closed until the full-expansion owner/hook receipt exists. The
+  # unreceipted 2026-08-07 bulk destruction is deliberately not a baseline.
+  - id: secret_retention_full_expansion
+    cutoff: null
+    project_ids: [merglbot-extractors]
+    services: [Secret Manager]
+    billing_lag_days: 3
+    requires_receipted_expansion: true
+    expansion_receipt_sha256: null

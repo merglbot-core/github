@@ -71,9 +71,10 @@ github:
 gcp:
   billing_account_id: "XXXX-XXXX-XXXX"
   billing_export:
-    project_id: "billing-project"
-    dataset: "billing_export"
+    project_id: "merglbot-platform-prd"
+    dataset: "billing_export_euw1"
     table_pattern: "gcp_billing_export_v1_*"
+    currency: "CZK"
 ```
 
 3. Configure thresholds in `config/thresholds.yml`:
@@ -85,24 +86,35 @@ github:
       max: 30
 
 gcp:
+  currency: CZK
   defaults:
-    total_monthly_usd: 1000
+    total_monthly: 23000
   projects:
     production-project:
-      total_monthly_usd: 2000
+      total_monthly: 46000
 ```
 
 ## 🔑 Authentication
 
 ### GitHub
-Set the `GITHUB_TOKEN` environment variable:
+Set a separately scoped token for organization aggregate billing reads. Keep
+`GITHUB_TOKEN` distinct for optional issue creation:
 ```bash
-export GITHUB_TOKEN="ghp_your_personal_access_token"
+export ENTERPRISE_GITHUB_TOKEN="<enterprise-read-token>"
+export GITHUB_TOKEN="<run-token-for-issue-creation>"
 ```
 
 Required scopes:
-- `read:org` - Read organization data
-- `read:enterprise` - Read enterprise billing data
+- classic PAT: `manage_billing:copilot` or `read:org`;
+- fine-grained PAT / GitHub App: organization `GitHub Copilot Business: read`
+  or `Administration: read`.
+
+The calling account must be an owner of every configured organization.
+
+The monitor uses only the aggregate organization Copilot billing response. It
+does not call the enterprise seat-list endpoint or ingest seat identities.
+Missing organizations are skipped, while authorization, billing-configuration,
+provider, and schema errors fail the report closed.
 
 ### GCP
 For local development:
@@ -110,7 +122,36 @@ For local development:
 gcloud auth application-default login
 ```
 
-For CI/CD, use Workload Identity Federation (recommended) or service account key.
+For CI/CD, use Workload Identity Federation. Service account JSON keys are not supported.
+
+## Equal-window realized savings
+
+The durable FinOps verifier compares independent 30-day pre/post windows only
+after the configured billing lag. It reads only the canonical
+`merglbot-platform-prd.billing_export_euw1` standard export, enforces both
+`_PARTITIONTIME` and usage-time bounds, and hard-caps the single aggregate query
+at 5 GiB. Receipts never include billing rows or identities and never calculate
+a cross-action or cross-currency grand total.
+
+```bash
+# Safe provider-side byte estimate; no billing rows are read.
+cost-monitor realized-savings --query-dry-run
+
+# Scheduled verification (read-only aggregate query).
+cost-monitor realized-savings --out reports/realized-savings.json
+```
+
+The Secret Manager scenario stays `NOT_ELIGIBLE_YET` until both a full-expansion
+timestamp and its immutable owner/hook receipt SHA-256 are committed to the
+measurement contract. The unreceipted 2026-08-07 bulk destruction is excluded.
+
+Scheduled runs restore the last non-dry-run aggregate receipt and hash only the
+stable verdict payload. Ordinary waiting and unchanged verdicts remain silent;
+only a new `REALIZED`, `MISMATCH`, or `DATA_GAP` state emits a workflow
+annotation. Dry-run artifacts are isolated from this state. The authorized
+FinOps closeout consumer links the resulting aggregate artifact fingerprint to
+the closed audit issue; this least-privilege workflow does not receive a
+cross-repository write token.
 
 ### Slack (Optional)
 Set the webhook URL:
@@ -167,12 +208,12 @@ Structured data with columns:
 - `service`: Service name
 - `metric`: Metric type
 - `value`: Numeric value
-- `currency`: USD/count
+- `currency`: source currency (`USD` for GitHub, billing-account currency for GCP) or `count`
 - `month`: Report month
 
 ### Markdown Report
 Human-readable report with:
-- Executive summary
+- Currency-separated executive summary (no invalid cross-currency grand total)
 - GitHub Enterprise breakdown
 - GCP project costs
 - Top services by cost
@@ -244,6 +285,8 @@ cost-monitoring/
 - Store secrets in GitHub Secrets or Secret Manager
 - Mask sensitive values in logs
 - Use minimal required permissions
+- Keep billing queries partition- and usage-time bounded with a 5 GiB maximum-bytes guard
+- Fail closed on missing data, query/schema errors, or mixed export currencies
 
 ## 🧪 Testing
 
@@ -274,9 +317,9 @@ The tool tracks:
 
 ### Common Issues
 
-1. **"Missing GITHUB_TOKEN"**
-   - Ensure the token is set in environment
-   - Verify token has required scopes
+1. **"Missing ENTERPRISE_GITHUB_TOKEN"**
+   - Ensure the separately scoped enterprise billing-read token is configured
+   - Verify the token has the required read scopes
 
 2. **"Failed to query BigQuery"**
    - Check GCP authentication
@@ -311,7 +354,7 @@ MIT License - see LICENSE file for details.
 
 ## 🎯 Roadmap
 
-- [ ] Multi-currency support
+- [x] Currency-aware source reporting without cross-currency aggregation
 - [ ] Predictive cost modeling
 - [ ] Custom report templates
 - [ ] Cost optimization recommendations

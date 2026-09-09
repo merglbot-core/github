@@ -70,38 +70,36 @@ jobs:
       - name: Generate cost report
         id: generate
         working-directory: platform/tools/cost-monitoring
-        continue-on-error: true
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          # Read-only enterprise/org billing APIs require the separately scoped token.
+          ENTERPRISE_GITHUB_TOKEN: ${{ secrets.ENTERPRISE_GITHUB_TOKEN }}
+          # Keep the run token isolated to optional issue creation.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MONITOR_MONTH: ${{ inputs.month }}
+          MONITOR_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          
-          # Build command
-          CMD="python -m cost_monitoring.cli generate --outdir reports"
-          
-          # Add month if specified
-          if [ -n "${{ inputs.month }}" ]; then
-            CMD="$CMD --month ${{ inputs.month }}"
+
+          CMD=(python -m cost_monitoring.cli generate --outdir reports --soft-fail)
+
+          if [ -n "$MONITOR_MONTH" ]; then
+            CMD+=(--month "$MONITOR_MONTH")
           fi
-          
-          # Add dry-run if specified
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            CMD="$CMD --dry-run"
+
+          if [ "$MONITOR_DRY_RUN" = "true" ]; then
+            CMD+=(--dry-run)
           fi
-          
-          # Run with soft-fail to continue even if thresholds exceeded
-          CMD="$CMD --soft-fail"
-          
-          echo "Running: $CMD"
-          EXIT=0
-          $CMD || EXIT=$?
-          
+
           echo "reports_dir=$(pwd)/reports" >> "$GITHUB_OUTPUT"
-          echo "exit_code=${EXIT}" >> "$GITHUB_OUTPUT"
+          "${CMD[@]}"
 
       - name: AI Usage Telemetry Alerts (Budgets)
         id: ai_usage_alerts
+        # This is a separate notifier path from the main CLI. A workflow-dispatch
+        # dry run must suppress both paths; scheduled runs and normal dispatches
+        # still execute the budget alerts.
+        if: github.event_name != 'workflow_dispatch' || inputs.dry_run != true
         working-directory: platform/tools/cost-monitoring
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
@@ -126,28 +124,28 @@ jobs:
         if: always()
         working-directory: platform/tools/cost-monitoring
         run: |
-          echo "## 💰 Cost Monitoring Report" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          
-          # Check if markdown report exists
-          MD_FILE=$(find reports -name "*.md" -type f | head -1)
-          if [ -f "$MD_FILE" ]; then
-            # Add the markdown report to summary (truncate if too long)
-            head -n 200 "$MD_FILE" >> "$GITHUB_STEP_SUMMARY"
-            
-            if [ $(wc -l < "$MD_FILE") -gt 200 ]; then
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "*... Report truncated. See artifacts for full report.*" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## 💰 Cost Monitoring Report"
+            echo ""
+
+            MD_FILE=$(find reports -name "*.md" -type f | head -1)
+            if [ -f "$MD_FILE" ]; then
+              head -n 200 "$MD_FILE"
+
+              if [ "$(wc -l < "$MD_FILE")" -gt 200 ]; then
+                echo ""
+                echo "*... Report truncated. See artifacts for full report.*"
+              fi
+            else
+              echo "❌ No report generated"
             fi
-          else
-            echo "❌ No report generated" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "---" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Exit code: ${{ steps.generate.outputs.exit_code }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- AI usage alerts exit code: ${{ steps.ai_usage_alerts.outputs.exit_code }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Reports directory: ${{ steps.generate.outputs.reports_dir }}" >> "$GITHUB_STEP_SUMMARY"
+
+            echo ""
+            echo "---"
+            echo "- Generate outcome: ${{ steps.generate.outcome }}"
+            echo "- AI usage alerts exit code: ${{ steps.ai_usage_alerts.outputs.exit_code }}"
+            echo "- Reports directory: ${{ steps.generate.outputs.reports_dir }}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload cost reports
         if: always()
@@ -156,9 +154,3 @@ jobs:
           name: cost-reports-${{ github.run_id }}
           path: platform/tools/cost-monitoring/reports/
           retention-days: 90
-
-      - name: Check exit code
-        if: steps.generate.outputs.exit_code != '0'
-        run: |
-          echo "⚠️ Cost monitoring detected issues (exit code: ${{ steps.generate.outputs.exit_code }})"
-          echo "Review the reports and GitHub issue for details."

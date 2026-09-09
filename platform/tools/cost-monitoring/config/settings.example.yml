@@ -12,8 +12,9 @@ gcp:
   billing_account_id: "XXXX-XXXX-XXXX"
   billing_export:
     project_id: "merglbot-platform-prd"
-    dataset: "billing_export"
+    dataset: "billing_export_euw1"
     table_pattern: "gcp_billing_export_v1_*"
+    currency: "CZK"
   projects:
     core:
       - "merglbot-seed"

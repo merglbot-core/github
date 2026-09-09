@@ -8,21 +8,24 @@ github:
       max: 60
 
 gcp:
+  # GCP billing export values are reported in the billing-account currency.
+  # Existing sample guardrails were rebased at 23 CZK/USD; review them as policy, not as an exchange-rate feed.
+  currency: CZK
   defaults:
-    total_monthly_usd: 300
-    per_service_monthly_usd:
-      Cloud Run: 150
-      BigQuery: 150
-      Cloud Storage: 80
-      Compute Engine: 80
+    total_monthly: 6900
+    per_service_monthly:
+      Cloud Run: 3450
+      BigQuery: 3450
+      Cloud Storage: 1840
+      Compute Engine: 1840
   projects:
     mb-portal-prd:
-      total_monthly_usd: 800
-      per_service_monthly_usd:
-        Cloud Run: 500
-        BigQuery: 150
+      total_monthly: 18400
+      per_service_monthly:
+        Cloud Run: 11500
+        BigQuery: 3450
     denatura-btf-prd:
-      total_monthly_usd: 1200
-      per_service_monthly_usd:
-        BigQuery: 800
-        Cloud Run: 300
+      total_monthly: 27600
+      per_service_monthly:
+        BigQuery: 18400
+        Cloud Run: 6900

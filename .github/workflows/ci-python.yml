@@ -20,7 +20,12 @@ on:
   workflow_call:
     inputs:
       python-version:
-        description: 'Python version to use'
+        description: >-
+          Python version to use (any setup-python selector). If lint-tools
+          includes black or mypy AND the repo does not ship the tool via
+          requirements-dev.txt, the hub fallback pins require the resolved
+          interpreter to be >=3.10 (checked at install time, fail-fast with
+          guidance). A repo-installed tool always wins regardless of version.
         type: string
         default: '3.11'
         required: false
@@ -87,15 +92,50 @@ jobs:
           if [ -f requirements-dev.txt ]; then
             pip install -r requirements-dev.txt
           fi
-          # Install linters based on inputs
+          # Install linters based on inputs — repo-first with a PINNED hub default.
+          # A bare `pip install ruff` resolves to whatever is latest at run time, so an
+          # upstream release flips CI estate-wide with zero repo changes (github#728:
+          # ruff 0.16.0 landed on a weekend and reddened mains that had no ruff pin of
+          # their own). If the repo ships the tool via requirements-dev.txt, that pin
+          # wins (command -v check); otherwise the hub installs an exact version.
+          # Bumping these pins = a deliberate hub PR, reviewed like any other change.
+          # NOTE: 0.16.0 is the deliberate go-forward pin, NOT the regression being
+          # frozen by accident. Per #728: pinning <0.16 would not un-redden
+          # forecast-engine (red under 0.15.x since 23.7. on a real code bug) and
+          # would fight the four repos already migrated cleanly to 0.16
+          # (dse/dmp/shoptet/hod-bde). What #728 fixes is DETERMINISM — the pin
+          # makes the estate move to a new ruff on a reviewed hub PR, not on
+          # whatever PyPI serves at run time.
           if [[ "${{ inputs.lint-tools }}" == *"ruff"* ]]; then
-            pip install ruff
+            command -v ruff >/dev/null 2>&1 || pip install "ruff==0.16.0"
           fi
+          # black/mypy hub pins declare requires_python >=3.10. The check runs
+          # (a) only when the repo did NOT provide the tool (repo tool always wins,
+          # even on an older interpreter), and (b) against the RESOLVED interpreter
+          # (sys.version_info), so setup-python selectors like "3.x", ">=3.10" or
+          # "pypy3.10" are judged by what they resolved to, not by string shape.
+          hub_pin_needs_py310() {
+            python -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'
+          }
           if [[ "${{ inputs.lint-tools }}" == *"black"* ]]; then
-            pip install black
+            if ! command -v black >/dev/null 2>&1; then
+              if hub_pin_needs_py310; then
+                pip install "black==26.5.1"
+              else
+                echo "::error::Resolved interpreter $(python -V 2>&1) is <3.10 and cannot run the hub-pinned black==26.5.1. Ship black via requirements-dev.txt (a repo-installed tool always wins) or raise python-version."
+                exit 1
+              fi
+            fi
           fi
           if [[ "${{ inputs.lint-tools }}" == *"mypy"* ]]; then
-            pip install mypy
+            if ! command -v mypy >/dev/null 2>&1; then
+              if hub_pin_needs_py310; then
+                pip install "mypy==2.3.0"
+              else
+                echo "::error::Resolved interpreter $(python -V 2>&1) is <3.10 and cannot run the hub-pinned mypy==2.3.0. Ship mypy via requirements-dev.txt (a repo-installed tool always wins) or raise python-version."
+                exit 1
+              fi
+            fi
           fi
       
       - name: Run ruff

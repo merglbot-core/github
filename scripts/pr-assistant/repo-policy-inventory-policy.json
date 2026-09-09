@@ -84,6 +84,12 @@
     "merglbot-core/ai_prompts": {
       "notes": "Prompt-contract peer; included in enterprise rollout but not in the advisory docs pilot scope."
     },
+    "merglbot-core/fleet-deck": {
+      "enabled": false,
+      "review_owner_policy": "no_owner",
+      "rollout_tier": "core",
+      "notes": "Local Fleet Deck tool with zero workflows by design; v6 coverage via dynamic fleet discovery + branch-protection required check, not v3 copy-deploy."
+    },
     "merglbot-denatura/denatura-btf-data": {
       "enabled": false,
       "review_owner_policy": "no_owner",

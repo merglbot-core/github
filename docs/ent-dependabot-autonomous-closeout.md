@@ -61,11 +61,15 @@ Platform policy authority remains in `merglbot-public/docs`:
   short-lived installation tokens per repository owner and fails closed when the
   app is not installed for a target owner. `ENTERPRISE_GITHUB_TOKEN` remains only
   a legacy fallback for non-ENT/single-owner tests.
-- Missing or stale Merglbot evidence is remediated through the target repo's
-  active `Merglbot PR Assistant v3 (On-Demand Multi-Model)` workflow via
-  `workflow_dispatch` on the PR head ref with `expected_head_sha`. The legacy
-  `@merglbot review --light` comment path is not used by the ENT weekly apply
-  lane because GitHub App comments do not carry a trusted author association.
+- Missing or stale Merglbot evidence is produced by the trusted v6 machine
+  paths: the review gate's auto-fire on PR open/sync (the closeout's own
+  update-branch of BEHIND PRs lands here) and the local dependabot-keeper's
+  owner-authored `@merglbot review` triggers; the closeout then consumes their
+  receipts. The closeout itself does not post trigger comments by default —
+  it authenticates as a GitHub App and the gate ignores bot/app-authored
+  triggers (anti-loop floor). Set `ENT_DEPENDABOT_REVIEW_TRIGGER_TRUSTED=true`
+  only when the job is wired to an owner-attributed credential. (The retired
+  v3 `workflow_dispatch` remediation path was removed from the engine.)
 - When `autonomous_fix_loop=true`, current-head Merglbot `changes_required`,
   third-party review-bot blockers, and real CI failures are not treated as final closeout
   blockers in dry-run. They are classified as `WOULD_START_AUTONOMOUS_FIX_LOOP`

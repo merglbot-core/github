@@ -23,7 +23,7 @@ dependencies = [
     "PyGithub>=2.1.1",
     "google-cloud-bigquery>=3.13.0",
     "google-cloud-firestore>=2.16.0",
-    "google-cloud-billing>=1.11.2",
+    "google-cloud-billing-budgets>=1.11.2",
     "google-api-core>=2.14.0",
 ]
 
