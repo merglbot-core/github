@@ -10,6 +10,7 @@ import plistlib
 import signal
 import subprocess
 import sys
+import heartbeat
 
 from controller import DEADLINE, GitHub, atomic, cleanup, instant
 
@@ -81,6 +82,15 @@ def unload():
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20).returncode
 
 
+def sync_heartbeat(state_dir, plan, now):
+    active = bool(plan.get("next_due")) and instant(plan["next_due"]) <= now + dt.timedelta(minutes=5)
+    proof = heartbeat.sync(state_dir, active, plan["stopped"], now)
+    plan["heartbeat"] = proof
+    if proof["status"] == "unverified":
+        plan.update(stopped=False, next_due=(now + dt.timedelta(minutes=5)).isoformat(), admitted_runs="DATA_GAP")
+    return proof["status"] != "unverified"
+
+
 def wake(state_dir, now):
     plan_path = state_dir / "runtime.json"
     invalid_state = False
@@ -99,7 +109,9 @@ def wake(state_dir, now):
         plan, state = {}, {}
         invalid_state = True
     if plan.get("stopped"):
-        return unload()
+        verified = sync_heartbeat(state_dir, plan, now)
+        atomic(plan_path, plan)
+        return unload() if verified else 1
     due = plan.get("next_due")
     urgent = (now >= instant(DEADLINE) or len(state.get("counted_prs", [])) >= 5
               or (state_dir / "OWNER_HOLD").exists()
@@ -123,8 +135,12 @@ def wake(state_dir, now):
                       "reason": "invalid_persisted_state"}
         atomic(state_dir / "next_action.json", result)
     plan = schedule(result, now)
+    verified = sync_heartbeat(state_dir, plan, now)
+    if not verified:
+        result.update(action="heartbeat_sync_required", status="unverified")
+        atomic(state_dir / "next_action.json", result)
     atomic(plan_path, plan)
-    return unload() if plan["stopped"] else 0
+    return unload() if plan["stopped"] else 0 if verified else 1
 
 
 def main():
