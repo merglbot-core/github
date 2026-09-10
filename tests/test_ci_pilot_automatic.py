@@ -2,6 +2,8 @@ import copy
 import datetime as dt
 from pathlib import Path
 import sys
+import tempfile
+import json
 import unittest
 from unittest.mock import patch
 
@@ -48,6 +50,34 @@ class ExperimentTests(unittest.TestCase):
     def tick(self, receipt=None, now=NOW, **kw):
         return a.experiment_tick(self.gh, self.state, now, True, receipt,
                                  clock=lambda: now, supervisor_ready=kw.pop("supervisor_ready", lambda: True), **kw)
+
+    def test_recovery_runs_real_controller_with_five_historical_cases(self):
+        import runtime
+        now = dt.datetime.now(dt.timezone.utc)
+        self.state["counted_prs"] = ["historical#" + str(i) for i in range(5)]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            c.atomic(root / "state.json", self.state)
+            c.atomic(root / "runtime.json", {"stopped": True})
+            def run_controller(path):
+                with patch.object(sys, "argv", ["controller.py", "tick", "--state-dir", str(path), "--apply"]):
+                    self.assertEqual(c.main(), 0)
+            with patch.object(runtime, "GitHub", return_value=self.gh), patch.object(c, "GitHub", return_value=self.gh):
+                runtime.recover_experiment(root, now)
+                with patch.object(runtime, "run_controller", side_effect=run_controller), patch.object(runtime, "unload") as unload:
+                    self.assertEqual(runtime.wake(root, now), 0)
+                    unload.assert_not_called()
+            result = json.loads((root / "next_action.json").read_text())
+            plan = json.loads((root / "runtime.json").read_text())
+            self.assertEqual("await_experiment_selection", result["action"])
+            self.assertTrue(plan["healthy"])
+            self.assertFalse(plan["stopped"])
+            self.assertEqual(self.state["counted_prs"], json.loads((root / "state.json").read_text())["counted_prs"])
+            # The successor still enforces its own three-identity bound.
+            for number in (12, 13, 14):
+                self.assertEqual("active", self.tick({**self.selection, "pr": number})["status"])
+                self.tick({"stop": True})
+            self.assertEqual("experiment_kind_limit", self.tick({**self.selection, "pr": 15})["reason"])
 
     def test_missing_or_lost_supervisor_never_leaves_selectors(self):
         result = a.experiment_tick(self.gh, self.state, NOW, True, self.selection, clock=lambda: NOW)

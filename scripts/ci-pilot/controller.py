@@ -8,6 +8,9 @@ from pathlib import Path
 from github_client import CHECKS, DEADLINE, REPOS, PR_VAR, SHA_VAR, BASE_VAR, BASE_BOUND_REPOS, SELECTOR_NAMES, GitHub, Gap, atomic, digest, instant
 
 
+# Runtime recovery is safe only with the independently bounded experiment dispatcher.
+EXPERIMENT_STATE_VERSION = 1
+
 def validate_receipt(r):
     if (r.get("repo") not in REPOS or type(r.get("pr")) is not int or r["pr"] <= 0
             or r.get("eligible") is not True or not r.get("assessment", "").strip()
