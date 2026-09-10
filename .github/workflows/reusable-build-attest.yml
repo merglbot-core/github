@@ -95,6 +95,9 @@ on:
       slsa_provenance:
         description: 'SLSA provenance JSON'
         value: ${{ jobs.build.outputs.provenance }}
+      platform_provenance:
+        description: 'Build provenance scoped to the verified linux/amd64 manifest'
+        value: ${{ jobs.build.outputs.platform_provenance }}
       scan_passed:
         description: 'Whether vulnerability scan passed'
         value: ${{ jobs.build.outputs.scan_passed }}
@@ -121,6 +124,7 @@ jobs:
       platform_digest: ${{ steps.parity.outputs.platform_digest }}
       tag: ${{ steps.meta.outputs.version }}
       provenance: ${{ steps.provenance.outputs.provenance }}
+      platform_provenance: ${{ steps.provenance.outputs.platform_provenance }}
       scan_passed: ${{ !inputs.scan || steps.trivy.outcome == 'success' }}
     
     steps:
@@ -462,12 +466,22 @@ jobs:
             printf '%s\n' "$PROVENANCE_DELIMITER"
           } >> "$GITHUB_OUTPUT"
           echo "$PROVENANCE" > provenance.json
+          # Keep the full statement artifact and expose a single-subject projection
+          # for strict deployment consumers. All builder/commit/material claims remain.
+          if [ -n "$PLATFORM_DIGEST" ]; then
+            PLATFORM_PROVENANCE="$(printf '%s' "$PROVENANCE" | jq -ce --arg digest "${PLATFORM_DIGEST#sha256:}" \
+              '.subject = [.subject[] | select((.digest.sha256 | sub("^sha256:"; "")) == $digest)] | if (.subject | length) >= 1 then .subject = [.subject[0]] else error("missing verified platform subject") end')"
+            printf 'platform_provenance=%s\n' "$PLATFORM_PROVENANCE" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "$PLATFORM_PROVENANCE" > platform-provenance.json
+          fi
 
       - name: Upload SLSA Provenance
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: slsa-provenance
-          path: provenance.json
+          path: |
+            provenance.json
+            platform-provenance.json
           retention-days: 90
 
   attest:
