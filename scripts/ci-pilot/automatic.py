@@ -1,9 +1,8 @@
 """Bounded automatic experiment, using the existing lock, runtime and heartbeat."""
 import base64
 import datetime as dt
-import json
 from pathlib import Path
-from urllib.parse import quote
+import experiment_measurements as measurements
 
 from github_client import AUTO_MODE, AUTO_PR, DEADLINE, REPOS, Gap, digest, instant
 
@@ -32,70 +31,6 @@ def snapshot(gh, number, protection_hash):
     # The experiment has a separately pinned reviewed source contract.
     eligible(r, {**s, "selector_supported": True})
     return r, p["head"]["ref"]
-
-
-def observe(gh, case, now):
-    """Discover intermediate heads, then reuse complete attempt-specific job measurements."""
-    query = (f"repos/{REPO}/actions/workflows/python-script-tests.yml/runs?event=pull_request"
-             f"&branch={quote(case['branch'], safe='')}")
-    # A rerun can enter this phase even when its original run predates it.
-    # The adapter assigns each attempt by run_started_at, not original created_at.
-    runs = gh.pages(query, "workflow_runs")
-    if len(runs) >= 1000:
-        raise Gap("run_inventory_cap")
-    heads = set()
-    signatures = {}
-    for run in runs:
-        if case.get("stopped_at") and instant(run["created_at"]) >= instant(case["stopped_at"]):
-            continue
-        if run["head_branch"] != case["branch"]:
-            raise Gap("run_branch_mismatch")
-        associations = run["pull_requests"]
-        if not associations:
-            associations = gh.pages(f"repos/{REPO}/commits/{run['head_sha']}/pulls")
-            if len(associations) != 1:
-                raise Gap("run_pr_ambiguous")
-        if not any(p["number"] == case["pr"] for p in associations):
-            raise Gap("run_pr_mismatch")
-        heads.add(run["head_sha"])
-        signatures.setdefault(run["head_sha"], []).append(
-            (run["id"], run["run_attempt"], run["status"], run["updated_at"]))
-    # Persist discovered heads before measuring; an API gap must not erase inventory.
-    case["heads"] = sorted(set(case.get("heads", [])) | heads)
-    pending, gaps = 0, 0
-    metrics = case.setdefault("measurements", {})
-    for head in case["heads"]:
-        r = {"repo": REPO, "pr": case["pr"], "head": head, "base": case["initial_base"]}
-        entry = metrics.setdefault(head, {"snapshots": {}})
-        signature = digest(json.dumps(sorted(signatures.get(head, []))))
-        previous = entry.get("latest")
-        if (previous and entry.get("inventory_signature") == signature
-                and entry.get("until") == case.get("stopped_at")
-                and not previous["runner_evidence_gaps"] and previous["observations"]
-                and all(o["status"] == "completed" for o in previous["observations"])):
-            m = previous
-        else:
-            m = gh.measurements(r, case["started_at"], case.get("stopped_at"))
-        for observation in m["observations"]:
-            key = digest(json.dumps(observation, sort_keys=True))
-            entry["snapshots"].setdefault(key, {"observed_at": now.isoformat(), "evidence": observation})
-            pending += observation["status"] != "completed"
-        entry["latest"] = m
-        entry.update(inventory_signature=signature, until=case.get("stopped_at"))
-        gaps += m["runner_evidence_gaps"]
-    return {"unfinished_runs": pending, "data_gaps": gaps, "observed_at": now.isoformat()}
-
-
-def histories(gh, experiment, now):
-    result = {"unfinished_runs": 0, "data_gaps": 0, "observed_at": now.isoformat()}
-    for case in experiment["cases"]:
-        try:
-            item = observe(gh, case, now)
-            result["unfinished_runs"] += item["unfinished_runs"]
-            result["data_gaps"] += item["data_gaps"]
-        except Exception:
-            result["data_gaps"] += 1
-    return result
 
 
 def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
@@ -148,7 +83,7 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
                 raise Gap("experiment_kind_limit")
             if selectors:
                 raise Gap("selectors_already_present")
-            previous = histories(gh, experiment, now)
+            previous = measurements.histories(gh, experiment, now)
             if previous["unfinished_runs"] or previous["data_gaps"]:
                 raise Gap("previous_phase_incomplete")
             r, branch = snapshot(gh, receipt["pr"], receipt["protection_sha256"])
@@ -180,7 +115,7 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
                 raise Gap("selector_readback")
         elif selectors:
             raise Gap("orphan_selectors")
-        historical = histories(gh, experiment, now)
+        historical = measurements.histories(gh, experiment, now)
         if historical["data_gaps"]:
             raise Gap("measurement_gap")
         check_time()
@@ -194,7 +129,7 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
             case = experiment["cases"][experiment["active"]]
             case.update(phase="inactive", stopped_at=now.isoformat(), reason=reason)
             experiment["active"] = None
-        historical = histories(gh, experiment, now)
+        historical = measurements.histories(gh, experiment, now)
         persist(state)
         if clean and (historical["unfinished_runs"] or historical["data_gaps"]):
             # The existing runtime stops on cleanup_verified/deadline. Keep it alive

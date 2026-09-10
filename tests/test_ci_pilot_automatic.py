@@ -126,7 +126,7 @@ class ExperimentTests(unittest.TestCase):
         for pending, gaps in ((1, 0), (0, 1)):
             with self.subTest(pending=pending, gaps=gaps):
                 self.gh.writes.clear()
-                with patch.object(a, "observe", return_value={
+                with patch.object(a.measurements, "observe", return_value={
                         "unfinished_runs": pending, "data_gaps": gaps}):
                     result = self.tick({**self.selection, "mode": "baseline"})
                 self.assertEqual("previous_phase_incomplete", result["reason"])
@@ -134,7 +134,7 @@ class ExperimentTests(unittest.TestCase):
                 self.assertEqual(1, len(self.state["experiment"]["cases"]))
                 self.assertFalse(any(value is not None for _, _, value in self.gh.writes))
                 self.assertFalse(any(self.gh.values.values()))
-        with patch.object(a, "observe", return_value={"unfinished_runs": 0, "data_gaps": 0}):
+        with patch.object(a.measurements, "observe", return_value={"unfinished_runs": 0, "data_gaps": 0}):
             result = self.tick({**self.selection, "mode": "baseline"})
         self.assertEqual("active", result["status"])
         self.assertEqual(2, len(self.state["experiment"]["cases"]))
@@ -142,7 +142,7 @@ class ExperimentTests(unittest.TestCase):
     def test_deadline_keeps_runtime_until_admitted_jobs_are_terminal(self):
         import runtime
         self.tick(self.selection)
-        with patch.object(a, "observe", return_value={"unfinished_runs": 1, "data_gaps": 0}):
+        with patch.object(a.measurements, "observe", return_value={"unfinished_runs": 1, "data_gaps": 0}):
             result = self.tick(now=c.instant(c.DEADLINE))
         self.assertEqual("drain_admitted_runs", result["action"])
         self.assertTrue(result["cleanup_verified"])
@@ -167,7 +167,7 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual("experiment_kind_limit", self.tick({**self.selection, "pr": 15})["reason"])
 
     def test_measurement_gap_cleans_selection_without_claiming_zero(self):
-        with patch.object(a, "observe", side_effect=c.Gap("api_failure")):
+        with patch.object(a.measurements, "observe", side_effect=c.Gap("api_failure")):
             result = self.tick(self.selection)
         self.assertEqual("measurement_gap", result["reason"])
         self.assertEqual(1, result["history"]["data_gaps"])
@@ -182,50 +182,6 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual("inactive", self.tick({"begin": True})["status"])
         self.assertEqual(["historical#1", "historical#2"], self.state["counted_prs"])
 
-    def test_completed_cache_requires_same_attempt_and_interval(self):
-        case = {"pr": 12, "branch": "test-branch", "started_at": NOW.isoformat(),
-                "initial_base": "b" * 40}
-        run = {"id": 7, "run_attempt": 1, "head_sha": "a" * 40, "head_branch": "test-branch",
-               "pull_requests": [{"number": 12}], "status": "completed", "updated_at": NOW.isoformat()}
-        self.gh.pages = lambda *args: [copy.deepcopy(run)]
-        reads = []
-        def measurements(receipt, since, until):
-            reads.append((receipt, since, until))
-            return {"observations": [{"status": "completed", "attempt": run["run_attempt"]}],
-                    "runner_evidence_gaps": 0}
-        self.gh.measurements = measurements
-        a.observe(self.gh, case, NOW)
-        a.observe(self.gh, case, NOW)
-        self.assertEqual(1, len(reads))
-        run["run_attempt"] = 2
-        a.observe(self.gh, case, NOW)
-        self.assertEqual(2, len(reads))
-        run["created_at"] = NOW.isoformat()
-        case["stopped_at"] = (NOW + dt.timedelta(seconds=1)).isoformat()
-        a.observe(self.gh, case, NOW)
-        self.assertEqual(case["stopped_at"], reads[-1][2])
-        self.assertEqual(3, len(reads))
-
-    def test_previous_phase_run_rerun_is_discovered_in_current_phase(self):
-        case = {"pr": 12, "branch": "test-branch", "started_at": NOW.isoformat(),
-                "initial_base": "b" * 40}
-        run = {"id": 9, "run_attempt": 2, "head_sha": "a" * 40,
-               "head_branch": "test-branch", "pull_requests": [{"number": 12}],
-               "created_at": (NOW - dt.timedelta(hours=1)).isoformat(),
-               "run_started_at": NOW.isoformat(), "updated_at": NOW.isoformat(),
-               "status": "in_progress"}
-        # Reproduce GitHub's original-creation filter, which hides a later rerun.
-        self.gh.pages = lambda query, *args: [] if "&created=" in query else [run]
-        measurements = []
-        def measure(receipt, since, until):
-            measurements.append((receipt["head"], since, until))
-            return {"observations": [{"run_id": 9, "attempt": 2, "status": "in_progress"}],
-                    "runner_evidence_gaps": 0}
-        self.gh.measurements = measure
-        result = a.observe(self.gh, case, NOW)
-        self.assertEqual(1, result["unfinished_runs"])
-        self.assertEqual([("a" * 40, NOW.isoformat(), None)], measurements)
-        self.assertEqual(2, case["measurements"]["a" * 40]["latest"]["observations"][0]["attempt"])
 
 
 if __name__ == "__main__":
