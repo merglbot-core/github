@@ -1,0 +1,85 @@
+import datetime as dt
+import importlib.util
+from pathlib import Path
+import sys
+import json
+import subprocess
+import tempfile
+import unittest
+from unittest.mock import MagicMock, patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts/ci-pilot"))
+import runtime
+sys.path.pop(0)
+
+
+class RuntimeTests(unittest.TestCase):
+    def test_active_idle_and_unverified_cadence(self):
+        now = runtime.instant("2026-09-10T20:00:00Z")
+        for status, seconds in (("active", 300), ("inactive", 900), ("unverified", 300)):
+            result = runtime.schedule({"status": status}, now)
+            self.assertEqual(runtime.instant(result["next_due"]) - now, dt.timedelta(seconds=seconds))
+            self.assertFalse(result["stopped"])
+
+    def test_terminal_requires_proven_cleanup_and_records_unfinished_gap(self):
+        now = runtime.instant("2026-09-10T20:00:00Z")
+        for action, stopped in (("cleanup_required", False), ("cleanup_verified", True)):
+            result = runtime.schedule({"action": action, "reason": "deadline",
+                                       "history": {"unfinished_runs": 1}}, now)
+            self.assertEqual(result["stopped"], stopped)
+            self.assertEqual(result["admitted_runs"], "DATA_GAP")
+
+    def test_missing_history_and_unverified_are_never_observed_complete(self):
+        now = runtime.instant("2026-09-10T20:00:00Z")
+        for result in ({"status": "unverified"}, {"status": "inactive"},
+                       {"status": "unverified", "history": {"unfinished_runs": 0, "data_gaps": 0}}):
+            self.assertEqual(runtime.schedule(result, now)["admitted_runs"], "DATA_GAP")
+
+    def test_timeout_and_null_counter_attempt_independent_cleanup(self):
+        now = runtime.instant("2026-09-10T20:00:00Z")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "state.json").write_text(json.dumps({"counted_prs": None}))
+            (root / "runtime.json").write_text(json.dumps({"next_due": "2026-09-11T20:00:00Z"}))
+            with patch.object(runtime, "run_controller", side_effect=subprocess.TimeoutExpired("controller", 240)) as runner:
+                with patch.object(runtime, "emergency_cleanup", return_value={"action": "cleanup_required", "status": "unverified"}) as cleanup:
+                    self.assertEqual(runtime.wake(root, now), 0)
+                    runner.assert_called_once_with(root)
+                    cleanup.assert_called_once_with(root)
+            plan = json.loads((root / "runtime.json").read_text())
+            self.assertFalse(plan["stopped"])
+            self.assertEqual(plan["admitted_runs"], "DATA_GAP")
+            self.assertEqual(runtime.instant(plan["next_due"]) - now, dt.timedelta(minutes=5))
+
+    def test_emergency_cleanup_uses_separate_cleanup_command(self):
+        output = {"action": "cleanup_verified", "status": "inactive"}
+        process = MagicMock(returncode=0)
+        process.communicate.return_value = (json.dumps(output), None)
+        with patch.object(runtime.subprocess, "Popen", return_value=process) as run:
+            self.assertEqual(runtime.emergency_cleanup(Path("/tmp/test-pilot")), output)
+            self.assertIn("cleanup", run.call_args.args[0])
+            self.assertNotIn("tick", run.call_args.args[0])
+            self.assertTrue(run.call_args.kwargs["start_new_session"])
+
+    def test_emergency_timeout_kills_process_group(self):
+        process = MagicMock(pid=12345)
+        process.communicate.side_effect = subprocess.TimeoutExpired("cleanup", 240)
+        with patch.object(runtime.subprocess, "Popen", return_value=process):
+            with patch.object(runtime.os, "killpg") as kill:
+                result = runtime.emergency_cleanup(Path("/tmp/test-pilot"))
+                kill.assert_called_once_with(12345, runtime.signal.SIGKILL)
+                process.wait.assert_called_once()
+                self.assertEqual(result["status"], "unverified")
+
+    def test_cleanup_does_not_mutate_while_controller_lock_owned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (root / "controller.lock").open("a") as lock:
+                runtime.fcntl.flock(lock, runtime.fcntl.LOCK_EX | runtime.fcntl.LOCK_NB)
+                with patch.object(runtime, "cleanup") as cleanup:
+                    self.assertFalse(runtime.locked_cleanup(root))
+                    cleanup.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()
