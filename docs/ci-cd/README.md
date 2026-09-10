@@ -26,3 +26,9 @@ distinct digest. A child signing failure fails the job. Cloud Run callers use
 `platform_digest` and `platform_attestation_id` together, with the unchanged
 commit/provenance and enforced Binary Authorization checks. Empty platform
 outputs (for example a non-pushing build) are not deployable release evidence.
+
+For a verifier requiring exactly one subject, consume `platform_provenance`
+with `platform_digest`. This is a builder-produced projection of the same
+statement, retaining all commit/material claims, and is archived beside the
+full `provenance.json` as `platform-provenance.json`. It is absent for non-push
+builds. The existing `slsa_provenance` output retains its complete subject list.
