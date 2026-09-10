@@ -53,13 +53,14 @@ class GitHubTests(unittest.TestCase):
     def test_wait_timer_and_runner_zero_evidence(self):
         gh = c.GitHub()
         run = {"id": 7, "run_attempt": 1, "created_at": NOW.isoformat(), "head_sha": RECEIPT["head"],
+               "run_started_at": NOW.isoformat(),
                "path": c.WORKFLOWS[c.REPOS[0]], "event": "pull_request", "status": "completed",
                "pull_requests": [{"number": 123, "head": {"sha": RECEIPT["head"]}, "base": {"sha": RECEIPT["base"]}}]}
         job = {"id": 9, "name": "unit-tests", "runner_id": 0, "steps": [], "conclusion": "cancelled",
                "started_at": None, "completed_at": None}
-        gh.pages = lambda path, *args: [job] if "/jobs?" in path else [run]
-        gh.api = lambda *args: [{"environment": {"name": c.ENVIRONMENT}, "wait_timer": 10,
-                                 "wait_timer_started_at": NOW.isoformat()}]
+        gh.pages = lambda path, *args: [job] if path.endswith("/jobs") else [run]
+        gh.api = lambda path: ([{"environment": {"name": c.ENVIRONMENT}, "wait_timer": 10,
+                                 "wait_timer_started_at": NOW.isoformat()}] if path.endswith("/pending_deployments") else run)
         metrics = gh.measurements(RECEIPT, NOW.isoformat())
         self.assertEqual(metrics["cancelled_without_runner"], 1)
         self.assertEqual(metrics["runner_seconds"], 0)
@@ -74,11 +75,46 @@ class GitHubTests(unittest.TestCase):
         self.assertEqual(gh.measurements(RECEIPT, NOW.isoformat())["runs"], 0)
         run["path"] = c.WORKFLOWS[c.REPOS[0]]
         job["runner_id"] = None
-        with self.assertRaisesRegex(c.Gap, "job_runner_evidence_missing"):
-            gh.measurements(RECEIPT, NOW.isoformat())
+        metrics = gh.measurements(RECEIPT, NOW.isoformat())
+        self.assertEqual(metrics["runner_evidence_gaps"], 1)
+        self.assertEqual(metrics["cancelled_without_runner"], 0)
+        self.assertIsNone(metrics["observations"][0]["jobs"][0]["runner_id"])
         job["runner_id"] = 0
         job.pop("steps")
         with self.assertRaisesRegex(c.Gap, "job_runner_evidence_missing"):
+            gh.measurements(RECEIPT, NOW.isoformat())
+
+    def test_attempt_jobs_are_separate_and_old_run_rerun_is_admitted(self):
+        gh = c.GitHub()
+        old = "2026-09-09T20:00:00Z"
+        base = {"id": 7, "created_at": old, "head_sha": RECEIPT["head"],
+                "path": c.WORKFLOWS[c.REPOS[0]], "event": "pull_request", "status": "completed",
+                "pull_requests": [{"number": 123, "head": {"sha": RECEIPT["head"]}, "base": {"sha": RECEIPT["base"]}}]}
+        attempts = {n: {**base, "run_attempt": n, "run_started_at": NOW.isoformat()} for n in (1, 2)}
+        calls = []
+        def pages(path, *args):
+            calls.append(path)
+            if path.endswith("/jobs"):
+                number = int(path.split("/")[-2])
+                return [{"id": number, "name": "test", "runner_id": 0, "steps": [],
+                         "conclusion": "cancelled", "started_at": None, "completed_at": None}]
+            return [attempts[2]]
+        gh.pages = pages
+        gh.api = lambda path: ([] if path.endswith("/pending_deployments") else
+                               attempts[int(path.rsplit("/", 1)[1])] if "/attempts/" in path else attempts[2])
+        metrics = gh.measurements(RECEIPT, NOW.isoformat())
+        self.assertEqual([(o["attempt"], o["jobs"][0]["id"]) for o in metrics["observations"]], [(1, 1), (2, 2)])
+        self.assertEqual((metrics["runs"], metrics["attempts"]), (1, 2))
+        self.assertFalse(any("filter=all" in path for path in calls))
+        attempts[1]["run_started_at"] = old
+        metrics = gh.measurements(RECEIPT, NOW.isoformat())
+        self.assertEqual([o["attempt"] for o in metrics["observations"]], [2])
+        attempts[2]["pull_requests"][0].update(head={"sha": "d" * 40}, base={"sha": "e" * 40})
+        metrics = gh.measurements(RECEIPT, NOW.isoformat())
+        self.assertEqual(metrics["attempts"], 1)
+        self.assertEqual(metrics["observations"][0]["actual_base"], "DATA_GAP")
+        attempts[2]["head_sha"] = "f" * 40
+        with self.assertRaisesRegex(c.Gap, "run_pr_binding_changed"):
             gh.measurements(RECEIPT, NOW.isoformat())
 
     def test_snapshot_rejects_stale_receipt_before_other_reads_and_after_reread(self):
@@ -119,7 +155,7 @@ class GitHubTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertTrue(all("per_page=30" in path for path in calls))
 
-    def test_run_must_bind_exact_pr_and_base(self):
+    def test_run_must_bind_exact_pr_and_immutable_head(self):
         gh = c.GitHub()
         run = {"created_at": NOW.isoformat(), "path": c.WORKFLOWS[c.REPOS[0]],
                "event": "pull_request", "pull_requests": [{"number": 999}]}
@@ -128,7 +164,8 @@ class GitHubTests(unittest.TestCase):
         run["pull_requests"] = []
         with self.assertRaises(c.Gap):
             gh.measurements(RECEIPT, NOW.isoformat())
-        run["pull_requests"] = [{"number": 123, "head": {"sha": "a" * 40}, "base": {"sha": "d" * 40}}]
+        run["pull_requests"] = [{"number": 123}]
+        run["head_sha"] = "d" * 40
         with self.assertRaises(c.Gap):
             gh.measurements(RECEIPT, NOW.isoformat())
 

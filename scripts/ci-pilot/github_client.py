@@ -121,44 +121,72 @@ class GitHub:
                 "environment": env, "custom": custom, "policies": policies,
                 "environment_empty": not variables and not secrets}
 
+    def attempts(self, receipt, summary):
+        if (summary["path"].split("@", 1)[0] != WORKFLOWS[receipt["repo"]]
+                or summary["event"] != "pull_request"):
+            return
+        def bound(run):
+            if not run["pull_requests"]:
+                raise Gap("run_pr_binding_missing")
+            matches = [p for p in run["pull_requests"] if p["number"] == receipt["pr"]]
+            # Associated PR head/base are mutable; only run.head_sha is historical.
+            if matches and run["head_sha"] != receipt["head"]:
+                raise Gap("run_pr_binding_changed")
+            return bool(matches)
+        if not bound(summary):
+            return
+        latest = summary["run_attempt"]
+        if type(latest) is not int or not 1 <= latest <= 100:
+            raise Gap("attempt_enumeration_cap")
+        for number in range(1, latest + 1):
+            run = self.api(f"repos/{receipt['repo']}/actions/runs/{summary['id']}/attempts/{number}")
+            if (not bound(run) or run["run_attempt"] != number or run["id"] != summary["id"]
+                    or run["head_sha"] != receipt["head"]):
+                raise Gap("attempt_binding_changed")
+            yield run, latest
+
     def measurements(self, receipt, since):
         repo = receipt["repo"]
         runs = self.pages(f"repos/{repo}/actions/runs?head_sha={receipt['head']}", "workflow_runs")
-        runner_seconds, waiting, cancelled_without_runner, count = 0, 0, 0, 0
-        observations = []
-        for run in runs:
-            if (instant(run["created_at"]) < instant(since)
-                    or run["path"].split("@", 1)[0] != WORKFLOWS[repo] or run["event"] != "pull_request"):
+        runner_seconds, waiting, cancelled_without_runner, count, runner_gaps = 0, 0, 0, 0, 0
+        observations, run_ids = [], set()
+        for run, latest in (attempt for summary in runs for attempt in self.attempts(receipt, summary)):
+            # Original created_at predates natural reruns; admission is per attempt.
+            if not isinstance(run.get("run_started_at"), str) or not run["run_started_at"]:
+                raise Gap("attempt_start_missing")
+            if instant(run["run_started_at"]) < instant(since):
                 continue
-            bindings = run["pull_requests"]
-            if not bindings:
-                raise Gap("run_pr_binding_missing")
-            matches = [p for p in bindings if p["number"] == receipt["pr"]]
-            if not matches:
-                continue
-            if any(p["head"]["sha"] != receipt["head"] or p["base"]["sha"] != receipt["base"] for p in matches):
-                raise Gap("run_pr_binding_changed")
             count += 1
-            pending = self.api(f"repos/{repo}/actions/runs/{run['id']}/pending_deployments")
+            run_ids.add(run["id"])
+            pending = []
+            if run["run_attempt"] == latest:
+                pending = self.api(f"repos/{repo}/actions/runs/{run['id']}/pending_deployments")
+                if self.api(f"repos/{repo}/actions/runs/{run['id']}")["run_attempt"] != latest:
+                    raise Gap("pending_attempt_race")
             waiting += sum(p["environment"]["name"] == ENVIRONMENT for p in pending)
-            jobs = self.pages(f"repos/{repo}/actions/runs/{run['id']}/jobs?filter=all", "jobs")
-            if any(type(j.get("runner_id")) is not int or j["runner_id"] < 0
+            jobs = self.pages(f"repos/{repo}/actions/runs/{run['id']}/attempts/{run['run_attempt']}/jobs", "jobs")
+            if any("runner_id" not in j or (j["runner_id"] is not None
+                   and (type(j["runner_id"]) is not int or j["runner_id"] < 0))
                    or not isinstance(j.get("steps"), list) for j in jobs):
                 raise Gap("job_runner_evidence_missing")
             observations.append({"run_id": run["id"], "attempt": run["run_attempt"], "head": run["head_sha"],
-                                 "created_at": run["created_at"], "status": run["status"],
+                                 "created_at": run["created_at"], "run_started_at": run["run_started_at"], "status": run["status"],
                                  "pending_environment": [p["environment"]["name"] for p in pending],
                                  "wait_timers": [{"environment": p["environment"]["name"], "wait_timer": p.get("wait_timer"),
                                                   "started_at": p.get("wait_timer_started_at")} for p in pending],
                                  "checkout_head": "DATA_GAP",
+                                 "actual_base": "DATA_GAP", "receipt_base": receipt["base"],
                                  "jobs": [{**{k: j[k] for k in ("id", "name", "runner_id", "started_at", "completed_at", "conclusion")},
                                            "steps_count": len(j["steps"])}
                                           for j in jobs]})
             for job in jobs:
+                # Explicit null is valid API data, but is not proof of no runner.
+                runner_gaps += job["runner_id"] is None
                 if job["runner_id"] == 0 and job["steps"] == [] and job["conclusion"] == "cancelled":
                     cancelled_without_runner += 1
                 if job["runner_id"] and job["started_at"] and job["completed_at"]:
                     runner_seconds += max(0, (instant(job["completed_at"]) - instant(job["started_at"])).total_seconds())
-        return {"runs": count, "runner_seconds": runner_seconds,
+        return {"runs": len(run_ids), "attempts": count, "runner_seconds": runner_seconds,
+                "runner_evidence_gaps": runner_gaps,
                 "pending_environment_observations": waiting,
                 "cancelled_without_runner": cancelled_without_runner, "observations": observations}
