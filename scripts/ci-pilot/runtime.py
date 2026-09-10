@@ -21,10 +21,10 @@ def schedule(result, now):
     terminal = (result.get("action") == "cleanup_verified"
                 and result.get("reason") in ("deadline", "case_limit"))
     history = result.get("history") or {}
-    active = result.get("status") in ("active", "unverified") or history.get("unfinished_runs", 0) > 0
+    active = result.get("status") in ("active", "unverified", "pending") or history.get("unfinished_runs", 0) > 0
     return {"stopped": terminal,
             "next_due": None if terminal else (now + dt.timedelta(seconds=300 if active else 900)).isoformat(),
-            "admitted_runs": "DATA_GAP" if (result.get("status") == "unverified"
+            "admitted_runs": "DATA_GAP" if (result.get("status") in ("unverified", "pending")
                 or "unfinished_runs" not in history or "data_gaps" not in history
                 or history["unfinished_runs"] or history["data_gaps"]) else "observed_complete"}
 
@@ -86,9 +86,12 @@ def sync_heartbeat(state_dir, plan, now):
     active = bool(plan.get("next_due")) and instant(plan["next_due"]) <= now + dt.timedelta(minutes=5)
     proof = heartbeat.sync(state_dir, active, plan["stopped"], now)
     plan["heartbeat"] = proof
-    if proof["status"] == "unverified":
+    if proof["status"] == "unverified" and not active:
+        # Genuine errors target the conservative cadence without bypassing validation.
+        plan["heartbeat"]["retry"] = heartbeat.sync(state_dir, True, plan["stopped"], now)
+    if proof["status"] in ("unverified", "pending"):
         plan.update(stopped=False, next_due=(now + dt.timedelta(minutes=5)).isoformat(), admitted_runs="DATA_GAP")
-    return proof["status"] != "unverified"
+    return proof["status"] not in ("unverified", "pending")
 
 
 def wake(state_dir, now):
@@ -137,7 +140,7 @@ def wake(state_dir, now):
     plan = schedule(result, now)
     verified = sync_heartbeat(state_dir, plan, now)
     if not verified:
-        result.update(action="heartbeat_sync_required", status="unverified")
+        result.update(action="heartbeat_sync_required", status=plan["heartbeat"]["status"])
         atomic(state_dir / "next_action.json", result)
     atomic(plan_path, plan)
     return unload() if plan["stopped"] else 0 if verified else 1

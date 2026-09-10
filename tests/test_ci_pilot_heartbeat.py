@@ -5,6 +5,8 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+import sys
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("heartbeat", Path(__file__).resolve().parents[1] / "scripts/ci-pilot/heartbeat.py")
 h = importlib.util.module_from_spec(spec)
@@ -14,6 +16,29 @@ NOW = datetime(2026, 9, 10, tzinfo=timezone.utc)
 
 
 class HeartbeatTests(unittest.TestCase):
+    def test_repeated_idle_ticks_converge_without_rewriting_pending_cadence(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts/ci-pilot"))
+        import runtime
+        sys.path.pop(0)
+        self.sync(active=True)
+        self.app_sync()
+        def idle_plan():
+            return {"stopped": False, "next_due": (NOW + runtime.dt.timedelta(minutes=15)).isoformat()}
+        with patch.object(runtime.heartbeat, "sync", side_effect=lambda state, active, terminal, now: h.sync(state, active, terminal, now, self.home)):
+            plan = idle_plan()
+            self.assertFalse(runtime.sync_heartbeat(self.state, plan, NOW))
+            self.assertEqual(plan["heartbeat"]["status"], "pending")
+            pending = self.path.read_bytes()
+            for _ in range(2):
+                self.assertFalse(runtime.sync_heartbeat(self.state, idle_plan(), NOW))
+                self.assertEqual(self.path.read_bytes(), pending)
+            self.app_sync()
+            plan = idle_plan()
+            self.assertTrue(runtime.sync_heartbeat(self.state, plan, NOW))
+            self.assertEqual(h.parse(self.path.read_text())[0]["rrule"], "FREQ=MINUTELY;INTERVAL=15")
+            self.assertEqual(self.path.read_bytes(), pending)
+            self.assertEqual(runtime.instant(plan["next_due"]) - NOW, runtime.dt.timedelta(minutes=15))
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -49,18 +74,18 @@ class HeartbeatTests(unittest.TestCase):
 
     def test_cadence_preserves_pause_prompt_and_waits_for_database(self):
         original = self.values.copy()
-        self.assertEqual(self.sync(active=True)["status"], "unverified")
+        self.assertEqual(self.sync(active=True)["status"], "pending")
         changed, _ = h.parse(self.path.read_text())
         self.assertEqual(changed["rrule"], "FREQ=MINUTELY;INTERVAL=5")
         self.assertGreater(changed["updated_at"], original["updated_at"])
         for key in original.keys() - {"rrule", "updated_at"}:
             self.assertEqual(changed[key], original[key])
         pending_bytes = self.path.read_bytes()
-        self.assertEqual(self.sync(active=True)["status"], "unverified")
+        self.assertEqual(self.sync(active=True)["status"], "pending")
         self.assertEqual(self.path.read_bytes(), pending_bytes)
         self.app_sync()
         self.assertEqual(self.sync(active=True), {"status": "verified", "paused": True})
-        self.assertEqual(self.sync()["status"], "unverified")
+        self.assertEqual(self.sync()["status"], "pending")
         self.app_sync()
         self.assertEqual(self.sync()["status"], "verified")
 
@@ -68,12 +93,12 @@ class HeartbeatTests(unittest.TestCase):
         self.values["status"] = "ACTIVE"
         self.write_file()
         self.app_sync()
-        self.assertEqual(self.sync(terminal=True)["status"], "unverified")
+        self.assertEqual(self.sync(terminal=True)["status"], "pending")
         self.assertEqual(h.parse(self.path.read_text())[0]["status"], "PAUSED")
         self.app_sync()
         with closing(sqlite3.connect(str(self.db), isolation_level=None)) as db:
             db.execute("UPDATE automations SET next_run_at=999")
-        self.assertEqual(self.sync(terminal=True)["status"], "unverified")
+        self.assertEqual(self.sync(terminal=True)["status"], "pending")
         self.app_sync()
         self.assertEqual(self.sync(terminal=True), {"status": "verified", "paused": True})
 
@@ -105,7 +130,7 @@ class HeartbeatTests(unittest.TestCase):
     def test_database_pause_cannot_be_enabled_by_stale_active_file(self):
         self.values["status"] = "ACTIVE"
         self.write_file()  # DB still proves PAUSED.
-        self.assertEqual(self.sync(active=True)["status"], "unverified")
+        self.assertEqual(self.sync(active=True)["status"], "pending")
         self.assertEqual(h.parse(self.path.read_text())[0]["status"], "PAUSED")
 
     def test_invalid_id_and_symlink_cannot_write_other_automation(self):

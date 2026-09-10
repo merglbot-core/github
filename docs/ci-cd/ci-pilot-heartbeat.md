@@ -17,7 +17,7 @@ fields, comments, multiline TOML and malformed input fail closed. It preserves
 all unrelated lines, including the prompt; neither prompts nor raw payloads
 are emitted. File changes are atomic and strictly advance updated_at.
 
-Cadence is five minutes while active/unverified and fifteen while idle.
+Cadence is five minutes while active or after an error, and fifteen when idle.
 PAUSED in either file or app database stays PAUSED; the adapter never enables
 a heartbeat. Deadline/case-limit completion requests PAUSED. Existing saved
 state and pilot selector cleanup remain governed by the controller.
@@ -25,9 +25,14 @@ state and pilot selector cleanup remain governed by the controller.
 Verification opens `~/.codex/sqlite/codex-dev.db` using SQLite `mode=ro` and
 query-only mode. The exact id, thread, status and rrule must agree with the
 file; terminal verification also requires next_run_at=NULL. The database is
-never modified. If app sync lags, the desired file remains in place and the
-runtime reports heartbeat_sync_required/unverified, retains five-minute
-retries and does not unload itself. Only proven selector cleanup **and**
+never modified. Successful identity-validated reads awaiting only app sync
+are `pending`, not verified: keep the desired file cadence (including idle15),
+retry the runtime every five minutes, and do not unload. Repeated pending
+reads do not rewrite the file or advance updated_at. This allows idle15 to
+settle asynchronously. Actual read/parse/identity errors are `unverified`;
+retry the same validated adapter with the five-minute target, never bypassing
+its identity checks or enabling a paused heartbeat. Both statuses report
+heartbeat_sync_required and keep runtime retries at five minutes. Only proven selector cleanup **and**
 proven heartbeat stop allow terminal unload of the runtime's own launchd label.
 
 After configuring a target, inspect `runtime.json` heartbeat proof and the

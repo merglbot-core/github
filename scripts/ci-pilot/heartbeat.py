@@ -93,9 +93,11 @@ def sync(state_dir, active, terminal, now, home=None):
         actual, _ = parse(path.read_text())
         db = read_db(db_path, config["id"])
         if (any(actual[k] != config[k] or db[k] != config[k] for k in config)
-                or any(actual[k] != desired[k] or db[k] != desired[k] for k in ("status", "rrule"))
-                or (terminal and db["next_run_at"] is not None)):
-            raise ValueError("sync_pending")
+                or any(actual[k] != desired[k] for k in ("status", "rrule"))
+                or db["status"] not in ("ACTIVE", "PAUSED") or not isinstance(db["rrule"], str)):
+            raise ValueError("readback_invalid")
+        if any(db[k] != desired[k] for k in ("status", "rrule")) or (terminal and db["next_run_at"] is not None):
+            return {"status": "pending", "reason": "app_sync"}
         return {"status": "verified", "paused": actual["status"] == "PAUSED"}
     except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
         return {"status": "unverified"}
