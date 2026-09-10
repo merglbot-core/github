@@ -37,7 +37,9 @@ def snapshot(gh, number, protection_hash):
 def observe(gh, case, now):
     """Discover intermediate heads, then reuse complete attempt-specific job measurements."""
     query = (f"repos/{REPO}/actions/workflows/python-script-tests.yml/runs?event=pull_request"
-             f"&branch={quote(case['branch'], safe='')}&created={quote('>=' + case['started_at'], safe='')}")
+             f"&branch={quote(case['branch'], safe='')}")
+    # A rerun can enter this phase even when its original run predates it.
+    # The adapter assigns each attempt by run_started_at, not original created_at.
     runs = gh.pages(query, "workflow_runs")
     if len(runs) >= 1000:
         raise Gap("run_inventory_cap")

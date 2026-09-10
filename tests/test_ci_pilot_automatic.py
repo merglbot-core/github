@@ -164,6 +164,27 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(case["stopped_at"], reads[-1][2])
         self.assertEqual(3, len(reads))
 
+    def test_previous_phase_run_rerun_is_discovered_in_current_phase(self):
+        case = {"pr": 12, "branch": "test-branch", "started_at": NOW.isoformat(),
+                "initial_base": "b" * 40}
+        run = {"id": 9, "run_attempt": 2, "head_sha": "a" * 40,
+               "head_branch": "test-branch", "pull_requests": [{"number": 12}],
+               "created_at": (NOW - dt.timedelta(hours=1)).isoformat(),
+               "run_started_at": NOW.isoformat(), "updated_at": NOW.isoformat(),
+               "status": "in_progress"}
+        # Reproduce GitHub's original-creation filter, which hides a later rerun.
+        self.gh.pages = lambda query, *args: [] if "&created=" in query else [run]
+        measurements = []
+        def measure(receipt, since, until):
+            measurements.append((receipt["head"], since, until))
+            return {"observations": [{"run_id": 9, "attempt": 2, "status": "in_progress"}],
+                    "runner_evidence_gaps": 0}
+        self.gh.measurements = measure
+        result = a.observe(self.gh, case, NOW)
+        self.assertEqual(1, result["unfinished_runs"])
+        self.assertEqual([("a" * 40, NOW.isoformat(), None)], measurements)
+        self.assertEqual(2, case["measurements"]["a" * 40]["latest"]["observations"][0]["attempt"])
+
 
 if __name__ == "__main__":
     unittest.main()
