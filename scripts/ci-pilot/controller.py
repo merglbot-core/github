@@ -177,6 +177,9 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
         persist(state)
         historical = history_evidence(gh, state, now)
         persist(state)
+        activation_check()
+        if len(state["counted_prs"]) >= 5:
+            raise Gap("case_limit")
         return {"action": "observe", "status": "active" if apply else "readonly",
                 "history": historical,
                 "metrics": {k: v for k, v in metrics.items() if k != "observations"}}
@@ -213,6 +216,11 @@ def main():
         gh = GitHub()
         try:
             state = json.loads(state_path.read_text()) if state_path.exists() else {}
+            if (not isinstance(state, dict)
+                    or any(not isinstance(state.get(k, default), type(default)) for k, default in
+                           (("counted_prs", []), ("history", []), ("measurements", {})))
+                    or any(not isinstance(case, str) for case in state.get("counted_prs", []))):
+                raise Gap("invalid_durable_state")
             receipt = json.loads(args.receipt.read_text()) if args.command == "activate" and args.receipt else None
             if args.command == "activate" and receipt is None:
                 raise Gap("receipt_required")
@@ -223,8 +231,8 @@ def main():
                           hold_check=lambda: (args.state_dir / "OWNER_HOLD").exists())
         except Exception:
             clean = cleanup(gh, args.apply)
-            result = {"action": "cleanup_verified" if clean else "cleanup_required",
-                      "status": "inactive" if clean else "unverified", "reason": "invalid_local_state"}
+            result = {"action": "recovery_required", "cleanup_verified": clean,
+                      "status": "unverified", "reason": "invalid_local_state"}
         atomic(args.state_dir / "next_action.json", result)
         print(json.dumps(result, sort_keys=True))
         return 1 if result["status"] == "unverified" else 0
