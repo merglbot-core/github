@@ -4,6 +4,7 @@ import copy
 import json
 from pathlib import Path
 import subprocess
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -22,6 +23,105 @@ def make_run(**overrides):
 
 
 class GitHubTests(unittest.TestCase):
+    def test_repeated_same_head_intervals_accumulate_once_and_drain(self):
+        with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1] / "scripts/ci-pilot"), *sys.path]):
+            import controller
+        gh = c.GitHub()
+        first = make_run()
+        later = make_run(run_attempt=2, run_started_at="2026-09-10T20:10:00Z", status="in_progress")
+        jobs = {
+            1: {"id": 9, "name": "unit-tests", "runner_id": 8, "steps": [], "conclusion": "success",
+                "started_at": NOW.isoformat(), "completed_at": "2026-09-10T20:06:00Z"},
+            2: {"id": 10, "name": "unit-tests", "runner_id": 9, "steps": [], "conclusion": None,
+                "started_at": "2026-09-10T20:10:00Z", "completed_at": None}}
+        gh.pages = lambda path, *args: [jobs[int(path.split("/attempts/")[1].split("/")[0])]] if path.endswith("/jobs") else [later]
+        gh.api = lambda path: [] if path.endswith("/pending_deployments") else first if path.endswith("/attempts/1") else later
+        entries = [{"receipt": RECEIPT, "started_at": start, "stopped_at": stop} for start, stop in (
+            (NOW.isoformat(), "2026-09-10T20:05:00Z"), ("2026-09-10T20:10:00Z", "2026-09-10T20:15:00Z"))]
+        state = {"history": [*entries, copy.deepcopy(entries[0])]}
+        result = controller.history_evidence(gh, state, NOW)
+        self.assertEqual((1, 0), (result["unfinished_runs"], result["data_gaps"]))
+        metrics = next(iter(state["measurements"].values()))
+        self.assertEqual((1, 2, 360), (metrics["runs"], metrics["attempts"], metrics["runner_seconds"]))
+        later["status"] = "completed"
+        jobs[2].update(conclusion="success", completed_at="2026-09-10T20:12:00Z")
+        for _ in range(2):
+            result = controller.history_evidence(gh, state, NOW)
+            self.assertEqual((0, 0), (result["unfinished_runs"], result["data_gaps"]))
+            self.assertEqual(480, metrics["runner_seconds"])
+            self.assertEqual(2, metrics["attempts"])
+        state["history"].append({"receipt": RECEIPT, "started_at": "2026-09-10T20:04:00Z",
+                                 "stopped_at": "2026-09-10T20:06:00Z"})
+        self.assertEqual(1, controller.history_evidence(gh, state, NOW)["data_gaps"])
+        self.assertEqual(480, metrics["runner_seconds"])
+        state["history"].pop()
+        state["history"].append({**entries[1], "stopped_at": entries[1]["started_at"]})
+        self.assertEqual(1, controller.history_evidence(gh, state, NOW)["data_gaps"])
+        self.assertEqual(480, metrics["runner_seconds"])
+
+    def test_interval_can_close_once_but_cannot_reopen_or_change_end(self):
+        with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1] / "scripts/ci-pilot"), *sys.path]):
+            import controller
+        state = {}
+        metrics = {"pending_environment_observations": 0, "runner_seconds": 10, "observations": []}
+        stop = "2026-09-10T20:05:00Z"
+        for end in (None, None, stop, stop):
+            controller.record_measurements(state, RECEIPT, metrics, NOW, NOW.isoformat(), end)
+        for end in (None, "2026-09-10T20:04:00Z", "2026-09-10T20:06:00Z"):
+            with self.assertRaisesRegex(Exception, "conflicting_closed_measurement_interval"):
+                controller.record_measurements(state, RECEIPT, metrics, NOW, NOW.isoformat(), end)
+        saved = next(iter(state["measurements"].values()))
+        self.assertEqual(stop, saved["interval_measurements"][NOW.isoformat()]["until"])
+        self.assertEqual(10, saved["runner_seconds"])
+
+    def test_retired_history_keeps_admitted_run_and_excludes_later_rerun(self):
+        with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1] / "scripts/ci-pilot"), *sys.path]):
+            import controller
+        gh = c.GitHub()
+        stop = "2026-09-10T20:05:00Z"
+        first = make_run()
+        later = make_run(run_attempt=2, run_started_at="2026-09-10T20:10:00Z", status="in_progress")
+        job = {"id": 9, "name": "unit-tests", "runner_id": 8, "steps": [], "conclusion": "success",
+               "started_at": NOW.isoformat(), "completed_at": "2026-09-10T20:06:00Z"}
+        def pages(path, *args):
+            if "/actions/runs?" in path:
+                return [later]
+            self.assertTrue(path.endswith("/attempts/1/jobs"), "late rerun must not enter retired evidence")
+            return [job]
+        gh.pages = pages
+        gh.api = lambda path: first if path.endswith("/attempts/1") else later
+        state = {"history": [{"receipt": RECEIPT, "started_at": NOW.isoformat(), "stopped_at": stop}]}
+        result = controller.history_evidence(gh, state, NOW)
+        self.assertEqual(0, result["unfinished_runs"])
+        self.assertEqual(0, result["data_gaps"])
+        metrics = next(iter(state["measurements"].values()))
+        self.assertEqual(360, metrics["runner_seconds"])
+        self.assertEqual([1], [o["attempt"] for o in metrics["observations"]])
+        del state["history"][0]["stopped_at"]
+        self.assertEqual(1, controller.history_evidence(gh, state, NOW)["data_gaps"])
+        state["history"][0]["stopped_at"] = stop
+        job["completed_at"] = None
+        self.assertEqual(1, controller.history_evidence(gh, state, NOW)["data_gaps"])
+
+    def test_interval_end_excludes_later_attempt_without_job_reads(self):
+        gh = c.GitHub()
+        run = make_run()
+        gh.pages = lambda path, *args: [run] if "/actions/runs?" in path else self.fail("job read past interval")
+        gh.api = lambda path: run
+        result = gh.measurements(RECEIPT, NOW.isoformat(), NOW.isoformat())
+        self.assertEqual(0, result["attempts"])
+
+    def test_completed_runner_missing_time_is_a_gap(self):
+        gh = c.GitHub()
+        run = make_run()
+        job = {"id": 9, "name": "unit-tests", "runner_id": 8, "steps": [], "conclusion": "success",
+               "started_at": None, "completed_at": None}
+        gh.pages = lambda path, *args: [job] if path.endswith("/jobs") else [run]
+        gh.api = lambda path: [] if path.endswith("/pending_deployments") else run
+        result = gh.measurements(RECEIPT, NOW.isoformat())
+        self.assertEqual(1, result["runner_evidence_gaps"])
+        self.assertEqual(0, result["cancelled_without_runner"])
+
     def test_selector_requires_exact_trusted_workflow_bytes(self):
         workflow = "name: fixture\non: pull_request\njobs:\n  test:\n    runs-on: ubuntu-latest\n    environment: ci-pr-delay\n    steps:\n      - run: echo test\n"
         gh = c.GitHub()
@@ -54,6 +154,13 @@ class GitHubTests(unittest.TestCase):
         self.assertIn(c.BASE_VAR, gh.command.call_args.args[0])
         gh.pages = lambda *args, **kwargs: [{"name": c.BASE_VAR, "value": "b" * 40}]
         self.assertEqual(gh.selectors(c.REPOS[1]), {c.BASE_VAR: "b" * 40})
+        for name in (c.AUTO_PR, c.AUTO_MODE):
+            gh.mutate(c.REPOS[1], name, "12" if name == c.AUTO_PR else "delay")
+            for repo in (c.REPOS[0], c.REPOS[2]):
+                with self.assertRaises(c.Gap):
+                    gh.mutate(repo, name, "delay")
+                gh.mutate(repo, name)
+                self.assertIn("delete", gh.command.call_args.args[0])
 
     def test_api_error_is_a_gap_without_raw_output(self):
         failed = subprocess.CompletedProcess([], 1, "private stdout", "private stderr")

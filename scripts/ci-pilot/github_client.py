@@ -12,6 +12,8 @@ import tempfile
 REPOS = ("merglbot-extractors/denatura-forecast-exporter", "merglbot-core/infra",
          "merglbot-denatura/denatura-fb-viz")
 PR_VAR, SHA_VAR, BASE_VAR = "CI_DELAY_PILOT_PR", "CI_DELAY_PILOT_SHA", "CI_DELAY_PILOT_BASE_SHA"
+AUTO_PR, AUTO_MODE = "CI_DEBOUNCE_TEST_PR", "CI_DEBOUNCE_TEST_MODE"
+SELECTOR_NAMES = (AUTO_PR, AUTO_MODE, PR_VAR, SHA_VAR, BASE_VAR)
 BASE_BOUND_REPOS = frozenset((REPOS[1],))
 DEADLINE = "2026-09-14T19:03:19Z"
 ENVIRONMENT = "ci-pr-delay"
@@ -87,10 +89,11 @@ class GitHub:
 
     def selectors(self, repo):
         rows = self.pages(f"repos/{repo}/actions/variables", "variables", size=30)
-        return {r["name"]: r["value"] for r in rows if r["name"] in (PR_VAR, SHA_VAR, BASE_VAR)}
+        return {r["name"]: r["value"] for r in rows if r["name"] in SELECTOR_NAMES}
 
     def mutate(self, repo, name, value=None):
-        if repo not in REPOS or name not in (PR_VAR, SHA_VAR, BASE_VAR):
+        if (repo not in REPOS or name not in SELECTOR_NAMES
+                or (name in (AUTO_PR, AUTO_MODE) and repo != REPOS[1] and value is not None)):
             raise Gap("mutation_out_of_scope")
         args = ["/bin/bash", str(GUARD), "gh", "variable",
                 "delete" if value is None else "set", name, "--repo", repo]
@@ -161,7 +164,7 @@ class GitHub:
                 raise Gap("attempt_binding_changed")
             yield run, latest
 
-    def measurements(self, receipt, since):
+    def measurements(self, receipt, since, until=None):
         repo = receipt["repo"]
         runs = self.pages(f"repos/{repo}/actions/runs?head_sha={receipt['head']}", "workflow_runs")
         runner_seconds, waiting, cancelled_without_runner, count, runner_gaps = 0, 0, 0, 0, 0
@@ -171,6 +174,8 @@ class GitHub:
             if not isinstance(run.get("run_started_at"), str) or not run["run_started_at"]:
                 raise Gap("attempt_start_missing")
             if instant(run["run_started_at"]) < instant(since):
+                continue
+            if until is not None and instant(run["run_started_at"]) >= instant(until):
                 continue
             count += 1
             run_ids.add(run["id"])
@@ -201,7 +206,13 @@ class GitHub:
                 if job["runner_id"] == 0 and job["steps"] == [] and job["conclusion"] == "cancelled":
                     cancelled_without_runner += 1
                 if job["runner_id"] and job["started_at"] and job["completed_at"]:
-                    runner_seconds += max(0, (instant(job["completed_at"]) - instant(job["started_at"])).total_seconds())
+                    duration = (instant(job["completed_at"]) - instant(job["started_at"])).total_seconds()
+                    if duration < 0:
+                        runner_gaps += 1
+                    else:
+                        runner_seconds += duration
+                elif job["runner_id"] and job["conclusion"] is not None:
+                    runner_gaps += 1
         return {"runs": len(run_ids), "attempts": count, "runner_seconds": runner_seconds,
                 "runner_evidence_gaps": runner_gaps,
                 "pending_environment_observations": waiting,

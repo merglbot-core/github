@@ -61,7 +61,7 @@ class Fake:
         else:
             self.values[repo][name] = value
 
-    def measurements(self, receipt, since):
+    def measurements(self, receipt, since, until=None):
         return {"runs": 1, "runner_seconds": 0, "pending_environment_observations": 0,
                 "cancelled_without_runner": 1}
 
@@ -178,10 +178,18 @@ class PilotTests(unittest.TestCase):
         self.assertFalse(any(self.gh.values.values()))
         self.assertEqual([w for w in self.gh.writes if w[2] is None],
                          [(repo, name, None) for repo in c.REPOS
-                          for name in (c.PR_VAR, c.SHA_VAR, c.BASE_VAR)])
+                          for name in c.SELECTOR_NAMES])
+
+    def test_cleanup_removes_both_selector_generations(self):
+        for repo in c.REPOS:
+            self.gh.values[repo] = {name: "orphan" for name in c.SELECTOR_NAMES}
+        self.assertTrue(c.cleanup(self.gh, True))
+        self.assertFalse(any(self.gh.values.values()))
+        self.assertEqual({(repo, name) for repo, name, value in self.gh.writes if value is None},
+                         {(repo, name) for repo in c.REPOS for name in c.SELECTOR_NAMES})
 
     def test_delay_counts_distinct_pr_and_preserves_old_head_observations(self):
-        def measured(receipt, since):
+        def measured(receipt, since, until=None):
             return {"pending_environment_observations": 1,
                     "observations": [{"run_id": 7, "status": "in_progress"}]}
         self.gh.measurements = measured
@@ -251,7 +259,7 @@ class PilotTests(unittest.TestCase):
         self.state = json.loads(json.dumps(self.state))
         seen = []
         original = self.gh.measurements
-        self.gh.measurements = lambda r, since: (seen.append((r["head"], since)) or original(r, since))
+        self.gh.measurements = lambda r, since, until=None: (seen.append((r["head"], since)) or original(r, since, until))
         self.assertEqual(c.tick(self.gh, self.state, later, True, self.gh.receipt,
                                 clock=lambda: later)["action"], "observe")
         self.assertEqual(self.state["started_at"], later.isoformat())
