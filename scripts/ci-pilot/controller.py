@@ -88,6 +88,8 @@ def record_measurements(state, receipt, metrics, now):
     entry["ever_observed_delay"] = entry.get("ever_observed_delay", False) or metrics["pending_environment_observations"] > 0
     counted = state.setdefault("counted_prs", [])
     case = f"{receipt['repo']}#{receipt['pr']}"
+    if entry["ever_observed_delay"] and case in state.get("pr_windows", {}):
+        state["pr_windows"][case]["saw_delay"] = True
     if entry["ever_observed_delay"] and case not in counted:
         counted.append(case)
 
@@ -110,14 +112,70 @@ def history_evidence(gh, state, now):
     return {"unfinished_runs": pending, "data_gaps": gaps, "observed_at": now.isoformat()}
 
 
+def pr_windows(state, now):
+    """Migrate retained admission intent without extending a PR's first window."""
+    windows = state.get("pr_windows", {})
+    if not isinstance(windows, dict):
+        raise Gap("invalid_pr_windows")
+    windows = {key: dict(value) if isinstance(value, dict) else value for key, value in windows.items()}
+    for key, value in windows.items():
+        repo, separator, number = key.rpartition("#")
+        if (not separator or repo not in REPOS or not number.isdigit() or int(number) <= 0
+                or not isinstance(value, dict) or set(value) != {"first_selected_at", "saw_delay"}
+                or type(value["saw_delay"]) is not bool):
+            raise Gap("invalid_pr_windows")
+        start = instant(value["first_selected_at"])
+        if start.tzinfo is None or start > now:
+            raise Gap("invalid_pr_windows")
+    entries = list(state.get("history", []))
+    if state.get("receipt"):
+        entries.append(state)
+    for entry in entries:
+        if entry.get("historical_only"):
+            continue  # Imported run creation is not selector-admission proof.
+        r = entry["receipt"]
+        validate_receipt(r)
+        start = entry["started_at"]
+        parsed = instant(start)
+        if parsed.tzinfo is None or parsed > now:
+            raise Gap("invalid_pr_windows")
+        key = f"{r['repo']}#{r['pr']}"
+        window = windows.setdefault(key, {"first_selected_at": start, "saw_delay": False})
+        if instant(start) < instant(window["first_selected_at"]):
+            window["first_selected_at"] = start
+        if type(entry.get("saw_delay", False)) is not bool:
+            raise Gap("invalid_pr_windows")
+        window["saw_delay"] |= entry.get("saw_delay", False)
+    for key, window in windows.items():
+        window["saw_delay"] |= key in state.get("counted_prs", [])
+    state["pr_windows"] = windows
+
+
+def check_pr_window(state, receipt, now):
+    key = f"{receipt['repo']}#{receipt['pr']}"
+    window = state.get("pr_windows", {}).get(key)
+    if (window and not window["saw_delay"] and key not in state.get("counted_prs", [])
+            and (now - instant(window["first_selected_at"])).total_seconds() >= 86400):
+        raise Gap("no_delay_24h")
+
+
 def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s: None,
          clock=None, hold_check=lambda: False):
     """All exceptions lead to scoped cleanup; no partial activation is accepted."""
+    r = receipt or state.get("receipt")
     def activation_check():
-        if (clock() if clock else dt.datetime.now(dt.timezone.utc)) >= instant(DEADLINE):
+        current = clock() if clock else dt.datetime.now(dt.timezone.utc)
+        if current >= instant(DEADLINE):
             raise Gap("deadline")
+        if r is not None:
+            check_pr_window(state, r, max(current, now))
         if hold_check() or (Path.home() / ".claude/merglbot-preauth/OWNER_HOLD").exists():
             raise Gap("owner_hold")
+    try:
+        pr_windows(state, now)
+    except Exception:
+        return {"action": "recovery_required", "status": "unverified",
+                "cleanup_verified": cleanup(gh, apply), "reason": "invalid_pr_windows"}
     try:
         if now >= instant(DEADLINE):
             raise Gap("deadline")
@@ -152,8 +210,11 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
                 raise Gap("untracked_selectors")
             if not receipt:
                 raise Gap("missing_receipt")
+            check_pr_window(state, r, now)
             if not apply:
                 return {"action": "activation_available", "status": "readonly"}
+            key = f"{r['repo']}#{r['pr']}"
+            state["pr_windows"].setdefault(key, {"first_selected_at": now.isoformat(), "saw_delay": False})
             state.update(receipt=r, started_at=now.isoformat(), saw_delay=False, phase="activating")
             persist(state)  # Durable intent precedes the first mutation.
             for name in (BASE_VAR, SHA_VAR, PR_VAR):
@@ -174,8 +235,7 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
         state["saw_delay"] = state.get("saw_delay", False) or metrics["pending_environment_observations"] > 0
         if len(state["counted_prs"]) >= 5:
             raise Gap("case_limit")
-        if not state["saw_delay"] and (now - instant(state["started_at"])).total_seconds() >= 86400:
-            raise Gap("no_delay_24h")
+        check_pr_window(state, r, now)
         persist(state)
         historical = history_evidence(gh, state, now)
         persist(state)

@@ -33,3 +33,14 @@ identities, receipts and measurements against retained/live evidence. Preserve
 all counted PRs; never replace state with {} or zero the budget. If completeness
 cannot be proved, keep recovery_required. Re-run tick --apply and verify both
 cleanup and the restored history before admitting another case.
+
+The no-delay timeout is per repository/PR: `pr_windows` retains the first selector
+admission intent across head changes, cleanup and restarts. Re-admission never
+restarts its 24 hours. Each head still uses its own `started_at` measurement
+boundary. Once a delay is observed (including retained `counted_prs` evidence),
+that PR is exempt from the no-delay timeout; closure, holds, the global deadline
+and five-case limit still apply. Legacy active/history admission timestamps migrate
+to the earliest retained start; imported `historical_only` run timestamps are not
+selection proof. Invalid windows require recovery without overwriting durable state.
+When recovering state, preserve `pr_windows` alongside counts and historical receipts;
+never delete a window or replace its first start with a later admission.
