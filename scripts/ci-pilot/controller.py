@@ -5,7 +5,7 @@ import datetime as dt
 import fcntl
 import json
 from pathlib import Path
-from github_client import CHECKS, DEADLINE, REPOS, PR_VAR, SHA_VAR, GitHub, Gap, atomic, digest, instant
+from github_client import CHECKS, DEADLINE, REPOS, PR_VAR, SHA_VAR, BASE_VAR, BASE_BOUND_REPOS, GitHub, Gap, atomic, digest, instant
 
 
 def validate_receipt(r):
@@ -59,9 +59,9 @@ def cleanup(gh, apply):
         try:
             present = gh.selectors(repo)
         except Exception:
-            present = {PR_VAR: "unknown", SHA_VAR: "unknown"}
+            present = {PR_VAR: "unknown", SHA_VAR: "unknown", BASE_VAR: "unknown"}
         if apply:
-            for name in (PR_VAR, SHA_VAR):
+            for name in (PR_VAR, SHA_VAR, BASE_VAR):
                 if name in present:
                     try:
                         gh.mutate(repo, name)
@@ -141,6 +141,8 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
             raise Gap("active_receipt_conflict")
         eligible(r, gh.snapshot(r))
         expected = {PR_VAR: str(r["pr"]), SHA_VAR: r["head"]}
+        if r["repo"] in BASE_BOUND_REPOS:
+            expected[BASE_VAR] = r["base"]
         populated = {repo: values for repo, values in active.items() if values}
         installed = populated == {r["repo"]: expected}
         if populated and not installed:
@@ -154,12 +156,12 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
                 return {"action": "activation_available", "status": "readonly"}
             state.update(receipt=r, started_at=now.isoformat(), saw_delay=False, phase="activating")
             persist(state)  # Durable intent precedes the first mutation.
-            activation_check()
-            gh.mutate(r["repo"], SHA_VAR, r["head"])
-            eligible(r, gh.snapshot(r))
-            activation_check()
-            gh.mutate(r["repo"], PR_VAR, str(r["pr"]))
-            eligible(r, gh.snapshot(r))
+            for name in (BASE_VAR, SHA_VAR, PR_VAR):
+                if name not in expected:
+                    continue
+                activation_check()
+                gh.mutate(r["repo"], name, expected[name])
+                eligible(r, gh.snapshot(r))
             after = {repo: gh.selectors(repo) for repo in REPOS}
             if {repo: values for repo, values in after.items() if values} != {r["repo"]: expected}:
                 raise Gap("activation_readback_failed")
