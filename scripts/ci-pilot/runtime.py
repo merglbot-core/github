@@ -83,17 +83,21 @@ def unload():
 
 def wake(state_dir, now):
     plan_path = state_dir / "runtime.json"
+    invalid_state = False
     try:
         plan = json.loads(plan_path.read_text()) if plan_path.exists() else {}
         state = json.loads((state_dir / "state.json").read_text()) if (state_dir / "state.json").exists() else {}
         if not isinstance(plan, dict) or not isinstance(state, dict):
             raise ValueError("invalid_state_shape")
+        if type(plan.get("stopped", False)) is not bool:
+            raise ValueError("invalid_stopped_shape")
         if not isinstance(state.get("counted_prs", []), list):
             raise ValueError("invalid_counter_shape")
         if plan.get("next_due"):
             instant(plan["next_due"])
-    except (ValueError, OSError):
-        plan, state = {}, {}  # Controller handles malformed state with cleanup.
+    except (ValueError, OSError, TypeError, AttributeError):
+        plan, state = {}, {}
+        invalid_state = True
     if plan.get("stopped"):
         return unload()
     due = plan.get("next_due")
@@ -104,6 +108,8 @@ def wake(state_dir, now):
     if due and not urgent and not active and now < instant(due):
         return 0
     try:
+        if invalid_state:
+            raise ValueError("invalid_persisted_state")
         run_controller(state_dir)
         result_path = state_dir / "next_action.json"
         if result_path.stat().st_mtime < now.timestamp():

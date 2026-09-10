@@ -44,12 +44,25 @@ class RuntimeTests(unittest.TestCase):
             with patch.object(runtime, "run_controller", side_effect=subprocess.TimeoutExpired("controller", 240)) as runner:
                 with patch.object(runtime, "emergency_cleanup", return_value={"action": "cleanup_required", "status": "unverified"}) as cleanup:
                     self.assertEqual(runtime.wake(root, now), 0)
-                    runner.assert_called_once_with(root)
+                    runner.assert_not_called()
                     cleanup.assert_called_once_with(root)
             plan = json.loads((root / "runtime.json").read_text())
             self.assertFalse(plan["stopped"])
             self.assertEqual(plan["admitted_runs"], "DATA_GAP")
             self.assertEqual(runtime.instant(plan["next_due"]) - now, dt.timedelta(minutes=5))
+
+    def test_non_boolean_stopped_and_timeout_cannot_unload_without_cleanup(self):
+        now = runtime.instant("2026-09-10T20:00:00Z")
+        for stopped in ("false", 1, None, [], {}, False):
+            with self.subTest(stopped=stopped), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "runtime.json").write_text(json.dumps({"stopped": stopped}))
+                (root / "state.json").write_text(json.dumps({"receipt": {"head": "a" * 40}}))
+                with patch.object(runtime, "run_controller", side_effect=subprocess.TimeoutExpired("controller", 240)), patch.object(runtime, "unload") as unload, patch.object(runtime, "emergency_cleanup", return_value={"action": "cleanup_required", "status": "unverified"}) as cleanup:
+                    self.assertEqual(runtime.wake(root, now), 0)
+                    cleanup.assert_called_once_with(root)
+                    unload.assert_not_called()
+                self.assertFalse(json.loads((root / "runtime.json").read_text())["stopped"])
 
     def test_emergency_cleanup_uses_separate_cleanup_command(self):
         output = {"action": "cleanup_verified", "status": "inactive"}
