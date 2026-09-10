@@ -66,21 +66,6 @@ An expired PR with no observed delay remains ineligible for the rest of this pil
 The semantic selector must skip its retained expired `pr_windows` entry and choose
 the next eligible PR, rather than repeatedly retrying the oldest PR.
 
-
-## Automatic infra experiment (version 1)
-
-Use the existing runtime/lock/heartbeat. `begin-experiment --apply` requires no old
-receipt, verified global cleanup and terminal old history; historical counts stay.
-`activate --receipt <file> --apply` accepts repo=merglbot-core/infra, positive `pr`,
-`kind`=synthetic|natural, `mode`=baseline|delay and live `protection_sha256`.
-Reviewed source hashes, protections and environments bind activation.
-Errors, partial activation, expiry, close/merge and changed scope/protection clean
-both old and new selectors. `stop-selection --apply` ends a measurement interval.
-At most three distinct PRs per kind, one selection globally, unchanged Sep14 deadline.
-Intermediate heads and all attempts are measured; completed results are reused
-only against unchanged live run/attempt inventory. Gaps remain explicit. Admission
-runner time counts; actual checkout/base still need separate execution evidence.
-The agent owns V6/merge and the separate GO audit. No production rollout.
 ### Bounded experiment supervisor recovery
 
 The test successor must verify `runtime.ready(state_dir, now)` before writing a
@@ -113,3 +98,18 @@ phases. It discovers all run attempts (including reruns of originally older runs
 assigns them through the adapter's start/stop interval, preserves observation snapshots,
 and reuses completed measurements only for the same attempt inventory and interval.
 Missing evidence remains a data gap. This helper alone activates no experiment.
+
+## Automatic infra experiment (version 1)
+
+Use the existing runtime/lock/heartbeat. `begin-experiment --apply` requires no old
+receipt, verified global cleanup and terminal old history; historical counts stay.
+`activate --receipt <file> --apply` accepts repo=merglbot-core/infra, positive `pr`,
+`kind`=synthetic|natural, `mode`=baseline|delay and live `protection_sha256`.
+Reviewed source hashes, protections and environments bind activation.
+Errors, partial activation, expiry, close/merge and changed scope/protection clean
+both old and new selectors. `stop-selection --apply` ends a measurement interval.
+At most three distinct PRs per kind, one selection globally, unchanged Sep14 deadline.
+Intermediate heads and all attempts are measured; completed results are reused
+only against unchanged live run/attempt inventory. Gaps remain explicit. Admission
+runner time counts; actual checkout/base still need separate execution evidence.
+The agent owns V6/merge and the separate GO audit. No production rollout.
