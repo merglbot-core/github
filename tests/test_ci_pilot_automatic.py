@@ -56,6 +56,22 @@ class ExperimentTests(unittest.TestCase):
         return a.experiment_tick(self.gh, self.state, now, True, receipt,
                                  clock=lambda: now, supervisor_ready=kw.pop("supervisor_ready", lambda: True), **kw)
 
+    def test_stop_includes_attempt_arriving_during_selector_cleanup(self):
+        self.tick(self.selection)
+        arrival, finished = NOW + dt.timedelta(seconds=1), NOW + dt.timedelta(seconds=2)
+        current, cleanup = [NOW], c.cleanup
+        def retire(gh, apply):
+            clean = cleanup(gh, apply)
+            current[0] = finished
+            return clean
+        def measure(gh, case, observed_at):
+            return {"unfinished_runs": int(arrival < c.instant(case["stopped_at"])), "data_gaps": 0}
+        with patch.object(c, "cleanup", side_effect=retire), patch.object(a.measurements, "observe", side_effect=measure):
+            result = a.experiment_tick(self.gh, self.state, NOW, True, {"stop": True}, clock=lambda: current[0])
+        self.assertEqual(finished.isoformat(), self.state["experiment"]["cases"][0]["stopped_at"])
+        self.assertEqual("drain_admitted_runs", result["action"])
+        self.assertEqual(1, result["history"]["unfinished_runs"])
+
     def test_first_event_wait_does_not_cancel_new_selection(self):
         with patch.object(a.measurements, "observe", side_effect=REAL_OBSERVE):
             result = self.tick(self.selection)

@@ -127,7 +127,8 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
         clean = cleanup(gh, apply)
         if clean and apply and experiment.get("active") is not None:
             case = experiment["cases"][experiment["active"]]
-            case.update(phase="inactive", stopped_at=now.isoformat(), reason=reason)
+            stopped = max(now, clock() if clock else dt.datetime.now(dt.timezone.utc))
+            case.update(phase="inactive", stopped_at=stopped.isoformat(), reason=reason)
             experiment["active"] = None
         historical = measurements.histories(gh, experiment, now)
         persist(state)
