@@ -104,7 +104,9 @@ def sync(state_dir, active, terminal, now, home=None):
                 if proof["status"] == "verified":
                     final_text = path.read_text()
                     final, _ = parse(final_text)
-                    if final["status"] != "PAUSED" or any(final[k] != config[k] for k in config):
+                    if (any(final[k] != desired[k] for k in ("status", "rrule"))
+                            or any(final[k] != actual[k] for k in ("kind", "version"))
+                            or any(final[k] != config[k] for k in config)):
                         raise ValueError("file_race")
                     proof.update(file_sha256=hashlib.sha256(final_text.encode()).hexdigest(), **config)
                     return {"status": "verified", "paused": True, "proof": proof, "database_cache": "stale"}

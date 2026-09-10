@@ -115,6 +115,14 @@ class LegacySourceTests(unittest.TestCase):
         target.write_bytes(self.f.path.read_bytes())
         self.assertEqual(self.f.sync(terminal=True)["source_proof"]["reason"], "home_alias_mapping_changed")
 
+    def test_cadence_changed_during_source_probe_is_not_verified(self):
+        def concurrent_change(*args):
+            self.f.values["rrule"] = "FREQ=MINUTELY;INTERVAL=30"
+            self.f.write_file()
+            return {"status": "verified"}
+        with patch.object(h.legacy_source, "verify", side_effect=concurrent_change):
+            self.assertEqual(self.f.sync(terminal=True)["status"], "unverified")
+
 
 if __name__ == "__main__":
     unittest.main()
