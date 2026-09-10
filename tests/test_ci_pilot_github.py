@@ -4,6 +4,7 @@ import copy
 import json
 from pathlib import Path
 import subprocess
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -22,6 +23,35 @@ def make_run(**overrides):
 
 
 class GitHubTests(unittest.TestCase):
+    def test_retired_history_keeps_admitted_run_and_excludes_later_rerun(self):
+        with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1] / "scripts/ci-pilot"), *sys.path]):
+            import controller
+        gh = c.GitHub()
+        stop = "2026-09-10T20:05:00Z"
+        first = make_run()
+        later = make_run(run_attempt=2, run_started_at="2026-09-10T20:10:00Z", status="in_progress")
+        job = {"id": 9, "name": "unit-tests", "runner_id": 8, "steps": [], "conclusion": "success",
+               "started_at": NOW.isoformat(), "completed_at": "2026-09-10T20:06:00Z"}
+        def pages(path, *args):
+            if "/actions/runs?" in path:
+                return [later]
+            self.assertTrue(path.endswith("/attempts/1/jobs"), "late rerun must not enter retired evidence")
+            return [job]
+        gh.pages = pages
+        gh.api = lambda path: first if path.endswith("/attempts/1") else later
+        state = {"history": [{"receipt": RECEIPT, "started_at": NOW.isoformat(), "stopped_at": stop}]}
+        result = controller.history_evidence(gh, state, NOW)
+        self.assertEqual(0, result["unfinished_runs"])
+        self.assertEqual(0, result["data_gaps"])
+        metrics = next(iter(state["measurements"].values()))
+        self.assertEqual(360, metrics["runner_seconds"])
+        self.assertEqual([1], [o["attempt"] for o in metrics["observations"]])
+        del state["history"][0]["stopped_at"]
+        self.assertEqual(1, controller.history_evidence(gh, state, NOW)["data_gaps"])
+        state["history"][0]["stopped_at"] = stop
+        job["completed_at"] = None
+        self.assertEqual(1, controller.history_evidence(gh, state, NOW)["data_gaps"])
+
     def test_interval_end_excludes_later_attempt_without_job_reads(self):
         gh = c.GitHub()
         run = make_run()

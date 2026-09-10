@@ -104,9 +104,13 @@ def history_evidence(gh, state, now):
             continue
         seen.add(key)
         try:
-            metrics = gh.measurements(r, entry["started_at"])
+            stopped = entry["stopped_at"]
+            if instant(stopped) < instant(entry["started_at"]):
+                raise Gap("invalid_history_interval")
+            metrics = gh.measurements(r, entry["started_at"], stopped)
             record_measurements(state, r, metrics, now)
             pending += sum(o["status"] != "completed" for o in metrics.get("observations", []))
+            gaps += metrics.get("runner_evidence_gaps", 0)
         except Exception:
             gaps += 1
     return {"unfinished_runs": pending, "data_gaps": gaps, "observed_at": now.isoformat()}

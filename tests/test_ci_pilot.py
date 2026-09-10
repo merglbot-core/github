@@ -61,7 +61,7 @@ class Fake:
         else:
             self.values[repo][name] = value
 
-    def measurements(self, receipt, since):
+    def measurements(self, receipt, since, until=None):
         return {"runs": 1, "runner_seconds": 0, "pending_environment_observations": 0,
                 "cancelled_without_runner": 1}
 
@@ -181,7 +181,7 @@ class PilotTests(unittest.TestCase):
                           for name in (c.PR_VAR, c.SHA_VAR, c.BASE_VAR)])
 
     def test_delay_counts_distinct_pr_and_preserves_old_head_observations(self):
-        def measured(receipt, since):
+        def measured(receipt, since, until=None):
             return {"pending_environment_observations": 1,
                     "observations": [{"run_id": 7, "status": "in_progress"}]}
         self.gh.measurements = measured
@@ -251,7 +251,7 @@ class PilotTests(unittest.TestCase):
         self.state = json.loads(json.dumps(self.state))
         seen = []
         original = self.gh.measurements
-        self.gh.measurements = lambda r, since: (seen.append((r["head"], since)) or original(r, since))
+        self.gh.measurements = lambda r, since, until=None: (seen.append((r["head"], since)) or original(r, since, until))
         self.assertEqual(c.tick(self.gh, self.state, later, True, self.gh.receipt,
                                 clock=lambda: later)["action"], "observe")
         self.assertEqual(self.state["started_at"], later.isoformat())
