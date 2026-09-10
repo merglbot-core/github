@@ -48,3 +48,19 @@ never delete a window or replace its first start with a later admission.
 An expired PR with no observed delay remains ineligible for the rest of this pilot.
 The semantic selector must skip its retained expired `pr_windows` entry and choose
 the next eligible PR, rather than repeatedly retrying the oldest PR.
+
+
+## Automatic infra experiment (version 1)
+
+Use the existing runtime/lock/heartbeat. `begin-experiment --apply` requires no old
+receipt, verified global cleanup and terminal old history; historical counts stay.
+`activate --receipt <file> --apply` accepts repo=merglbot-core/infra, positive `pr`,
+`kind`=synthetic|natural, `mode`=baseline|delay and live `protection_sha256`.
+Reviewed source hashes, protections and environments bind activation.
+Errors, partial activation, expiry, close/merge and changed scope/protection clean
+both old and new selectors. `stop-selection --apply` ends a measurement interval.
+At most three distinct PRs per kind, one selection globally, unchanged Sep14 deadline.
+Intermediate heads and all attempts are measured; completed results are reused
+only against unchanged live run/attempt inventory. Gaps remain explicit. Admission
+runner time counts; actual checkout/base still need separate execution evidence.
+The agent owns V6/merge and the separate GO audit. No production rollout.

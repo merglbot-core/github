@@ -6,6 +6,7 @@ import fcntl
 import json
 from pathlib import Path
 from github_client import CHECKS, DEADLINE, REPOS, PR_VAR, SHA_VAR, BASE_VAR, BASE_BOUND_REPOS, GitHub, Gap, atomic, digest, instant
+from github_client import SELECTOR_NAMES
 
 
 def validate_receipt(r):
@@ -59,9 +60,9 @@ def cleanup(gh, apply):
         try:
             present = gh.selectors(repo)
         except Exception:
-            present = {PR_VAR: "unknown", SHA_VAR: "unknown", BASE_VAR: "unknown"}
+            present = dict.fromkeys(SELECTOR_NAMES, "unknown")
         if apply:
-            for name in (PR_VAR, SHA_VAR, BASE_VAR):
+            for name in SELECTOR_NAMES:
                 if name in present:
                     try:
                         gh.mutate(repo, name)
@@ -263,7 +264,7 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("tick", "activate"))
+    parser.add_argument("command", choices=("tick", "activate", "begin-experiment", "stop-selection"))
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--receipt", type=Path)
     parser.add_argument("--apply", action="store_true")
@@ -286,7 +287,18 @@ def main():
             receipt = json.loads(args.receipt.read_text()) if args.command == "activate" and args.receipt else None
             if args.command == "activate" and receipt is None:
                 raise Gap("receipt_required")
-            result = tick(gh, state, dt.datetime.now(dt.timezone.utc), args.apply, receipt,
+            if args.command == "stop-selection" and "experiment" not in state:
+                raise Gap("experiment_required")
+            if args.command == "begin-experiment" or "experiment" in state:
+                from automatic import experiment_tick
+                runner = experiment_tick
+                if args.command == "begin-experiment":
+                    receipt = {"begin": True}
+                elif args.command == "stop-selection":
+                    receipt = {"stop": True}
+            else:
+                runner = tick
+            result = runner(gh, state, dt.datetime.now(dt.timezone.utc), args.apply, receipt,
                           ((args.state_dir / "OWNER_HOLD").exists()
                            or (Path.home() / ".claude/merglbot-preauth/OWNER_HOLD").exists()),
                           lambda s: atomic(state_path, s),
