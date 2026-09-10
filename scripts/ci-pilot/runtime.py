@@ -30,6 +30,7 @@ def ready(state_dir, now):
         block = re.search(r"arguments = \{\n(.*?)\n\s*\}", result.stdout, re.S)
         expected = [sys.executable, str(Path(__file__).resolve()), "wake", "--state-dir", str(state_dir.resolve())]
         return (result.returncode == 0 and block is not None
+                and re.search(r"(?m)^\s*run interval = 300 seconds\s*$", result.stdout) is not None
                 and [line.strip() for line in block[1].splitlines()] == expected)
     except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
         return False
