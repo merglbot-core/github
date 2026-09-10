@@ -97,3 +97,10 @@ original deadline, globally verified selector cleanup and complete old run histo
 It preserves all counters and history. It only rearms the plan; bootstrap the
 reviewed test supervisor and verify an actual successful wake before selection.
 Recovery alone is not supervisor health or experiment delivery evidence.
+### Experiment observation helper
+
+`experiment_measurements.py` provides read-only `observe`/`histories` for successor
+phases. It discovers all run attempts (including reruns of originally older runs),
+assigns them through the adapter's start/stop interval, preserves observation snapshots,
+and reuses completed measurements only for the same attempt inventory and interval.
+Missing evidence remains a data gap. This helper alone activates no experiment.
