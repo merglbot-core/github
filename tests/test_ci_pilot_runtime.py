@@ -36,7 +36,7 @@ class RuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             args = [sys.executable, str(Path(runtime.__file__).resolve()), "wake", "--state-dir", str(root.resolve())]
-            output = "arguments = {\n" + "\n".join(args) + "\n}"
+            output = "arguments = {\n" + "\n".join(args) + "\n}\nrun interval = 300 seconds"
             plan = {"stopped": False, "healthy": True, "last_successful_wake": now.isoformat()}
             runtime.atomic(root / "runtime.json", plan)
             with patch.object(runtime.subprocess, "run", return_value=MagicMock(returncode=0, stdout=output)) as run:
@@ -47,6 +47,8 @@ class RuntimeTests(unittest.TestCase):
                     self.assertFalse(runtime.ready(root, now))
                 runtime.atomic(root / "runtime.json", plan)
                 run.return_value.stdout = output.replace(str(root.resolve()), "/wrong-state")
+                self.assertFalse(runtime.ready(root, now))
+                run.return_value.stdout = output.replace("300 seconds", "900 seconds")
                 self.assertFalse(runtime.ready(root, now))
                 run.return_value.stdout = output
                 run.return_value.returncode = 113
