@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import unittest
 import sys
+import tempfile
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("pilot", Path(__file__).resolve().parents[1] / "scripts/ci-pilot/controller.py")
 c = importlib.util.module_from_spec(spec)
@@ -191,6 +193,35 @@ class PilotTests(unittest.TestCase):
         holds = iter([False, True])
         self.assert_clean(c.tick(self.gh, self.state, NOW, True, self.gh.receipt,
                                  clock=lambda: NOW, hold_check=lambda: next(holds)))
+
+    def test_active_tick_rechecks_deadline_and_hold_after_observations(self):
+        for boundary in ("deadline", "hold"):
+            self.setUp()
+            self.activate()
+            changed = []
+            def measurements(*args):
+                changed.append(True)
+                return {"pending_environment_observations": 0}
+            self.gh.measurements = measurements
+            result = c.tick(self.gh, self.state, NOW, True,
+                            clock=lambda: c.instant(c.DEADLINE) if changed and boundary == "deadline" else NOW,
+                            hold_check=lambda: bool(changed) and boundary == "hold")
+            self.assert_clean(result)
+            self.assertEqual(result["reason"], "deadline" if boundary == "deadline" else "owner_hold")
+
+    def test_corrupt_state_repeatedly_requires_recovery_without_reset(self):
+        for original in ("{broken", '{"counted_prs": null, "history": []}'):
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)
+                (path / "state.json").write_text(original)
+                argv = ["controller", "tick", "--state-dir", directory, "--apply"]
+                with patch.object(sys, "argv", argv), patch.object(c, "GitHub", return_value=self.gh), patch("builtins.print"):
+                    for _ in range(2):
+                        self.assertEqual(c.main(), 1)
+                        result = json.loads((path / "next_action.json").read_text())
+                        self.assertEqual(result["action"], "recovery_required")
+                        self.assertTrue(result["cleanup_verified"])
+                        self.assertEqual((path / "state.json").read_text(), original)
 
 
 
