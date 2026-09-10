@@ -15,3 +15,14 @@ CI/CD standardy a governance jsou SSOT v `merglbot-public/docs`:
 
 - Aby interní odkazy v tomto repu zůstaly funkční (training/release-management).
 - Abychom měli *lokální rozcestník* bez duplikace pravidel.
+
+### Cloud Run platform manifest attestations
+
+`reusable-build-attest.yml` builds and checks linux/amd64. `image_digest` retains
+the bare root/index digest for existing callers. `platform_digest` is the bare
+manifest digest selected by the successful local Trivy/config-parity check.
+The build provenance includes both subjects, and the attestation job signs each
+distinct digest. A child signing failure fails the job. Cloud Run callers use
+`platform_digest` and `platform_attestation_id` together, with the unchanged
+commit/provenance and enforced Binary Authorization checks. Empty platform
+outputs (for example a non-pushing build) are not deployable release evidence.
