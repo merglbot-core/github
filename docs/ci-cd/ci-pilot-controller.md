@@ -97,4 +97,7 @@ Historical case counts remain unchanged and do not set the successor's case limi
 phases. It discovers all run attempts (including reruns of originally older runs),
 assigns them through the adapter's start/stop interval, preserves observation snapshots,
 and reuses completed measurements only for the same attempt inventory and interval.
-Missing evidence remains a data gap. This helper alone activates no experiment.
+An open phase without in-window observations stays pending for its first event;
+a closed empty phase has a data gap, including an interval with retained heads but
+no matching attempts. Neither is complete evidence. This helper alone activates
+no experiment.

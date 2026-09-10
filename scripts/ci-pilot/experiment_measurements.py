@@ -35,7 +35,7 @@ def observe(gh, case, now):
             (run["id"], run["run_attempt"], run["status"], run["updated_at"]))
     # Persist discovered heads before measuring; an API gap must not erase inventory.
     case["heads"] = sorted(set(case.get("heads", [])) | heads)
-    pending, gaps = 0, 0
+    pending, gaps, observed = 0, 0, 0
     metrics = case.setdefault("measurements", {})
     for head in case["heads"]:
         r = {"repo": REPO, "pr": case["pr"], "head": head, "base": case["initial_base"]}
@@ -50,6 +50,7 @@ def observe(gh, case, now):
             m = previous
         else:
             m = gh.measurements(r, case["started_at"], case.get("stopped_at"))
+        observed += len(m["observations"])
         for observation in m["observations"]:
             key = digest(json.dumps(observation, sort_keys=True))
             entry["snapshots"].setdefault(key, {"observed_at": now.isoformat(), "evidence": observation})
@@ -57,6 +58,12 @@ def observe(gh, case, now):
         entry["latest"] = m
         entry.update(inventory_signature=signature, since=case["started_at"], until=case.get("stopped_at"))
         gaps += m["runner_evidence_gaps"]
+    if not observed:
+        # A just-selected phase awaits its first event; a closed empty phase is not proof.
+        if case.get("stopped_at"):
+            gaps += 1
+        else:
+            pending += 1
     return {"unfinished_runs": pending, "data_gaps": gaps, "observed_at": now.isoformat()}
 
 
