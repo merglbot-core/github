@@ -14,6 +14,34 @@ sys.path.pop(0)
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_idle_error_retargets_five_minutes_without_losing_terminal_intent(self):
+        now = runtime.instant("2026-09-10T20:00:00Z")
+        for terminal in (False, True):
+            plan = {"stopped": terminal, "next_due": None if terminal else (now + dt.timedelta(minutes=15)).isoformat()}
+            with patch.object(runtime.heartbeat, "sync", side_effect=[{"status": "unverified"}, {"status": "pending"}]) as sync:
+                self.assertFalse(runtime.sync_heartbeat(Path("/unused"), plan, now))
+                self.assertEqual([call.args[1:3] for call in sync.call_args_list], [(False, terminal), (True, terminal)])
+                self.assertFalse(plan["stopped"])
+                self.assertEqual(runtime.instant(plan["next_due"]) - now, dt.timedelta(minutes=5))
+
+    def test_terminal_waits_for_heartbeat_stop_readback_before_unload(self):
+        now = runtime.dt.datetime.now(runtime.dt.timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime.atomic(root / "state.json", {"counted_prs": [str(i) for i in range(5)]})
+            result = {"action": "cleanup_verified", "reason": "case_limit", "status": "inactive",
+                      "history": {"unfinished_runs": 0, "data_gaps": 0}}
+            def controller(path):
+                runtime.atomic(path / "next_action.json", result)
+            with patch.object(runtime, "run_controller", side_effect=controller), patch.object(runtime, "unload", return_value=0) as unload:
+                with patch.object(runtime.heartbeat, "sync", side_effect=[{"status": "pending"}, {"status": "verified", "paused": True}]):
+                    self.assertEqual(runtime.wake(root, now), 1)
+                    self.assertFalse(json.loads((root / "runtime.json").read_text())["stopped"])
+                    unload.assert_not_called()
+                    self.assertEqual(runtime.wake(root, now), 0)
+                    self.assertTrue(json.loads((root / "runtime.json").read_text())["stopped"])
+                    unload.assert_called_once()
+
     def test_active_idle_and_unverified_cadence(self):
         now = runtime.instant("2026-09-10T20:00:00Z")
         for status, seconds in (("active", 300), ("inactive", 900), ("unverified", 300)):
