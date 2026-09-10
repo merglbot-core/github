@@ -44,3 +44,7 @@ to the earliest retained start; imported `historical_only` run timestamps are no
 selection proof. Invalid windows require recovery without overwriting durable state.
 When recovering state, preserve `pr_windows` alongside counts and historical receipts;
 never delete a window or replace its first start with a later admission.
+
+An expired PR with no observed delay remains ineligible for the rest of this pilot.
+The semantic selector must skip its retained expired `pr_windows` entry and choose
+the next eligible PR, rather than repeatedly retrying the oldest PR.
