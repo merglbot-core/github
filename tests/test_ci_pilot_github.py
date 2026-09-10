@@ -50,6 +50,10 @@ class GitHubTests(unittest.TestCase):
             with self.assertRaises(c.Gap):
                 gh.mutate(repo, name)
         self.assertEqual(gh.command.call_count, 2)
+        gh.mutate(c.REPOS[1], c.BASE_VAR, "b" * 40)
+        self.assertIn(c.BASE_VAR, gh.command.call_args.args[0])
+        gh.pages = lambda *args, **kwargs: [{"name": c.BASE_VAR, "value": "b" * 40}]
+        self.assertEqual(gh.selectors(c.REPOS[1]), {c.BASE_VAR: "b" * 40})
 
     def test_api_error_is_a_gap_without_raw_output(self):
         failed = subprocess.CompletedProcess([], 1, "private stdout", "private stderr")
