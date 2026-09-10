@@ -145,6 +145,9 @@ class GitHub:
             observations.append({"run_id": run["id"], "attempt": run["run_attempt"], "head": run["head_sha"],
                                  "created_at": run["created_at"], "status": run["status"],
                                  "pending_environment": [p["environment"]["name"] for p in pending],
+                                 "wait_timers": [{"environment": p["environment"]["name"],
+                                                  "wait_timer": p.get("wait_timer"),
+                                                  "started_at": p.get("wait_timer_started_at")} for p in pending],
                                  "checkout_head": "DATA_GAP",
                                  "jobs": [{**{k: j[k] for k in ("id", "name", "runner_id", "started_at", "completed_at", "conclusion")},
                                            "steps_count": len(j["steps"])}
