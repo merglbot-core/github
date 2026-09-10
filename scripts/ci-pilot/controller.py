@@ -5,7 +5,7 @@ import datetime as dt
 import fcntl
 import json
 from pathlib import Path
-from github_client import CHECKS, DEADLINE, REPOS, PR_VAR, SHA_VAR, BASE_VAR, BASE_BOUND_REPOS, GitHub, Gap, atomic, digest, instant
+from github_client import CHECKS, DEADLINE, REPOS, PR_VAR, SHA_VAR, BASE_VAR, BASE_BOUND_REPOS, SELECTOR_NAMES, GitHub, Gap, atomic, digest, instant
 
 
 def validate_receipt(r):
@@ -59,9 +59,9 @@ def cleanup(gh, apply):
         try:
             present = gh.selectors(repo)
         except Exception:
-            present = {PR_VAR: "unknown", SHA_VAR: "unknown", BASE_VAR: "unknown"}
+            present = {name: "unknown" for name in SELECTOR_NAMES}
         if apply:
-            for name in (PR_VAR, SHA_VAR, BASE_VAR):
+            for name in SELECTOR_NAMES:
                 if name in present:
                     try:
                         gh.mutate(repo, name)
@@ -76,9 +76,32 @@ def cleanup(gh, apply):
     return verified
 
 
-def record_measurements(state, receipt, metrics, now):
+def record_measurements(state, receipt, metrics, now, since=None, until=None):
     key = f"{receipt['repo']}#{receipt['pr']}@{receipt['head']}"
     entry = state.setdefault("measurements", {}).setdefault(key, {})
+    if since is not None:
+        start = instant(since)
+        intervals = dict(entry.get("interval_measurements", {}))
+        intervals[start.isoformat()] = {"until": until, "metrics": metrics}
+        ordered = sorted(intervals.items(), key=lambda item: instant(item[0]))
+        for (previous_start, previous), (next_start, _) in zip(ordered, ordered[1:]):
+            if previous["until"] is None or instant(previous["until"]) > instant(next_start):
+                raise Gap("overlapping_measurement_intervals")
+        totals = {name: 0 for name in ("runner_seconds", "runner_evidence_gaps",
+                  "pending_environment_observations", "cancelled_without_runner")}
+        observations = {}
+        for _, interval in ordered:
+            current = interval["metrics"]
+            for name in totals:
+                totals[name] += current.get(name, 0)
+            for observation in current.get("observations", []):
+                identity = (observation["run_id"], observation.get("attempt", 1))
+                if identity in observations:
+                    raise Gap("attempt_in_multiple_intervals")
+                observations[identity] = observation
+        metrics = {**totals, "observations": list(observations.values()),
+                   "runs": len({identity[0] for identity in observations}), "attempts": len(observations)}
+        entry["interval_measurements"] = intervals
     snapshots = entry.setdefault("snapshots", {})
     for observation in metrics.get("observations", []):
         identity = digest(json.dumps(observation, sort_keys=True))
@@ -99,7 +122,7 @@ def history_evidence(gh, state, now):
     seen = set()
     for entry in state.get("history", []):
         r = entry["receipt"]
-        key = f"{r['repo']}#{r['pr']}@{r['head']}"
+        key = (r['repo'], r['pr'], r['head'], entry.get("started_at"), entry.get("stopped_at"))
         if key in seen:
             continue
         seen.add(key)
@@ -108,7 +131,7 @@ def history_evidence(gh, state, now):
             if instant(stopped) < instant(entry["started_at"]):
                 raise Gap("invalid_history_interval")
             metrics = gh.measurements(r, entry["started_at"], stopped)
-            record_measurements(state, r, metrics, now)
+            record_measurements(state, r, metrics, now, entry["started_at"], stopped)
             pending += sum(o["status"] != "completed" for o in metrics.get("observations", []))
             gaps += metrics.get("runner_evidence_gaps", 0)
         except Exception:
@@ -235,7 +258,7 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
         elif not installed or state.get("phase") != "active":
             raise Gap("restart_incomplete_activation")
         metrics = gh.measurements(r, state["started_at"])
-        record_measurements(state, r, metrics, now)
+        record_measurements(state, r, metrics, now, state["started_at"])
         state["saw_delay"] = state.get("saw_delay", False) or metrics["pending_environment_observations"] > 0
         if len(state["counted_prs"]) >= 5:
             raise Gap("case_limit")

@@ -23,6 +23,38 @@ def make_run(**overrides):
 
 
 class GitHubTests(unittest.TestCase):
+    def test_repeated_same_head_intervals_accumulate_once_and_drain(self):
+        with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1] / "scripts/ci-pilot"), *sys.path]):
+            import controller
+        gh = c.GitHub()
+        first = make_run()
+        later = make_run(run_attempt=2, run_started_at="2026-09-10T20:10:00Z", status="in_progress")
+        jobs = {
+            1: {"id": 9, "name": "unit-tests", "runner_id": 8, "steps": [], "conclusion": "success",
+                "started_at": NOW.isoformat(), "completed_at": "2026-09-10T20:06:00Z"},
+            2: {"id": 10, "name": "unit-tests", "runner_id": 9, "steps": [], "conclusion": None,
+                "started_at": "2026-09-10T20:10:00Z", "completed_at": None}}
+        gh.pages = lambda path, *args: [jobs[int(path.split("/attempts/")[1].split("/")[0])]] if path.endswith("/jobs") else [later]
+        gh.api = lambda path: [] if path.endswith("/pending_deployments") else first if path.endswith("/attempts/1") else later
+        entries = [{"receipt": RECEIPT, "started_at": start, "stopped_at": stop} for start, stop in (
+            (NOW.isoformat(), "2026-09-10T20:05:00Z"), ("2026-09-10T20:10:00Z", "2026-09-10T20:15:00Z"))]
+        state = {"history": [*entries, copy.deepcopy(entries[0])]}
+        result = controller.history_evidence(gh, state, NOW)
+        self.assertEqual((1, 0), (result["unfinished_runs"], result["data_gaps"]))
+        metrics = next(iter(state["measurements"].values()))
+        self.assertEqual((1, 2, 360), (metrics["runs"], metrics["attempts"], metrics["runner_seconds"]))
+        later["status"] = "completed"
+        jobs[2].update(conclusion="success", completed_at="2026-09-10T20:12:00Z")
+        for _ in range(2):
+            result = controller.history_evidence(gh, state, NOW)
+            self.assertEqual((0, 0), (result["unfinished_runs"], result["data_gaps"]))
+            self.assertEqual(480, metrics["runner_seconds"])
+            self.assertEqual(2, metrics["attempts"])
+        state["history"].append({"receipt": RECEIPT, "started_at": "2026-09-10T20:04:00Z",
+                                 "stopped_at": "2026-09-10T20:06:00Z"})
+        self.assertEqual(1, controller.history_evidence(gh, state, NOW)["data_gaps"])
+        self.assertEqual(480, metrics["runner_seconds"])
+
     def test_retired_history_keeps_admitted_run_and_excludes_later_rerun(self):
         with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1] / "scripts/ci-pilot"), *sys.path]):
             import controller
@@ -103,6 +135,13 @@ class GitHubTests(unittest.TestCase):
         self.assertIn(c.BASE_VAR, gh.command.call_args.args[0])
         gh.pages = lambda *args, **kwargs: [{"name": c.BASE_VAR, "value": "b" * 40}]
         self.assertEqual(gh.selectors(c.REPOS[1]), {c.BASE_VAR: "b" * 40})
+        for name in (c.AUTO_PR, c.AUTO_MODE):
+            gh.mutate(c.REPOS[1], name, "12" if name == c.AUTO_PR else "delay")
+            for repo in (c.REPOS[0], c.REPOS[2]):
+                with self.assertRaises(c.Gap):
+                    gh.mutate(repo, name, "delay")
+                gh.mutate(repo, name)
+                self.assertIn("delete", gh.command.call_args.args[0])
 
     def test_api_error_is_a_gap_without_raw_output(self):
         failed = subprocess.CompletedProcess([], 1, "private stdout", "private stderr")
