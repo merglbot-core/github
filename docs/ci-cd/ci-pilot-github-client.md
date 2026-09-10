@@ -1,18 +1,20 @@
 # CI pilot GitHub adapter
 
-`scripts/ci-pilot/github_client.py` provides the bounded pilot's API adapter.
-Importing it performs no requests and enables no selectors or scheduled jobs.
-Controller/runtime delivery is separate.
-
-Reads fail on incomplete pagination, changed PR bindings and missing evidence.
-Variable pagination uses the API's thirty-item cap. Mutations are restricted
-to the two named pilot selectors in three repositories through the existing
-guarded wrapper. No raw command output or credential values are persisted.
-Measurements include run/attempt/job identity, exact PR head/base binding,
-pending timer start, and runner-zero/empty-step cancellation evidence.
-
-Run the committed offline fixtures; no GitHub credentials are needed:
+No import-time actions. Run offline fixtures:
 
 ```sh
 python3 -m unittest discover -s tests -p test_ci_pilot_github.py
 ```
+
+Workflow support requires an exact full-file SHA256 allowlist match. Comments,
+unrelated scalars and any future edits fail closed pending new review. Audited
+source commits (workflow paths in WORKFLOWS; dual V6 and actionlint verified):
+
+- exporter: 5f2c6f67a73cf7fc4d6fa7da23ab426172ba9d8f
+- infra: f396ce798b96c9e353fe7db856b28a4e86825f05
+- fb-viz: b1489d531c5fb5d3a9b0c956ed290c244fd35a09
+
+Per-attempt jobs/start times include natural reruns. Mutable PR associations do
+not prove historical base: DATA_GAP. Empty associations require a unique commit
+association. Null runner IDs remain gaps; only ID zero plus empty steps proves
+runner-free cancellation. Selector writes remain scoped through the guard.
