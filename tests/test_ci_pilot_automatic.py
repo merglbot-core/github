@@ -11,6 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts/ci-pilot")
 import automatic as a
 import controller as c
 
+REAL_OBSERVE = a.measurements.observe
+
 NOW = c.instant("2026-09-10T20:00:00Z")
 
 
@@ -46,10 +48,26 @@ class ExperimentTests(unittest.TestCase):
         self.snapshot = patch.object(a, "snapshot", return_value=({"base": "b" * 40}, "test-branch"))
         self.snapshot.start()
         self.addCleanup(self.snapshot.stop)
+        self.observation = patch.object(a.measurements, "observe", return_value={"unfinished_runs": 0, "data_gaps": 0})
+        self.observation.start()
+        self.addCleanup(self.observation.stop)
 
     def tick(self, receipt=None, now=NOW, **kw):
         return a.experiment_tick(self.gh, self.state, now, True, receipt,
                                  clock=lambda: now, supervisor_ready=kw.pop("supervisor_ready", lambda: True), **kw)
+
+    def test_first_event_wait_does_not_cancel_new_selection(self):
+        with patch.object(a.measurements, "observe", side_effect=REAL_OBSERVE):
+            result = self.tick(self.selection)
+            self.assertEqual("active", result["status"])
+            self.assertEqual(1, result["history"]["unfinished_runs"])
+            self.assertEqual(0, result["history"]["data_gaps"])
+            self.assertTrue(any(self.gh.values.values()))
+            result = self.tick({"stop": True})
+            self.assertEqual("drain_admitted_runs", result["action"])
+            self.assertEqual(1, result["history"]["data_gaps"])
+            self.assertFalse(any(self.gh.values.values()))
+            self.assertEqual("previous_phase_incomplete", self.tick(self.selection)["reason"])
 
     def test_recovery_runs_real_controller_with_five_historical_cases(self):
         import runtime

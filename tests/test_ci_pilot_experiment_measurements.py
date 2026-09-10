@@ -19,6 +19,19 @@ class MeasurementTests(unittest.TestCase):
     def setUp(self):
         self.gh = FakeGitHub()
 
+    def test_empty_phase_never_claims_complete_evidence(self):
+        for retained in (False, True):
+            for closed in (False, True):
+                with self.subTest(retained=retained, closed=closed):
+                    case = {"pr": 12, "branch": "test-branch", "started_at": NOW.isoformat(),
+                            "initial_base": "b" * 40, "heads": ["a" * 40] if retained else []}
+                    if closed:
+                        case["stopped_at"] = (NOW + dt.timedelta(seconds=1)).isoformat()
+                    self.gh.measurements = lambda *args: {"observations": [], "runner_evidence_gaps": 0}
+                    result = a.observe(self.gh, case, NOW)
+                    self.assertEqual(0 if closed else 1, result["unfinished_runs"])
+                    self.assertEqual(1 if closed else 0, result["data_gaps"])
+
     def test_completed_cache_requires_same_attempt_and_interval(self):
         case = {"pr": 12, "branch": "test-branch", "started_at": NOW.isoformat(),
                 "initial_base": "b" * 40}
