@@ -8,8 +8,8 @@ from urllib.parse import quote
 from github_client import AUTO_MODE, AUTO_PR, DEADLINE, REPOS, Gap, digest, instant
 
 REPO = REPOS[1]
-WORKFLOW_HASH = "d7ab98c7e6ea27aa541998d3104b34ac3f1e13bcb3028d2d30a38a1cbb3b1288"
-CLASSIFIER_HASH = "df823ecd66f6b71c1c457f49305ef6e7d55425f6050c40263f6835d89620247b"
+WORKFLOW_HASH = "af63c037f1c853818320d58a552b5e9fa1ca08422dac5748763156ce670d422c"
+CLASSIFIER_HASH = "8304e9c9a23bf6b828dd3b07d5f2a390c30b3a7b25b9f8d057772d44a789003a"
 PATHS = {"scripts/reconcile-alert-config.py", "scripts/reconcile-alert-estate.py",
          "tests/test_reconcile_alert_config.py", "tests/test_reconcile_alert_estate.py"}
 
@@ -99,7 +99,8 @@ def histories(gh, experiment, now):
 
 
 def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
-                    persist=lambda s: None, clock=None, hold_check=lambda: False):
+                    persist=lambda s: None, clock=None, hold_check=lambda: False,
+                    supervisor_ready=lambda: False):
     from controller import cleanup, history_evidence
     def check_time():
         current = clock() if clock else dt.datetime.now(dt.timezone.utc)
@@ -153,6 +154,8 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
             r, branch = snapshot(gh, receipt["pr"], receipt["protection_sha256"])
             if not apply:
                 return {"action": "activation_available", "status": "readonly"}
+            if not supervisor_ready():
+                raise Gap("supervisor_not_ready")
             active = {**receipt, "started_at": now.isoformat(), "branch": branch,
                       "initial_base": r["base"], "heads": [], "phase": "activating"}
             experiment["cases"].append(active)
@@ -161,6 +164,8 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
             for name, value in ((AUTO_MODE, active["mode"]), (AUTO_PR, str(active["pr"]))):
                 check_time()
                 snapshot(gh, active["pr"], active["protection_sha256"])
+                if not supervisor_ready():
+                    raise Gap("supervisor_not_ready")
                 gh.mutate(REPO, name, value)
             active["phase"] = "active"
             persist(state)

@@ -47,7 +47,19 @@ class ExperimentTests(unittest.TestCase):
 
     def tick(self, receipt=None, now=NOW, **kw):
         return a.experiment_tick(self.gh, self.state, now, True, receipt,
-                                 clock=lambda: now, **kw)
+                                 clock=lambda: now, supervisor_ready=kw.pop("supervisor_ready", lambda: True), **kw)
+
+    def test_missing_or_lost_supervisor_never_leaves_selectors(self):
+        result = a.experiment_tick(self.gh, self.state, NOW, True, self.selection, clock=lambda: NOW)
+        self.assertEqual("supervisor_not_ready", result["reason"])
+        self.assertFalse(any(value is not None for _, _, value in self.gh.writes))
+        for readiness in ([False], [True, False], [True, True, False]):
+            self.gh.writes.clear()
+            checks = iter(readiness)
+            result = self.tick(self.selection, supervisor_ready=lambda: next(checks))
+            self.assertEqual("supervisor_not_ready", result["reason"])
+            self.assertFalse(any(self.gh.values.values()))
+            self.assertIsNone(self.state["experiment"]["active"])
 
     def test_selection_has_durable_intent_and_global_readback(self):
         saved = []

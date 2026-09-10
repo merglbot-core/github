@@ -321,8 +321,11 @@ def main():
                 raise Gap("receipt_required")
             if args.command == "stop-selection" and "experiment" not in state:
                 raise Gap("experiment_required")
+            extra = {}
             if args.command == "begin-experiment" or "experiment" in state:
                 from automatic import experiment_tick
+                from runtime import ready
+                extra["supervisor_ready"] = lambda: ready(args.state_dir, dt.datetime.now(dt.timezone.utc))
                 runner = experiment_tick
                 if args.command == "begin-experiment":
                     receipt = {"begin": True}
@@ -334,7 +337,7 @@ def main():
                           ((args.state_dir / "OWNER_HOLD").exists()
                            or (Path.home() / ".claude/merglbot-preauth/OWNER_HOLD").exists()),
                           lambda s: atomic(state_path, s),
-                          hold_check=lambda: (args.state_dir / "OWNER_HOLD").exists())
+                          hold_check=lambda: (args.state_dir / "OWNER_HOLD").exists(), **extra)
         except Exception:
             clean = cleanup(gh, args.apply)
             result = {"action": "recovery_required", "cleanup_verified": clean,
