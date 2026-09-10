@@ -239,6 +239,63 @@ class PilotTests(unittest.TestCase):
             self.assert_clean(result)
             self.assertEqual(result["reason"], "deadline" if boundary == "deadline" else "owner_hold")
 
+    def change_head(self, when):
+        self.gh.snap["pr"]["head"]["sha"] = "d" * 40
+        self.assert_clean(c.tick(self.gh, self.state, when, True, clock=lambda: when))
+        self.gh.receipt["head"] = "d" * 40
+
+    def test_pr_window_survives_head_change_restart_and_keeps_metrics_start(self):
+        self.activate()
+        later = NOW + dt.timedelta(hours=23)
+        self.change_head(later)
+        self.state = json.loads(json.dumps(self.state))
+        seen = []
+        original = self.gh.measurements
+        self.gh.measurements = lambda r, since: (seen.append((r["head"], since)) or original(r, since))
+        self.assertEqual(c.tick(self.gh, self.state, later, True, self.gh.receipt,
+                                clock=lambda: later)["action"], "observe")
+        self.assertEqual(self.state["started_at"], later.isoformat())
+        self.assertIn(("d" * 40, later.isoformat()), seen)
+        result = c.tick(self.gh, self.state, NOW + dt.timedelta(hours=24), True,
+                        clock=lambda: NOW + dt.timedelta(hours=24))
+        self.assert_clean(result)
+        self.assertEqual(result["reason"], "no_delay_24h")
+
+    def test_new_head_after_pr_expiry_never_writes_selectors(self):
+        self.activate()
+        self.change_head(NOW + dt.timedelta(hours=23))
+        self.gh.writes.clear()
+        later = NOW + dt.timedelta(hours=25)
+        result = c.tick(self.gh, self.state, later, True, self.gh.receipt, clock=lambda: later)
+        self.assert_clean(result)
+        self.assertEqual(result["reason"], "no_delay_24h")
+        self.assertEqual(self.gh.writes, [])
+
+    def test_legacy_earliest_admission_migration_and_counted_exemption(self):
+        self.activate()
+        self.change_head(NOW + dt.timedelta(hours=1))
+        self.state.pop("pr_windows")
+        self.state["counted_prs"] = [f"{c.REPOS[0]}#123"]
+        later = NOW + dt.timedelta(hours=25)
+        self.assertEqual(c.tick(self.gh, self.state, later, True, self.gh.receipt,
+                                clock=lambda: later)["action"], "observe")
+        window = self.state["pr_windows"][f"{c.REPOS[0]}#123"]
+        self.assertEqual(window["first_selected_at"], NOW.isoformat())
+        self.assertTrue(window["saw_delay"])
+
+    def test_invalid_pr_window_repeated_cleanup_preserves_state(self):
+        self.activate()
+        for invalid in (None, *({f"{c.REPOS[0]}#123": {"first_selected_at": value, "saw_delay": False}}
+                                for value in ("bad", "2026-09-10T20:00:00", (NOW + dt.timedelta(days=1)).isoformat()))):
+            self.state["pr_windows"] = invalid
+            before = copy.deepcopy(self.state)
+            for _ in range(2):
+                result = c.tick(self.gh, self.state, NOW, True)
+                self.assertEqual(result["action"], "recovery_required")
+                self.assertEqual(result["status"], "unverified")
+                self.assertEqual(self.state, before)
+                self.assertFalse(any(self.gh.values.values()))
+
     def test_corrupt_state_repeatedly_requires_recovery_without_reset(self):
         for original in ("{broken", '{"counted_prs": null, "history": []}'):
             with tempfile.TemporaryDirectory() as directory:
