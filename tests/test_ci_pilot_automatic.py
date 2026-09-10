@@ -78,6 +78,16 @@ class ExperimentTests(unittest.TestCase):
         result = self.tick(now=c.instant(c.DEADLINE))
         self.assertEqual("deadline", result["reason"])
 
+    def test_deadline_keeps_runtime_until_admitted_jobs_are_terminal(self):
+        import runtime
+        self.tick(self.selection)
+        with patch.object(a, "observe", return_value={"unfinished_runs": 1, "data_gaps": 0}):
+            result = self.tick(now=c.instant(c.DEADLINE))
+        self.assertEqual("drain_admitted_runs", result["action"])
+        self.assertTrue(result["cleanup_verified"])
+        self.assertFalse(runtime.schedule(result, c.instant(c.DEADLINE))["stopped"])
+        self.assertFalse(any(self.gh.values.values()))
+
     def test_hold_and_changed_scope_cleanup(self):
         self.tick(self.selection)
         with patch.object(a, "snapshot", side_effect=c.Gap("excluded_experiment_scope")):

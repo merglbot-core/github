@@ -186,5 +186,10 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
             experiment["active"] = None
         historical = histories(gh, experiment, now)
         persist(state)
+        if clean and (historical["unfinished_runs"] or historical["data_gaps"]):
+            # The existing runtime stops on cleanup_verified/deadline. Keep it alive
+            # to reconcile admitted jobs after admission itself has been disabled.
+            return {"action": "drain_admitted_runs", "status": "pending", "reason": reason,
+                    "cleanup_verified": True, "history": historical}
         return {"action": "cleanup_verified" if clean else "cleanup_required",
                 "status": "inactive" if clean else "unverified", "reason": reason, "history": historical}
