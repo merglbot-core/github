@@ -145,6 +145,9 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
                 raise Gap("experiment_kind_limit")
             if selectors:
                 raise Gap("selectors_already_present")
+            previous = histories(gh, experiment, now)
+            if previous["unfinished_runs"] or previous["data_gaps"]:
+                raise Gap("previous_phase_incomplete")
             r, branch = snapshot(gh, receipt["pr"], receipt["protection_sha256"])
             if not apply:
                 return {"action": "activation_available", "status": "readonly"}

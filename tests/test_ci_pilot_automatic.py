@@ -78,6 +78,25 @@ class ExperimentTests(unittest.TestCase):
         result = self.tick(now=c.instant(c.DEADLINE))
         self.assertEqual("deadline", result["reason"])
 
+    def test_new_phase_waits_for_terminal_complete_previous_measurements(self):
+        self.tick(self.selection)
+        self.tick({"stop": True})
+        for pending, gaps in ((1, 0), (0, 1)):
+            with self.subTest(pending=pending, gaps=gaps):
+                self.gh.writes.clear()
+                with patch.object(a, "observe", return_value={
+                        "unfinished_runs": pending, "data_gaps": gaps}):
+                    result = self.tick({**self.selection, "mode": "baseline"})
+                self.assertEqual("previous_phase_incomplete", result["reason"])
+                self.assertEqual("drain_admitted_runs", result["action"])
+                self.assertEqual(1, len(self.state["experiment"]["cases"]))
+                self.assertFalse(any(value is not None for _, _, value in self.gh.writes))
+                self.assertFalse(any(self.gh.values.values()))
+        with patch.object(a, "observe", return_value={"unfinished_runs": 0, "data_gaps": 0}):
+            result = self.tick({**self.selection, "mode": "baseline"})
+        self.assertEqual("active", result["status"])
+        self.assertEqual(2, len(self.state["experiment"]["cases"]))
+
     def test_deadline_keeps_runtime_until_admitted_jobs_are_terminal(self):
         import runtime
         self.tick(self.selection)
