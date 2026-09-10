@@ -81,3 +81,17 @@ Intermediate heads and all attempts are measured; completed results are reused
 only against unchanged live run/attempt inventory. Gaps remain explicit. Admission
 runner time counts; actual checkout/base still need separate execution evidence.
 The agent owns V6/merge and the separate GO audit. No production rollout.
+### Bounded experiment supervisor recovery
+
+The test successor must verify `runtime.ready(state_dir, now)` before writing a
+selector: a successful wake within 360 seconds, a non-stopped healthy runtime,
+and the loaded launchd job bound to this exact runtime release and state directory.
+The first active experiment index (zero) also forces the five-minute cadence.
+
+After legacy case-limit shutdown, create the empty bounded experiment state, then
+run `runtime.py recover-experiment --state-dir <state-dir>` under the runtime lock.
+Recovery requires no active case or legacy receipt, no holds, time before the
+original deadline, globally verified selector cleanup and complete old run history.
+It preserves all counters and history. It only rearms the plan; bootstrap the
+reviewed test supervisor and verify an actual successful wake before selection.
+Recovery alone is not supervisor health or experiment delivery evidence.
