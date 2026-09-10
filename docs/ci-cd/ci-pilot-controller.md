@@ -90,3 +90,14 @@ a live, explicitly absent supervisor service, with a readable launchd-domain
 positive control, before cleanup and again before rearming. A loaded supervisor
 or an unavailable/ambiguous launchd read blocks recovery without resetting its plan.
 Historical case counts remain unchanged and do not set the successor's case limit.
+
+### Experiment observation helper
+
+`experiment_measurements.py` provides read-only `observe`/`histories` for successor
+phases. It discovers all run attempts (including reruns of originally older runs),
+assigns them through the adapter's start/stop interval, preserves observation snapshots,
+and reuses completed measurements only for the same attempt inventory and interval.
+An open phase without in-window observations stays pending for its first event;
+a closed empty phase has a data gap, including an interval with retained heads but
+no matching attempts. Neither is complete evidence. This helper alone activates
+no experiment.
