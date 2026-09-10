@@ -66,6 +66,31 @@ An expired PR with no observed delay remains ineligible for the rest of this pil
 The semantic selector must skip its retained expired `pr_windows` entry and choose
 the next eligible PR, rather than repeatedly retrying the oldest PR.
 
+### Bounded experiment supervisor recovery
+
+The test successor must verify `runtime.ready(state_dir, now)` before writing a
+selector: a successful wake within 360 seconds, a non-stopped healthy runtime,
+and the loaded launchd job bound to this exact runtime release and state directory.
+The first active experiment index (zero) also forces the five-minute cadence.
+
+Recovery requires the reviewed successor controller (#832) advertising
+`EXPERIMENT_STATE_VERSION=1`; the legacy controller cannot be rearmed. After
+retiring the legacy supervisor, create the empty bounded experiment state, then
+run `runtime.py recover-experiment --state-dir <state-dir>` under the runtime lock.
+Recovery requires no active case or legacy receipt, no holds, time before the
+original deadline, globally verified selector cleanup and complete old run history.
+It preserves all counters and history. It only rearms the plan; bootstrap the
+reviewed test supervisor and verify an actual successful wake before selection.
+Recovery alone is not supervisor health or experiment delivery evidence.
+
+Recovery covers both explicit retirement of the original two-case pilot and
+case-limit shutdown. It does not require five historical cases or trust an old
+`runtime.json.stopped` flag: manual bootout can leave that flag false. It requires
+a live, explicitly absent supervisor service, with a readable launchd-domain
+positive control, before cleanup and again before rearming. A loaded supervisor
+or an unavailable/ambiguous launchd read blocks recovery without resetting its plan.
+Historical case counts remain unchanged and do not set the successor's case limit.
+
 ### Experiment observation helper
 
 `experiment_measurements.py` provides read-only `observe`/`histories` for successor
