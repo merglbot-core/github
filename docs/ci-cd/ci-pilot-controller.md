@@ -65,3 +65,18 @@ never delete a window or replace its first start with a later admission.
 An expired PR with no observed delay remains ineligible for the rest of this pilot.
 The semantic selector must skip its retained expired `pr_windows` entry and choose
 the next eligible PR, rather than repeatedly retrying the oldest PR.
+
+### Bounded experiment supervisor recovery
+
+The test successor must verify `runtime.ready(state_dir, now)` before writing a
+selector: a successful wake within 360 seconds, a non-stopped healthy runtime,
+and the loaded launchd job bound to this exact runtime release and state directory.
+The first active experiment index (zero) also forces the five-minute cadence.
+
+After legacy case-limit shutdown, create the empty bounded experiment state, then
+run `runtime.py recover-experiment --state-dir <state-dir>` under the runtime lock.
+Recovery requires no active case or legacy receipt, no holds, time before the
+original deadline, globally verified selector cleanup and complete old run history.
+It preserves all counters and history. It only rearms the plan; bootstrap the
+reviewed test supervisor and verify an actual successful wake before selection.
+Recovery alone is not supervisor health or experiment delivery evidence.

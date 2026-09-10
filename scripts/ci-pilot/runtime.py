@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import signal
 import subprocess
 import sys
@@ -15,6 +16,49 @@ import heartbeat
 from controller import DEADLINE, GitHub, atomic, cleanup, instant
 
 LABEL = "ai.merglbot.ci-pilot-supervisor"
+
+
+def ready(state_dir, now):
+    """Require recent successful supervision by this exact loaded release."""
+    try:
+        plan = json.loads((state_dir / "runtime.json").read_text())
+        age = (now - instant(plan["last_successful_wake"])).total_seconds()
+        if plan.get("stopped") is not False or plan.get("healthy") is not True or not 0 <= age <= 360:
+            return False
+        result = subprocess.run(["/bin/launchctl", "print", f"gui/{os.getuid()}/{LABEL}"],
+                                capture_output=True, text=True, timeout=20)
+        block = re.search(r"arguments = \{\n(.*?)\n\s*\}", result.stdout, re.S)
+        expected = [sys.executable, str(Path(__file__).resolve()), "wake", "--state-dir", str(state_dir.resolve())]
+        return (result.returncode == 0 and block is not None
+                and [line.strip() for line in block[1].splitlines()] == expected)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
+        return False
+
+
+def recover_experiment(state_dir, now):
+    """Rearm only an inactive bounded experiment; preserve all historical state."""
+    from controller import history_evidence
+    from github_client import Gap
+    with (state_dir / "controller.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        state = json.loads((state_dir / "state.json").read_text())
+        experiment = state.get("experiment")
+        if (now >= instant(DEADLINE) or (state_dir / "OWNER_HOLD").exists()
+                or (Path.home() / ".claude/merglbot-preauth/OWNER_HOLD").exists()
+                or state.get("receipt") or not isinstance(experiment, dict)
+                or experiment.get("version") != 1 or experiment.get("active") is not None
+                or experiment.get("cases") != []):
+            raise Gap("experiment_recovery_ineligible")
+        gh = GitHub()
+        if not cleanup(gh, True):
+            raise Gap("experiment_recovery_cleanup_gap")
+        history = history_evidence(gh, state, now)
+        if history["unfinished_runs"] or history["data_gaps"]:
+            raise Gap("experiment_recovery_history_gap")
+        # No health assertion: a real successful wake and loaded job are still required.
+        atomic(state_dir / "runtime.json", {"stopped": False, "next_due": now.isoformat(),
+                                           "admitted_runs": "observed_complete"})
+    return 0
 
 
 def schedule(result, now):
@@ -119,8 +163,12 @@ def wake(state_dir, now):
     urgent = (now >= instant(DEADLINE) or len(state.get("counted_prs", [])) >= 5
               or (state_dir / "OWNER_HOLD").exists()
               or (Path.home() / ".claude/merglbot-preauth/OWNER_HOLD").exists())
-    active = bool(state.get("receipt"))
+    active = bool(state.get("receipt")) or (isinstance(state.get("experiment"), dict)
+              and state["experiment"].get("active") is not None)
     if due and not urgent and not active and now < instant(due):
+        if plan.get("healthy") is True:
+            plan["last_successful_wake"] = now.isoformat()
+            atomic(plan_path, plan)
         return 0
     try:
         if invalid_state:
@@ -142,13 +190,16 @@ def wake(state_dir, now):
     if not verified:
         result.update(action="heartbeat_sync_required", status=plan["heartbeat"]["status"])
         atomic(state_dir / "next_action.json", result)
+    plan["healthy"] = verified and result.get("status") in ("active", "inactive")
+    if plan["healthy"]:
+        plan["last_successful_wake"] = now.isoformat()
     atomic(plan_path, plan)
     return unload() if plan["stopped"] else 0 if verified else 1
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("wake", "plist", "cleanup"))
+    parser.add_argument("command", choices=("wake", "plist", "cleanup", "recover-experiment"))
     parser.add_argument("--state-dir", type=Path, required=True)
     args = parser.parse_args()
     state_dir = args.state_dir.resolve()
@@ -171,7 +222,10 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return 0
-        return wake(state_dir, dt.datetime.now(dt.timezone.utc))
+        now = dt.datetime.now(dt.timezone.utc)
+        if args.command == "recover-experiment":
+            return recover_experiment(state_dir, now)
+        return wake(state_dir, now)
 
 
 if __name__ == "__main__":
