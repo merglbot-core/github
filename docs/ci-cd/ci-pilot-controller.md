@@ -16,6 +16,11 @@ Agent-reviewed full-diff receipt: repo, pr, head/base, sorted paths, eligible,
 assessment, diff_sha256, workflow_sha256, protection_sha256 (SHA256 of sorted
 JSON {protection, rules}). Only app code/tests and companion docs qualify;
 exclude TF/IAM/auth/secrets/workflows/deploy/dependencies/persistent schemas.
+Hash protection with Python json.dumps({"protection": protection, "rules": rules},
+sort_keys=True), preserving its default separators. Hash the full GitHub diff
+and base workflow text verbatim; head/base are full SHAs, eligible must be true.
+Runner seconds and observed waits are evidence, not billing savings. Persist
+no raw diff, logs, credentials or transcripts.
 
 Corrupt durable state returns recovery_required/unverified and exit 1 even
 when selector cleanup is verified; repeated invocations cannot reset history.
