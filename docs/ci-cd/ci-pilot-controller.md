@@ -90,13 +90,22 @@ The first active experiment index (zero) also forces the five-minute cadence.
 
 Recovery requires the reviewed successor controller (#832) advertising
 `EXPERIMENT_STATE_VERSION=1`; the legacy controller cannot be rearmed. After
-legacy case-limit shutdown, create the empty bounded experiment state, then
+retiring the legacy supervisor, create the empty bounded experiment state, then
 run `runtime.py recover-experiment --state-dir <state-dir>` under the runtime lock.
 Recovery requires no active case or legacy receipt, no holds, time before the
 original deadline, globally verified selector cleanup and complete old run history.
 It preserves all counters and history. It only rearms the plan; bootstrap the
 reviewed test supervisor and verify an actual successful wake before selection.
 Recovery alone is not supervisor health or experiment delivery evidence.
+
+Recovery covers both explicit retirement of the original two-case pilot and
+case-limit shutdown. It does not require five historical cases or trust an old
+`runtime.json.stopped` flag: manual bootout can leave that flag false. It requires
+a live, explicitly absent supervisor service, with a readable launchd-domain
+positive control, before cleanup and again before rearming. A loaded supervisor
+or an unavailable/ambiguous launchd read blocks recovery without resetting its plan.
+Historical case counts remain unchanged and do not set the successor's case limit.
+
 ### Experiment observation helper
 
 `experiment_measurements.py` provides read-only `observe`/`histories` for successor

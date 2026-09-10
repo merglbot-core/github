@@ -36,6 +36,20 @@ def ready(state_dir, now):
         return False
 
 
+def supervisor_unloaded():
+    """An explicit missing-service result needs a readable launchd-domain control."""
+    domain = f"gui/{os.getuid()}"
+    try:
+        control = subprocess.run(["/bin/launchctl", "print", domain],
+                                 capture_output=True, text=True, timeout=20)
+        service = subprocess.run(["/bin/launchctl", "print", f"{domain}/{LABEL}"],
+                                 capture_output=True, text=True, timeout=20)
+        return (control.returncode == 0 and service.returncode == 113
+                and f'Could not find service "{LABEL}"' in service.stderr)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def recover_experiment(state_dir, now):
     """Rearm only an inactive bounded experiment; preserve all historical state."""
     import controller
@@ -53,12 +67,16 @@ def recover_experiment(state_dir, now):
                 or experiment.get("version") != 1 or experiment.get("active") is not None
                 or experiment.get("cases") != []):
             raise Gap("experiment_recovery_ineligible")
+        if not supervisor_unloaded():
+            raise Gap("experiment_supervisor_not_retired")
         gh = GitHub()
         if not cleanup(gh, True):
             raise Gap("experiment_recovery_cleanup_gap")
         history = history_evidence(gh, state, now)
         if history["unfinished_runs"] or history["data_gaps"]:
             raise Gap("experiment_recovery_history_gap")
+        if not supervisor_unloaded():
+            raise Gap("experiment_supervisor_not_retired")
         # No health assertion: a real successful wake and loaded job are still required.
         atomic(state_dir / "runtime.json", {"stopped": False, "next_due": now.isoformat(),
                                            "admitted_runs": "observed_complete"})

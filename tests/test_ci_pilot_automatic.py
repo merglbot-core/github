@@ -62,7 +62,7 @@ class ExperimentTests(unittest.TestCase):
             def run_controller(path):
                 with patch.object(sys, "argv", ["controller.py", "tick", "--state-dir", str(path), "--apply"]):
                     self.assertEqual(c.main(), 0)
-            with patch.object(runtime, "GitHub", return_value=self.gh), patch.object(c, "GitHub", return_value=self.gh):
+            with patch.object(runtime, "supervisor_unloaded", return_value=True), patch.object(runtime, "GitHub", return_value=self.gh), patch.object(c, "GitHub", return_value=self.gh):
                 runtime.recover_experiment(root, now)
                 with patch.object(runtime, "run_controller", side_effect=run_controller), patch.object(runtime, "unload") as unload:
                     self.assertEqual(runtime.wake(root, now), 0)
