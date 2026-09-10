@@ -101,3 +101,18 @@ An open phase without in-window observations stays pending for its first event;
 a closed empty phase has a data gap, including an interval with retained heads but
 no matching attempts. Neither is complete evidence. This helper alone activates
 no experiment.
+
+## Automatic infra experiment (version 1)
+
+Use the existing runtime/lock/heartbeat. `begin-experiment --apply` requires no old
+receipt, verified global cleanup and terminal old history; historical counts stay.
+`activate --receipt <file> --apply` accepts repo=merglbot-core/infra, positive `pr`,
+`kind`=synthetic|natural, `mode`=baseline|delay and live `protection_sha256`.
+Reviewed source hashes, protections and environments bind activation.
+Errors, partial activation, expiry, close/merge and changed scope/protection clean
+both old and new selectors. `stop-selection --apply` ends a measurement interval.
+At most three distinct PRs per kind, one selection globally, unchanged Sep14 deadline.
+The reviewed observer measures all attempts; gaps stay explicit. Include admission
+runner time and checkout proof. The agent owns V6/merge and GO evidence.
+Zero-write aborts stay audited but unmeasured; attempted writes remain conservative.
+No production rollout.

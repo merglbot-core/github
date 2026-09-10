@@ -8,6 +8,9 @@ from pathlib import Path
 from github_client import CHECKS, DEADLINE, REPOS, PR_VAR, SHA_VAR, BASE_VAR, BASE_BOUND_REPOS, SELECTOR_NAMES, GitHub, Gap, atomic, digest, instant
 
 
+# Runtime recovery is safe only with the independently bounded experiment dispatcher.
+EXPERIMENT_STATE_VERSION = 1
+
 def validate_receipt(r):
     if (r.get("repo") not in REPOS or type(r.get("pr")) is not int or r["pr"] <= 0
             or r.get("eligible") is not True or not r.get("assessment", "").strip()
@@ -296,7 +299,7 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("tick", "activate"))
+    parser.add_argument("command", choices=("tick", "activate", "begin-experiment", "stop-selection"))
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--receipt", type=Path)
     parser.add_argument("--apply", action="store_true")
@@ -319,11 +322,25 @@ def main():
             receipt = json.loads(args.receipt.read_text()) if args.command == "activate" and args.receipt else None
             if args.command == "activate" and receipt is None:
                 raise Gap("receipt_required")
-            result = tick(gh, state, dt.datetime.now(dt.timezone.utc), args.apply, receipt,
+            if args.command == "stop-selection" and "experiment" not in state:
+                raise Gap("experiment_required")
+            extra = {}
+            if args.command == "begin-experiment" or "experiment" in state:
+                from automatic import experiment_tick
+                from runtime import ready
+                extra["supervisor_ready"] = lambda: ready(args.state_dir, dt.datetime.now(dt.timezone.utc))
+                runner = experiment_tick
+                if args.command == "begin-experiment":
+                    receipt = {"begin": True}
+                elif args.command == "stop-selection":
+                    receipt = {"stop": True}
+            else:
+                runner = tick
+            result = runner(gh, state, dt.datetime.now(dt.timezone.utc), args.apply, receipt,
                           ((args.state_dir / "OWNER_HOLD").exists()
                            or (Path.home() / ".claude/merglbot-preauth/OWNER_HOLD").exists()),
                           lambda s: atomic(state_path, s),
-                          hold_check=lambda: (args.state_dir / "OWNER_HOLD").exists())
+                          hold_check=lambda: (args.state_dir / "OWNER_HOLD").exists(), **extra)
         except Exception:
             clean = cleanup(gh, args.apply)
             result = {"action": "recovery_required", "cleanup_verified": clean,
