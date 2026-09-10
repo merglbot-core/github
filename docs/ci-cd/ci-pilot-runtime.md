@@ -26,7 +26,9 @@ The runtime lock prevents overlaps, subprocess timeout is four minutes, and
 only sanitized results are stored. A timed-out controller process group is
 terminated before a separate bounded cleanup-only subprocess attempts selector
 removal/readback. Missing cleanup proof remains unverified and is retried at
-the active cadence. Missing historical evidence always remains DATA_GAP.
+the active cadence. Missing historical evidence always remains DATA_GAP. Malformed durable state
+remains `recovery_required` / `unverified` even after selector cleanup succeeds;
+the five-minute retry cadence continues and counters are never reset.
 
 After deadline or case limit, stop only after selector cleanup is verified by
 readback. The wrapper persists a terminal marker then unloads **only its own**

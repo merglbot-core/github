@@ -117,6 +117,10 @@ def wake(state_dir, now):
         result = json.loads(result_path.read_text())
     except (OSError, ValueError, subprocess.TimeoutExpired):
         result = emergency_cleanup(state_dir)
+        if invalid_state:
+            result = {**result, "cleanup_verified": result.get("action") == "cleanup_verified",
+                      "action": "recovery_required", "status": "unverified",
+                      "reason": "invalid_persisted_state"}
         atomic(state_dir / "next_action.json", result)
     plan = schedule(result, now)
     atomic(plan_path, plan)

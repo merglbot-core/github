@@ -51,6 +51,21 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(plan["admitted_runs"], "DATA_GAP")
             self.assertEqual(runtime.instant(plan["next_due"]) - now, dt.timedelta(minutes=5))
 
+    def test_corrupt_state_cleanup_does_not_hide_recovery(self):
+        now = runtime.instant("2026-09-10T20:00:00Z")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "state.json").write_text("invalid fixture")
+            with patch.object(runtime, "emergency_cleanup", return_value={"action": "cleanup_verified", "status": "inactive"}), patch.object(runtime, "unload") as unload:
+                for _ in range(2):
+                    runtime.wake(root, now)
+                    result = json.loads((root / "next_action.json").read_text())
+                    self.assertEqual((result["action"], result["status"]), ("recovery_required", "unverified"))
+                    self.assertTrue(result["cleanup_verified"])
+                    self.assertEqual((root / "state.json").read_text(), "invalid fixture")
+                    self.assertEqual(runtime.instant(json.loads((root / "runtime.json").read_text())["next_due"]) - now, dt.timedelta(minutes=5))
+                unload.assert_not_called()
+
     def test_non_boolean_stopped_and_timeout_cannot_unload_without_cleanup(self):
         now = runtime.instant("2026-09-10T20:00:00Z")
         for stopped in ("false", 1, None, [], {}, False):
