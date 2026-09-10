@@ -54,6 +54,25 @@ class GitHubTests(unittest.TestCase):
                                  "stopped_at": "2026-09-10T20:06:00Z"})
         self.assertEqual(1, controller.history_evidence(gh, state, NOW)["data_gaps"])
         self.assertEqual(480, metrics["runner_seconds"])
+        state["history"].pop()
+        state["history"].append({**entries[1], "stopped_at": entries[1]["started_at"]})
+        self.assertEqual(1, controller.history_evidence(gh, state, NOW)["data_gaps"])
+        self.assertEqual(480, metrics["runner_seconds"])
+
+    def test_interval_can_close_once_but_cannot_reopen_or_change_end(self):
+        with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1] / "scripts/ci-pilot"), *sys.path]):
+            import controller
+        state = {}
+        metrics = {"pending_environment_observations": 0, "runner_seconds": 10, "observations": []}
+        stop = "2026-09-10T20:05:00Z"
+        for end in (None, None, stop, stop):
+            controller.record_measurements(state, RECEIPT, metrics, NOW, NOW.isoformat(), end)
+        for end in (None, "2026-09-10T20:04:00Z", "2026-09-10T20:06:00Z"):
+            with self.assertRaisesRegex(Exception, "conflicting_closed_measurement_interval"):
+                controller.record_measurements(state, RECEIPT, metrics, NOW, NOW.isoformat(), end)
+        saved = next(iter(state["measurements"].values()))
+        self.assertEqual(stop, saved["interval_measurements"][NOW.isoformat()]["until"])
+        self.assertEqual(10, saved["runner_seconds"])
 
     def test_retired_history_keeps_admitted_run_and_excludes_later_rerun(self):
         with patch.object(sys, "path", [str(Path(__file__).resolve().parents[1] / "scripts/ci-pilot"), *sys.path]):

@@ -82,6 +82,12 @@ def record_measurements(state, receipt, metrics, now, since=None, until=None):
     if since is not None:
         start = instant(since)
         intervals = dict(entry.get("interval_measurements", {}))
+        previous = intervals.get(start.isoformat())
+        if previous is not None and previous["until"] is not None:
+            if until is None or instant(previous["until"]) != instant(until):
+                raise Gap("conflicting_closed_measurement_interval")
+        if until is not None and instant(until) < start:
+            raise Gap("invalid_measurement_interval")
         intervals[start.isoformat()] = {"until": until, "metrics": metrics}
         ordered = sorted(intervals.items(), key=lambda item: instant(item[0]))
         for (previous_start, previous), (next_start, _) in zip(ordered, ordered[1:]):
