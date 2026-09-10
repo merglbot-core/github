@@ -80,6 +80,12 @@ on:
       image_digest:
         description: 'Full image digest (registry/image@sha256:...)'
         value: ${{ jobs.build.outputs.digest }}
+      platform_digest:
+        description: 'Verified linux/amd64 manifest digest (bare sha256:...)'
+        value: ${{ jobs.build.outputs.platform_digest }}
+      platform_attestation_id:
+        description: 'Binary Authorization attestation for the verified platform manifest'
+        value: ${{ jobs.attest.outputs.platform_attestation_id }}
       image_tag:
         description: 'Image tag'
         value: ${{ jobs.build.outputs.tag }}
@@ -112,6 +118,7 @@ jobs:
       security-events: write
     outputs:
       digest: ${{ steps.build.outputs.digest }}
+      platform_digest: ${{ steps.parity.outputs.platform_digest }}
       tag: ${{ steps.meta.outputs.version }}
       provenance: ${{ steps.provenance.outputs.provenance }}
       scan_passed: ${{ !inputs.scan || steps.trivy.outcome == 'success' }}
@@ -373,6 +380,8 @@ jobs:
 
       - name: Generate SLSA Provenance
         id: provenance
+        env:
+          PLATFORM_DIGEST: ${{ steps.parity.outputs.platform_digest }}
         run: |
           # Create SLSA provenance document
           PROVENANCE=$(cat <<EOF
@@ -436,6 +445,11 @@ jobs:
           EOF
           )
 
+          if [ -n "$PLATFORM_DIGEST" ]; then
+            PROVENANCE="$(printf '%s' "$PROVENANCE" | jq --arg digest "${PLATFORM_DIGEST#sha256:}" \
+              '.subject += [{name: .subject[0].name, digest: {sha256: $digest}}]')"
+          fi
+
           PROVENANCE_DELIMITER="PROVENANCE_EOF_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}_$(date +%s%N)"
           if printf '%s\n' "$PROVENANCE" | grep -Fxq "$PROVENANCE_DELIMITER"; then
             echo "::error::Generated provenance output delimiter collided with provenance content."
@@ -464,6 +478,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       attestation_id: ${{ steps.attest.outputs.attestation_id }}
+      platform_attestation_id: ${{ steps.attest.outputs.platform_attestation_id }}
     
     steps:
       - name: Validate WIF provider (SSOT)
@@ -497,63 +512,82 @@ jobs:
       - name: Create Binary Authorization Attestation
         id: attest
         shell: bash
+        env:
+          IMAGE: ${{ inputs.registry }}/${{ inputs.image_name }}
+          INDEX_DIGEST: ${{ needs.build.outputs.digest }}
+          PLATFORM_DIGEST: ${{ needs.build.outputs.platform_digest }}
         run: |
           set -euo pipefail
 
-          IMAGE_DIGEST="${{ inputs.registry }}/${{ inputs.image_name }}@${{ needs.build.outputs.digest }}"
-          ATTESTOR="projects/merglbot-artifacts/attestors/merglbot-build-attestor"
+          # The build is linux/amd64 only. This digest comes from its successful
+          # local-scan/config-parity check, not from an unverified registry tag.
+          for digest in "$INDEX_DIGEST" "$PLATFORM_DIGEST"; do
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::missing or malformed build digest"; exit 1; }
+          done
+          previous=""
+          for digest in "$INDEX_DIGEST" "$PLATFORM_DIGEST"; do
+            [ "$digest" != "$previous" ] || continue
+            previous="$digest"
+            IMAGE_DIGEST="$IMAGE@$digest"
+            ATTESTOR="projects/merglbot-artifacts/attestors/merglbot-build-attestor"
           
-          echo "Creating attestation for: $IMAGE_DIGEST"
+            echo "Creating attestation for: $IMAGE_DIGEST"
           
-          # sign-and-create does not reliably surface the occurrence name on stdout,
-          # so only use a scoped list lookup when creation succeeded but stdout is empty.
-          set +e
-          ATTESTATION_ID_RAW="$(gcloud beta container binauthz attestations sign-and-create \
-            --project=merglbot-artifacts \
-            --artifact-url="$IMAGE_DIGEST" \
-            --attestor="$ATTESTOR" \
-            --keyversion="projects/merglbot-artifacts/locations/europe-west1/keyRings/binary-auth-keyring/cryptoKeys/attestor-signing-key/cryptoKeyVersions/1" \
-            --format="value(name)")"
-          SIGN_AND_CREATE_STATUS=$?
-          set -e
-          ATTESTATION_ID="$(printf '%s\n' "$ATTESTATION_ID_RAW" | tr -d '\r' | awk 'NF { print; exit }')"
-
-          NEEDS_ATTESTATION_LIST=0
-          if [ "$SIGN_AND_CREATE_STATUS" -ne 0 ]; then
-            echo "::error::sign-and-create exited with status ${SIGN_AND_CREATE_STATUS}; refusing attestations list fallback after failed creation."
-            exit "$SIGN_AND_CREATE_STATUS"
-          elif [ -z "$ATTESTATION_ID" ]; then
-            echo "sign-and-create returned no attestation name; falling back to attestations list"
-            NEEDS_ATTESTATION_LIST=1
-          fi
-
-          if [ "$NEEDS_ATTESTATION_LIST" -eq 1 ]; then
-            ATTESTATION_ID_RAW="$(gcloud beta container binauthz attestations list \
+            # sign-and-create does not reliably surface the occurrence name on stdout,
+            # so only use a scoped list lookup when creation succeeded but stdout is empty.
+            set +e
+            ATTESTATION_ID_RAW="$(gcloud beta container binauthz attestations sign-and-create \
               --project=merglbot-artifacts \
-              --attestor="$ATTESTOR" \
               --artifact-url="$IMAGE_DIGEST" \
-              --sort-by="~createTime" \
-              --format="value(name)" \
-              --limit=1)"
+              --attestor="$ATTESTOR" \
+              --keyversion="projects/merglbot-artifacts/locations/europe-west1/keyRings/binary-auth-keyring/cryptoKeys/attestor-signing-key/cryptoKeyVersions/1" \
+              --format="value(name)")"
+            SIGN_AND_CREATE_STATUS=$?
+            set -e
             ATTESTATION_ID="$(printf '%s\n' "$ATTESTATION_ID_RAW" | tr -d '\r' | awk 'NF { print; exit }')"
-          fi
 
-          if [ -z "$ATTESTATION_ID" ]; then
-            echo "::error::Binary Authorization attestation ID was empty after sign-and-create and attestations list fallback."
-            exit 1
-          fi
+            NEEDS_ATTESTATION_LIST=0
+            if [ "$SIGN_AND_CREATE_STATUS" -ne 0 ]; then
+              echo "::error::sign-and-create exited with status ${SIGN_AND_CREATE_STATUS}; refusing attestations list fallback after failed creation."
+              exit "$SIGN_AND_CREATE_STATUS"
+            elif [ -z "$ATTESTATION_ID" ]; then
+              echo "sign-and-create returned no attestation name; falling back to attestations list"
+              NEEDS_ATTESTATION_LIST=1
+            fi
+
+            if [ "$NEEDS_ATTESTATION_LIST" -eq 1 ]; then
+              ATTESTATION_ID_RAW="$(gcloud beta container binauthz attestations list \
+                --project=merglbot-artifacts \
+                --attestor="$ATTESTOR" \
+                --artifact-url="$IMAGE_DIGEST" \
+                --sort-by="~createTime" \
+                --format="value(name)" \
+                --limit=1)"
+              ATTESTATION_ID="$(printf '%s\n' "$ATTESTATION_ID_RAW" | tr -d '\r' | awk 'NF { print; exit }')"
+            fi
+
+            if [ -z "$ATTESTATION_ID" ]; then
+              echo "::error::Binary Authorization attestation ID was empty after sign-and-create and attestations list fallback."
+              exit 1
+            fi
           
-          echo "attestation_id=$ATTESTATION_ID" >> "$GITHUB_OUTPUT"
+            if [ "$digest" = "$INDEX_DIGEST" ]; then
+              echo "attestation_id=$ATTESTATION_ID" >> "$GITHUB_OUTPUT"
+            fi
+            if [ "$digest" = "$PLATFORM_DIGEST" ]; then
+              echo "platform_attestation_id=$ATTESTATION_ID" >> "$GITHUB_OUTPUT"
+            fi
           
-          {
-            echo "## Binary Authorization Attestation"
-            echo ""
-            echo "✅ **Attestation Created**"
-            echo ""
-            echo "- **Image:** \`$IMAGE_DIGEST\`"
-            echo "- **Attestor:** \`$ATTESTOR\`"
-            echo "- **Attestation ID:** \`$ATTESTATION_ID\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "## Binary Authorization Attestation"
+              echo ""
+              echo "✅ **Attestation Created**"
+              echo ""
+              echo "- **Image:** \`$IMAGE_DIGEST\`"
+              echo "- **Attestor:** \`$ATTESTOR\`"
+              echo "- **Attestation ID:** \`$ATTESTATION_ID\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
 
   summary:
     name: Build Summary
