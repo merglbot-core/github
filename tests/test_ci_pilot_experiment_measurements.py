@@ -42,6 +42,15 @@ class MeasurementTests(unittest.TestCase):
         a.observe(self.gh, case, NOW)
         self.assertEqual(case["stopped_at"], reads[-1][2])
         self.assertEqual(3, len(reads))
+        case["started_at"] = (NOW - dt.timedelta(seconds=1)).isoformat()
+        a.observe(self.gh, case, NOW)
+        self.assertEqual(4, len(reads))
+        self.assertEqual(case["started_at"], reads[-1][1])
+        del case["measurements"]["a" * 40]["since"]
+        a.observe(self.gh, case, NOW)
+        self.assertEqual(5, len(reads))
+        a.observe(self.gh, case, NOW)
+        self.assertEqual(5, len(reads))
 
     def test_previous_phase_run_rerun_is_discovered_in_current_phase(self):
         case = {"pr": 12, "branch": "test-branch", "started_at": NOW.isoformat(),
