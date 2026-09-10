@@ -117,6 +117,23 @@ class GitHubTests(unittest.TestCase):
         with self.assertRaisesRegex(c.Gap, "run_pr_binding_changed"):
             gh.measurements(RECEIPT, NOW.isoformat())
 
+    def test_closed_run_uses_only_unique_commit_association(self):
+        gh = c.GitHub()
+        run = {"id": 7, "run_attempt": 1, "created_at": NOW.isoformat(), "run_started_at": NOW.isoformat(),
+               "head_sha": RECEIPT["head"], "head_branch": "fix/example", "pull_requests": [],
+               "path": c.WORKFLOWS[c.REPOS[0]], "event": "pull_request", "status": "completed"}
+        associated = [{"number": 123, "state": "closed", "head": {"ref": "fix/example", "sha": "d" * 40}}]
+        gh.pages = lambda path, *args: (associated if "/commits/" in path else [] if path.endswith("/jobs") else [run])
+        gh.api = lambda path: [] if path.endswith("/pending_deployments") else run
+        self.assertEqual(gh.measurements(RECEIPT, NOW.isoformat())["runs"], 1)
+        associated.append({"number": 124})
+        with self.assertRaisesRegex(c.Gap, "commit_pr_binding_ambiguous"):
+            gh.measurements(RECEIPT, NOW.isoformat())
+        associated.pop()
+        associated[0]["head"]["ref"] = "other-branch"
+        with self.assertRaisesRegex(c.Gap, "commit_pr_branch_changed"):
+            gh.measurements(RECEIPT, NOW.isoformat())
+
     def test_snapshot_rejects_stale_receipt_before_other_reads_and_after_reread(self):
         for field in ("head", "base"):
             for stale_first in (True, False):
@@ -162,6 +179,8 @@ class GitHubTests(unittest.TestCase):
         gh.pages = lambda *args: [run]
         self.assertEqual(gh.measurements(RECEIPT, NOW.isoformat())["runs"], 0)
         run["pull_requests"] = []
+        run["head_sha"] = RECEIPT["head"]
+        gh.pages = lambda path, *args: [] if "/commits/" in path else [run]
         with self.assertRaises(c.Gap):
             gh.measurements(RECEIPT, NOW.isoformat())
         run["pull_requests"] = [{"number": 123}]

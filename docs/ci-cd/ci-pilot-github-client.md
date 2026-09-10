@@ -15,6 +15,8 @@ PR associations expose current head/base, so historical actual base remains
 `runner_evidence_gaps`; only ID zero plus empty steps proves runner-free cancellation.
 Each bounded attempt uses its own metadata/jobs and start time, including reruns
 of runs created before activation.
+Empty merged-run PR associations require a unique commit-to-PR association;
+ambiguity fails closed. Available branch identity must also match.
 
 Run the committed offline fixtures; no GitHub credentials are needed:
 

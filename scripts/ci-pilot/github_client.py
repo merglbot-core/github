@@ -126,9 +126,17 @@ class GitHub:
                 or summary["event"] != "pull_request"):
             return
         def bound(run):
-            if not run["pull_requests"]:
-                raise Gap("run_pr_binding_missing")
-            matches = [p for p in run["pull_requests"] if p["number"] == receipt["pr"]]
+            associations = run["pull_requests"]
+            if not associations:
+                if run["head_sha"] != receipt["head"]:
+                    raise Gap("run_pr_binding_changed")
+                associations = self.pages(f"repos/{receipt['repo']}/commits/{receipt['head']}/pulls")
+                if len(associations) != 1 or associations[0]["number"] != receipt["pr"]:
+                    raise Gap("commit_pr_binding_ambiguous")
+                branch = run.get("head_branch")
+                if branch and associations[0].get("head", {}).get("ref") != branch:
+                    raise Gap("commit_pr_branch_changed")
+            matches = [p for p in associations if p["number"] == receipt["pr"]]
             # Associated PR head/base are mutable; only run.head_sha is historical.
             if matches and run["head_sha"] != receipt["head"]:
                 raise Gap("run_pr_binding_changed")
