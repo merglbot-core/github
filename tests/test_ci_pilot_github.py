@@ -1,4 +1,6 @@
 import importlib.util
+import base64
+import copy
 import json
 from pathlib import Path
 import subprocess
@@ -43,7 +45,7 @@ class GitHubTests(unittest.TestCase):
         gh.api = lambda *args: {"variables": [], "total_count": 1}
         with self.assertRaisesRegex(c.Gap, "incomplete_pagination"):
             gh.selectors(c.REPOS[0])
-        gh.api = lambda *args: {"changed_files": 2}
+        gh.api = lambda *args: {"changed_files": 2, "head": {"sha": RECEIPT["head"]}, "base": {"sha": RECEIPT["base"]}}
         gh.pages = lambda *args: [{"filename": "one.py"}]
         with self.assertRaisesRegex(c.Gap, "incomplete_files"):
             gh.snapshot(RECEIPT)
@@ -66,6 +68,43 @@ class GitHubTests(unittest.TestCase):
         self.assertEqual(observation["wait_timers"][0]["wait_timer"], 10)
         self.assertEqual(observation["jobs"][0]["steps_count"], 0)
         self.assertEqual(observation["jobs"][0]["name"], "unit-tests")
+        run["path"] += "@refs/pull/123/merge"
+        self.assertEqual(gh.measurements(RECEIPT, NOW.isoformat())["runs"], 1)
+        run["path"] = ".github/workflows/unrelated.yml@refs/pull/123/merge"
+        self.assertEqual(gh.measurements(RECEIPT, NOW.isoformat())["runs"], 0)
+        run["path"] = c.WORKFLOWS[c.REPOS[0]]
+        job["runner_id"] = None
+        with self.assertRaisesRegex(c.Gap, "job_runner_evidence_missing"):
+            gh.measurements(RECEIPT, NOW.isoformat())
+        job["runner_id"] = 0
+        job.pop("steps")
+        with self.assertRaisesRegex(c.Gap, "job_runner_evidence_missing"):
+            gh.measurements(RECEIPT, NOW.isoformat())
+
+    def test_snapshot_rejects_stale_receipt_before_other_reads_and_after_reread(self):
+        for field in ("head", "base"):
+            for stale_first in (True, False):
+                with self.subTest(field=field, stale_first=stale_first):
+                    gh = c.GitHub()
+                    pr = {"head": {"sha": RECEIPT["head"]}, "base": {"sha": RECEIPT["base"]}, "changed_files": 0}
+                    stale = copy.deepcopy(pr)
+                    stale[field]["sha"] = "d" * 40
+                    reads = []
+                    def api(path):
+                        reads.append(path)
+                        if "/pulls/" in path:
+                            return stale if stale_first or reads.count(path) > 1 else pr
+                        if "/contents/" in path:
+                            return {"content": base64.b64encode(b"workflow").decode()}
+                        return {}
+                    gh.api = api
+                    gh.pages = MagicMock(return_value=[])
+                    gh.command = MagicMock(return_value="diff")
+                    with self.assertRaisesRegex(c.Gap, "stale_receipt" if stale_first else "snapshot_race"):
+                        gh.snapshot(RECEIPT)
+                    if stale_first:
+                        gh.pages.assert_not_called()
+                        gh.command.assert_not_called()
 
     def test_pagination_uses_actual_thirty_item_cap(self):
         gh = c.GitHub()

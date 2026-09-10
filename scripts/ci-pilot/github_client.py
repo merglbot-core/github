@@ -94,6 +94,8 @@ class GitHub:
         repo, number = receipt["repo"], receipt["pr"]
         prefix = f"repos/{repo}"
         pr = self.api(f"{prefix}/pulls/{number}")
+        if any(pr[k]["sha"] != receipt[k] for k in ("head", "base")):
+            raise Gap("stale_receipt")
         files = self.pages(f"{prefix}/pulls/{number}/files")
         if len(files) != pr["changed_files"] or len(files) >= 3000:
             raise Gap("incomplete_files")
@@ -110,7 +112,7 @@ class GitHub:
         secrets = self.pages(f"{prefix}/environments/{ENVIRONMENT}/secrets", "secrets", 100)
         # Re-read the PR after all dependent reads to detect moving heads/bases.
         end = self.api(f"{prefix}/pulls/{number}")
-        if any(pr[k]["sha"] != end[k]["sha"] for k in ("head", "base")):
+        if any(end[k]["sha"] != receipt[k] for k in ("head", "base")):
             raise Gap("snapshot_race")
         return {"pr": end, "paths": sorted(f["filename"] for f in files),
                 "diff_sha256": digest(diff), "workflow_sha256": digest(workflow),
@@ -126,7 +128,7 @@ class GitHub:
         observations = []
         for run in runs:
             if (instant(run["created_at"]) < instant(since)
-                    or run["path"] != WORKFLOWS[repo] or run["event"] != "pull_request"):
+                    or run["path"].split("@", 1)[0] != WORKFLOWS[repo] or run["event"] != "pull_request"):
                 continue
             bindings = run["pull_requests"]
             if not bindings:
@@ -140,6 +142,9 @@ class GitHub:
             pending = self.api(f"repos/{repo}/actions/runs/{run['id']}/pending_deployments")
             waiting += sum(p["environment"]["name"] == ENVIRONMENT for p in pending)
             jobs = self.pages(f"repos/{repo}/actions/runs/{run['id']}/jobs?filter=all", "jobs")
+            if any(type(j.get("runner_id")) is not int or j["runner_id"] < 0
+                   or not isinstance(j.get("steps"), list) for j in jobs):
+                raise Gap("job_runner_evidence_missing")
             observations.append({"run_id": run["id"], "attempt": run["run_attempt"], "head": run["head_sha"],
                                  "created_at": run["created_at"], "status": run["status"],
                                  "pending_environment": [p["environment"]["name"] for p in pending],
@@ -157,4 +162,3 @@ class GitHub:
         return {"runs": count, "runner_seconds": runner_seconds,
                 "pending_environment_observations": waiting,
                 "cancelled_without_runner": cancelled_without_runner, "observations": observations}
-
