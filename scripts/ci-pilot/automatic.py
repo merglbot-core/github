@@ -8,8 +8,8 @@ from urllib.parse import quote
 from github_client import AUTO_MODE, AUTO_PR, DEADLINE, REPOS, Gap, digest, instant
 
 REPO = REPOS[1]
-WORKFLOW_HASH = "a3210e996cfd0f0d4422f1fe3d3d8f23b062e596b0b05bb7b235451b7b601600"
-CLASSIFIER_HASH = "ac7f072e3277766b6083c5b6fb9aafd9810d98a3f4f32dc459ab4c0e74987440"
+WORKFLOW_HASH = "414956c3adf20e078bfac189620dcfce711274624f6cdb93b019f9bbcbe383de"
+CLASSIFIER_HASH = "53c7e09dbf5688f1658ee069ed33e56df1774758a429c5ecd1a2d9fa800e8f7e"
 PATHS = {"scripts/reconcile-alert-config.py", "scripts/reconcile-alert-estate.py",
          "tests/test_reconcile_alert_config.py", "tests/test_reconcile_alert_estate.py"}
 
