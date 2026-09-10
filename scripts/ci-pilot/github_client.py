@@ -17,9 +17,10 @@ ENVIRONMENT = "ci-pr-delay"
 WORKFLOWS = dict(zip(REPOS, (".github/workflows/ci.yml",
                             ".github/workflows/python-script-tests.yml", ".github/workflows/ci.yml")))
 CHECKS = dict(zip(REPOS, (("unit-tests (3.11)", "unit-tests (3.12)"), ("Unit tests",), ("ci",))))
-PREDICATE = ("github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && "
-             "github.event.pull_request.base.ref == 'main' && format('{0}', github.event.pull_request.number) == vars.CI_DELAY_PILOT_PR && "
-             "github.event.pull_request.head.sha == vars.CI_DELAY_PILOT_SHA")
+TRUSTED_WORKFLOW_SHA256 = dict(zip(REPOS, (
+    "a69f959a475154688e97476325deed907a6733df443c4d87d4661c76e704e85c",
+    "d7224f32643731fad2ac4d05bfe50eac9e76dd095d910e2736365de5e33e6b6a",
+    "6bc142187c566945d6fd92f7713ea09f3b4db0a5f3f386007d98ff666e5d2832")))
 GUARD = Path.home() / ".codex/bin/codex-guarded-command"
 
 
@@ -116,7 +117,7 @@ class GitHub:
             raise Gap("snapshot_race")
         return {"pr": end, "paths": sorted(f["filename"] for f in files),
                 "diff_sha256": digest(diff), "workflow_sha256": digest(workflow),
-                "selector_supported": PREDICATE in workflow,
+                "selector_supported": digest(workflow) == TRUSTED_WORKFLOW_SHA256[repo],
                 "protection": protection, "rules": rules,
                 "environment": env, "custom": custom, "policies": policies,
                 "environment_empty": not variables and not secrets}

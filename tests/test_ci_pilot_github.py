@@ -14,7 +14,28 @@ NOW = c.instant("2026-09-10T20:00:00Z")
 RECEIPT = {"repo": c.REPOS[0], "pr": 123, "head": "a" * 40, "base": "b" * 40}
 
 
+def make_run(**overrides):
+    return {"id": 7, "run_attempt": 1, "created_at": NOW.isoformat(), "head_sha": RECEIPT["head"],
+            "run_started_at": NOW.isoformat(), "path": c.WORKFLOWS[c.REPOS[0]], "event": "pull_request",
+            "status": "completed", "pull_requests": [{"number": 123, "head": {"sha": RECEIPT["head"]},
+            "base": {"sha": RECEIPT["base"]}}], **overrides}
+
+
 class GitHubTests(unittest.TestCase):
+    def test_selector_requires_exact_trusted_workflow_bytes(self):
+        workflow = "name: fixture\non: pull_request\njobs:\n  test:\n    runs-on: ubuntu-latest\n    environment: ci-pr-delay\n    steps:\n      - run: echo test\n"
+        gh = c.GitHub()
+        pr = {"head": {"sha": RECEIPT["head"]}, "base": {"sha": RECEIPT["base"]}, "changed_files": 0}
+        gh.pages = lambda *args: []
+        gh.command = lambda *args, **kwargs: "diff"
+        variants = [workflow, "# " + workflow, workflow.replace("environment:", "unrelated:"),
+                    workflow.replace("ci-pr-delay", "ci-immediate")]
+        with patch.dict(c.TRUSTED_WORKFLOW_SHA256, {RECEIPT["repo"]: c.digest(workflow)}):
+            for index, content in enumerate(variants):
+                gh.api = lambda path: ({"content": base64.b64encode(content.encode()).decode()}
+                                       if "/contents/" in path else pr if "/pulls/" in path else {})
+                self.assertEqual(gh.snapshot(RECEIPT)["selector_supported"], index == 0)
+
     def test_mutation_is_scoped_and_guarded(self):
         gh = c.GitHub()
         gh.command = MagicMock()
@@ -52,10 +73,7 @@ class GitHubTests(unittest.TestCase):
 
     def test_wait_timer_and_runner_zero_evidence(self):
         gh = c.GitHub()
-        run = {"id": 7, "run_attempt": 1, "created_at": NOW.isoformat(), "head_sha": RECEIPT["head"],
-               "run_started_at": NOW.isoformat(),
-               "path": c.WORKFLOWS[c.REPOS[0]], "event": "pull_request", "status": "completed",
-               "pull_requests": [{"number": 123, "head": {"sha": RECEIPT["head"]}, "base": {"sha": RECEIPT["base"]}}]}
+        run = make_run()
         job = {"id": 9, "name": "unit-tests", "runner_id": 0, "steps": [], "conclusion": "cancelled",
                "started_at": None, "completed_at": None}
         gh.pages = lambda path, *args: [job] if path.endswith("/jobs") else [run]
@@ -87,9 +105,7 @@ class GitHubTests(unittest.TestCase):
     def test_attempt_jobs_are_separate_and_old_run_rerun_is_admitted(self):
         gh = c.GitHub()
         old = "2026-09-09T20:00:00Z"
-        base = {"id": 7, "created_at": old, "head_sha": RECEIPT["head"],
-                "path": c.WORKFLOWS[c.REPOS[0]], "event": "pull_request", "status": "completed",
-                "pull_requests": [{"number": 123, "head": {"sha": RECEIPT["head"]}, "base": {"sha": RECEIPT["base"]}}]}
+        base = make_run(created_at=old)
         attempts = {n: {**base, "run_attempt": n, "run_started_at": NOW.isoformat()} for n in (1, 2)}
         calls = []
         def pages(path, *args):
@@ -119,9 +135,7 @@ class GitHubTests(unittest.TestCase):
 
     def test_closed_run_uses_only_unique_commit_association(self):
         gh = c.GitHub()
-        run = {"id": 7, "run_attempt": 1, "created_at": NOW.isoformat(), "run_started_at": NOW.isoformat(),
-               "head_sha": RECEIPT["head"], "head_branch": "fix/example", "pull_requests": [],
-               "path": c.WORKFLOWS[c.REPOS[0]], "event": "pull_request", "status": "completed"}
+        run = make_run(head_branch="fix/example", pull_requests=[])
         associated = [{"number": 123, "state": "closed", "head": {"ref": "fix/example", "sha": "d" * 40}}]
         gh.pages = lambda path, *args: (associated if "/commits/" in path else [] if path.endswith("/jobs") else [run])
         gh.api = lambda path: [] if path.endswith("/pending_deployments") else run
