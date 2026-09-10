@@ -14,6 +14,122 @@ sys.path.pop(0)
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_first_experiment_case_overrides_idle_due(self):
+        now = runtime.dt.datetime.now(runtime.dt.timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime.atomic(root / "state.json", {"experiment": {"active": 0}})
+            runtime.atomic(root / "runtime.json", {"stopped": False,
+                           "next_due": (now + dt.timedelta(minutes=15)).isoformat()})
+            def controller(path):
+                runtime.atomic(path / "next_action.json", {"status": "active", "action": "observe",
+                               "history": {"unfinished_runs": 0, "data_gaps": 0}})
+            with patch.object(runtime, "run_controller", side_effect=controller) as run:
+                runtime.wake(root, now)
+            run.assert_called_once_with(root)
+            plan = json.loads((root / "runtime.json").read_text())
+            self.assertEqual(runtime.instant(plan["next_due"]) - now, dt.timedelta(minutes=5))
+            self.assertEqual(plan["last_successful_wake"], now.isoformat())
+
+    def test_readiness_requires_live_matching_supervisor_and_fresh_success(self):
+        now = runtime.instant("2026-09-10T20:00:00Z")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = [sys.executable, str(Path(runtime.__file__).resolve()), "wake", "--state-dir", str(root.resolve())]
+            output = "arguments = {\n" + "\n".join(args) + "\n}\nrun interval = 300 seconds"
+            plan = {"stopped": False, "healthy": True, "last_successful_wake": now.isoformat()}
+            runtime.atomic(root / "runtime.json", plan)
+            with patch.object(runtime.subprocess, "run", return_value=MagicMock(returncode=0, stdout=output)) as run:
+                self.assertTrue(runtime.ready(root, now))
+                for changes in ({"stopped": True}, {"healthy": False}, {"last_successful_wake": (now - dt.timedelta(seconds=361)).isoformat()},
+                                {"last_successful_wake": (now + dt.timedelta(seconds=1)).isoformat()}):
+                    runtime.atomic(root / "runtime.json", {**plan, **changes})
+                    self.assertFalse(runtime.ready(root, now))
+                runtime.atomic(root / "runtime.json", plan)
+                run.return_value.stdout = output.replace(str(root.resolve()), "/wrong-state")
+                self.assertFalse(runtime.ready(root, now))
+                run.return_value.stdout = output.replace("300 seconds", "900 seconds")
+                self.assertFalse(runtime.ready(root, now))
+                run.return_value.stdout = output
+                run.return_value.returncode = 113
+                self.assertFalse(runtime.ready(root, now))
+
+    def test_unloaded_requires_explicit_absence_and_domain_positive_control(self):
+        missing = f'Could not find service "{runtime.LABEL}"'
+        for domain_code, service_code, error, expected in ((0, 113, missing, True),
+                (113, 113, missing, False), (0, 1, "unknown", False), (0, 0, "", False)):
+            with patch.object(runtime.subprocess, "run", side_effect=[
+                    MagicMock(returncode=domain_code), MagicMock(returncode=service_code, stderr=error)]):
+                self.assertEqual(runtime.supervisor_unloaded(), expected)
+
+    @patch("controller.EXPERIMENT_STATE_VERSION", 1, create=True)
+    def test_loaded_supervisor_cannot_be_rearmed_or_cleaned(self):
+        from github_client import Gap
+        now = runtime.instant("2026-09-10T20:00:00Z")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime.atomic(root / "state.json", {"counted_prs": ["old#1", "old#2"],
+                           "experiment": {"version": 1, "active": None, "cases": []}})
+            runtime.atomic(root / "runtime.json", {"stopped": False})
+            original = (root / "runtime.json").read_bytes()
+            with patch.object(runtime, "supervisor_unloaded", return_value=False), patch.object(runtime, "cleanup") as clean:
+                with self.assertRaisesRegex(Gap, "experiment_supervisor_not_retired"):
+                    runtime.recover_experiment(root, now)
+                clean.assert_not_called()
+            self.assertEqual((root / "runtime.json").read_bytes(), original)
+
+    def test_legacy_controller_cannot_be_rearmed(self):
+        from github_client import Gap
+        now = runtime.instant("2026-09-10T20:00:00Z")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = {"counted_prs": [str(i) for i in range(5)],
+                     "experiment": {"version": 1, "active": None, "cases": []}}
+            runtime.atomic(root / "state.json", state)
+            runtime.atomic(root / "runtime.json", {"stopped": True})
+            with patch("controller.EXPERIMENT_STATE_VERSION", None, create=True), patch.object(runtime, "cleanup") as clean:
+                with self.assertRaisesRegex(Gap, "experiment_controller_not_installed"):
+                    runtime.recover_experiment(root, now)
+                clean.assert_not_called()
+            self.assertTrue(json.loads((root / "runtime.json").read_text())["stopped"])
+            self.assertEqual(json.loads((root / "state.json").read_text()), state)
+
+    @patch("runtime.supervisor_unloaded", return_value=True)
+    @patch("controller.EXPERIMENT_STATE_VERSION", 1, create=True)
+    def test_recovery_preserves_history_and_requires_real_wake(self, unloaded):
+        now = runtime.instant("2026-09-10T20:00:00Z")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = {"counted_prs": [str(i) for i in range(2)], "history": [],
+                     "experiment": {"version": 1, "active": None, "cases": []}}
+            runtime.atomic(root / "state.json", state)
+            original = (root / "state.json").read_bytes()
+            runtime.atomic(root / "runtime.json", {"stopped": False})
+            with patch.object(runtime, "cleanup", return_value=True), patch("controller.history_evidence", return_value={"unfinished_runs": 0, "data_gaps": 0}):
+                self.assertEqual(runtime.recover_experiment(root, now), 0)
+            self.assertEqual((root / "state.json").read_bytes(), original)
+            self.assertFalse(runtime.ready(root, now))
+            self.assertFalse(json.loads((root / "runtime.json").read_text())["stopped"])
+
+    @patch("runtime.supervisor_unloaded", return_value=True)
+    @patch("controller.EXPERIMENT_STATE_VERSION", 1, create=True)
+    def test_recovery_refuses_active_case_expiry_and_incomplete_history(self, unloaded):
+        now = runtime.instant("2026-09-10T20:00:00Z")
+        from github_client import Gap
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = {"experiment": {"version": 1, "active": None, "cases": []}}
+            runtime.atomic(root / "state.json", state)
+            with patch.object(runtime, "cleanup", return_value=True), patch("controller.history_evidence", return_value={"unfinished_runs": 1, "data_gaps": 0}):
+                with self.assertRaisesRegex(Gap, "history_gap"):
+                    runtime.recover_experiment(root, now)
+            self.assertFalse((root / "runtime.json").exists())
+            for active, when in ((0, now), (None, runtime.instant(runtime.DEADLINE))):
+                state["experiment"]["active"] = active
+                runtime.atomic(root / "state.json", state)
+                with self.assertRaisesRegex(Gap, "ineligible"):
+                    runtime.recover_experiment(root, when)
+
     def test_idle_error_retargets_five_minutes_without_losing_terminal_intent(self):
         now = runtime.instant("2026-09-10T20:00:00Z")
         for terminal in (False, True):
