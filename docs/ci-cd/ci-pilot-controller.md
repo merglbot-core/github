@@ -65,3 +65,11 @@ never delete a window or replace its first start with a later admission.
 An expired PR with no observed delay remains ineligible for the rest of this pilot.
 The semantic selector must skip its retained expired `pr_windows` entry and choose
 the next eligible PR, rather than repeatedly retrying the oldest PR.
+
+### Experiment observation helper
+
+`experiment_measurements.py` provides read-only `observe`/`histories` for successor
+phases. It discovers all run attempts (including reruns of originally older runs),
+assigns them through the adapter's start/stop interval, preserves observation snapshots,
+and reuses completed measurements only for the same attempt inventory and interval.
+Missing evidence remains a data gap. This helper alone activates no experiment.
