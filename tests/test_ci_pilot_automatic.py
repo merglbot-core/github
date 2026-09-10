@@ -43,7 +43,7 @@ class ExperimentTests(unittest.TestCase):
         self.gh = FakeGitHub()
         self.state = {"counted_prs": ["historical#1", "historical#2"], "history": [],
                       "experiment": {"version": 1, "cases": [], "active": None}}
-        self.selection = {"repo": a.REPO, "pr": 12, "kind": "synthetic", "mode": "delay",
+        self.spec = {"repo": a.REPO, "pr": 12, "kind": "synthetic", "mode": "delay",
                           "protection_sha256": "d" * 64}
         self.snapshot = patch.object(a, "snapshot", return_value=({"base": "b" * 40}, "test-branch"))
         self.snapshot.start()
@@ -56,8 +56,8 @@ class ExperimentTests(unittest.TestCase):
         return a.experiment_tick(self.gh, self.state, now, True, receipt,
                                  clock=lambda: now, supervisor_ready=kw.pop("supervisor_ready", lambda: True), **kw)
 
-    def test_stop_includes_attempt_arriving_during_selector_cleanup(self):
-        self.tick(self.selection)
+    def test_cleanup_keeps_racing_attempt(self):
+        self.tick(self.spec)
         arrival, finished = NOW + dt.timedelta(seconds=1), NOW + dt.timedelta(seconds=2)
         current, cleanup = [NOW], c.cleanup
         def retire(gh, apply):
@@ -72,20 +72,7 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual("drain_admitted_runs", result["action"])
         self.assertEqual(1, result["history"]["unfinished_runs"])
 
-    def test_first_event_wait_does_not_cancel_new_selection(self):
-        with patch.object(a.measurements, "observe", side_effect=REAL_OBSERVE):
-            result = self.tick(self.selection)
-            self.assertEqual("active", result["status"])
-            self.assertEqual(1, result["history"]["unfinished_runs"])
-            self.assertEqual(0, result["history"]["data_gaps"])
-            self.assertTrue(any(self.gh.values.values()))
-            result = self.tick({"stop": True})
-            self.assertEqual("drain_admitted_runs", result["action"])
-            self.assertEqual(1, result["history"]["data_gaps"])
-            self.assertFalse(any(self.gh.values.values()))
-            self.assertEqual("previous_phase_incomplete", self.tick(self.selection)["reason"])
-
-    def test_recovery_runs_real_controller_with_five_historical_cases(self):
+    def test_recovery_with_five_old_cases(self):
         import runtime
         now = dt.datetime.now(dt.timezone.utc)
         self.state["counted_prs"] = ["historical#" + str(i) for i in range(5)]
@@ -107,27 +94,38 @@ class ExperimentTests(unittest.TestCase):
             self.assertTrue(plan["healthy"])
             self.assertFalse(plan["stopped"])
             self.assertEqual(self.state["counted_prs"], json.loads((root / "state.json").read_text())["counted_prs"])
-            # The successor still enforces its own three-identity bound.
             for number in (12, 13, 14):
-                self.assertEqual("active", self.tick({**self.selection, "pr": number})["status"])
+                self.assertEqual("active", self.tick({**self.spec, "pr": number})["status"])
                 self.tick({"stop": True})
-            self.assertEqual("experiment_kind_limit", self.tick({**self.selection, "pr": 15})["reason"])
+            self.assertEqual("experiment_kind_limit", self.tick({**self.spec, "pr": 15})["reason"])
 
-    def test_missing_or_lost_supervisor_never_leaves_selectors(self):
-        result = a.experiment_tick(self.gh, self.state, NOW, True, self.selection, clock=lambda: NOW)
-        self.assertEqual("supervisor_not_ready", result["reason"])
-        self.assertFalse(any(value is not None for _, _, value in self.gh.writes))
-        for readiness in ([False], [True, False], [True, True, False]):
-            self.gh.writes.clear()
-            checks = iter(readiness)
-            result = self.tick(self.selection, supervisor_ready=lambda: next(checks))
+    def test_retry_requires_zero_writes(self):
+        with patch.object(a.measurements, "observe", side_effect=REAL_OBSERVE):
+            result = a.experiment_tick(self.gh, self.state, NOW, True, self.spec, clock=lambda: NOW)
             self.assertEqual("supervisor_not_ready", result["reason"])
+            self.assertEqual([], self.state["experiment"]["cases"])
+            readiness = iter([True, False])
+            result = self.tick(self.spec, supervisor_ready=lambda: next(readiness))
+            self.assertEqual("aborted_no_write", self.state["experiment"]["cases"][0]["phase"])
+            self.assertFalse(any(value is not None for _, _, value in self.gh.writes))
+            result = self.tick(self.spec)
+            self.assertEqual(("active", 1), (result["status"], result["history"]["unfinished_runs"]))
+            self.assertTrue(any(self.gh.values.values()))
+            result = self.tick({"stop": True})
+            self.assertEqual(("drain_admitted_runs", 1), (result["action"], result["history"]["data_gaps"]))
             self.assertFalse(any(self.gh.values.values()))
-            self.assertIsNone(self.state["experiment"]["active"])
+            self.assertEqual("previous_phase_incomplete", self.tick(self.spec)["reason"])
+        # A failed write attempt remains uncertain.
+        self.state["experiment"] = {"version": 1, "cases": [], "active": None}
+        self.gh.fail_write = a.AUTO_MODE
+        with patch.object(a.measurements, "observe", side_effect=REAL_OBSERVE):
+            self.tick(self.spec)
+            self.assertTrue(self.state["experiment"]["cases"][0]["write_attempted"])
+            self.assertEqual("previous_phase_incomplete", self.tick(self.spec)["reason"])
 
-    def test_selection_has_durable_intent_and_global_readback(self):
+    def test_durable_selection_and_readback(self):
         saved = []
-        result = self.tick(self.selection, persist=lambda s: saved.append(copy.deepcopy(s)))
+        result = self.tick(self.spec, persist=lambda s: saved.append(copy.deepcopy(s)))
         self.assertEqual("active", result["status"])
         self.assertEqual("activating", saved[0]["experiment"]["cases"][0]["phase"])
         self.assertEqual([(a.REPO, a.AUTO_MODE, "delay"), (a.REPO, a.AUTO_PR, "12")], self.gh.writes)
@@ -135,47 +133,47 @@ class ExperimentTests(unittest.TestCase):
 
     def test_second_selection_and_partial_write_cleanup(self):
         self.gh.fail_write = a.AUTO_PR
-        result = self.tick(self.selection)
+        result = self.tick(self.spec)
         self.assertEqual("cleanup_verified", result["action"])
         self.assertFalse(any(self.gh.values.values()))
         self.assertIsNone(self.state["experiment"]["active"])
 
     def test_restart_does_not_complete_partial_activation(self):
-        self.tick(self.selection)
+        self.tick(self.spec)
         self.state["experiment"]["cases"][0]["phase"] = "activating"
         self.assertEqual("partial_activation", self.tick()["reason"])
         self.assertFalse(any(self.gh.values.values()))
 
     def test_stop_and_expiry_preserve_history(self):
-        self.tick(self.selection)
+        self.tick(self.spec)
         self.assertEqual("selection_complete", self.tick({"stop": True})["reason"])
         self.assertEqual(1, len(self.state["experiment"]["cases"]))
         self.assertFalse(any(self.gh.values.values()))
         result = self.tick(now=c.instant(c.DEADLINE))
         self.assertEqual("deadline", result["reason"])
 
-    def test_new_phase_waits_for_terminal_complete_previous_measurements(self):
-        self.tick(self.selection)
+    def test_previous_phase_must_be_complete(self):
+        self.tick(self.spec)
         self.tick({"stop": True})
         for pending, gaps in ((1, 0), (0, 1)):
             with self.subTest(pending=pending, gaps=gaps):
                 self.gh.writes.clear()
                 with patch.object(a.measurements, "observe", return_value={
                         "unfinished_runs": pending, "data_gaps": gaps}):
-                    result = self.tick({**self.selection, "mode": "baseline"})
+                    result = self.tick({**self.spec, "mode": "baseline"})
                 self.assertEqual("previous_phase_incomplete", result["reason"])
                 self.assertEqual("drain_admitted_runs", result["action"])
                 self.assertEqual(1, len(self.state["experiment"]["cases"]))
                 self.assertFalse(any(value is not None for _, _, value in self.gh.writes))
                 self.assertFalse(any(self.gh.values.values()))
         with patch.object(a.measurements, "observe", return_value={"unfinished_runs": 0, "data_gaps": 0}):
-            result = self.tick({**self.selection, "mode": "baseline"})
+            result = self.tick({**self.spec, "mode": "baseline"})
         self.assertEqual("active", result["status"])
         self.assertEqual(2, len(self.state["experiment"]["cases"]))
 
-    def test_deadline_keeps_runtime_until_admitted_jobs_are_terminal(self):
+    def test_deadline_drains_admitted_jobs(self):
         import runtime
-        self.tick(self.selection)
+        self.tick(self.spec)
         with patch.object(a.measurements, "observe", return_value={"unfinished_runs": 1, "data_gaps": 0}):
             result = self.tick(now=c.instant(c.DEADLINE))
         self.assertEqual("drain_admitted_runs", result["action"])
@@ -184,30 +182,30 @@ class ExperimentTests(unittest.TestCase):
         self.assertFalse(any(self.gh.values.values()))
 
     def test_hold_and_changed_scope_cleanup(self):
-        self.tick(self.selection)
+        self.tick(self.spec)
         with patch.object(a, "snapshot", side_effect=c.Gap("excluded_experiment_scope")):
             self.assertEqual("excluded_experiment_scope", self.tick()["reason"])
-        self.tick(self.selection)
+        self.tick(self.spec)
         self.assertEqual("owner_hold", self.tick(hold=True)["reason"])
         self.assertFalse(any(self.gh.values.values()))
 
-    def test_case_kind_cannot_change_and_limit_does_not_stop_whole_runtime(self):
-        self.tick(self.selection)
+    def test_kind_and_identity_limits(self):
+        self.tick(self.spec)
         self.tick({"stop": True})
-        self.assertEqual("case_provenance_changed", self.tick({**self.selection, "kind": "natural"})["reason"])
+        self.assertEqual("case_provenance_changed", self.tick({**self.spec, "kind": "natural"})["reason"])
         for number in (13, 14):
-            self.tick({**self.selection, "pr": number})
+            self.tick({**self.spec, "pr": number})
             self.tick({"stop": True})
-        self.assertEqual("experiment_kind_limit", self.tick({**self.selection, "pr": 15})["reason"])
+        self.assertEqual("experiment_kind_limit", self.tick({**self.spec, "pr": 15})["reason"])
 
     def test_measurement_gap_cleans_selection_without_claiming_zero(self):
         with patch.object(a.measurements, "observe", side_effect=c.Gap("api_failure")):
-            result = self.tick(self.selection)
+            result = self.tick(self.spec)
         self.assertEqual("measurement_gap", result["reason"])
         self.assertEqual(1, result["history"]["data_gaps"])
         self.assertFalse(any(self.gh.values.values()))
 
-    def test_begin_does_not_reset_old_cases_or_accept_active_old_receipt(self):
+    def test_begin_preserves_old_cases(self):
         del self.state["experiment"]
         self.state["receipt"] = {"old": True}
         with self.assertRaisesRegex(c.Gap, "old_admission_active"):

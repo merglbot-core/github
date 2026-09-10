@@ -28,7 +28,6 @@ def snapshot(gh, number, protection_hash):
         raise Gap("excluded_experiment_scope")
     r.update(paths=s["paths"], diff_sha256=s["diff_sha256"], protection_sha256=protection_hash,
              workflow_sha256=WORKFLOW_HASH, eligible=True, assessment="Automatic bounded path admission")
-    # The experiment has a separately pinned reviewed source contract.
     eligible(r, {**s, "selector_supported": True})
     return r, p["head"]["ref"]
 
@@ -64,6 +63,11 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
         receipt = None
     if not isinstance(experiment, dict) or experiment.get("version") != 1 or not isinstance(experiment.get("cases"), list):
         raise Gap("invalid_experiment_state")
+    def history():
+        cases = [c for c in experiment["cases"]
+                 if not (c.get("phase") == "aborted_no_write" and c.get("write_attempted") is False)]
+        return measurements.histories(gh, {**experiment, "cases": cases}, now)
+
     try:
         check_time()
         if receipt == {"stop": True}:
@@ -83,7 +87,7 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
                 raise Gap("experiment_kind_limit")
             if selectors:
                 raise Gap("selectors_already_present")
-            previous = measurements.histories(gh, experiment, now)
+            previous = history()
             if previous["unfinished_runs"] or previous["data_gaps"]:
                 raise Gap("previous_phase_incomplete")
             r, branch = snapshot(gh, receipt["pr"], receipt["protection_sha256"])
@@ -92,7 +96,7 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
             if not supervisor_ready():
                 raise Gap("supervisor_not_ready")
             active = {**receipt, "started_at": now.isoformat(), "branch": branch,
-                      "initial_base": r["base"], "heads": [], "phase": "activating"}
+                      "initial_base": r["base"], "heads": [], "phase": "activating", "write_attempted": False}
             experiment["cases"].append(active)
             experiment["active"] = len(experiment["cases"]) - 1
             persist(state)
@@ -101,6 +105,8 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
                 snapshot(gh, active["pr"], active["protection_sha256"])
                 if not supervisor_ready():
                     raise Gap("supervisor_not_ready")
+                active["write_attempted"] = True
+                persist(state)
                 gh.mutate(REPO, name, value)
             active["phase"] = "active"
             persist(state)
@@ -115,7 +121,7 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
                 raise Gap("selector_readback")
         elif selectors:
             raise Gap("orphan_selectors")
-        historical = measurements.histories(gh, experiment, now)
+        historical = history()
         if historical["data_gaps"]:
             raise Gap("measurement_gap")
         check_time()
@@ -128,13 +134,13 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
         if clean and apply and experiment.get("active") is not None:
             case = experiment["cases"][experiment["active"]]
             stopped = max(now, clock() if clock else dt.datetime.now(dt.timezone.utc))
-            case.update(phase="inactive", stopped_at=stopped.isoformat(), reason=reason)
+            phase = "aborted_no_write" if case.get("write_attempted") is False else "inactive"
+            case.update(phase=phase, stopped_at=stopped.isoformat(), reason=reason)
             experiment["active"] = None
-        historical = measurements.histories(gh, experiment, now)
+        historical = history()
         persist(state)
         if clean and (historical["unfinished_runs"] or historical["data_gaps"]):
-            # The existing runtime stops on cleanup_verified/deadline. Keep it alive
-            # to reconcile admitted jobs after admission itself has been disabled.
+            # Keep supervising admitted jobs after disabling admission.
             return {"action": "drain_admitted_runs", "status": "pending", "reason": reason,
                     "cleanup_verified": True, "history": historical}
         return {"action": "cleanup_verified" if clean else "cleanup_required",

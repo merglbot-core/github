@@ -112,7 +112,7 @@ Reviewed source hashes, protections and environments bind activation.
 Errors, partial activation, expiry, close/merge and changed scope/protection clean
 both old and new selectors. `stop-selection --apply` ends a measurement interval.
 At most three distinct PRs per kind, one selection globally, unchanged Sep14 deadline.
-Intermediate heads and all attempts are measured; completed results are reused
-only against unchanged live run/attempt inventory. Gaps remain explicit. Admission
-runner time counts; actual checkout/base still need separate execution evidence.
-The agent owns V6/merge and the separate GO audit. No production rollout.
+The reviewed observer measures all attempts; gaps stay explicit. Include admission
+runner time and checkout proof. The agent owns V6/merge and GO evidence.
+Zero-write aborts stay audited but unmeasured; attempted writes remain conservative.
+No production rollout.
