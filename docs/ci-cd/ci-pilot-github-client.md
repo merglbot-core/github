@@ -18,3 +18,5 @@ Per-attempt jobs/start times include natural reruns. Mutable PR associations do
 not prove historical base: DATA_GAP. Empty associations require a unique commit
 association. Null runner IDs remain gaps; only ID zero plus empty steps proves
 runner-free cancellation. Selector writes remain scoped through the guard.
+
+Infra base-bound workflow candidate: merglbot-core/infra@494ccad91bb0f5a76e3ffe7d483d10cd82bd3ced, .github/workflows/python-script-tests.yml, SHA256 71a5a36e93245225fce8e3e7297360ebdf31895fbd36bf497f53792270767941. It requires CI_DELAY_PILOT_BASE_SHA in addition to PR and head SHA. Admission still requires these exact bytes on live main; this source reference does not claim infra PR merge or runtime acceptance.

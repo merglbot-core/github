@@ -77,6 +77,34 @@ class PilotTests(unittest.TestCase):
         self.assertEqual(result["action"], "cleanup_verified")
         self.assertFalse(any(self.gh.values.values()))
 
+    def infra_fixture(self):
+        repo = c.REPOS[1]
+        self.gh.receipt["repo"] = repo
+        for side in ("head", "base"):
+            self.gh.snap["pr"][side]["repo"]["full_name"] = repo
+        self.gh.snap["protection"]["required_status_checks"]["checks"] = [
+            {"context": "Merglbot PR Assistant v6", "app_id": None},
+            {"context": "Unit tests", "app_id": 15368}]
+        self.gh.receipt["protection_sha256"] = c.digest(json.dumps(
+            {"protection": self.gh.snap["protection"], "rules": []}, sort_keys=True))
+        return repo
+
+    def test_base_bound_admission_and_changed_base_cleanup(self):
+        repo = self.infra_fixture()
+        self.assertEqual(self.activate()["action"], "observe")
+        self.assertEqual([w[1] for w in self.gh.writes], [c.BASE_VAR, c.SHA_VAR, c.PR_VAR])
+        self.assertEqual(self.gh.values[repo][c.BASE_VAR], self.gh.receipt["base"])
+        self.assertEqual(c.tick(self.gh, self.state, NOW, True)["action"], "observe")
+        self.gh.snap["pr"]["base"]["sha"] = "d" * 40
+        self.assert_clean(c.tick(self.gh, self.state, NOW, True))
+        self.assertEqual([w[1] for w in self.gh.writes[-3:]], [c.PR_VAR, c.SHA_VAR, c.BASE_VAR])
+
+    def test_partial_base_selector_restart_cleans_all_repos(self):
+        for repo in c.REPOS:
+            self.gh.values[repo] = {c.BASE_VAR: "b" * 40}
+        self.assert_clean(c.tick(self.gh, {}, NOW, True))
+        self.assertEqual(len(self.gh.writes), len(c.REPOS))
+
     def test_readonly_never_installs(self):
         result = c.tick(self.gh, self.state, NOW, receipt=self.gh.receipt)
         self.assertEqual(result["action"], "activation_available")
@@ -148,7 +176,9 @@ class PilotTests(unittest.TestCase):
         result = c.tick(self.gh, self.state, NOW, True)
         self.assertEqual(result["status"], "unverified")
         self.assertFalse(any(self.gh.values.values()))
-        self.assertEqual(len(self.gh.writes), 8)
+        self.assertEqual([w for w in self.gh.writes if w[2] is None],
+                         [(repo, name, None) for repo in c.REPOS
+                          for name in (c.PR_VAR, c.SHA_VAR, c.BASE_VAR)])
 
     def test_delay_counts_distinct_pr_and_preserves_old_head_observations(self):
         def measured(receipt, since):

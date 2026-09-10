@@ -11,7 +11,8 @@ import tempfile
 
 REPOS = ("merglbot-extractors/denatura-forecast-exporter", "merglbot-core/infra",
          "merglbot-denatura/denatura-fb-viz")
-PR_VAR, SHA_VAR = "CI_DELAY_PILOT_PR", "CI_DELAY_PILOT_SHA"
+PR_VAR, SHA_VAR, BASE_VAR = "CI_DELAY_PILOT_PR", "CI_DELAY_PILOT_SHA", "CI_DELAY_PILOT_BASE_SHA"
+BASE_BOUND_REPOS = frozenset((REPOS[1],))
 DEADLINE = "2026-09-14T19:03:19Z"
 ENVIRONMENT = "ci-pr-delay"
 WORKFLOWS = dict(zip(REPOS, (".github/workflows/ci.yml",
@@ -19,7 +20,7 @@ WORKFLOWS = dict(zip(REPOS, (".github/workflows/ci.yml",
 CHECKS = dict(zip(REPOS, (("unit-tests (3.11)", "unit-tests (3.12)"), ("Unit tests",), ("ci",))))
 TRUSTED_WORKFLOW_SHA256 = dict(zip(REPOS, (
     "a69f959a475154688e97476325deed907a6733df443c4d87d4661c76e704e85c",
-    "d7224f32643731fad2ac4d05bfe50eac9e76dd095d910e2736365de5e33e6b6a",
+    "71a5a36e93245225fce8e3e7297360ebdf31895fbd36bf497f53792270767941",
     "6bc142187c566945d6fd92f7713ea09f3b4db0a5f3f386007d98ff666e5d2832")))
 GUARD = Path.home() / ".codex/bin/codex-guarded-command"
 
@@ -86,10 +87,10 @@ class GitHub:
 
     def selectors(self, repo):
         rows = self.pages(f"repos/{repo}/actions/variables", "variables", size=30)
-        return {r["name"]: r["value"] for r in rows if r["name"] in (PR_VAR, SHA_VAR)}
+        return {r["name"]: r["value"] for r in rows if r["name"] in (PR_VAR, SHA_VAR, BASE_VAR)}
 
     def mutate(self, repo, name, value=None):
-        if repo not in REPOS or name not in (PR_VAR, SHA_VAR):
+        if repo not in REPOS or name not in (PR_VAR, SHA_VAR, BASE_VAR):
             raise Gap("mutation_out_of_scope")
         args = ["/bin/bash", str(GUARD), "gh", "variable",
                 "delete" if value is None else "set", name, "--repo", repo]

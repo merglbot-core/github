@@ -7,7 +7,10 @@ python3 -m unittest discover -s tests -p test_ci_pilot.py
 ```
 
 Without --apply GitHub is read-only; local state is atomic and locked. Only
-CI_DELAY_PILOT_PR/SHA are mutated: install SHA first, delete PR first.
+CI_DELAY_PILOT_PR/SHA/BASE_SHA are the only writable variables. Infra uses
+all three: install base SHA, head SHA, then PR number. Exporter and fb-viz
+retain their audited two-variable contract. Cleanup deletes PR, head SHA,
+then base SHA in every repository, including partial or orphaned selectors.
 Limits: one active PR, five observed-delay PRs, 2026-09-14T19:03:19Z and 24h
 without delay. Local/global OWNER_HOLD, PR holds, changed or missing evidence
 trigger cleanup/readback. Active ticks recheck holds/time after observations.
