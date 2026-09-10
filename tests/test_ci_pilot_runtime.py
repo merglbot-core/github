@@ -54,6 +54,23 @@ class RuntimeTests(unittest.TestCase):
                 run.return_value.returncode = 113
                 self.assertFalse(runtime.ready(root, now))
 
+    def test_legacy_controller_cannot_be_rearmed(self):
+        from github_client import Gap
+        now = runtime.instant("2026-09-10T20:00:00Z")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = {"counted_prs": [str(i) for i in range(5)],
+                     "experiment": {"version": 1, "active": None, "cases": []}}
+            runtime.atomic(root / "state.json", state)
+            runtime.atomic(root / "runtime.json", {"stopped": True})
+            with patch("controller.EXPERIMENT_STATE_VERSION", None, create=True), patch.object(runtime, "cleanup") as clean:
+                with self.assertRaisesRegex(Gap, "experiment_controller_not_installed"):
+                    runtime.recover_experiment(root, now)
+                clean.assert_not_called()
+            self.assertTrue(json.loads((root / "runtime.json").read_text())["stopped"])
+            self.assertEqual(json.loads((root / "state.json").read_text()), state)
+
+    @patch("controller.EXPERIMENT_STATE_VERSION", 1, create=True)
     def test_recovery_preserves_history_and_requires_real_wake(self):
         now = runtime.instant("2026-09-10T20:00:00Z")
         with tempfile.TemporaryDirectory() as directory:
@@ -69,6 +86,7 @@ class RuntimeTests(unittest.TestCase):
             self.assertFalse(runtime.ready(root, now))
             self.assertFalse(json.loads((root / "runtime.json").read_text())["stopped"])
 
+    @patch("controller.EXPERIMENT_STATE_VERSION", 1, create=True)
     def test_recovery_refuses_active_case_expiry_and_incomplete_history(self):
         now = runtime.instant("2026-09-10T20:00:00Z")
         from github_client import Gap
