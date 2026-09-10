@@ -24,7 +24,9 @@ state and pilot selector cleanup remain governed by the controller.
 
 Verification opens `~/.codex/sqlite/codex-dev.db` using SQLite `mode=ro` and
 query-only mode. The exact id, thread, status and rrule must agree with the
-file; terminal verification also requires next_run_at=NULL. The database is
+file; normal terminal verification also requires next_run_at=NULL. For the
+audited PAUSED legacy file source, the separate [source proof](ci-pilot-legacy-source.md)
+can establish no new admission despite stale DB cache metadata. The database is
 never modified. Successful identity-validated reads awaiting only app sync
 are `pending`, not verified: keep the desired file cadence (including idle15),
 retry the runtime every five minutes, and do not unload. Repeated pending
