@@ -6,11 +6,21 @@ python3 scripts/ci-pilot/controller.py activate --state-dir /absolute/state --re
 python3 -m unittest discover -s tests -p test_ci_pilot.py
 ```
 
-Without --apply GitHub is read-only; local state is atomic and locked. Only
-CI_DELAY_PILOT_PR/SHA/BASE_SHA are the only writable variables. Infra uses
+Without --apply GitHub is read-only; local state is atomic and locked. The semantic
+pilot writes CI_DELAY_PILOT_PR/SHA/BASE_SHA. Infra uses
 all three: install base SHA, head SHA, then PR number. Exporter and fb-viz
-retain their audited two-variable contract. Cleanup deletes PR, head SHA,
-then base SHA in every repository, including partial or orphaned selectors.
+retain their audited two-variable contract.
+
+The successor test program (infra#2643, owner-approved 2026-09-10) additionally
+authorizes the adapter to set CI_DEBOUNCE_TEST_PR and CI_DEBOUNCE_TEST_MODE in
+merglbot-core/infra only. Setting either variable in exporter or fb-viz is denied.
+Deletion of all five exact variable names is authorized across the three pilot
+repositories to remove partial or orphaned selectors. No other repository or
+variable is writable. All writes still use the guarded command wrapper.
+Cleanup removes debounce PR/mode first, then semantic PR/head/base, and verifies
+global absence. The semantic controller does not activate the successor selectors;
+it detects them as conflicting/orphaned admission and cleans them. Runtime
+installation and successor activation require their separate reviewed delivery.
 Limits: one active PR, five observed-delay PRs, 2026-09-14T19:03:19Z and 24h
 without delay. Local/global OWNER_HOLD, PR holds, changed or missing evidence
 trigger cleanup/readback. Active ticks recheck holds/time after observations.
@@ -37,7 +47,14 @@ cleanup and the restored history before admitting another case.
 The no-delay timeout is per repository/PR: `pr_windows` retains the first selector
 admission intent across head changes, cleanup and restarts. Re-admission never
 restarts its 24 hours. Each head still uses its own `started_at` measurement
-boundary. Once a delay is observed (including retained `counted_prs` evidence),
+boundary. Retired intervals also require `stopped_at`: attempts starting at or
+after cleanup are excluded, while already admitted jobs are measured through
+completion. Multiple admissions of one head retain separate latest interval
+measurements and aggregate without counting an attempt twice. Exact duplicate
+history intervals are ignored; overlapping intervals, missing boundaries and
+runner timing gaps prevent a complete-evidence verdict. Recovery must preserve
+the interval boundaries and `interval_measurements`, as well as prior snapshots.
+Once a delay is observed (including retained `counted_prs` evidence),
 that PR is exempt from the no-delay timeout; closure, holds, the global deadline
 and five-case limit still apply. Legacy active/history admission timestamps migrate
 to the earliest retained start; imported `historical_only` run timestamps are not
