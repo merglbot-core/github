@@ -44,6 +44,7 @@ def observe(gh, case, now):
         previous = entry.get("latest")
         if (previous and entry.get("inventory_signature") == signature
                 and entry.get("until") == case.get("stopped_at")
+                and entry.get("since") == case["started_at"]
                 and not previous["runner_evidence_gaps"] and previous["observations"]
                 and all(o["status"] == "completed" for o in previous["observations"])):
             m = previous
@@ -54,7 +55,7 @@ def observe(gh, case, now):
             entry["snapshots"].setdefault(key, {"observed_at": now.isoformat(), "evidence": observation})
             pending += observation["status"] != "completed"
         entry["latest"] = m
-        entry.update(inventory_signature=signature, until=case.get("stopped_at"))
+        entry.update(inventory_signature=signature, since=case["started_at"], until=case.get("stopped_at"))
         gaps += m["runner_evidence_gaps"]
     return {"unfinished_runs": pending, "data_gaps": gaps, "observed_at": now.isoformat()}
 
