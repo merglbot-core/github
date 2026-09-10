@@ -1,10 +1,12 @@
 """Optional, single-target Codex heartbeat cadence/stop adapter. Never enables."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
 import sqlite3
 import tempfile
+import legacy_source
 
 FIELDS = {"version", "id", "kind", "name", "prompt", "status", "rrule",
           "target_thread_id", "created_at", "updated_at"}
@@ -97,6 +99,16 @@ def sync(state_dir, active, terminal, now, home=None):
                 or db["status"] not in ("ACTIVE", "PAUSED") or not isinstance(db["rrule"], str)):
             raise ValueError("readback_invalid")
         if any(db[k] != desired[k] for k in ("status", "rrule")) or (terminal and db["next_run_at"] is not None):
+            if actual["status"] == "PAUSED" and actual["kind"] == "heartbeat" and actual["version"] == 1:
+                proof = legacy_source.verify(db_path, config)
+                if proof["status"] == "verified":
+                    final_text = path.read_text()
+                    final, _ = parse(final_text)
+                    if final["status"] != "PAUSED" or any(final[k] != config[k] for k in config):
+                        raise ValueError("file_race")
+                    proof.update(file_sha256=hashlib.sha256(final_text.encode()).hexdigest(), **config)
+                    return {"status": "verified", "paused": True, "proof": proof, "database_cache": "stale"}
+                return {"status": "pending", "reason": "app_sync", "source_proof": proof}
             return {"status": "pending", "reason": "app_sync"}
         return {"status": "verified", "paused": actual["status"] == "PAUSED"}
     except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):

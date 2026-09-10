@@ -10,7 +10,9 @@ from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("heartbeat", Path(__file__).resolve().parents[1] / "scripts/ci-pilot/heartbeat.py")
 h = importlib.util.module_from_spec(spec)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts/ci-pilot"))
 spec.loader.exec_module(h)
+sys.path.pop(0)
 from datetime import datetime, timezone
 NOW = datetime(2026, 9, 10, tzinfo=timezone.utc)
 
