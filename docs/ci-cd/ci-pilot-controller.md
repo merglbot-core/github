@@ -88,7 +88,9 @@ selector: a successful wake within 360 seconds, a non-stopped healthy runtime,
 and the loaded launchd job bound to this exact runtime release and state directory.
 The first active experiment index (zero) also forces the five-minute cadence.
 
-After legacy case-limit shutdown, create the empty bounded experiment state, then
+Recovery requires the reviewed successor controller (#832) advertising
+`EXPERIMENT_STATE_VERSION=1`; the legacy controller cannot be rearmed. After
+legacy case-limit shutdown, create the empty bounded experiment state, then
 run `runtime.py recover-experiment --state-dir <state-dir>` under the runtime lock.
 Recovery requires no active case or legacy receipt, no holds, time before the
 original deadline, globally verified selector cleanup and complete old run history.

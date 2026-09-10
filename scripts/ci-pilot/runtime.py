@@ -38,10 +38,13 @@ def ready(state_dir, now):
 
 def recover_experiment(state_dir, now):
     """Rearm only an inactive bounded experiment; preserve all historical state."""
+    import controller
     from controller import history_evidence
     from github_client import Gap
     with (state_dir / "controller.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if getattr(controller, "EXPERIMENT_STATE_VERSION", None) != 1:
+            raise Gap("experiment_controller_not_installed")
         state = json.loads((state_dir / "state.json").read_text())
         experiment = state.get("experiment")
         if (now >= instant(DEADLINE) or (state_dir / "OWNER_HOLD").exists()
