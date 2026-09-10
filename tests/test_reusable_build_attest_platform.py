@@ -1,5 +1,6 @@
 """Execute the workflow signing step with a fake gcloud; no cloud calls."""
 import os
+import json
 from pathlib import Path
 import subprocess
 import tempfile
@@ -66,6 +67,45 @@ printf 'projects/merglbot-artifacts/occurrences/test\\n'
         self.assertIn("platform_digest: ${{ steps.parity.outputs.platform_digest }}", source)
         self.assertIn("PLATFORM_DIGEST: ${{ steps.parity.outputs.platform_digest }}", source)
         self.assertIn(".subject += [{name: .subject[0].name, digest: {sha256: $digest}}]", source)
+
+
+class PlatformProvenanceTests(unittest.TestCase):
+    def project(self, subjects, digest=CHILD):
+        source = WORKFLOW.read_text()
+        block = source.split('          # Keep the full statement artifact', 1)[1]
+        script = textwrap.dedent(block[block.index('          if ['):].split('      - name: Upload SLSA Provenance', 1)[0])
+        document = {"subject": subjects, "predicate": {"materials": [{"digest": {"sha1": "c" * 40}}]}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "output"
+            result = subprocess.run(["bash", "-e", "-c", script], cwd=root, capture_output=True, text=True,
+                env={**os.environ, "PLATFORM_DIGEST": digest, "PROVENANCE": json.dumps(document), "GITHUB_OUTPUT": str(output)})
+            artifact = root / "platform-provenance.json"
+            return result.returncode, json.loads(artifact.read_text()) if artifact.exists() else None, document
+
+    def test_projection_preserves_claims_and_selects_only_runtime(self):
+        subjects = [{"name": "image", "digest": {"sha256": INDEX}}, {"name": "image", "digest": {"sha256": CHILD[7:]}}]
+        code, projected, original = self.project(subjects)
+        self.assertEqual(code, 0)
+        self.assertEqual(projected["subject"], [subjects[1]])
+        self.assertEqual(projected["predicate"], original["predicate"])
+        self.assertEqual(len(original["subject"]), 2)
+
+    def test_missing_platform_subject_fails(self):
+        code, projected, _ = self.project([{"name": "image", "digest": {"sha256": INDEX}}])
+        self.assertNotEqual(code, 0)
+        self.assertIsNone(projected)
+
+    def test_nonpush_has_no_platform_provenance(self):
+        code, projected, _ = self.project([], digest="")
+        self.assertEqual(code, 0)
+        self.assertIsNone(projected)
+
+    def test_duplicate_plain_manifest_projects_one_subject(self):
+        subject = {"name": "image", "digest": {"sha256": CHILD}}
+        code, projected, _ = self.project([subject, subject])
+        self.assertEqual(code, 0)
+        self.assertEqual(projected["subject"], [subject])
 
 
 if __name__ == "__main__":
