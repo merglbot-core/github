@@ -7,7 +7,7 @@ import experiment_measurements as measurements
 from github_client import AUTO_MODE, AUTO_PR, DEADLINE, REPOS, Gap, digest, instant
 
 REPO = REPOS[1]
-WORKFLOW_HASH = "af63c037f1c853818320d58a552b5e9fa1ca08422dac5748763156ce670d422c"
+WORKFLOW_HASH = "cae8723a5b7dd9b87b766a174a3630f08d7bb624bc7d6cfd9bb1a186aaba7c4d"
 CLASSIFIER_HASH = "8304e9c9a23bf6b828dd3b07d5f2a390c30b3a7b25b9f8d057772d44a789003a"
 PATHS = {"scripts/reconcile-alert-config.py", "scripts/reconcile-alert-estate.py",
          "tests/test_reconcile_alert_config.py", "tests/test_reconcile_alert_estate.py"}
