@@ -206,7 +206,13 @@ class GitHub:
                 if job["runner_id"] == 0 and job["steps"] == [] and job["conclusion"] == "cancelled":
                     cancelled_without_runner += 1
                 if job["runner_id"] and job["started_at"] and job["completed_at"]:
-                    runner_seconds += max(0, (instant(job["completed_at"]) - instant(job["started_at"])).total_seconds())
+                    duration = (instant(job["completed_at"]) - instant(job["started_at"])).total_seconds()
+                    if duration < 0:
+                        runner_gaps += 1
+                    else:
+                        runner_seconds += duration
+                elif job["runner_id"] and job["conclusion"] is not None:
+                    runner_gaps += 1
         return {"runs": len(run_ids), "attempts": count, "runner_seconds": runner_seconds,
                 "runner_evidence_gaps": runner_gaps,
                 "pending_environment_observations": waiting,

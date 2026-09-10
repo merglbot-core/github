@@ -22,6 +22,25 @@ def make_run(**overrides):
 
 
 class GitHubTests(unittest.TestCase):
+    def test_interval_end_excludes_later_attempt_without_job_reads(self):
+        gh = c.GitHub()
+        run = make_run()
+        gh.pages = lambda path, *args: [run] if "/actions/runs?" in path else self.fail("job read past interval")
+        gh.api = lambda path: run
+        result = gh.measurements(RECEIPT, NOW.isoformat(), NOW.isoformat())
+        self.assertEqual(0, result["attempts"])
+
+    def test_completed_runner_missing_time_is_a_gap(self):
+        gh = c.GitHub()
+        run = make_run()
+        job = {"id": 9, "name": "unit-tests", "runner_id": 8, "steps": [], "conclusion": "success",
+               "started_at": None, "completed_at": None}
+        gh.pages = lambda path, *args: [job] if path.endswith("/jobs") else [run]
+        gh.api = lambda path: [] if path.endswith("/pending_deployments") else run
+        result = gh.measurements(RECEIPT, NOW.isoformat())
+        self.assertEqual(1, result["runner_evidence_gaps"])
+        self.assertEqual(0, result["cancelled_without_runner"])
+
     def test_selector_requires_exact_trusted_workflow_bytes(self):
         workflow = "name: fixture\non: pull_request\njobs:\n  test:\n    runs-on: ubuntu-latest\n    environment: ci-pr-delay\n    steps:\n      - run: echo test\n"
         gh = c.GitHub()
