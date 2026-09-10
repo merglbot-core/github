@@ -61,6 +61,15 @@ class GitHubTests(unittest.TestCase):
             with self.assertRaisesRegex(c.Gap, "^invalid_api_json$"):
                 c.GitHub().api("repos/example/example")
 
+    def test_timeout_discards_captured_output(self):
+        error = subprocess.TimeoutExpired(["gh"], 90, output="synthetic stdout", stderr="synthetic stderr")
+        with patch.object(c.subprocess, "run", side_effect=error):
+            with self.assertRaisesRegex(c.Gap, "^github_command_timeout$") as caught:
+                c.GitHub().api("repos/example/example")
+        self.assertIsNone(error.output)
+        self.assertIsNone(error.stderr)
+        self.assertTrue(caught.exception.__suppress_context__)
+
     def test_partial_pagination_and_file_list_are_gaps(self):
         gh = c.GitHub()
         gh.api = lambda *args: {"variables": [], "total_count": 1}
