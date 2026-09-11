@@ -86,6 +86,20 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual("compatibility_case_closed", self.tick(spec)["reason"])
         self.assertFalse(any(value is not None for _, _, value in self.gh.writes))
 
+    def test_scope_expansion_then_contraction_cannot_reselect_case(self):
+        import runtime
+        spec = {**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"}
+        self.tick(spec)
+        with patch.object(a, "snapshot", side_effect=c.Gap("compatibility_scope_expanded")):
+            result = self.tick()
+        self.assertEqual("compatibility_scope_expanded", result["reason"])
+        self.assertFalse(any(self.gh.values.values()))
+        self.assertTrue(runtime.schedule(result, NOW)["stopped"])
+        self.gh.writes.clear()
+        # The ordinary valid snapshot is restored, representing scope contraction.
+        self.assertEqual("compatibility_scope_expanded", self.tick(spec)["reason"])
+        self.assertFalse(any(value is not None for _, _, value in self.gh.writes))
+
     def test_cleanup_keeps_racing_attempt(self):
         self.tick(self.spec)
         arrival, finished = NOW + dt.timedelta(seconds=1), NOW + dt.timedelta(seconds=2)

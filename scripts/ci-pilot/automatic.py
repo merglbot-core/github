@@ -8,7 +8,7 @@ from github_client import AUTO_MODE, AUTO_PR, DEADLINE, REPOS, Gap, digest, inst
 
 REPO = REPOS[1]
 WORKFLOW_HASH = "cae8723a5b7dd9b87b766a174a3630f08d7bb624bc7d6cfd9bb1a186aaba7c4d"
-CLASSIFIER_HASH = "0b1bdd1461f7db4bd2844337c24a0ca6a7a2ef376fb703b165a0491dcdf7306e"
+CLASSIFIER_HASH = "a3e7e71981af3fa108a80f4a9fe3168b5bd10ca52d387bdbd78a01b22b99e6c4"
 COMPATIBILITY_PR = 2683
 PATHS = {"scripts/measure-job-coverage-live.py", "tests/test_absence_duration_sweep.py",
          "tests/test_absence_shape.py", "tests/test_measure_job_coverage_live.py",
@@ -31,7 +31,9 @@ def snapshot(gh, number, protection_hash):
     classifier = base64.b64decode(content["content"]).decode()
     if s["workflow_sha256"] != WORKFLOW_HASH or digest(classifier) != CLASSIFIER_HASH:
         raise Gap("unverified_experiment_source")
-    if not set(s["paths"]) <= PATHS or not s["paths"] or p["labels"]:
+    if not set(s["paths"]) <= PATHS:
+        raise Gap("compatibility_scope_expanded")
+    if not s["paths"] or p["labels"]:
         raise Gap("excluded_experiment_scope")
     r.update(paths=s["paths"], diff_sha256=s["diff_sha256"], protection_sha256=protection_hash,
              workflow_sha256=WORKFLOW_HASH, eligible=True, assessment="Automatic bounded path admission")
@@ -143,7 +145,7 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
                 "status": "active" if active is not None else "inactive", "history": historical}
     except Exception as error:
         reason = str(error) if isinstance(error, Gap) else "experiment_read_gap"
-        if apply and reason in ("compatibility_case_closed", "compatibility_finished", "deadline"):
+        if apply and reason in ("compatibility_case_closed", "compatibility_finished", "compatibility_scope_expanded", "deadline"):
             experiment["terminal_reason"] = reason
         clean = cleanup(gh, apply)
         if clean and apply and experiment.get("active") is not None:
