@@ -56,6 +56,50 @@ class ExperimentTests(unittest.TestCase):
         return a.experiment_tick(self.gh, self.state, now, True, receipt,
                                  clock=lambda: now, supervisor_ready=kw.pop("supervisor_ready", lambda: True), **kw)
 
+    def test_compatibility_case_cannot_be_synthetic_or_baseline(self):
+        for kind, mode in (("synthetic", "delay"), ("natural", "baseline")):
+            result = self.tick({**self.spec, "pr": a.COMPATIBILITY_PR,
+                                "kind": kind, "mode": mode})
+            self.assertEqual("compatibility_requires_natural_delay", result["reason"])
+            self.assertFalse(any(value is not None for _, _, value in self.gh.writes))
+        result = self.tick({**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"})
+        self.assertEqual("active", result["status"])
+
+    def test_other_pr_refused_by_real_snapshot_before_any_api(self):
+        self.snapshot.stop()
+        with self.assertRaisesRegex(c.Gap, "unsupported_compatibility_pr"):
+            a.snapshot(self.gh, a.COMPATIBILITY_PR + 1, "a" * 64)
+
+    def test_closed_compatibility_case_drains_then_stops_without_reactivation(self):
+        import runtime
+        spec = {**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"}
+        self.tick(spec)
+        with patch.object(a, "snapshot", side_effect=c.Gap("compatibility_case_closed")):
+            with patch.object(a.measurements, "observe", return_value={"unfinished_runs": 1, "data_gaps": 0}):
+                result = self.tick()
+                self.assertEqual("drain_admitted_runs", result["action"])
+                self.assertFalse(runtime.schedule(result, NOW)["stopped"])
+            result = self.tick()
+            self.assertEqual("cleanup_verified", result["action"])
+            self.assertTrue(runtime.schedule(result, NOW)["stopped"])
+        self.gh.writes.clear()
+        self.assertEqual("compatibility_case_closed", self.tick(spec)["reason"])
+        self.assertFalse(any(value is not None for _, _, value in self.gh.writes))
+
+    def test_scope_expansion_then_contraction_cannot_reselect_case(self):
+        import runtime
+        spec = {**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"}
+        self.tick(spec)
+        with patch.object(a, "snapshot", side_effect=c.Gap("compatibility_scope_expanded")):
+            result = self.tick()
+        self.assertEqual("compatibility_scope_expanded", result["reason"])
+        self.assertFalse(any(self.gh.values.values()))
+        self.assertTrue(runtime.schedule(result, NOW)["stopped"])
+        self.gh.writes.clear()
+        # The ordinary valid snapshot is restored, representing scope contraction.
+        self.assertEqual("compatibility_scope_expanded", self.tick(spec)["reason"])
+        self.assertFalse(any(value is not None for _, _, value in self.gh.writes))
+
     def test_cleanup_keeps_racing_attempt(self):
         self.tick(self.spec)
         arrival, finished = NOW + dt.timedelta(seconds=1), NOW + dt.timedelta(seconds=2)
