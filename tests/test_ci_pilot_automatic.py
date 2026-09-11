@@ -260,5 +260,51 @@ class ExperimentTests(unittest.TestCase):
 
 
 
+class LiveMainSourceTests(unittest.TestCase):
+    def fixture(self, race=False, bad_workflow=False):
+        import base64
+        from test_ci_pilot import Fake
+        gh = Fake()
+        for side in ("head", "base"):
+            gh.snap["pr"][side]["repo"]["full_name"] = a.REPO
+        gh.snap["pr"]["head"]["ref"] = "business-branch"
+        gh.snap["paths"] = ["scripts/measure-job-coverage-live.py"]
+        gh.snap["workflow_sha256"] = c.digest("workflow")
+        gh.snap["protection"]["required_status_checks"]["checks"] = [
+            {"context": "Merglbot PR Assistant v6", "app_id": 3518182},
+            {"context": "Unit tests", "app_id": 15368}]
+        protection = c.digest(json.dumps({"protection": gh.snap["protection"], "rules": []}, sort_keys=True))
+        calls = []
+        def api(path):
+            calls.append(path)
+            if path.endswith("/pulls/2683"):
+                return copy.deepcopy(gh.snap["pr"])
+            if path.endswith("/git/ref/heads/main"):
+                reads = sum(x.endswith("/git/ref/heads/main") for x in calls)
+                return {"object": {"sha": ("e" if race and reads > 1 else "d") * 40}}
+            if "?ref=" + "d" * 40 in path:
+                value = "classifier" if "ci-delay-admission.py" in path else ("changed" if bad_workflow else "workflow")
+                return {"content": base64.b64encode(value.encode()).decode()}
+            raise AssertionError(path)
+        gh.api = api
+        return gh, protection, calls
+
+    def test_lagging_pr_base_keeps_identity_and_checks_live_source(self):
+        gh, protection, calls = self.fixture()
+        with patch.object(a, "WORKFLOW_HASH", c.digest("workflow")), patch.object(a, "CLASSIFIER_HASH", c.digest("classifier")):
+            receipt, _ = a.snapshot(gh, a.COMPATIBILITY_PR, protection)
+        self.assertEqual("b" * 40, receipt["base"])
+        self.assertEqual("d" * 40, receipt["source_base"])
+        self.assertEqual(2, sum(x.endswith("/git/ref/heads/main") for x in calls))
+
+    def test_source_movement_and_changed_live_workflow_refuse(self):
+        for kwargs, reason in (({"race": True}, "main_source_race"),
+                               ({"bad_workflow": True}, "unverified_main_workflow")):
+            gh, protection, _ = self.fixture(**kwargs)
+            with self.subTest(reason=reason), patch.object(a, "WORKFLOW_HASH", c.digest("workflow")), patch.object(a, "CLASSIFIER_HASH", c.digest("classifier")):
+                with self.assertRaisesRegex(c.Gap, reason):
+                    a.snapshot(gh, a.COMPATIBILITY_PR, protection)
+
+
 if __name__ == "__main__":
     unittest.main()

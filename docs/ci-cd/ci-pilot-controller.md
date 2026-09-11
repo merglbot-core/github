@@ -147,3 +147,13 @@ Success requires captured final pending-environment timer, checkout parents,
 substantive V6 and standard merge while selection remains active. Do not count
 mere timestamp spacing or an immediate final run as delayed acceptance.
 Refs: merglbot-core/infra#2688.
+
+### Live main source and PR metadata base
+
+Automatic admission validates the reviewed classifier and workflow at the live
+`refs/heads/main` commit, with a second reference read after the snapshot. The
+PR metadata base may lag that branch; it remains unchanged in the receipt and
+PR identity validation. Both the metadata-base workflow and live-main workflow
+must match the pinned workflow. A branch movement during validation refuses
+admission. The per-event classifier still requires the event head/base to match
+live refs; selecting a PR does not approve a stale event or change merge rules.
