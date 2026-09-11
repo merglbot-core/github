@@ -8,15 +8,22 @@ from github_client import AUTO_MODE, AUTO_PR, DEADLINE, REPOS, Gap, digest, inst
 
 REPO = REPOS[1]
 WORKFLOW_HASH = "cae8723a5b7dd9b87b766a174a3630f08d7bb624bc7d6cfd9bb1a186aaba7c4d"
-CLASSIFIER_HASH = "8304e9c9a23bf6b828dd3b07d5f2a390c30b3a7b25b9f8d057772d44a789003a"
-PATHS = {"scripts/reconcile-alert-config.py", "scripts/reconcile-alert-estate.py",
-         "tests/test_reconcile_alert_config.py", "tests/test_reconcile_alert_estate.py"}
+CLASSIFIER_HASH = "0b1bdd1461f7db4bd2844337c24a0ca6a7a2ef376fb703b165a0491dcdf7306e"
+COMPATIBILITY_PR = 2683
+PATHS = {"scripts/measure-job-coverage-live.py", "tests/test_absence_duration_sweep.py",
+         "tests/test_absence_shape.py", "tests/test_measure_job_coverage_live.py",
+         "tests/test_measure_job_coverage_live_head_regressions.py",
+         "tests/test_measure_job_coverage_live_rounds.py"}
 
 
 def snapshot(gh, number, protection_hash):
     from controller import eligible
+    if number != COMPATIBILITY_PR:
+        raise Gap("unsupported_compatibility_pr")
     p = gh.api(f"repos/{REPO}/pulls/{number}")
     r = {"repo": REPO, "pr": number, "head": p["head"]["sha"], "base": p["base"]["sha"]}
+    if p.get("state") == "closed":
+        raise Gap("compatibility_case_closed")
     if gh.api(f"repos/{REPO}/git/ref/heads/main")["object"]["sha"] != r["base"]:
         raise Gap("advanced_main")
     s = gh.snapshot(r)
@@ -70,7 +77,11 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
 
     try:
         check_time()
+        if experiment.get("terminal_reason"):
+            raise Gap(experiment["terminal_reason"])
         if receipt == {"stop": True}:
+            if any(c.get("pr") == COMPATIBILITY_PR for c in experiment["cases"]):
+                raise Gap("compatibility_finished")
             raise Gap("selection_complete")
         active = experiment.get("active")
         selectors = {repo: values for repo in REPOS if (values := gh.selectors(repo))}
@@ -79,6 +90,8 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
                     or receipt.get("kind") not in ("synthetic", "natural")
                     or receipt.get("mode") not in ("baseline", "delay") or active is not None):
                 raise Gap("invalid_experiment_selection")
+            if receipt["pr"] == COMPATIBILITY_PR and (receipt["kind"], receipt["mode"]) != ("natural", "delay"):
+                raise Gap("compatibility_requires_natural_delay")
             existing = [c for c in experiment["cases"] if c["pr"] == receipt["pr"]]
             if any(c["kind"] != receipt["kind"] for c in existing):
                 raise Gap("case_provenance_changed")
@@ -130,6 +143,8 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
                 "status": "active" if active is not None else "inactive", "history": historical}
     except Exception as error:
         reason = str(error) if isinstance(error, Gap) else "experiment_read_gap"
+        if apply and reason in ("compatibility_case_closed", "compatibility_finished", "deadline"):
+            experiment["terminal_reason"] = reason
         clean = cleanup(gh, apply)
         if clean and apply and experiment.get("active") is not None:
             case = experiment["cases"][experiment["active"]]

@@ -116,3 +116,34 @@ The reviewed observer measures all attempts; gaps stay explicit. Include admissi
 runner time and checkout proof. The agent owns V6/merge and GO evidence.
 Zero-write aborts stay audited but unmeasured; attempted writes remain conservative.
 No production rollout.
+
+
+## Natural compatibility case 2683
+
+The automatic adapter now accepts only `merglbot-core/infra#2683`, in natural
+`delay` mode. Its six assessed Python paths and base-owned classifier digest
+are pinned in `automatic.py`. This does not activate selection. Install only
+after the classifier PR (infra #2689) has been reviewed, merged, and its live
+base digest verified. Reconcile that digest after any classifier review fix.
+
+Use a separate state directory for this compatibility case, preserving all old
+state and case counts. The existing absolute September 14, 2026, 19:03:19 UTC
+cutoff is a shorter bound than seven days. Only one selection may exist across
+all supported repositories; no synthetic or baseline mode for this case.
+Prove a real supervisor wake and exact loaded source before activation.
+
+The base-owned classifier rechecks each event and applies its conservative
+Python capability envelope; the supervising agent also reads each new head's
+full semantic diff. A syntax refusal is an immediate-test fallback, not proof
+of a V6 finding. Scope expansion ends the case. Current scope admission never
+substitutes for full exact-head V6 evidence and required-check verification.
+
+Closed compatibility PRs and explicit case termination are persistent terminal
+states. Selectors are removed first; already admitted jobs are observed until
+complete before the supervisor unloads. A read gap cannot certify completion.
+Historical experiment phase transitions retain their existing behavior.
+
+Success requires captured final pending-environment timer, checkout parents,
+substantive V6 and standard merge while selection remains active. Do not count
+mere timestamp spacing or an immediate final run as delayed acceptance.
+Refs: merglbot-core/infra#2688.
