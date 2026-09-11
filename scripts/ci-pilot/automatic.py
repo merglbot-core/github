@@ -24,11 +24,13 @@ def snapshot(gh, number, protection_hash):
     r = {"repo": REPO, "pr": number, "head": p["head"]["sha"], "base": p["base"]["sha"]}
     if p.get("state") == "closed":
         raise Gap("compatibility_case_closed")
-    if gh.api(f"repos/{REPO}/git/ref/heads/main")["object"]["sha"] != r["base"]:
-        raise Gap("advanced_main")
+    source_base = gh.api(f"repos/{REPO}/git/ref/heads/main")["object"]["sha"]
     s = gh.snapshot(r)
-    content = gh.api(f"repos/{REPO}/contents/scripts/ci-delay-admission.py?ref={r['base']}")
+    content = gh.api(f"repos/{REPO}/contents/scripts/ci-delay-admission.py?ref={source_base}")
     classifier = base64.b64decode(content["content"]).decode()
+    live_workflow = gh.api(f"repos/{REPO}/contents/.github/workflows/python-script-tests.yml?ref={source_base}")
+    if digest(base64.b64decode(live_workflow["content"]).decode()) != WORKFLOW_HASH:
+        raise Gap("unverified_main_workflow")
     if s["workflow_sha256"] != WORKFLOW_HASH or digest(classifier) != CLASSIFIER_HASH:
         raise Gap("unverified_experiment_source")
     if not set(s["paths"]) <= PATHS:
@@ -38,6 +40,9 @@ def snapshot(gh, number, protection_hash):
     r.update(paths=s["paths"], diff_sha256=s["diff_sha256"], protection_sha256=protection_hash,
              workflow_sha256=WORKFLOW_HASH, eligible=True, assessment="Automatic bounded path admission")
     eligible(r, {**s, "selector_supported": True})
+    if gh.api(f"repos/{REPO}/git/ref/heads/main")["object"]["sha"] != source_base:
+        raise Gap("main_source_race")
+    r["source_base"] = source_base
     return r, p["head"]["ref"]
 
 
