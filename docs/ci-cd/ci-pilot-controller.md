@@ -204,3 +204,8 @@ infra classifier is reviewed and merged. Keep the current recovered state and
 its earliest selection window; no fresh experiment, history reset, automatic
 reselection, or wider path grant is introduced. Revalidate the then-current
 business head before activation. This binding is not business V6 approval.
+
+The predicate-compatibility binding pins the classifier assessed at
+`d4a0c63265b62c783e381d485d2eb506575145c1`. Install only after that matching infra assessment
+has merged; retain the current state, selection history, deadlines and single
+supervisor. This source binding alone is not delayed-CI or V6 acceptance.
