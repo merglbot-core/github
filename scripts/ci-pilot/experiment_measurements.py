@@ -9,6 +9,7 @@ REPO = REPOS[1]
 
 def observe(gh, case, now):
     """Discover intermediate heads, then reuse complete attempt-specific job measurements."""
+    case.pop("empty_phase_verified", None)
     query = (f"repos/{REPO}/actions/workflows/python-script-tests.yml/runs?event=pull_request"
              f"&branch={quote(case['branch'], safe='')}")
     # A rerun can enter this phase even when its original run predates it.
@@ -63,7 +64,13 @@ def observe(gh, case, now):
         if case.get("stopped_at"):
             # Successful complete reads with no event are the expected outcome
             # of the bounded no-event timeout, not unfinished runner work.
-            if case.get("reason") != "compatibility_no_event_24h":
+            recoverable = {"github_command_failed", "github_command_timeout",
+                           "github_command_unavailable", "invalid_api_json", "measurement_gap"}
+            if case.get("reason") in recoverable and gaps == 0:
+                # All inventory and per-head reads above succeeded. This proves
+                # an empty interval, never a tested or successful pilot case.
+                case["empty_phase_verified"] = True
+            elif case.get("reason") != "compatibility_no_event_24h":
                 gaps += 1
         else:
             pending += 1

@@ -44,6 +44,22 @@ def snapshot(gh, number, protection_hash):
     return r, p["head"]["ref"]
 
 
+def check_natural_window(experiment, pr, now):
+    """Retries preserve the first selection window and its observed events."""
+    cases = [c for c in experiment["cases"] if c["pr"] == pr and c["kind"] == "natural"]
+    if not cases:
+        return
+    start = min(instant(c["started_at"]) for c in cases)
+    limit = start + dt.timedelta(hours=24)
+    if now < limit:
+        return
+    observations = [o for case in cases for entry in case.get("measurements", {}).values()
+                    for o in entry.get("latest", {}).get("observations", [])]
+    if not any(o.get("attempt") == 1 and start <= instant(o["created_at"]) < limit
+               for o in observations):
+        raise Gap("compatibility_no_event_24h")
+
+
 def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
                     persist=lambda s: None, clock=None, hold_check=lambda: False,
                     supervisor_ready=lambda: False):
@@ -108,6 +124,9 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
             previous = history()
             if previous["unfinished_runs"] or previous["data_gaps"]:
                 raise Gap("previous_phase_incomplete")
+            if receipt["kind"] == "natural":
+                check_natural_window(experiment, receipt["pr"],
+                                     max(now, clock() if clock else dt.datetime.now(dt.timezone.utc)))
             r, branch = snapshot(gh, receipt["pr"], receipt["protection_sha256"])
             if not apply:
                 return {"action": "activation_available", "status": "readonly"}
@@ -123,6 +142,9 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
                 snapshot(gh, active["pr"], active["protection_sha256"])
                 if not supervisor_ready():
                     raise Gap("supervisor_not_ready")
+                if active["kind"] == "natural":
+                    check_natural_window(experiment, active["pr"],
+                                         max(now, clock() if clock else dt.datetime.now(dt.timezone.utc)))
                 active["write_attempted"] = True
                 persist(state)
                 gh.mutate(REPO, name, value)
@@ -144,16 +166,8 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
             raise Gap("measurement_gap")
         check_time()
         if active is not None and active["kind"] == "natural":
-            start = instant(active["started_at"])
-            limit = start + dt.timedelta(hours=24)
-            current = max(now, clock() if clock else dt.datetime.now(dt.timezone.utc))
-            if current >= limit:
-                observations = [o for entry in active.get("measurements", {}).values()
-                                for o in entry.get("latest", {}).get("observations", [])]
-                if not any(o.get("attempt") == 1
-                           and start <= instant(o["created_at"]) < limit
-                           for o in observations):
-                    raise Gap("compatibility_no_event_24h")
+            check_natural_window(experiment, active["pr"],
+                                 max(now, clock() if clock else dt.datetime.now(dt.timezone.utc)))
         persist(state)
         return {"action": "observe" if active is not None else "await_experiment_selection",
                 "status": "active" if active is not None else "inactive", "history": historical}

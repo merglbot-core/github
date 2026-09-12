@@ -32,6 +32,31 @@ class MeasurementTests(unittest.TestCase):
                     self.assertEqual(0 if closed else 1, result["unfinished_runs"])
                     self.assertEqual(1 if closed else 0, result["data_gaps"])
 
+    def test_recovered_read_failure_proves_empty_interval_only(self):
+        case = {"pr": 12, "branch": "test", "started_at": NOW.isoformat(),
+                "stopped_at": (NOW + dt.timedelta(seconds=1)).isoformat(),
+                "initial_base": "b" * 40, "reason": "github_command_failed"}
+        result = a.observe(self.gh, case, NOW)
+        self.assertEqual(0, result["data_gaps"])
+        self.assertEqual(0, result["unfinished_runs"])
+        self.assertTrue(case["empty_phase_verified"])
+        self.assertEqual([], case["heads"])
+        def fail(*args):
+            raise a.Gap("github_command_failed")
+        self.gh.pages = fail
+        result = a.histories(self.gh, {"cases": [case]}, NOW)
+        self.assertEqual(1, result["data_gaps"])
+        self.assertNotIn("empty_phase_verified", case)
+
+    def test_incomplete_measurement_cannot_prove_empty_interval(self):
+        case = {"pr": 12, "branch": "test", "started_at": NOW.isoformat(),
+                "stopped_at": (NOW + dt.timedelta(seconds=1)).isoformat(),
+                "initial_base": "b" * 40, "reason": "github_command_timeout", "heads": ["a" * 40]}
+        self.gh.measurements = lambda *args: {"observations": [], "runner_evidence_gaps": 1}
+        result = a.observe(self.gh, case, NOW)
+        self.assertGreater(result["data_gaps"], 0)
+        self.assertNotIn("empty_phase_verified", case)
+
     def test_completed_cache_requires_same_attempt_and_interval(self):
         case = {"pr": 12, "branch": "test-branch", "started_at": NOW.isoformat(),
                 "initial_base": "b" * 40}
