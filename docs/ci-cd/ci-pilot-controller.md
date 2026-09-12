@@ -182,3 +182,16 @@ event or rerun cannot reset the window. Already admitted jobs are drained before
 the supervisor stops, and empty successful inventories are an expected timeout
 outcome. Failed inventory reads remain data gaps. The absolute September 14
 deadline is unchanged; a new candidate still requires a fresh scope assessment.
+
+### Recovery after an empty read-failure phase
+
+After a GitHub command failure, selection remains off until all inventory and
+per-head reads succeed. A successfully read stopped interval with no events is
+recorded as `empty_phase_verified`, not as a tested or accepted case. A later
+read failure clears that observation and remains a data gap. Existing terminal
+case stops are unchanged; recovery does not automatically reselect a PR.
+
+If the operator reselects the same natural PR through the existing checked
+activation path, its 24-hour window starts at its earliest phase in the
+experiment. Prior timely events are retained; an expired retry cannot write
+a selector. Phase history and the absolute cutoff are preserved.

@@ -112,6 +112,37 @@ class ExperimentTests(unittest.TestCase):
             result = a.measurements.histories(self.gh, {"cases": [case]}, NOW)
         self.assertEqual(1, result["data_gaps"])
 
+    def test_retry_after_read_failure_preserves_first_natural_window(self):
+        spec = {**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"}
+        self.tick(spec)
+        with patch.object(a, "snapshot", side_effect=c.Gap("github_command_failed")):
+            self.tick(now=NOW + dt.timedelta(hours=1))
+        self.assertEqual("active", self.tick(spec, now=NOW + dt.timedelta(hours=2))["status"])
+        self.assertEqual(2, len(self.state["experiment"]["cases"]))
+        result = self.tick(now=NOW + dt.timedelta(hours=24))
+        self.assertEqual("compatibility_no_event_24h", result["reason"])
+        self.assertFalse(any(self.gh.values.values()))
+
+    def test_expired_retry_never_writes_a_selector(self):
+        spec = {**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"}
+        self.tick(spec)
+        with patch.object(a, "snapshot", side_effect=c.Gap("github_command_failed")):
+            self.tick(now=NOW + dt.timedelta(hours=1))
+        self.gh.writes.clear()
+        result = self.tick(spec, now=NOW + dt.timedelta(hours=24))
+        self.assertEqual("compatibility_no_event_24h", result["reason"])
+        self.assertFalse(any(value is not None for _, _, value in self.gh.writes))
+
+    def test_prior_phase_timely_event_is_preserved_on_retry(self):
+        spec = {**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"}
+        self.tick(spec)
+        self.state["experiment"]["cases"][0]["measurements"] = {"head": {"latest": {"observations": [
+            {"attempt": 1, "created_at": (NOW + dt.timedelta(minutes=10)).isoformat()}
+        ]}}}
+        with patch.object(a, "snapshot", side_effect=c.Gap("github_command_failed")):
+            self.tick(now=NOW + dt.timedelta(hours=1))
+        self.assertEqual("active", self.tick(spec, now=NOW + dt.timedelta(hours=24))["status"])
+
     def test_other_pr_refused_by_real_snapshot_before_any_api(self):
         self.snapshot.stop()
         with self.assertRaisesRegex(c.Gap, "unsupported_compatibility_pr"):
