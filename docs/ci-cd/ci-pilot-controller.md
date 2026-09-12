@@ -164,3 +164,19 @@ regression tests, with unchanged ten-minute waiting and September 14 cutoff.
 Reuse the inactive compatibility state and preserve the two historical natural
 case counts in the overall five-case accounting. The selected business PR is
 completed by its development agent; the pilot does not take over that workstream.
+
+### September 12 assessed repair refresh
+
+The classifier digest now binds the assessed ancestor
+`0146939ca86efcd0009cb290707ba5106efb79c5` (infra #2737). The natural run
+34708056870 selected immediate tests against the older ancestor and is not a
+delayed case. Its completed phase stays archived; never erase its terminal
+state to claim uninterrupted selection. Any new phase uses a separate state
+directory and the same supervisor label only after the previous service is
+unloaded. Carry forward the overall case ledger and original experiment end.
+
+This digest update does not activate selection or alter controller behavior.
+The generic controller has a 24-hour no-delay check; the automatic compatibility
+adapter does not call that check. The supervising session must enforce the
+original 24-hour selection limit; do not claim this adapter provides that
+unattended guarantee. Both paths retain the absolute September 14 deadline.
