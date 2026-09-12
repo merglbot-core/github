@@ -118,12 +118,12 @@ Zero-write aborts stay audited but unmeasured; attempted writes remain conservat
 No production rollout.
 
 
-## Natural compatibility case 2683
+## Natural compatibility case 2733
 
-The automatic adapter now accepts only `merglbot-core/infra#2683`, in natural
-`delay` mode. Its six assessed Python paths and base-owned classifier digest
+The automatic adapter now accepts only `merglbot-core/infra#2733`, in natural
+`delay` mode. Its two assessed Python paths and base-owned classifier digest
 are pinned in `automatic.py`. This does not activate selection. Install only
-after the classifier PR (infra #2689) has been reviewed, merged, and its live
+after the replacement classifier PR has been reviewed, merged, and its live
 base digest verified. Reconcile that digest after any classifier review fix.
 
 Use a separate state directory for this compatibility case, preserving all old
@@ -157,3 +157,10 @@ PR identity validation. Both the metadata-base workflow and live-main workflow
 must match the pinned workflow. A branch movement during validation refuses
 admission. The per-event classifier still requires the event head/base to match
 live refs; selecting a PR does not approve a stale event or change merge rules.
+
+The previous #2683 case merged before activation; #2696 stays closed. The
+replacement #2733 assessment covers the coverage calculator and its head
+regression tests, with unchanged ten-minute waiting and September 14 cutoff.
+Reuse the inactive compatibility state and preserve the two historical natural
+case counts in the overall five-case accounting. The selected business PR is
+completed by its development agent; the pilot does not take over that workstream.
