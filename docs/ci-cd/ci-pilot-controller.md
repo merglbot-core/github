@@ -206,6 +206,6 @@ reselection, or wider path grant is introduced. Revalidate the then-current
 business head before activation. This binding is not business V6 approval.
 
 The predicate-compatibility binding pins the classifier assessed at
-`d4a0c63265b62c783e381d485d2eb506575145c1`. Install only after that matching infra assessment
+`f8bccd22311020001a70ac950ee4ad16705164d4`. Install only after that matching infra assessment
 has merged; retain the current state, selection history, deadlines and single
 supervisor. This source binding alone is not delayed-CI or V6 acceptance.
