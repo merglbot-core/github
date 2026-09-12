@@ -8,7 +8,7 @@ from github_client import AUTO_MODE, AUTO_PR, DEADLINE, REPOS, Gap, digest, inst
 
 REPO = REPOS[1]
 WORKFLOW_HASH = "cae8723a5b7dd9b87b766a174a3630f08d7bb624bc7d6cfd9bb1a186aaba7c4d"
-CLASSIFIER_HASH = "53d7dd0730b4abb2a3fcb7c1042cb55ec26dc8c13121d49363793ecd01cdeba8"
+CLASSIFIER_HASH = "343dfbfa3f0d7e48f813b4d3ede1c1e85afa7d6532a1a3340dd035485023c39d"
 COMPATIBILITY_PR = 2733
 PATHS = {"scripts/measure-job-coverage-live.py",
          "tests/test_measure_job_coverage_live_head_regressions.py"}
