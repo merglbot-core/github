@@ -277,7 +277,7 @@ class LiveMainSourceTests(unittest.TestCase):
         calls = []
         def api(path):
             calls.append(path)
-            if path.endswith("/pulls/2683"):
+            if path.endswith("/pulls/2733"):
                 return copy.deepcopy(gh.snap["pr"])
             if path.endswith("/git/ref/heads/main"):
                 reads = sum(x.endswith("/git/ref/heads/main") for x in calls)

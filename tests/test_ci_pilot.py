@@ -94,7 +94,7 @@ class PilotTests(unittest.TestCase):
         self.assertEqual(self.activate()["action"], "observe")
         self.assertEqual([w[1] for w in self.gh.writes], [c.BASE_VAR, c.SHA_VAR, c.PR_VAR])
         self.assertEqual(self.gh.values[repo][c.BASE_VAR], self.gh.receipt["base"])
-        self.assertEqual(c.tick(self.gh, self.state, NOW, True)["action"], "observe")
+        self.assertEqual(c.tick(self.gh, self.state, NOW, True, clock=lambda: NOW)["action"], "observe")
         self.gh.snap["pr"]["base"]["sha"] = "d" * 40
         self.assert_clean(c.tick(self.gh, self.state, NOW, True))
         self.assertEqual([w[1] for w in self.gh.writes[-3:]], [c.PR_VAR, c.SHA_VAR, c.BASE_VAR])
@@ -114,7 +114,7 @@ class PilotTests(unittest.TestCase):
         self.assertEqual(self.activate()["action"], "observe")
         self.assertEqual([w[1] for w in self.gh.writes], [c.SHA_VAR, c.PR_VAR])
         recovered = json.loads(json.dumps(self.state))
-        self.assertEqual(c.tick(self.gh, recovered, NOW, True)["action"], "observe")
+        self.assertEqual(c.tick(self.gh, recovered, NOW, True, clock=lambda: NOW)["action"], "observe")
         self.assertEqual(recovered["counted_prs"], [])
 
     def test_head_base_closed_merge_hold_and_paths_cleanup(self):
