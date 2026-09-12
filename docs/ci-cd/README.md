@@ -32,3 +32,7 @@ with `platform_digest`. This is a builder-produced projection of the same
 statement, retaining all commit/material claims, and is archived beside the
 full `provenance.json` as `platform-provenance.json`. It is absent for non-push
 builds. The existing `slsa_provenance` output retains its complete subject list.
+
+## Bounded CI experiment
+
+- [2026-09-11 closeout: NO-GO, insufficient evidence](ci-pilot-closeout-20260911.md)
