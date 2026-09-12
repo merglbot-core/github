@@ -164,3 +164,21 @@ regression tests, with unchanged ten-minute waiting and September 14 cutoff.
 Reuse the inactive compatibility state and preserve the two historical natural
 case counts in the overall five-case accounting. The selected business PR is
 completed by its development agent; the pilot does not take over that workstream.
+
+### September 12 assessed repair refresh
+
+The classifier digest now binds the assessed ancestor
+`0146939ca86efcd0009cb290707ba5106efb79c5` (infra #2737). The natural run
+34708056870 selected immediate tests against the older ancestor and is not a
+delayed case. Its completed phase stays archived; never erase its terminal
+state to claim uninterrupted selection. Any new phase uses a separate state
+directory and the same supervisor label only after the previous service is
+unloaded. Carry forward the overall case ledger and original experiment end.
+
+This update does not activate selection.
+The automatic compatibility adapter removes selection after 24 hours without
+an observed first-attempt natural event within that selection window. A late
+event or rerun cannot reset the window. Already admitted jobs are drained before
+the supervisor stops, and empty successful inventories are an expected timeout
+outcome. Failed inventory reads remain data gaps. The absolute September 14
+deadline is unchanged; a new candidate still requires a fresh scope assessment.

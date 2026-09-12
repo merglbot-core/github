@@ -8,7 +8,7 @@ from github_client import AUTO_MODE, AUTO_PR, DEADLINE, REPOS, Gap, digest, inst
 
 REPO = REPOS[1]
 WORKFLOW_HASH = "cae8723a5b7dd9b87b766a174a3630f08d7bb624bc7d6cfd9bb1a186aaba7c4d"
-CLASSIFIER_HASH = "343dfbfa3f0d7e48f813b4d3ede1c1e85afa7d6532a1a3340dd035485023c39d"
+CLASSIFIER_HASH = "190a6c0203c2c3121696505fdec6ec44e6469d5eb98487d2b4384f0e3feacfa7"
 COMPATIBILITY_PR = 2733
 PATHS = {"scripts/measure-job-coverage-live.py",
          "tests/test_measure_job_coverage_live_head_regressions.py"}
@@ -143,12 +143,23 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
         if historical["data_gaps"]:
             raise Gap("measurement_gap")
         check_time()
+        if active is not None and active["kind"] == "natural":
+            start = instant(active["started_at"])
+            limit = start + dt.timedelta(hours=24)
+            current = max(now, clock() if clock else dt.datetime.now(dt.timezone.utc))
+            if current >= limit:
+                observations = [o for entry in active.get("measurements", {}).values()
+                                for o in entry.get("latest", {}).get("observations", [])]
+                if not any(o.get("attempt") == 1
+                           and start <= instant(o["created_at"]) < limit
+                           for o in observations):
+                    raise Gap("compatibility_no_event_24h")
         persist(state)
         return {"action": "observe" if active is not None else "await_experiment_selection",
                 "status": "active" if active is not None else "inactive", "history": historical}
     except Exception as error:
         reason = str(error) if isinstance(error, Gap) else "experiment_read_gap"
-        if apply and reason in ("compatibility_case_closed", "compatibility_finished", "compatibility_scope_expanded", "deadline"):
+        if apply and reason in ("compatibility_case_closed", "compatibility_finished", "compatibility_scope_expanded", "compatibility_no_event_24h", "deadline"):
             experiment["terminal_reason"] = reason
         clean = cleanup(gh, apply)
         if clean and apply and experiment.get("active") is not None:

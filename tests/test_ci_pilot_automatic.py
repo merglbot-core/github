@@ -65,6 +65,53 @@ class ExperimentTests(unittest.TestCase):
         result = self.tick({**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"})
         self.assertEqual("active", result["status"])
 
+    def test_natural_no_event_times_out_at_24h_and_cannot_reactivate(self):
+        import runtime
+        spec = {**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"}
+        self.tick(spec)
+        self.assertEqual("active", self.tick(now=NOW + dt.timedelta(hours=24, seconds=-1))["status"])
+        result = self.tick(now=NOW + dt.timedelta(hours=24))
+        self.assertEqual("compatibility_no_event_24h", result["reason"])
+        self.assertFalse(any(self.gh.values.values()))
+        self.assertTrue(runtime.schedule(result, NOW)["stopped"])
+        self.assertIsNone(self.state["experiment"]["active"])
+        self.assertEqual("compatibility_no_event_24h", self.tick(spec)["reason"])
+
+    def test_natural_event_within_window_keeps_selection(self):
+        self.tick({**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"})
+        case = self.state["experiment"]["cases"][0]
+        case["measurements"] = {"head": {"latest": {"observations": [
+            {"attempt": 1, "created_at": (NOW + dt.timedelta(hours=1)).isoformat()}
+        ]}}}
+        self.assertEqual("active", self.tick(now=NOW + dt.timedelta(hours=24))["status"])
+
+    def test_late_event_or_rerun_cannot_rescue_expired_window(self):
+        for offset, attempt in [(24, 1), (-1, 1), (1, 2)]:
+            with self.subTest(offset=offset, attempt=attempt):
+                self.state = {"experiment": {"version": 1, "cases": [], "active": None}}
+                self.gh.values = {repo: {} for repo in c.REPOS}
+                self.tick({**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"})
+                case = self.state["experiment"]["cases"][0]
+                case["measurements"] = {"head": {"latest": {"observations": [
+                    {"attempt": attempt, "created_at": (NOW + dt.timedelta(hours=offset)).isoformat()}
+                ]}}}
+                with patch.object(a.measurements, "observe", return_value={"unfinished_runs": 1, "data_gaps": 0}):
+                    result = self.tick(now=NOW + dt.timedelta(hours=24))
+                self.assertEqual("drain_admitted_runs", result["action"])
+                self.assertFalse(any(self.gh.values.values()))
+
+    def test_timeout_empty_inventory_is_complete_but_read_failure_is_not(self):
+        case = {"branch": "test", "pr": a.COMPATIBILITY_PR,
+                "started_at": NOW.isoformat(), "stopped_at": (NOW + dt.timedelta(hours=24)).isoformat(),
+                "reason": "compatibility_no_event_24h", "initial_base": "b" * 40}
+        result = REAL_OBSERVE(self.gh, case, NOW + dt.timedelta(hours=24))
+        self.assertEqual(0, result["data_gaps"])
+        self.assertEqual(0, result["unfinished_runs"])
+        self.observation.stop()
+        with patch.object(self.gh, "pages", side_effect=RuntimeError("API unavailable")):
+            result = a.measurements.histories(self.gh, {"cases": [case]}, NOW)
+        self.assertEqual(1, result["data_gaps"])
+
     def test_other_pr_refused_by_real_snapshot_before_any_api(self):
         self.snapshot.stop()
         with self.assertRaisesRegex(c.Gap, "unsupported_compatibility_pr"):
