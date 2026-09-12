@@ -61,7 +61,10 @@ def observe(gh, case, now):
     if not observed:
         # A just-selected phase awaits its first event; a closed empty phase is not proof.
         if case.get("stopped_at"):
-            gaps += 1
+            # Successful complete reads with no event are the expected outcome
+            # of the bounded no-event timeout, not unfinished runner work.
+            if case.get("reason") != "compatibility_no_event_24h":
+                gaps += 1
         else:
             pending += 1
     return {"unfinished_runs": pending, "data_gaps": gaps, "observed_at": now.isoformat()}

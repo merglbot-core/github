@@ -143,12 +143,23 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
         if historical["data_gaps"]:
             raise Gap("measurement_gap")
         check_time()
+        if active is not None and active["kind"] == "natural":
+            start = instant(active["started_at"])
+            limit = start + dt.timedelta(hours=24)
+            current = max(now, clock() if clock else dt.datetime.now(dt.timezone.utc))
+            if current >= limit:
+                observations = [o for entry in active.get("measurements", {}).values()
+                                for o in entry.get("latest", {}).get("observations", [])]
+                if not any(o.get("attempt") == 1
+                           and start <= instant(o["created_at"]) < limit
+                           for o in observations):
+                    raise Gap("compatibility_no_event_24h")
         persist(state)
         return {"action": "observe" if active is not None else "await_experiment_selection",
                 "status": "active" if active is not None else "inactive", "history": historical}
     except Exception as error:
         reason = str(error) if isinstance(error, Gap) else "experiment_read_gap"
-        if apply and reason in ("compatibility_case_closed", "compatibility_finished", "compatibility_scope_expanded", "deadline"):
+        if apply and reason in ("compatibility_case_closed", "compatibility_finished", "compatibility_scope_expanded", "compatibility_no_event_24h", "deadline"):
             experiment["terminal_reason"] = reason
         clean = cleanup(gh, apply)
         if clean and apply and experiment.get("active") is not None:

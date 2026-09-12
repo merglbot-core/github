@@ -175,8 +175,10 @@ state to claim uninterrupted selection. Any new phase uses a separate state
 directory and the same supervisor label only after the previous service is
 unloaded. Carry forward the overall case ledger and original experiment end.
 
-This digest update does not activate selection or alter controller behavior.
-The generic controller has a 24-hour no-delay check; the automatic compatibility
-adapter does not call that check. The supervising session must enforce the
-original 24-hour selection limit; do not claim this adapter provides that
-unattended guarantee. Both paths retain the absolute September 14 deadline.
+This update does not activate selection.
+The automatic compatibility adapter removes selection after 24 hours without
+an observed first-attempt natural event within that selection window. A late
+event or rerun cannot reset the window. Already admitted jobs are drained before
+the supervisor stops, and empty successful inventories are an expected timeout
+outcome. Failed inventory reads remain data gaps. The absolute September 14
+deadline is unchanged; a new candidate still requires a fresh scope assessment.

@@ -85,7 +85,7 @@ def recover_experiment(state_dir, now):
 
 def schedule(result, now):
     terminal = (result.get("action") == "cleanup_verified"
-                and result.get("reason") in ("deadline", "case_limit", "compatibility_case_closed", "compatibility_finished", "compatibility_scope_expanded"))
+                and result.get("reason") in ("deadline", "case_limit", "compatibility_case_closed", "compatibility_finished", "compatibility_scope_expanded", "compatibility_no_event_24h"))
     history = result.get("history") or {}
     active = result.get("status") in ("active", "unverified", "pending") or history.get("unfinished_runs", 0) > 0
     return {"stopped": terminal,
