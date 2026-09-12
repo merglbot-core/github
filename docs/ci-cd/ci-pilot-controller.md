@@ -195,3 +195,12 @@ If the operator reselects the same natural PR through the existing checked
 activation path, its 24-hour window starts at its earliest phase in the
 experiment. Prior timely events are retained; an expired retry cannot write
 a selector. Phase history and the absolute cutoff are preserved.
+
+### Filter-pinning assessment binding
+
+The adapter digest binds the bounded assessment of business head
+`d8b7e3e171d5ac5a91b39ec2d258fdd66cf0e8ec`. Install only after the matching
+infra classifier is reviewed and merged. Keep the current recovered state and
+its earliest selection window; no fresh experiment, history reset, automatic
+reselection, or wider path grant is introduced. Revalidate the then-current
+business head before activation. This binding is not business V6 approval.
