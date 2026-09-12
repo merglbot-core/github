@@ -112,6 +112,27 @@ class ExperimentTests(unittest.TestCase):
             result = a.measurements.histories(self.gh, {"cases": [case]}, NOW)
         self.assertEqual(1, result["data_gaps"])
 
+    def test_measurement_read_failure_recovers_and_failure_returns(self):
+        self.observation.stop()
+        spec = {**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"}
+        self.assertEqual("active", self.tick(spec)["status"])
+        with patch.object(self.gh, "pages", side_effect=c.Gap("github_command_failed")):
+            failed = self.tick(now=NOW + dt.timedelta(minutes=1))
+        self.assertEqual("measurement_gap", failed["reason"])
+        self.assertGreater(failed["history"]["data_gaps"], 0)
+        self.assertFalse(any(self.gh.values.values()))
+        recovered = self.tick(now=NOW + dt.timedelta(minutes=2))
+        self.assertEqual("inactive", recovered["status"])
+        self.assertEqual(0, recovered["history"]["data_gaps"])
+        self.assertTrue(self.state["experiment"]["cases"][0]["empty_phase_verified"])
+        self.assertEqual("active", self.tick(spec, now=NOW + dt.timedelta(minutes=3))["status"])
+        with patch.object(self.gh, "pages", side_effect=c.Gap("github_command_failed")):
+            failed_again = self.tick(now=NOW + dt.timedelta(minutes=4))
+        self.assertGreater(failed_again["history"]["data_gaps"], 0)
+        self.assertFalse(any(self.gh.values.values()))
+        self.assertTrue(all("empty_phase_verified" not in case
+                            for case in self.state["experiment"]["cases"]))
+
     def test_retry_after_read_failure_preserves_first_natural_window(self):
         spec = {**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"}
         self.tick(spec)

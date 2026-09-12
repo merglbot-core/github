@@ -65,7 +65,7 @@ def observe(gh, case, now):
             # Successful complete reads with no event are the expected outcome
             # of the bounded no-event timeout, not unfinished runner work.
             recoverable = {"github_command_failed", "github_command_timeout",
-                           "github_command_unavailable", "invalid_api_json"}
+                           "github_command_unavailable", "invalid_api_json", "measurement_gap"}
             if case.get("reason") in recoverable and gaps == 0:
                 # All inventory and per-head reads above succeeded. This proves
                 # an empty interval, never a tested or successful pilot case.
