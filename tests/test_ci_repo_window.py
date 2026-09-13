@@ -115,6 +115,60 @@ class WindowTests(unittest.TestCase):
         self.assertFalse(self.gh.writes)
 
 
+    def test_storage_failure_still_cleans_partial_activation(self):
+        calls = []
+        def persist(state):
+            calls.append(1)
+            if len(calls) >= 3:
+                raise OSError('synthetic disk full')
+        result = window.tick(self.gh, self.state, self.now, True, {'start_window': True},
+                             persist=persist, clock=lambda: self.now, supervisor_ready=lambda: True)
+        self.assertEqual('unverified', result['status'])
+        self.assertTrue(result['cleanup_verified'])
+        self.assertFalse(any(self.gh.values.values()))
+
+    def test_expiry_during_observation_cleans_before_return(self):
+        self.start()
+        def observation(gh, value, persist, checkpoint):
+            self.now += dt.timedelta(hours=5)
+            checkpoint()
+        with patch.object(window, 'observe', side_effect=observation):
+            result = self.tick()
+        self.assertTrue(result['cleanup_verified'])
+        self.assertFalse(any(self.gh.values.values()))
+
+    def test_hold_during_observation_cleans_before_return(self):
+        self.start()
+        held = [False]
+        def observation(gh, value, persist, checkpoint):
+            held[0] = True
+            checkpoint()
+        with patch.object(window, 'observe', side_effect=observation):
+            result = window.tick(self.gh, self.state, self.now, True,
+                                 clock=lambda: self.now, hold_check=lambda: held[0])
+        self.assertTrue(result['cleanup_verified'])
+        self.assertFalse(any(self.gh.values.values()))
+
+    def test_only_first_attempt_within_actual_boundaries_is_observed(self):
+        value = {'activation_intents': {window.REPOS[0]: self.now.isoformat()},
+                 'stopped_at': {window.REPOS[0]: (self.now + dt.timedelta(hours=5)).isoformat()}}
+        self.gh.pages = lambda path, *args: ([{'id': 1, 'created_at': self.now.isoformat(),
+            'run_attempt': 2}] if '/runs?' in path else [])
+        calls = []
+        def api(path):
+            calls.append(path)
+            return {'id': 1, 'run_started_at': self.now.isoformat(), 'status': 'completed',
+                    'pull_requests': []}
+        self.gh.api = api
+        result = window.observe(self.gh, value, lambda: None)
+        self.assertEqual({'unfinished_runs': 0, 'data_gaps': 0}, result)
+        self.assertEqual([f'repos/{window.REPOS[0]}/actions/runs/1/attempts/1'], calls)
+        for offset in (-1, 5 * 3600):
+            value.pop('observations', None)
+            self.gh.api = lambda path: {'run_started_at': (self.now + dt.timedelta(seconds=offset)).isoformat()}
+            self.assertEqual(0, window.observe(self.gh, value, lambda: None)['data_gaps'])
+            self.assertFalse(value.get('observations'))
+
 
 class PreflightTests(unittest.TestCase):
     def setUp(self):

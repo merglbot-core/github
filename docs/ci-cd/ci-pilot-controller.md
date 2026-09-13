@@ -217,3 +217,9 @@ not dispatched by the controller or installed yet. The follow-up wiring delivery
 will replace single-PR selection only after V6 review and runtime verification.
 Owner scope: infra/exporter, fixed ten minutes, five-hour window, no V6 or LPW
 changes. Refs infra#2688. No activation is authorized by this source-only merge.
+
+The window observer measures admitted first attempts only. The new workflows
+explicitly route every rerun immediately; old-run reruns are not admission or
+drain evidence and their runner cost is outside this observer's coverage. This
+is not a complete Actions billing inventory. Final acceptance still requires
+actual timer evidence on the merged head, not a later immediate rerun.
