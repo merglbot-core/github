@@ -299,10 +299,11 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("tick", "activate", "begin-experiment", "stop-selection"))
+    parser.add_argument("command", choices=("tick", "activate", "begin-experiment", "stop-selection", "prepare-window", "start-window", "stop-window"))
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--receipt", type=Path)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--repo", choices=("merglbot-core/infra", "merglbot-extractors/denatura-forecast-exporter"))
     args = parser.parse_args()
     args.state_dir.mkdir(parents=True, exist_ok=True)
     with (args.state_dir / "controller.lock").open("a") as lock:
@@ -325,7 +326,18 @@ def main():
             if args.command == "stop-selection" and "experiment" not in state:
                 raise Gap("experiment_required")
             extra = {}
-            if args.command == "begin-experiment" or "experiment" in state:
+            if args.command in ("prepare-window", "start-window", "stop-window") or "repo_window" in state:
+                from repo_window import tick as window_tick, REPOS as WINDOW_REPOS
+                from runtime import ready
+                runner = window_tick
+                extra["supervisor_ready"] = lambda: ready(args.state_dir, dt.datetime.now(dt.timezone.utc))
+                if args.command == "prepare-window":
+                    receipt = {"prepare_window": True, "contracts": json.loads(args.receipt.read_text())}
+                elif args.command == "start-window":
+                    receipt = {"start_window": True}
+                elif args.command == "stop-window":
+                    receipt = {"stop_repos": [args.repo] if args.repo else list(WINDOW_REPOS)}
+            elif args.command == "begin-experiment" or "experiment" in state:
                 from automatic import experiment_tick
                 from runtime import ready
                 extra["supervisor_ready"] = lambda: ready(args.state_dir, dt.datetime.now(dt.timezone.utc))
@@ -340,9 +352,12 @@ def main():
                           ((args.state_dir / "OWNER_HOLD").exists()
                            or (Path.home() / ".claude/merglbot-preauth/OWNER_HOLD").exists()),
                           lambda s: atomic(state_path, s),
-                          hold_check=lambda: (args.state_dir / "OWNER_HOLD").exists(), **extra)
+                          hold_check=lambda: ((args.state_dir / "OWNER_HOLD").exists()
+                              or (Path.home() / ".claude/merglbot-preauth/OWNER_HOLD").exists()), **extra)
         except Exception:
+            from repo_window import disable
             clean = cleanup(gh, args.apply)
+            clean = disable(gh, apply=args.apply) and clean
             result = {"action": "recovery_required", "cleanup_verified": clean,
                       "status": "unverified", "reason": "invalid_local_state"}
         atomic(args.state_dir / "next_action.json", result)
