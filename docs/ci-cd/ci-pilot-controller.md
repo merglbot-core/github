@@ -265,3 +265,9 @@ The predicate-compatibility binding pins the classifier assessed at
 `d4a0c63265b62c783e381d485d2eb506575145c1`. Install only after that matching infra assessment
 has merged; retain the current state, selection history, deadlines and single
 supervisor. This source binding alone is not delayed-CI or V6 acceptance.
+
+The new observer measures first attempts eligible for delay only. Reruns are
+explicitly immediate in both workflows and are excluded from delayed admission
+and drain evidence. Their runner cost needs separate measurement; this observer
+is not a complete billing inventory. Final acceptance cannot use an immediate
+rerun in place of delayed final-head tests.

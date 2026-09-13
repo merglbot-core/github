@@ -81,29 +81,39 @@ def preflight(gh, repo, expected):
         raise Gap('window_main_moved')
 
 
-def observe(gh, window, persist):
-    """Retain redacted per-attempt job/timer observations; never infer V6 acceptance."""
+def observe(gh, window, persist, checkpoint=lambda: None):
+    """Measure admitted first attempts only; reruns are always immediate in this mode."""
     unfinished = gaps = 0
     for repo in REPOS:
         if repo not in window.get('activation_intents', {}):
             continue
         try:
+            checkpoint()
             since = window['activation_intents'][repo].replace('+00:00', 'Z')
             runs = gh.pages(f'repos/{repo}/actions/workflows/{WORKFLOWS[repo].rsplit("/", 1)[1]}/runs'
                             f'?event=pull_request&created=%3E%3D{since}', 'workflow_runs')
             for run in runs:
+                checkpoint()
                 stopped = window.get('stopped_at', {}).get(repo)
                 if stopped and instant(run['created_at']) >= instant(stopped):
                     continue
-                for attempt in range(1, run['run_attempt'] + 1):
+                # Unlike the retired selector experiment, attempts >1 cannot be delayed.
+                # Exclude them from admission/drain evidence, not count them as free work.
+                for attempt in (1,):
                     key = f'{repo}/{run["id"]}/{attempt}'
                     old = window.setdefault('observations', {}).get(key)
                     if old and old['status'] == 'completed':
                         continue
                     prefix = f'repos/{repo}/actions/runs/{run["id"]}'
                     current = gh.api(f'{prefix}/attempts/{attempt}')
+                    checkpoint()
+                    started = instant(current['run_started_at'])
+                    if started < instant(since) or (stopped and started >= instant(stopped)):
+                        continue
                     jobs = gh.pages(f'{prefix}/attempts/{attempt}/jobs', 'jobs')
+                    checkpoint()
                     pending = gh.api(f'{prefix}/pending_deployments') if attempt == run['run_attempt'] else []
+                    checkpoint()
                     observation = {k: current.get(k) for k in
                                    ('id', 'head_sha', 'created_at', 'run_started_at', 'status', 'conclusion')}
                     observation['prs'] = [p['number'] for p in current['pull_requests']]
@@ -119,6 +129,10 @@ def observe(gh, window, persist):
                     window['observations'][key] = observation
                     persist()
                     unfinished += current['status'] != 'completed'
+        except Gap as error:
+            if str(error) == 'window_interrupted':
+                raise
+            gaps += 1
         except Exception:
             gaps += 1
     return {'unfinished_runs': unfinished, 'data_gaps': gaps}
@@ -131,6 +145,10 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
     window = state.get('repo_window')
     def save():
         persist(state)
+    def checkpoint():
+        if hold_check() or (window.get('phase') == 'active' and
+                clock() >= instant(window['expires_at'])):
+            raise Gap('window_interrupted')
     try:
         if receipt and receipt.get('prepare_window'):
             if window is not None or state.get('receipt') or state.get('experiment', {}).get('active'):
@@ -224,7 +242,8 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
                 for repo in REPOS:
                     window.setdefault('stopped_at', {}).setdefault(repo, clock().isoformat())
                 save()
-        history = observe(gh, window, save)
+        history = observe(gh, window, save, checkpoint)
+        checkpoint()
         if window['phase'] == 'stopping' and not any(history.values()):
             window['phase'] = 'stopped'
         save()
@@ -234,7 +253,10 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
     except Exception as error:
         if isinstance(window, dict) and apply:
             window.update(phase='stopping', disabled=list(REPOS))
-            save()
+            try:
+                save()
+            except Exception:
+                pass  # Cleanup must not depend on healthy storage.
         clean = disable(gh, apply=apply)
         return {'action': 'window_cleanup_required', 'status': 'unverified', 'cleanup_verified': clean,
                 'reason': str(error) if isinstance(error, Gap) else 'window_data_gap'}
