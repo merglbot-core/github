@@ -53,6 +53,11 @@ on:
         type: string
         default: '.'
         required: false
+      ci-delay-candidate:
+        description: 'Opt in to caller repository CI_DELAY_ENABLED test-job routing'
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: read
@@ -66,12 +71,29 @@ jobs:
     name: Python CI
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # The caller's variable is evaluated here because reusable-call `with` does
+    # not accept the vars context. Existing callers remain immediate by default.
+    environment:
+      name: ${{ inputs.ci-delay-candidate && vars.CI_DELAY_ENABLED == 'true' && github.event_name == 'pull_request' && github.run_attempt == '1' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == github.repository && 'ci-pr-delay' || 'ci-immediate' }}
+      deployment: false
     
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Record CI pilot checkout
+        if: inputs.ci-delay-candidate && github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          {
+            echo 'CI_EXPERIMENT_CHECKOUT'
+            echo "checked_out_sha=$(git rev-parse HEAD)"
+            echo "pr_head_sha=${{ github.event.pull_request.head.sha }}"
+            echo "pr_base_sha=${{ github.event.pull_request.base.sha }}"
+            echo "checkout_parents=$(git rev-list --parents -n 1 HEAD)"
+          } >> "$GITHUB_STEP_SUMMARY"
       
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
