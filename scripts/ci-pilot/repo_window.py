@@ -43,6 +43,49 @@ def disable(gh, repos=REPOS, apply=False):
     return verified
 
 
+def stop_switches(gh, window, repos, apply, save, clock):
+    clean = True
+    for repo in repos:
+        if (isinstance(window, dict) and repo in window.get('activation_intents', {})
+                and repo not in window.get('stopped_at', {})):
+            try:
+                if not switches(gh, repo):
+                    window['boundary_gap'] = True
+            except Exception:
+                window['boundary_gap'] = True
+        removed = disable(gh, (repo,), apply)
+        clean = removed and clean
+        if removed and apply and isinstance(window, dict):
+            window.setdefault('stopped_at', {}).setdefault(repo, clock().isoformat())
+            try:
+                save()
+            except Exception:
+                window['boundary_gap'] = True
+    return clean
+
+
+def emergency_stop(gh, state, apply, persist, clock):
+    """Stop under the caller's lock; loss of storage must never block removal."""
+    window = state.get('repo_window') if isinstance(state, dict) else None
+    if not apply or not isinstance(window, dict):
+        return disable(gh, apply=apply)
+    window.update(phase='stopping', disabled=list(REPOS))
+    storage_ok = True
+    def save():
+        persist(state)
+    try:
+        save()
+    except Exception:
+        storage_ok = False
+        window['boundary_gap'] = True
+    try:
+        clean = stop_switches(gh, window, REPOS, True, save, clock)
+    except Exception:
+        storage_ok = False
+        clean = disable(gh, apply=True)
+    return clean and storage_ok and not window.get('boundary_gap', False)
+
+
 def preflight(gh, repo, expected):
     prefix = f'repos/{repo}'
     main = gh.api(f'{prefix}/git/ref/heads/main')['object']['sha']
@@ -146,24 +189,7 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
     def save():
         persist(state)
     def stop(repos):
-        clean = True
-        for repo in repos:
-            if (isinstance(window, dict) and repo in window.get('activation_intents', {})
-                    and repo not in window.get('stopped_at', {})):
-                try:
-                    if not switches(gh, repo):
-                        window['boundary_gap'] = True
-                except Exception:
-                    window['boundary_gap'] = True
-            removed = disable(gh, (repo,), apply)
-            clean = removed and clean
-            if removed and apply and isinstance(window, dict):
-                window.setdefault('stopped_at', {}).setdefault(repo, clock().isoformat())
-                try:
-                    save()
-                except Exception:
-                    window['boundary_gap'] = True
-        return clean
+        return stop_switches(gh, window, repos, apply, save, clock)
     def checkpoint():
         if hold_check() or (window.get('phase') == 'active' and
                 clock() >= instant(window['expires_at'])):

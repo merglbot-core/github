@@ -1,4 +1,52 @@
-# Bounded CI delay supervisor
+# CI delay supervisor
+
+## Active successor: five-hour repository window
+
+Owner-approved September 13, 2026 (infra#2688): infra and exporter share one
+five-hour window. Preserve historical evidence; retire the selection modes below.
+`CI_DELAY_ENABLED=true` delays first-attempt same-repo main PRs ten minutes,
+including drafts and every diff class. Unset/false, forks, other bases and reruns
+are immediate; push workflows are unchanged. GitHub compares strings without
+case sensitivity; the controller writes `true`. No admission runner or V6/LPW,
+Terraform, protection or fb-viz change.
+
+Install only reviewed source under the existing label and locks, after retiring
+the old supervisor and verifying terminal history and absent old selectors.
+Keep switches off until both workflow deliveries and scoped deployments pass.
+Prepare a JSON mapping of exactly both repo names to reviewed main workflow and
+protection hashes (`workflow_sha256`, `protection_sha256`, conventions below).
+Do not update hashes to accept unexplained drift.
+
+Run with the installed controller and state directory:
+
+```sh
+controller.py prepare-window --state-dir <state-dir> --receipt <contracts.json> --apply
+runtime.py recover-window --state-dir <state-dir>
+# Bootstrap the same supervisor and verify its fresh successful wake.
+controller.py start-window --state-dir <state-dir> --apply
+controller.py stop-window --state-dir <state-dir> --apply
+# Optional: add --repo merglbot-core/infra to stop only infra.
+```
+
+Recovery preserves history and refuses started windows, holds or unfinished prior
+runs. Activation validates both repos and supervision, durably records the five-hour
+deadline before writing switches, and rolls back partial activation. Restarts cannot
+extend or re-enable it; a per-repo stop persists.
+
+Observe every five minutes while active or draining; the active session stops at
+the deadline. Scheduled removal occurs on the next wake. Host sleep/API failure
+can delay removal: retry and report unverified until readback succeeds. Inspect
+already waiting runs separately and supervise until they finish.
+
+Use natural pushes only. Older PR branches may carry old workflows. Timer and
+checkout-parent proof, final-head V6 evidence and standard merge remain session
+acceptance duties; observation metadata proves neither review nor billing savings.
+Require one complete natural case per repo. At expiry remove switches and report
+counts, latency, runner work and pending closeouts. No extension, 15 minutes or
+estate rollout without a new owner decision.
+
+## Historical bounded selector supervisor
+
 
 ```sh
 python3 scripts/ci-pilot/controller.py tick --state-dir /absolute/state
@@ -210,25 +258,8 @@ The predicate-compatibility binding pins the classifier assessed at
 has merged; retain the current state, selection history, deadlines and single
 supervisor. This source binding alone is not delayed-CI or V6 acceptance.
 
-## Five-hour repository window preparation
-
-`repo_window.py` and its tests prepare a two-repo switch/expiry adapter. It is
-not dispatched by the controller or installed yet. The follow-up wiring delivery
-will replace single-PR selection only after V6 review and runtime verification.
-Owner scope: infra/exporter, fixed ten minutes, five-hour window, no V6 or LPW
-changes. Refs infra#2688. No activation is authorized by this source-only merge.
-
-The window observer measures admitted first attempts only. The new workflows
-explicitly route every rerun immediately; old-run reruns are not admission or
-drain evidence and their runner cost is outside this observer's coverage. This
-is not a complete Actions billing inventory. Final acceptance still requires
-actual timer evidence on the merged head, not a later immediate rerun.
-
-### Prepared repository-window recovery
-
-The `runtime.py recover-window --state-dir <state-dir>` command rearms only a
-prepared, unstarted repository window after the existing supervisor is unloaded.
-It requires no holds or selectors, verifies both legacy and experimental run
-history (excluding explicit no-write aborts), and preserves durable case evidence.
-It clears stale runtime readiness; a fresh verified wake is still required before
-activation. This source-only preparation neither installs nor enables the window.
+The new observer measures first attempts eligible for delay only. Reruns are
+explicitly immediate in both workflows and are excluded from delayed admission
+and drain evidence. Their runner cost needs separate measurement; this observer
+is not a complete billing inventory. Final acceptance cannot use an immediate
+rerun in place of delayed final-head tests.
