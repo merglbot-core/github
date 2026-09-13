@@ -54,6 +54,39 @@ class WindowRuntimeTests(unittest.TestCase):
                 self.assertEqual('recovery_required', saved['action'])
                 self.assertEqual('unverified', saved['status'])
 
+    def test_prepared_window_rearms_stopped_runtime_without_erasing_history(self):
+        state = {'repo_window': {'phase': 'prepared'}, 'experiment': {'active': None},
+                 'counted_prs': ['historical/repo#1'], 'history': [{'retained': True}]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = json.dumps(state)
+            (root / 'state.json').write_text(original)
+            (root / 'runtime.json').write_text(json.dumps({'stopped': True, 'healthy': True}))
+            with patch.object(runtime, 'supervisor_unloaded', return_value=True), patch.object(
+                    repo_window, 'disable', return_value=True), patch.object(runtime, 'cleanup', return_value=True), patch.object(
+                    controller, 'history_evidence', return_value={'unfinished_runs': 0, 'data_gaps': 0}):
+                self.assertEqual(0, runtime.recover_window(root, dt.datetime.now(dt.timezone.utc)))
+            self.assertEqual(original, (root / 'state.json').read_text())
+            plan = json.loads((root / 'runtime.json').read_text())
+            self.assertFalse(plan['stopped'])
+            self.assertFalse(plan['healthy'])
+            self.assertNotIn('last_successful_wake', plan)
+
+    def test_window_cleanup_precedes_stalled_legacy_cleanup(self):
+        calls = []
+        def remove(gh, apply):
+            self.assertEqual(20, gh.command_timeout)
+            calls.append('window')
+            return True
+        def legacy(*args):
+            self.assertEqual(['window'], calls)
+            raise TimeoutError('simulated legacy stall')
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+                repo_window, 'disable', side_effect=remove), patch.object(runtime, 'cleanup', side_effect=legacy):
+            with self.assertRaises(TimeoutError):
+                runtime.locked_cleanup(Path(directory))
+        self.assertEqual(['window'], calls)
+
 
 if __name__ == '__main__':
     unittest.main()

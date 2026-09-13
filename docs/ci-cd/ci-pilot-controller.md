@@ -25,12 +25,17 @@ until both workflow deployments and scoped post-merge checks are verified.
 
 ```sh
 python3 scripts/ci-pilot/controller.py prepare-window --state-dir <state-dir> --receipt <contracts.json> --apply
+python3 scripts/ci-pilot/runtime.py recover-window --state-dir <state-dir>
+# Bootstrap the same supervisor label and verify its successful fresh wake first.
 python3 scripts/ci-pilot/controller.py start-window --state-dir <state-dir> --apply
 python3 scripts/ci-pilot/controller.py stop-window --state-dir <state-dir> --apply
 python3 scripts/ci-pilot/controller.py stop-window --state-dir <state-dir> --repo merglbot-core/infra --apply
 ```
 
-Preparation does not enable tests. Starting requires a real recent successful wake
+Preparation does not enable tests. `recover-window` requires the old service to
+be unloaded, no selectors/holds, terminal old history and an unstarted prepared
+window. It preserves history and clears stale readiness; restarting an already
+started window through recovery is refused. Starting requires a real recent successful wake
 from this exact loaded supervisor, validates both environments/workflows/checks,
 records the immutable five-hour deadline before the first write, then verifies
 both switches. A partial activation or failed preflight removes both switches.

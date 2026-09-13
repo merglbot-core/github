@@ -83,6 +83,34 @@ def recover_experiment(state_dir, now):
     return 0
 
 
+def recover_window(state_dir, now):
+    """Rearm only an unstarted prepared window after retiring the old service."""
+    from controller import history_evidence
+    from github_client import Gap
+    from repo_window import disable
+    with (state_dir / "controller.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        state = json.loads((state_dir / "state.json").read_text())
+        window = state.get("repo_window", {})
+        if (window.get("phase") != "prepared" or window.get("started_at")
+                or window.get("disabled") or window.get("stopped_at") or state.get("receipt")
+                or state.get("experiment", {}).get("active") is not None
+                or (state_dir / "OWNER_HOLD").exists()
+                or (Path.home() / ".claude/merglbot-preauth/OWNER_HOLD").exists()
+                or not supervisor_unloaded()):
+            raise Gap("window_recovery_ineligible")
+        gh = GitHub()
+        if not disable(gh) or not cleanup(gh, False):
+            raise Gap("window_recovery_selectors_present")
+        history = history_evidence(gh, state, now)
+        if any(history[k] for k in ("unfinished_runs", "data_gaps")) or not supervisor_unloaded():
+            raise Gap("window_recovery_history_or_supervisor_gap")
+        # No state/history rewrite and no health assertion before a real fresh wake.
+        atomic(state_dir / "runtime.json", {"stopped": False, "healthy": False,
+               "next_due": now.isoformat(), "admitted_runs": "observed_complete"})
+    return 0
+
+
 def schedule(result, now):
     terminal = (result.get("action") == "repo_window_complete") or (result.get("action") == "cleanup_verified"
                 and result.get("reason") in ("deadline", "case_limit", "compatibility_case_closed", "compatibility_finished", "compatibility_scope_expanded", "compatibility_no_event_24h"))
@@ -142,8 +170,10 @@ def locked_cleanup(state_dir):
             return False
         from repo_window import disable
         gh = GitHub()
-        clean = cleanup(gh, True)
-        return disable(gh, apply=True) and clean
+        gh.command_timeout = 20
+        window_clean = disable(gh, apply=True)
+        legacy_clean = cleanup(gh, True)
+        return window_clean and legacy_clean
 
 
 def unload():
@@ -234,7 +264,7 @@ def wake(state_dir, now):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("wake", "plist", "cleanup", "recover-experiment"))
+    parser.add_argument("command", choices=("wake", "plist", "cleanup", "recover-experiment", "recover-window"))
     parser.add_argument("--state-dir", type=Path, required=True)
     args = parser.parse_args()
     state_dir = args.state_dir.resolve()
@@ -258,6 +288,8 @@ def main():
         except BlockingIOError:
             return 0
         now = dt.datetime.now(dt.timezone.utc)
+        if args.command == "recover-window":
+            return recover_window(state_dir, now)
         if args.command == "recover-experiment":
             return recover_experiment(state_dir, now)
         return wake(state_dir, now)

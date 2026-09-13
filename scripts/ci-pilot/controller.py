@@ -356,8 +356,9 @@ def main():
                               or (Path.home() / ".claude/merglbot-preauth/OWNER_HOLD").exists()), **extra)
         except Exception:
             from repo_window import disable
-            clean = cleanup(gh, args.apply)
-            clean = disable(gh, apply=args.apply) and clean
+            gh.command_timeout = 20
+            window_clean = disable(gh, apply=args.apply)
+            clean = cleanup(gh, args.apply) and window_clean
             result = {"action": "recovery_required", "cleanup_verified": clean,
                       "status": "unverified", "reason": "invalid_local_state"}
         atomic(args.state_dir / "next_action.json", result)
