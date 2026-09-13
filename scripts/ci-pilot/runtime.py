@@ -84,7 +84,7 @@ def recover_experiment(state_dir, now):
 
 
 def schedule(result, now):
-    terminal = (result.get("action") == "cleanup_verified"
+    terminal = (result.get("action") == "repo_window_complete") or (result.get("action") == "cleanup_verified"
                 and result.get("reason") in ("deadline", "case_limit", "compatibility_case_closed", "compatibility_finished", "compatibility_scope_expanded", "compatibility_no_event_24h"))
     history = result.get("history") or {}
     active = result.get("status") in ("active", "unverified", "pending") or history.get("unfinished_runs", 0) > 0
@@ -140,7 +140,10 @@ def locked_cleanup(state_dir):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return False
-        return cleanup(GitHub(), True)
+        from repo_window import disable
+        gh = GitHub()
+        clean = cleanup(gh, True)
+        return disable(gh, apply=True) and clean
 
 
 def unload():
@@ -182,10 +185,12 @@ def wake(state_dir, now):
         atomic(plan_path, plan)
         return unload() if verified else 1
     due = plan.get("next_due")
-    urgent = (now >= instant(DEADLINE) or len(state.get("counted_prs", [])) >= 5
+    window = state.get("repo_window")
+    cutoff = window.get("expires_at") if isinstance(window, dict) else DEADLINE
+    urgent = ((cutoff is not None and now >= instant(cutoff)) or (window is None and len(state.get("counted_prs", [])) >= 5)
               or (state_dir / "OWNER_HOLD").exists()
               or (Path.home() / ".claude/merglbot-preauth/OWNER_HOLD").exists())
-    active = bool(state.get("receipt")) or (isinstance(state.get("experiment"), dict)
+    active = (isinstance(window, dict) and window.get("phase") in ("activating", "active", "stopping")) or bool(state.get("receipt")) or (isinstance(state.get("experiment"), dict)
               and state["experiment"].get("active") is not None)
     if due and not urgent and not active and now < instant(due):
         if plan.get("healthy") is True:

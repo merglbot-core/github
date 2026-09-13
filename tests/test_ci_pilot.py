@@ -42,6 +42,12 @@ class Fake:
                         "eligible": True, "assessment": "Full diff reviewed: ordinary application fix; no excluded changes.",
                         "protection_sha256": c.digest(json.dumps({"protection": self.snap["protection"], "rules": []}, sort_keys=True))}
 
+    def pages(self, path, key=None, size=100):
+        if path.endswith('/actions/variables') and key == 'variables':
+            repo = path[len('repos/'):].split('/actions/')[0]
+            return [{'name': k, 'value': v} for k, v in self.values[repo].items()]
+        raise AssertionError('unexpected fake API surface')
+
     def selectors(self, repo):
         return self.values[repo].copy()
 
