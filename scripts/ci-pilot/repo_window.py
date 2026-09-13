@@ -145,6 +145,25 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
     window = state.get('repo_window')
     def save():
         persist(state)
+    def stop(repos):
+        clean = True
+        for repo in repos:
+            if (isinstance(window, dict) and repo in window.get('activation_intents', {})
+                    and repo not in window.get('stopped_at', {})):
+                try:
+                    if not switches(gh, repo):
+                        window['boundary_gap'] = True
+                except Exception:
+                    window['boundary_gap'] = True
+            removed = disable(gh, (repo,), apply)
+            clean = removed and clean
+            if removed and apply and isinstance(window, dict):
+                window.setdefault('stopped_at', {}).setdefault(repo, clock().isoformat())
+                try:
+                    save()
+                except Exception:
+                    window['boundary_gap'] = True
+        return clean
     def checkpoint():
         if hold_check() or (window.get('phase') == 'active' and
                 clock() >= instant(window['expires_at'])):
@@ -176,7 +195,8 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
             if end - start != dt.timedelta(hours=5) or start > now:
                 raise Gap('window_invalid_deadline')
         if receipt and receipt.get('start_window'):
-            if window['phase'] != 'prepared' or hold or hold_check() or not supervisor_ready():
+            if (window['phase'] != 'prepared' or window['disabled'] or window.get('stopped_at')
+                    or hold or hold_check() or not supervisor_ready()):
                 raise Gap('window_start_not_ready')
             for repo in REPOS:
                 preflight(gh, repo, window['contracts'][repo])
@@ -210,13 +230,8 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
             save()  # A restart must retry removals, never enable again.
         if window['phase'] in ('stopping', 'stopped'):
             window['disabled'] = list(REPOS)
-        if window['disabled']:
-            if not disable(gh, window['disabled'], apply):
-                raise Gap('window_cleanup_readback_failed')
-            if apply:
-                for repo in window['disabled']:
-                    window.setdefault('stopped_at', {}).setdefault(repo, clock().isoformat())
-                save()
+        if window['disabled'] and not stop(window['disabled']):
+            raise Gap('window_cleanup_readback_failed')
         if window['phase'] == 'prepared':
             if not disable(gh):
                 raise Gap('window_untracked_switch')
@@ -227,6 +242,7 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
         for repo in REPOS:
             if repo not in window['disabled']:
                 if switches(gh, repo) != {SWITCH: 'true'}:
+                    window['boundary_gap'] = True
                     raise Gap('window_switch_changed')
                 preflight(gh, repo, window['contracts'][repo])
         if not cleanup(gh, False):
@@ -236,14 +252,11 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
             window['disabled'] = list(REPOS)
             window['phase'] = 'stopping'
             save()
-            if not disable(gh, apply=apply):
+            if not stop(REPOS):
                 raise Gap('window_cleanup_readback_failed')
-            if apply:
-                for repo in REPOS:
-                    window.setdefault('stopped_at', {}).setdefault(repo, clock().isoformat())
-                save()
         history = observe(gh, window, save, checkpoint)
         checkpoint()
+        history['data_gaps'] += bool(window.get('boundary_gap'))
         if window['phase'] == 'stopping' and not any(history.values()):
             window['phase'] = 'stopped'
         save()
@@ -257,6 +270,6 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
                 save()
             except Exception:
                 pass  # Cleanup must not depend on healthy storage.
-        clean = disable(gh, apply=apply)
+        clean = stop(REPOS)
         return {'action': 'window_cleanup_required', 'status': 'unverified', 'cleanup_verified': clean,
                 'reason': str(error) if isinstance(error, Gap) else 'window_data_gap'}
