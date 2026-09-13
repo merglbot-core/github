@@ -1,20 +1,22 @@
-# CI: Python
-# Reusable workflow for Python projects (CI: lint, test)
+# CI: Python delay candidate
+# Dedicated reusable workflow for repositories that explicitly opt into the
+# bounded CI-delay experiment. The established ci-python.yml stays unchanged.
 #
 # Usage:
 #   jobs:
 #     ci:
-#       uses: merglbot-core/github/.github/workflows/ci-python.yml@<sha>  # vX.Y.Z
+#       uses: merglbot-core/github/.github/workflows/ci-python-delay-candidate.yml@<sha>
 #       with:
 #         python-version: '3.11'
+#         ci-delay-candidate: true
 #
-# Purpose: Standardize Python CI (denatura-btf-data, future projects)
+# Purpose: Preserve Python CI while routing an opted-in PR test job through
+#          a bounded environment wait timer in the caller repository.
 # Category: CI
 # Priority: MEDIUM
-# Status: PRODUCTION
-# Created: 2025-11-12 (Enterprise CI Audit)
+# Status: PILOT; no caller is repinned by adding this file.
 
-name: CI - Python
+name: CI - Python Delay Candidate
 
 on:
   workflow_call:
@@ -29,29 +31,34 @@ on:
         type: string
         default: '3.11'
         required: false
-      
+
       requirements-file:
         description: 'Requirements file path'
         type: string
         default: 'requirements.txt'
         required: false
-      
+
       test-command:
         description: 'Test command (default: pytest)'
         type: string
         default: 'pytest'
         required: false
-      
+
       lint-tools:
         description: 'Comma-separated list of linters (ruff,black,mypy)'
         type: string
         default: 'ruff,black'
         required: false
-      
+
       working-directory:
         description: 'Working directory for commands'
         type: string
         default: '.'
+        required: false
+      ci-delay-candidate:
+        description: 'Opt in to caller repository CI_DELAY_ENABLED test-job routing'
+        type: boolean
+        default: false
         required: false
 
 permissions:
@@ -66,26 +73,42 @@ jobs:
     name: Python CI
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    
+    # The caller's variable is evaluated here because reusable-call `with` does
+    # not accept the vars context. This workflow is used only by explicit pilots.
+    environment:
+      name: ${{ inputs.ci-delay-candidate && vars.CI_DELAY_ENABLED == 'true' && github.event_name == 'pull_request' && github.run_attempt == '1' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == github.repository && 'ci-pr-delay' || 'ci-immediate' }}
+      deployment: false
+
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-      
+          fetch-depth: ${{ inputs.ci-delay-candidate && 2 || 1 }}
+
+      - name: Record CI pilot checkout
+        if: inputs.ci-delay-candidate && github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          read -r checkout parent_a parent_b <<< "$(git rev-list --parents -n 1 HEAD)"
+          printf 'CI_EXPERIMENT_CHECKOUT={"checkout":"%s","event_head":"%s","event_base":"%s","parents":["%s","%s"],"run_id":"%s","attempt":"%s"}\n' \
+            "$checkout" "${{ github.event.pull_request.head.sha }}" \
+            "${{ github.event.pull_request.base.sha }}" "$parent_a" "$parent_b" \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ inputs.python-version }}
           cache: 'pip'
           cache-dependency-path: ${{ inputs.working-directory }}/${{ inputs.requirements-file }}
-      
+
       - name: Install dependencies
         working-directory: ${{ inputs.working-directory }}
         run: |
           python -m pip install --upgrade pip
           pip install -r ${{ inputs.requirements-file }}
-      
+
       - name: Install dev dependencies
         working-directory: ${{ inputs.working-directory }}
         run: |
@@ -137,22 +160,22 @@ jobs:
               fi
             fi
           fi
-      
+
       - name: Run ruff
         if: contains(inputs.lint-tools, 'ruff')
         working-directory: ${{ inputs.working-directory }}
         run: ruff check .
-      
+
       - name: Run black
         if: contains(inputs.lint-tools, 'black')
         working-directory: ${{ inputs.working-directory }}
         run: black --check .
-      
+
       - name: Run mypy
         if: contains(inputs.lint-tools, 'mypy')
         working-directory: ${{ inputs.working-directory }}
         run: mypy .
-      
+
       - name: Run tests
         if: inputs.test-command != ''
         working-directory: ${{ inputs.working-directory }}
