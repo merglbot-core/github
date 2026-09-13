@@ -39,6 +39,21 @@ class WindowRuntimeTests(unittest.TestCase):
             self.assertFalse(runtime.locked_cleanup(Path(directory)))
             self.assertTrue(disable.call_args.kwargs['apply'])
 
+    def test_invalid_window_deadline_invokes_cleanup(self):
+        for expiry in ('broken', 123, '2026-09-13T12:00:00', None):
+            with self.subTest(expiry=expiry), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / 'state.json').write_text(json.dumps({'repo_window': {
+                    'phase': 'active', 'expires_at': expiry}}))
+                result = {'action': 'cleanup_verified', 'status': 'inactive'}
+                with patch.object(runtime, 'emergency_cleanup', return_value=result) as cleanup, patch.object(
+                        runtime, 'sync_heartbeat', return_value=True):
+                    runtime.wake(root, dt.datetime.now(dt.timezone.utc))
+                cleanup.assert_called_once()
+                saved = json.loads((root / 'next_action.json').read_text())
+                self.assertEqual('recovery_required', saved['action'])
+                self.assertEqual('unverified', saved['status'])
+
 
 if __name__ == '__main__':
     unittest.main()

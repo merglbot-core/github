@@ -166,6 +166,7 @@ def sync_heartbeat(state_dir, plan, now):
 def wake(state_dir, now):
     plan_path = state_dir / "runtime.json"
     invalid_state = False
+    cutoff = None
     try:
         plan = json.loads(plan_path.read_text()) if plan_path.exists() else {}
         state = json.loads((state_dir / "state.json").read_text()) if (state_dir / "state.json").exists() else {}
@@ -177,8 +178,16 @@ def wake(state_dir, now):
             raise ValueError("invalid_counter_shape")
         if plan.get("next_due"):
             instant(plan["next_due"])
+        window = state.get("repo_window")
+        cutoff = window.get("expires_at") if isinstance(window, dict) else DEADLINE
+        if window is not None and (not isinstance(window, dict) or (
+                window.get("phase") in ("activating", "active") and cutoff is None)):
+            raise ValueError("invalid_window_state")
+        if cutoff is not None:
+            if not isinstance(cutoff, str) or instant(cutoff).tzinfo is None:
+                raise ValueError("invalid_window_deadline")
     except (ValueError, OSError, TypeError, AttributeError):
-        plan, state = {}, {}
+        plan, state, cutoff = {}, {}, None
         invalid_state = True
     if plan.get("stopped"):
         verified = sync_heartbeat(state_dir, plan, now)
@@ -186,7 +195,6 @@ def wake(state_dir, now):
         return unload() if verified else 1
     due = plan.get("next_due")
     window = state.get("repo_window")
-    cutoff = window.get("expires_at") if isinstance(window, dict) else DEADLINE
     urgent = ((cutoff is not None and now >= instant(cutoff)) or (window is None and len(state.get("counted_prs", [])) >= 5)
               or (state_dir / "OWNER_HOLD").exists()
               or (Path.home() / ".claude/merglbot-preauth/OWNER_HOLD").exists())
