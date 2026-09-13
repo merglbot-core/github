@@ -88,6 +88,7 @@ def recover_window(state_dir, now):
     from controller import history_evidence
     from github_client import Gap
     from repo_window import disable
+    import experiment_measurements
     with (state_dir / "controller.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         state = json.loads((state_dir / "state.json").read_text())
@@ -103,6 +104,15 @@ def recover_window(state_dir, now):
         if not disable(gh) or not cleanup(gh, False):
             raise Gap("window_recovery_selectors_present")
         history = history_evidence(gh, state, now)
+        experiment = state.get("experiment")
+        if experiment is not None:
+            if experiment.get("version") != 1 or not isinstance(experiment.get("cases"), list):
+                raise Gap("window_recovery_experiment_invalid")
+            cases = [case for case in experiment["cases"] if not (
+                case.get("phase") == "aborted_no_write" and case.get("write_attempted") is False)]
+            retained = experiment_measurements.histories(gh, {**experiment, "cases": cases}, now)
+            if any(retained[k] for k in ("unfinished_runs", "data_gaps")):
+                raise Gap("window_recovery_experiment_history_gap")
         if any(history[k] for k in ("unfinished_runs", "data_gaps")) or not supervisor_unloaded():
             raise Gap("window_recovery_history_or_supervisor_gap")
         # No state/history rewrite and no health assertion before a real fresh wake.
