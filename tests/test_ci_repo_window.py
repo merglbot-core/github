@@ -169,6 +169,22 @@ class WindowTests(unittest.TestCase):
             self.assertEqual(0, window.observe(self.gh, value, lambda: None)['data_gaps'])
             self.assertFalse(value.get('observations'))
 
+    def test_prepared_hold_cannot_start_a_consumed_window(self):
+        result = window.tick(self.gh, self.state, self.now, True, hold=True, clock=lambda: self.now)
+        self.assertEqual('inactive', result['status'])
+        self.assertEqual('window_start_not_ready', self.start()['reason'])
+        self.assertFalse(any(enabled for _, enabled in self.gh.writes))
+
+    def test_exception_cleanup_retains_original_stop_boundary(self):
+        self.start()
+        with patch.object(window, 'observe', side_effect=Gap('synthetic_read_failure')):
+            self.assertTrue(self.tick()['cleanup_verified'])
+        original = copy.deepcopy(self.state['repo_window']['stopped_at'])
+        self.now += dt.timedelta(hours=1)
+        self.tick()
+        self.assertEqual(original, self.state['repo_window']['stopped_at'])
+        self.assertEqual(set(window.REPOS), set(original))
+
 
 class PreflightTests(unittest.TestCase):
     def setUp(self):
