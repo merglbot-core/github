@@ -185,6 +185,23 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(original, self.state['repo_window']['stopped_at'])
         self.assertEqual(set(window.REPOS), set(original))
 
+    def test_first_experiment_index_blocks_preparation_without_selectors(self):
+        state = {'experiment': {'active': 0}}
+        result = window.tick(self.gh, state, self.now, True, {'prepare_window': True},
+                             clock=lambda: self.now)
+        self.assertEqual('window_already_prepared_or_old_selection_active', result['reason'])
+        self.assertNotIn('repo_window', state)
+        self.assertFalse(self.gh.writes)
+
+    def test_observation_gaps_remove_switches(self):
+        self.start()
+        with patch.object(window, 'observe', return_value={'unfinished_runs': 0, 'data_gaps': 1}):
+            result = self.tick()
+        self.assertEqual('unverified', result['status'])
+        self.assertEqual('window_observation_gap', result['reason'])
+        self.assertTrue(result['cleanup_verified'])
+        self.assertFalse(any(self.gh.values.values()))
+
 
 class PreflightTests(unittest.TestCase):
     def setUp(self):
