@@ -88,13 +88,11 @@ jobs:
         if: inputs.ci-delay-candidate && github.event_name == 'pull_request'
         shell: bash
         run: |
-          {
-            echo 'CI_EXPERIMENT_CHECKOUT'
-            echo "checked_out_sha=$(git rev-parse HEAD)"
-            echo "pr_head_sha=${{ github.event.pull_request.head.sha }}"
-            echo "pr_base_sha=${{ github.event.pull_request.base.sha }}"
-            echo "checkout_parents=$(git rev-list --parents -n 1 HEAD)"
-          } >> "$GITHUB_STEP_SUMMARY"
+          read -r checkout parent_a parent_b <<< "$(git rev-list --parents -n 1 HEAD)"
+          printf 'CI_EXPERIMENT_CHECKOUT={"checkout":"%s","event_head":"%s","event_base":"%s","parents":["%s","%s"],"run_id":"%s","attempt":"%s"}\n' \
+            "$checkout" "${{ github.event.pull_request.head.sha }}" \
+            "${{ github.event.pull_request.base.sha }}" "$parent_a" "$parent_b" \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" | tee -a "$GITHUB_STEP_SUMMARY"
       
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
