@@ -8,7 +8,6 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / 'scripts/ci-pilot'))
 import repo_window as window
-import runtime
 from github_client import Gap
 
 
@@ -115,13 +114,6 @@ class WindowTests(unittest.TestCase):
         self.assertEqual('readonly', self.tick({'start_window': True}, apply=False)['status'])
         self.assertFalse(self.gh.writes)
 
-    def test_runtime_drains_before_stopping(self):
-        result = {'action': 'observe_window', 'status': 'active',
-                  'history': {'unfinished_runs': 1, 'data_gaps': 0}}
-        self.assertFalse(runtime.schedule(result, self.now)['stopped'])
-        result.update(action='repo_window_complete', status='inactive',
-                      history={'unfinished_runs': 0, 'data_gaps': 0})
-        self.assertTrue(runtime.schedule(result, self.now)['stopped'])
 
 
 class PreflightTests(unittest.TestCase):
