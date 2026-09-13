@@ -12,6 +12,7 @@ import repo_window
 import runtime
 import experiment_measurements
 from github_client import Gap
+from test_ci_repo_window import FakeGitHub
 
 
 class WindowRuntimeTests(unittest.TestCase):
@@ -117,6 +118,36 @@ class WindowRuntimeTests(unittest.TestCase):
                         self.assertEqual(0, runtime.recover_window(root, dt.datetime.now(dt.timezone.utc)))
                     self.assertEqual([case], histories.call_args.args[1]['cases'])
                 self.assertEqual(original, (root / 'state.json').read_text())
+
+    def test_emergency_stop_preserves_boundaries_for_drain(self):
+        for storage_failure in (False, True):
+            with self.subTest(storage_failure=storage_failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                now = dt.datetime.now(dt.timezone.utc)
+                gh = FakeGitHub()
+                gh.values = {r: {repo_window.SWITCH: 'true'} for r in repo_window.REPOS}
+                state = {'repo_window': {'phase': 'active', 'disabled': [],
+                    'started_at': now.isoformat(), 'expires_at': (now + dt.timedelta(hours=5)).isoformat(),
+                    'activation_intents': {r: now.isoformat() for r in repo_window.REPOS}}}
+                (root / 'state.json').write_text(json.dumps(state))
+                original_atomic = runtime.atomic
+                def save(*args):
+                    if storage_failure:
+                        raise OSError('simulated storage failure')
+                    return original_atomic(*args)
+                with patch.object(runtime, 'GitHub', return_value=gh), patch.object(
+                        runtime, 'cleanup', return_value=True), patch.object(runtime, 'atomic', side_effect=save):
+                    self.assertEqual(not storage_failure, runtime.locked_cleanup(root))
+                self.assertFalse(any(gh.values.values()))
+                retained = json.loads((root / 'state.json').read_text())
+                with patch.object(repo_window, 'observe', return_value={'unfinished_runs': 0, 'data_gaps': 0}):
+                    result = repo_window.tick(gh, retained, dt.datetime.now(dt.timezone.utc), apply=True)
+                if storage_failure:
+                    self.assertEqual('unverified', result['status'])
+                    self.assertTrue(retained['repo_window']['boundary_gap'])
+                else:
+                    self.assertEqual(set(repo_window.REPOS), set(retained['repo_window']['stopped_at']))
+                    self.assertEqual('repo_window_complete', result['action'])
 
 
 if __name__ == '__main__':

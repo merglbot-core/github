@@ -43,6 +43,27 @@ def disable(gh, repos=REPOS, apply=False):
     return verified
 
 
+def stop_switches(gh, window, repos, apply, save, clock):
+    clean = True
+    for repo in repos:
+        if (isinstance(window, dict) and repo in window.get('activation_intents', {})
+                and repo not in window.get('stopped_at', {})):
+            try:
+                if not switches(gh, repo):
+                    window['boundary_gap'] = True
+            except Exception:
+                window['boundary_gap'] = True
+        removed = disable(gh, (repo,), apply)
+        clean = removed and clean
+        if removed and apply and isinstance(window, dict):
+            window.setdefault('stopped_at', {}).setdefault(repo, clock().isoformat())
+            try:
+                save()
+            except Exception:
+                window['boundary_gap'] = True
+    return clean
+
+
 def preflight(gh, repo, expected):
     prefix = f'repos/{repo}'
     main = gh.api(f'{prefix}/git/ref/heads/main')['object']['sha']
@@ -146,24 +167,7 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
     def save():
         persist(state)
     def stop(repos):
-        clean = True
-        for repo in repos:
-            if (isinstance(window, dict) and repo in window.get('activation_intents', {})
-                    and repo not in window.get('stopped_at', {})):
-                try:
-                    if not switches(gh, repo):
-                        window['boundary_gap'] = True
-                except Exception:
-                    window['boundary_gap'] = True
-            removed = disable(gh, (repo,), apply)
-            clean = removed and clean
-            if removed and apply and isinstance(window, dict):
-                window.setdefault('stopped_at', {}).setdefault(repo, clock().isoformat())
-                try:
-                    save()
-                except Exception:
-                    window['boundary_gap'] = True
-        return clean
+        return stop_switches(gh, window, repos, apply, save, clock)
     def checkpoint():
         if hold_check() or (window.get('phase') == 'active' and
                 clock() >= instant(window['expires_at'])):
