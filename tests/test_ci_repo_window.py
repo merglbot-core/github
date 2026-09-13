@@ -124,5 +124,56 @@ class WindowTests(unittest.TestCase):
         self.assertTrue(runtime.schedule(result, self.now)['stopped'])
 
 
+class PreflightTests(unittest.TestCase):
+    def setUp(self):
+        import base64
+        import json
+        self.repo = window.REPOS[0]
+        self.gh = FakeGitHub()
+        protection = {'required_status_checks': {'strict': True, 'checks': [
+            {'context': 'Merglbot PR Assistant v6', 'app_id': 3518182},
+            {'context': 'Unit tests', 'app_id': 15368}]}}
+        self.contract = {'workflow_sha256': window.digest('workflow'),
+                         'protection_sha256': window.digest(json.dumps(
+                             {'protection': protection, 'rules': []}, sort_keys=True))}
+        self.seconds = 10
+        self.secrets = []
+        def api(path):
+            if '/git/ref/' in path:
+                return {'object': {'sha': 'a' * 40}}
+            if '/contents/' in path:
+                return {'content': base64.b64encode(b'workflow').decode()}
+            if path.endswith('/protection'):
+                return protection
+            if path.endswith('/deployment_protection_rules'):
+                return {'total_count': 0}
+            return {'protection_rules': ([{'type': 'wait_timer', 'wait_timer': self.seconds}]
+                        if path.endswith('/ci-pr-delay') else []),
+                    'deployment_branch_policy': {'protected_branches': False,
+                                                 'custom_branch_policies': True}}
+        def pages(path, key=None, size=100):
+            if path.endswith('/secrets'):
+                return self.secrets
+            if path.endswith('/deployment-branch-policies'):
+                return [{'name': 'refs/pull/*/merge', 'type': 'branch'}]
+            return []
+        self.gh.api, self.gh.pages = api, pages
+
+    def test_live_contract_and_unsafe_environment_changes(self):
+        window.preflight(self.gh, self.repo, self.contract)
+        self.seconds = 15
+        with self.assertRaisesRegex(Gap, 'timer_changed'):
+            window.preflight(self.gh, self.repo, self.contract)
+        self.seconds = 10
+        self.secrets = [{'name': 'synthetic-secret-name'}]
+        with self.assertRaisesRegex(Gap, 'environment_not_empty'):
+            window.preflight(self.gh, self.repo, self.contract)
+
+    def test_drift_cannot_be_approved_by_prior_hash(self):
+        self.contract['workflow_sha256'] = 'b' * 64
+        with self.assertRaisesRegex(Gap, 'contract_changed'):
+            window.preflight(self.gh, self.repo, self.contract)
+
+
 if __name__ == '__main__':
     unittest.main()

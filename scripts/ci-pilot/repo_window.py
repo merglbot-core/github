@@ -72,7 +72,7 @@ def preflight(gh, repo, expected):
         policies = gh.pages(path + '/deployment-branch-policies', 'branch_policies')
         names = {(p['name'], p['type']) for p in policies}
         expected_names = {('refs/pull/*/merge', 'branch')}
-        if env == 'ci-immediate':
+        if env == 'ci-immediate' and repo == REPOS[1]:
             expected_names.add(('main', 'branch'))
         if (names != expected_names or config['deployment_branch_policy'] !=
                 {'protected_branches': False, 'custom_branch_policies': True}):
@@ -88,11 +88,12 @@ def observe(gh, window, persist):
         if repo not in window.get('activation_intents', {}):
             continue
         try:
-            since = window['activation_intents'][repo]
+            since = window['activation_intents'][repo].replace('+00:00', 'Z')
             runs = gh.pages(f'repos/{repo}/actions/workflows/{WORKFLOWS[repo].rsplit("/", 1)[1]}/runs'
                             f'?event=pull_request&created=%3E%3D{since}', 'workflow_runs')
             for run in runs:
-                if instant(run['created_at']) >= instant(window['expires_at']):
+                stopped = window.get('stopped_at', {}).get(repo)
+                if stopped and instant(run['created_at']) >= instant(stopped):
                     continue
                 for attempt in range(1, run['run_attempt'] + 1):
                     key = f'{repo}/{run["id"]}/{attempt}'
@@ -191,8 +192,13 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
             save()  # A restart must retry removals, never enable again.
         if window['phase'] in ('stopping', 'stopped'):
             window['disabled'] = list(REPOS)
-        if window['disabled'] and not disable(gh, window['disabled'], apply):
-            raise Gap('window_cleanup_readback_failed')
+        if window['disabled']:
+            if not disable(gh, window['disabled'], apply):
+                raise Gap('window_cleanup_readback_failed')
+            if apply:
+                for repo in window['disabled']:
+                    window.setdefault('stopped_at', {}).setdefault(repo, clock().isoformat())
+                save()
         if window['phase'] == 'prepared':
             if not disable(gh):
                 raise Gap('window_untracked_switch')
@@ -208,19 +214,23 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
         if not cleanup(gh, False):
             raise Gap('window_legacy_selector_conflict')
         # Recheck expiry after API work, before any observation workload.
-        if clock() >= instant(window['expires_at']):
+        if window.get('expires_at') and clock() >= instant(window['expires_at']):
             window['disabled'] = list(REPOS)
             window['phase'] = 'stopping'
             save()
             if not disable(gh, apply=apply):
                 raise Gap('window_cleanup_readback_failed')
+            if apply:
+                for repo in REPOS:
+                    window.setdefault('stopped_at', {}).setdefault(repo, clock().isoformat())
+                save()
         history = observe(gh, window, save)
         if window['phase'] == 'stopping' and not any(history.values()):
             window['phase'] = 'stopped'
         save()
         return {'action': 'repo_window_complete' if window['phase'] == 'stopped' else 'observe_window',
                 'status': 'inactive' if window['phase'] == 'stopped' else 'active', 'history': history,
-                'expires_at': window['expires_at'], 'disabled': window['disabled']}
+                'expires_at': window.get('expires_at'), 'disabled': window['disabled']}
     except Exception as error:
         if isinstance(window, dict) and apply:
             window.update(phase='stopping', disabled=list(REPOS))
