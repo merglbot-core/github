@@ -209,3 +209,17 @@ The predicate-compatibility binding pins the classifier assessed at
 `d4a0c63265b62c783e381d485d2eb506575145c1`. Install only after that matching infra assessment
 has merged; retain the current state, selection history, deadlines and single
 supervisor. This source binding alone is not delayed-CI or V6 acceptance.
+
+## Five-hour repository window preparation
+
+`repo_window.py` and its tests prepare a two-repo switch/expiry adapter. It is
+not dispatched by the controller or installed yet. The follow-up wiring delivery
+will replace single-PR selection only after V6 review and runtime verification.
+Owner scope: infra/exporter, fixed ten minutes, five-hour window, no V6 or LPW
+changes. Refs infra#2688. No activation is authorized by this source-only merge.
+
+The window observer measures admitted first attempts only. The new workflows
+explicitly route every rerun immediately; old-run reruns are not admission or
+drain evidence and their runner cost is outside this observer's coverage. This
+is not a complete Actions billing inventory. Final acceptance still requires
+actual timer evidence on the merged head, not a later immediate rerun.
