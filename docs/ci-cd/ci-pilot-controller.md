@@ -223,3 +223,12 @@ explicitly route every rerun immediately; old-run reruns are not admission or
 drain evidence and their runner cost is outside this observer's coverage. This
 is not a complete Actions billing inventory. Final acceptance still requires
 actual timer evidence on the merged head, not a later immediate rerun.
+
+### Prepared repository-window recovery
+
+The `runtime.py recover-window --state-dir <state-dir>` command rearms only a
+prepared, unstarted repository window after the existing supervisor is unloaded.
+It requires no holds or selectors, verifies both legacy and experimental run
+history (excluding explicit no-write aborts), and preserves durable case evidence.
+It clears stale runtime readiness; a fresh verified wake is still required before
+activation. This source-only preparation neither installs nor enables the window.
