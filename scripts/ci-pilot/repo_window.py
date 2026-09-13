@@ -170,7 +170,7 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
             raise Gap('window_interrupted')
     try:
         if receipt and receipt.get('prepare_window'):
-            if window is not None or state.get('receipt') or state.get('experiment', {}).get('active'):
+            if window is not None or state.get('receipt') or state.get('experiment', {}).get('active') is not None:
                 raise Gap('window_already_prepared_or_old_selection_active')
             contracts = receipt['contracts']
             if set(contracts) != set(REPOS):
@@ -257,6 +257,8 @@ def tick(gh, state, now, apply=False, receipt=None, hold=False, persist=lambda s
         history = observe(gh, window, save, checkpoint)
         checkpoint()
         history['data_gaps'] += bool(window.get('boundary_gap'))
+        if history['data_gaps']:
+            raise Gap('window_observation_gap')
         if window['phase'] == 'stopping' and not any(history.values()):
             window['phase'] = 'stopped'
         save()
