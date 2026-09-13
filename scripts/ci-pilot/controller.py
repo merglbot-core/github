@@ -313,6 +313,7 @@ def main():
             return 0
         state_path = args.state_dir / "state.json"
         gh = GitHub()
+        state = None
         try:
             state = json.loads(state_path.read_text()) if state_path.exists() else {}
             if (not isinstance(state, dict)
@@ -355,9 +356,10 @@ def main():
                           hold_check=lambda: ((args.state_dir / "OWNER_HOLD").exists()
                               or (Path.home() / ".claude/merglbot-preauth/OWNER_HOLD").exists()), **extra)
         except Exception:
-            from repo_window import disable
+            from repo_window import emergency_stop
             gh.command_timeout = 20
-            window_clean = disable(gh, apply=args.apply)
+            window_clean = emergency_stop(gh, state, args.apply, lambda s: atomic(state_path, s),
+                                          lambda: dt.datetime.now(dt.timezone.utc))
             clean = cleanup(gh, args.apply) and window_clean
             result = {"action": "recovery_required", "cleanup_verified": clean,
                       "status": "unverified", "reason": "invalid_local_state"}

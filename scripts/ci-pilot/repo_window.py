@@ -64,6 +64,28 @@ def stop_switches(gh, window, repos, apply, save, clock):
     return clean
 
 
+def emergency_stop(gh, state, apply, persist, clock):
+    """Stop under the caller's lock; loss of storage must never block removal."""
+    window = state.get('repo_window') if isinstance(state, dict) else None
+    if not apply or not isinstance(window, dict):
+        return disable(gh, apply=apply)
+    window.update(phase='stopping', disabled=list(REPOS))
+    storage_ok = True
+    def save():
+        persist(state)
+    try:
+        save()
+    except Exception:
+        storage_ok = False
+        window['boundary_gap'] = True
+    try:
+        clean = stop_switches(gh, window, REPOS, True, save, clock)
+    except Exception:
+        storage_ok = False
+        clean = disable(gh, apply=True)
+    return clean and storage_ok and not window.get('boundary_gap', False)
+
+
 def preflight(gh, repo, expected):
     prefix = f'repos/{repo}'
     main = gh.api(f'{prefix}/git/ref/heads/main')['object']['sha']

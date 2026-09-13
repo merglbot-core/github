@@ -178,7 +178,7 @@ def locked_cleanup(state_dir):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return False
-        from repo_window import disable, stop_switches, REPOS
+        from repo_window import emergency_stop
         gh = GitHub()
         gh.command_timeout = 20
         state = None
@@ -189,25 +189,8 @@ def locked_cleanup(state_dir):
             pass
         except (OSError, ValueError):
             storage_ok = False
-        window = state.get('repo_window') if isinstance(state, dict) else None
-        if isinstance(window, dict):
-            window.update(phase='stopping', disabled=list(REPOS))
-            def save():
-                atomic(state_dir / 'state.json', state)
-            try:
-                save()
-            except Exception:
-                storage_ok = False
-                window['boundary_gap'] = True
-            try:
-                window_clean = stop_switches(gh, window, REPOS, True, save,
-                                             lambda: dt.datetime.now(dt.timezone.utc))
-            except Exception:
-                storage_ok = False
-                window_clean = disable(gh, apply=True)
-            storage_ok = storage_ok and not window.get('boundary_gap', False)
-        else:
-            window_clean = disable(gh, apply=True)
+        window_clean = emergency_stop(gh, state, True, lambda s: atomic(state_dir / 'state.json', s),
+                                      lambda: dt.datetime.now(dt.timezone.utc))
         legacy_clean = cleanup(gh, True)
         return window_clean and legacy_clean and storage_ok
 

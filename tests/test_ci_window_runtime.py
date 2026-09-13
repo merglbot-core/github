@@ -149,6 +149,32 @@ class WindowRuntimeTests(unittest.TestCase):
                     self.assertEqual(set(repo_window.REPOS), set(retained['repo_window']['stopped_at']))
                     self.assertEqual('repo_window_complete', result['action'])
 
+    def test_controller_receipt_error_preserves_stop_boundaries(self):
+        for apply in (False, True):
+            with self.subTest(apply=apply), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                now = dt.datetime.now(dt.timezone.utc)
+                gh = FakeGitHub()
+                gh.values = {r: {repo_window.SWITCH: 'true'} for r in repo_window.REPOS}
+                state = {'repo_window': {'phase': 'active', 'disabled': [],
+                    'started_at': now.isoformat(), 'expires_at': (now + dt.timedelta(hours=5)).isoformat(),
+                    'activation_intents': {r: now.isoformat() for r in repo_window.REPOS}}}
+                original = json.dumps(state)
+                (root / 'state.json').write_text(original)
+                args = ['controller', 'prepare-window', '--state-dir', directory] + (['--apply'] if apply else [])
+                with patch.object(sys, 'argv', args), patch.object(controller, 'GitHub', return_value=gh), patch('builtins.print'):
+                    self.assertEqual(1, controller.main())
+                if not apply:
+                    self.assertTrue(all(gh.values.values()))
+                    self.assertEqual(original, (root / 'state.json').read_text())
+                    continue
+                self.assertFalse(any(gh.values.values()))
+                retained = json.loads((root / 'state.json').read_text())
+                self.assertEqual(set(repo_window.REPOS), set(retained['repo_window']['stopped_at']))
+                with patch.object(repo_window, 'observe', return_value={'unfinished_runs': 0, 'data_gaps': 0}):
+                    result = repo_window.tick(gh, retained, dt.datetime.now(dt.timezone.utc), apply=True)
+                self.assertEqual('repo_window_complete', result['action'])
+
 
 if __name__ == '__main__':
     unittest.main()
