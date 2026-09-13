@@ -2,61 +2,48 @@
 
 ## Active successor: five-hour repository window
 
-Owner-approved September 13, 2026: replace single-PR admission with a shared
-five-hour window for infra and denatura-forecast-exporter. Historical sections
-below describe retired selection modes; do not activate them during this window.
-The new mode preserves all historical counters and does not claim they are
-successful delayed-CI/V6 closeouts. No fb-viz activation or estate rollout.
+Owner-approved September 13, 2026 (infra#2688): infra and exporter share one
+five-hour window. Preserve historical evidence; retire the selection modes below.
+`CI_DELAY_ENABLED=true` delays first-attempt same-repo main PRs ten minutes,
+including drafts and every diff class. Unset/false, forks, other bases and reruns
+are immediate; push workflows are unchanged. GitHub compares strings without
+case sensitivity; the controller writes `true`. No admission runner or V6/LPW,
+Terraform, protection or fb-viz change.
 
-The workflow contract is `CI_DELAY_ENABLED=true` -> existing ten-minute environment
-for first-attempt same-repository PRs into main, including drafts and all diff
-classes. Unset/false, forks, stacked bases, reruns and pushes run immediately.
-GitHub string comparison is case-insensitive; the controller writes only `true`.
-No admission runner, PR/SHA rebinding, V6/LPW change or required-check bypass.
+Install only reviewed source under the existing label and locks, after retiring
+the old supervisor and verifying terminal history and absent old selectors.
+Keep switches off until both workflow deliveries and scoped deployments pass.
+Prepare a JSON mapping of exactly both repo names to reviewed main workflow and
+protection hashes (`workflow_sha256`, `protection_sha256`, conventions below).
+Do not update hashes to accept unexplained drift.
 
-Before installation, retire the old loaded supervisor with terminal old history,
-verify absence of all old selectors and preserve its state. Install the reviewed
-release under the existing label/runtime locks. Prepare the window with a JSON
-mapping of exactly the two repository names to `workflow_sha256` and
-`protection_sha256` (same sorted protection/rules JSON digest convention below).
-Capture hashes from reviewed merged main and current protections. Never refresh
-a hash merely to bless an unexplained change. Keep the activation switch off
-until both workflow deployments and scoped post-merge checks are verified.
+Run with the installed controller and state directory:
 
 ```sh
-python3 scripts/ci-pilot/controller.py prepare-window --state-dir <state-dir> --receipt <contracts.json> --apply
-python3 scripts/ci-pilot/runtime.py recover-window --state-dir <state-dir>
-# Bootstrap the same supervisor label and verify its successful fresh wake first.
-python3 scripts/ci-pilot/controller.py start-window --state-dir <state-dir> --apply
-python3 scripts/ci-pilot/controller.py stop-window --state-dir <state-dir> --apply
-python3 scripts/ci-pilot/controller.py stop-window --state-dir <state-dir> --repo merglbot-core/infra --apply
+controller.py prepare-window --state-dir <state-dir> --receipt <contracts.json> --apply
+runtime.py recover-window --state-dir <state-dir>
+# Bootstrap the same supervisor and verify its fresh successful wake.
+controller.py start-window --state-dir <state-dir> --apply
+controller.py stop-window --state-dir <state-dir> --apply
+# Optional: add --repo merglbot-core/infra to stop only infra.
 ```
 
-Preparation does not enable tests. `recover-window` requires the old service to
-be unloaded, no selectors/holds, terminal old history and an unstarted prepared
-window. It preserves history and clears stale readiness; restarting an already
-started window through recovery is refused. Starting requires a real recent successful wake
-from this exact loaded supervisor, validates both environments/workflows/checks,
-records the immutable five-hour deadline before the first write, then verifies
-both switches. A partial activation or failed preflight removes both switches.
-Restarts never re-enable or extend the window. One-repo stop is persistent.
-The same runtime checks every five minutes while active or draining; expiry
-removal runs at the next wake (normally within five minutes, subject to machine
-and API availability). The active session also executes stop at the exact deadline.
-A failed removal stays unverified and retries; it never reports a successful stop.
-Existing queued jobs are inspected individually, not assumed to change after
-variable removal. No API outage or sleeping host can guarantee an exact wall-clock
-GitHub mutation. Preserve this limitation in the final report.
+Recovery preserves history and refuses started windows, holds or unfinished prior
+runs. Activation validates both repos and supervision, durably records the five-hour
+deadline before writing switches, and rolls back partial activation. Restarts cannot
+extend or re-enable it; a per-repo stop persists.
 
-No synthetic pushes/reruns. Record actual environment timer, runner jobs and final
-checkout parents, V6 engine evidence and standard merge. Older PR branches may use
-an older workflow. Automatic run observations are diagnostic metadata, not review,
-checkout or billing proof; the session completes exact-head acceptance evidence.
-After five hours remove switches, report counts/latency/runner work by repo, and
-continue observing already admitted runs to completion before stopping supervision.
-At least one complete natural case in each repo is required for two-repo acceptance.
-Any remaining closeouts are pending, not failures or invented passes. Re-enabling,
-longer waiting and broader rollout require a new owner decision. Refs infra#2688.
+Observe every five minutes while active or draining; the active session stops at
+the deadline. Scheduled removal occurs on the next wake. Host sleep/API failure
+can delay removal: retry and report unverified until readback succeeds. Inspect
+already waiting runs separately and supervise until they finish.
+
+Use natural pushes only. Older PR branches may carry old workflows. Timer and
+checkout-parent proof, final-head V6 evidence and standard merge remain session
+acceptance duties; observation metadata proves neither review nor billing savings.
+Require one complete natural case per repo. At expiry remove switches and report
+counts, latency, runner work and pending closeouts. No extension, 15 minutes or
+estate rollout without a new owner decision.
 
 ## Historical bounded selector supervisor
 
