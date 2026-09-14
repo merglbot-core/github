@@ -93,10 +93,13 @@ jobs:
       - name: Record CI pilot checkout
         if: inputs.ci-delay-candidate && github.event_name == 'pull_request'
         shell: bash
+        env:
+          CI_EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
+          CI_EVENT_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           read -r checkout parent_a parent_b <<< "$(git rev-list --parents -n 1 HEAD)"
-          event_head="${{ github.event.pull_request.head.sha }}"
-          event_base="${{ github.event.pull_request.base.sha }}"
+          event_head="$CI_EVENT_HEAD"
+          event_base="$CI_EVENT_BASE"
           if [[ ! "$checkout" =~ ^[0-9a-f]{40}$ ||
                 ! "$parent_a" =~ ^[0-9a-f]{40}$ ||
                 ! "$parent_b" =~ ^[0-9a-f]{40}$ ||
