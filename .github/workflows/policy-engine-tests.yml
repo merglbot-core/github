@@ -11,6 +11,7 @@ on:
       # (unittest discover picks the file up; without these paths the test would
       # exist but never run on the changes it guards.)
       - ".github/workflows/ci-python.yml"
+      - ".github/workflows/ci-python-delay-candidate.yml"
       - "tests/test_ci_python_lint_pins_contract.py"
   workflow_dispatch:
 
