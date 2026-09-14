@@ -1,0 +1,200 @@
+# CI: Python delay candidate
+# Dedicated reusable workflow for repositories that explicitly opt into the
+# bounded CI-delay experiment. The established ci-python.yml stays unchanged.
+#
+# Usage:
+#   jobs:
+#     ci:
+#       uses: merglbot-core/github/.github/workflows/ci-python-delay-candidate.yml@<sha>
+#       with:
+#         python-version: '3.11'
+#         ci-delay-candidate: true
+#
+# Purpose: Preserve Python CI while routing an opted-in PR test job through
+#          a bounded environment wait timer in the caller repository.
+# Category: CI
+# Priority: MEDIUM
+# Status: PILOT; no caller is repinned by adding this file.
+
+name: CI - Python Delay Candidate
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: >-
+          Python version to use (any setup-python selector). If lint-tools
+          includes black or mypy AND the repo does not ship the tool via
+          requirements-dev.txt, the hub fallback pins require the resolved
+          interpreter to be >=3.10 (checked at install time, fail-fast with
+          guidance). A repo-installed tool always wins regardless of version.
+        type: string
+        default: '3.11'
+        required: false
+
+      requirements-file:
+        description: 'Requirements file path'
+        type: string
+        default: 'requirements.txt'
+        required: false
+
+      test-command:
+        description: 'Test command (default: pytest)'
+        type: string
+        default: 'pytest'
+        required: false
+
+      lint-tools:
+        description: 'Comma-separated list of linters (ruff,black,mypy)'
+        type: string
+        default: 'ruff,black'
+        required: false
+
+      working-directory:
+        description: 'Working directory for commands'
+        type: string
+        default: '.'
+        required: false
+      ci-delay-candidate:
+        description: 'Opt in to caller repository CI_DELAY_ENABLED test-job routing'
+        type: boolean
+        default: false
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Python CI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # The caller's variable is evaluated here because reusable-call `with` does
+    # not accept the vars context. This workflow is used only by explicit pilots.
+    environment:
+      name: ${{ inputs.ci-delay-candidate && vars.CI_DELAY_ENABLED == 'true' && github.event_name == 'pull_request' && github.run_attempt == '1' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == github.repository && 'ci-pr-delay' || 'ci-immediate' }}
+      # GitHub retains environment wait timers without a deployment record:
+      # https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/control-deployments#using-environments-without-deployments
+      deployment: false
+
+    steps:
+      - name: Checkout code
+        # No ref override: checkout pins the event's github.context.sha, also on reruns.
+        # https://github.com/actions/checkout/blob/3d3c42e5aac5ba805825da76410c181273ba90b1/src/input-helper.ts#L73-L76
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: ${{ inputs.ci-delay-candidate && 2 || 1 }}
+
+      - name: Record CI pilot checkout
+        if: inputs.ci-delay-candidate && github.event_name == 'pull_request'
+        shell: bash
+        env:
+          CI_EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
+          CI_EVENT_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          read -r checkout parent_a parent_b <<< "$(git rev-list --parents -n 1 HEAD)"
+          event_head="$CI_EVENT_HEAD"
+          event_base="$CI_EVENT_BASE"
+          if [[ ! "$checkout" =~ ^[0-9a-f]{40}$ ||
+                ! "$parent_a" =~ ^[0-9a-f]{40}$ ||
+                ! "$parent_b" =~ ^[0-9a-f]{40}$ ||
+                "$parent_a" != "$event_base" ||
+                "$parent_b" != "$event_head" ]]; then
+            echo "::error::CI pilot checkout does not match the event head and base"
+            exit 1
+          fi
+          printf 'CI_EXPERIMENT_CHECKOUT={"checkout":"%s","event_head":"%s","event_base":"%s","parents":["%s","%s"],"run_id":"%s","attempt":"%s"}\n' \
+            "$checkout" "$event_head" "$event_base" "$parent_a" "$parent_b" \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: 'pip'
+          cache-dependency-path: ${{ inputs.working-directory }}/${{ inputs.requirements-file }}
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ${{ inputs.requirements-file }}
+
+      - name: Install dev dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ -f requirements-dev.txt ]; then
+            pip install -r requirements-dev.txt
+          fi
+          # Install linters based on inputs — repo-first with a PINNED hub default.
+          # A bare `pip install ruff` resolves to whatever is latest at run time, so an
+          # upstream release flips CI estate-wide with zero repo changes (github#728:
+          # ruff 0.16.0 landed on a weekend and reddened mains that had no ruff pin of
+          # their own). If the repo ships the tool via requirements-dev.txt, that pin
+          # wins (command -v check); otherwise the hub installs an exact version.
+          # Bumping these pins = a deliberate hub PR, reviewed like any other change.
+          # NOTE: 0.16.0 is the deliberate go-forward pin, NOT the regression being
+          # frozen by accident. Per #728: pinning <0.16 would not un-redden
+          # forecast-engine (red under 0.15.x since 23.7. on a real code bug) and
+          # would fight the four repos already migrated cleanly to 0.16
+          # (dse/dmp/shoptet/hod-bde). What #728 fixes is DETERMINISM — the pin
+          # makes the estate move to a new ruff on a reviewed hub PR, not on
+          # whatever PyPI serves at run time.
+          if [[ "${{ inputs.lint-tools }}" == *"ruff"* ]]; then
+            command -v ruff >/dev/null 2>&1 || pip install "ruff==0.16.0"
+          fi
+          # black/mypy hub pins declare requires_python >=3.10. The check runs
+          # (a) only when the repo did NOT provide the tool (repo tool always wins,
+          # even on an older interpreter), and (b) against the RESOLVED interpreter
+          # (sys.version_info), so setup-python selectors like "3.x", ">=3.10" or
+          # "pypy3.10" are judged by what they resolved to, not by string shape.
+          hub_pin_needs_py310() {
+            python -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)'
+          }
+          if [[ "${{ inputs.lint-tools }}" == *"black"* ]]; then
+            if ! command -v black >/dev/null 2>&1; then
+              if hub_pin_needs_py310; then
+                pip install "black==26.5.1"
+              else
+                echo "::error::Resolved interpreter $(python -V 2>&1) is <3.10 and cannot run the hub-pinned black==26.5.1. Ship black via requirements-dev.txt (a repo-installed tool always wins) or raise python-version."
+                exit 1
+              fi
+            fi
+          fi
+          if [[ "${{ inputs.lint-tools }}" == *"mypy"* ]]; then
+            if ! command -v mypy >/dev/null 2>&1; then
+              if hub_pin_needs_py310; then
+                pip install "mypy==2.3.0"
+              else
+                echo "::error::Resolved interpreter $(python -V 2>&1) is <3.10 and cannot run the hub-pinned mypy==2.3.0. Ship mypy via requirements-dev.txt (a repo-installed tool always wins) or raise python-version."
+                exit 1
+              fi
+            fi
+          fi
+
+      - name: Run ruff
+        if: contains(inputs.lint-tools, 'ruff')
+        working-directory: ${{ inputs.working-directory }}
+        run: ruff check .
+
+      - name: Run black
+        if: contains(inputs.lint-tools, 'black')
+        working-directory: ${{ inputs.working-directory }}
+        run: black --check .
+
+      - name: Run mypy
+        if: contains(inputs.lint-tools, 'mypy')
+        working-directory: ${{ inputs.working-directory }}
+        run: mypy .
+
+      - name: Run tests
+        if: inputs.test-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.test-command }}
+        env:
+          PYTHONPATH: ${{ inputs.working-directory }}

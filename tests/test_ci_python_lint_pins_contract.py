@@ -1,4 +1,4 @@
-"""Contract test for the pinned lint-tool installs in the reusable ci-python workflow.
+"""Contract test for pinned lint-tool installs in both reusable Python CI workflows.
 
 Guards the determinism fix from merglbot-core/github#730 (issue #728): the hub
 must install ruff/black/mypy at EXACT pinned versions, must let a repo-installed
@@ -19,6 +19,7 @@ import unittest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 CI_PYTHON = REPO_ROOT / ".github" / "workflows" / "ci-python.yml"
+CI_PYTHON_DELAY = REPO_ROOT / ".github" / "workflows" / "ci-python-delay-candidate.yml"
 
 PINS = {
     "ruff": "0.16.0",
@@ -27,10 +28,10 @@ PINS = {
 }
 
 
-def lint_install_block(text=None):
+def lint_install_block(text=None, path=CI_PYTHON):
     """The single run-block that installs lint tools, sliced out of the workflow."""
     if text is None:
-        text = CI_PYTHON.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
     start = text.index("Install linters based on inputs")
     next_step = re.search(r"\n      - name: ", text[start:])
     end = start + next_step.start() if next_step else len(text)
@@ -89,7 +90,9 @@ def pin_violations(block):
 
 class LintPinContractTests(unittest.TestCase):
     def test_current_workflow_satisfies_contract(self):
-        self.assertEqual(pin_violations(lint_install_block()), [])
+        for path in (CI_PYTHON, CI_PYTHON_DELAY):
+            with self.subTest(workflow=path.name):
+                self.assertEqual(pin_violations(lint_install_block(path=path)), [])
 
     def test_checker_catches_pin_moved_to_comment(self):
         """The round-5 Codex mutation: keep the pinned string only in a comment
