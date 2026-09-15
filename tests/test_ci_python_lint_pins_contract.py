@@ -13,6 +13,7 @@ Design notes (round-5 hardening):
   the self-test below and must be reported as a violation.
 """
 
+import json
 import pathlib
 import re
 import unittest
@@ -98,6 +99,19 @@ class LintPinContractTests(unittest.TestCase):
         self.assertEqual(environment.group(1), recorded.group(1))
         self.assertIn('"environment":"%s"', workflow)
         self.assertIn('"$GITHUB_RUN_ATTEMPT" "$CI_ENVIRONMENT"', workflow)
+
+    def test_delay_checkout_marker_has_acceptance_schema(self):
+        workflow = CI_PYTHON_DELAY.read_text(encoding="utf-8")
+        marker = re.search(
+            r"printf 'CI_EXPERIMENT_CHECKOUT=(\{.*\})\\n' \\", workflow
+        )
+        self.assertIsNotNone(marker, "checkout marker format missing")
+        payload = json.loads(marker.group(1) % tuple("x" for _ in range(8)))
+        self.assertEqual(
+            set(payload),
+            {"checkout", "event_head", "event_base", "parents", "run_id", "attempt", "environment"},
+        )
+        self.assertEqual(len(payload["parents"]), 2)
 
     def test_delay_environment_requires_same_repo_head_and_base(self):
         workflow = CI_PYTHON_DELAY.read_text(encoding="utf-8")
