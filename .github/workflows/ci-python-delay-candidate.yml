@@ -96,6 +96,7 @@ jobs:
         env:
           CI_EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
           CI_EVENT_BASE: ${{ github.event.pull_request.base.sha }}
+          CI_ENVIRONMENT: ${{ inputs.ci-delay-candidate && vars.CI_DELAY_ENABLED == 'true' && github.event_name == 'pull_request' && github.run_attempt == '1' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.base.repo.full_name == github.repository && github.event.pull_request.head.repo.full_name == github.repository && 'ci-pr-delay' || 'ci-immediate' }}
         run: |
           read -r checkout parent_a parent_b <<< "$(git rev-list --parents -n 1 HEAD)"
           event_head="$CI_EVENT_HEAD"
@@ -108,9 +109,9 @@ jobs:
             echo "::error::CI pilot checkout does not match the event head and base"
             exit 1
           fi
-          printf 'CI_EXPERIMENT_CHECKOUT={"checkout":"%s","event_head":"%s","event_base":"%s","parents":["%s","%s"],"run_id":"%s","attempt":"%s"}\n' \
+          printf 'CI_EXPERIMENT_CHECKOUT={"checkout":"%s","event_head":"%s","event_base":"%s","parents":["%s","%s"],"run_id":"%s","attempt":"%s","environment":"%s"}\n' \
             "$checkout" "$event_head" "$event_base" "$parent_a" "$parent_b" \
-            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" | tee -a "$GITHUB_STEP_SUMMARY"
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$CI_ENVIRONMENT" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0

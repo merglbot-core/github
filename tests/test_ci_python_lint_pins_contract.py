@@ -89,6 +89,16 @@ def pin_violations(block):
 
 
 class LintPinContractTests(unittest.TestCase):
+    def test_delay_checkout_records_selected_environment(self):
+        workflow = CI_PYTHON_DELAY.read_text(encoding="utf-8")
+        environment = re.search(r"(?m)^      name: \$\{\{ (.*?) \}\}$", workflow)
+        recorded = re.search(r"(?m)^          CI_ENVIRONMENT: \$\{\{ (.*?) \}\}$", workflow)
+        self.assertIsNotNone(environment, "delay environment expression missing")
+        self.assertIsNotNone(recorded, "checkout environment proof missing")
+        self.assertEqual(environment.group(1), recorded.group(1))
+        self.assertIn('"environment":"%s"', workflow)
+        self.assertIn('"$GITHUB_RUN_ATTEMPT" "$CI_ENVIRONMENT"', workflow)
+
     def test_delay_environment_requires_same_repo_head_and_base(self):
         workflow = CI_PYTHON_DELAY.read_text(encoding="utf-8")
         match = re.search(r"(?m)^      name: \$\{\{ (.*?) \}\}$", workflow)
