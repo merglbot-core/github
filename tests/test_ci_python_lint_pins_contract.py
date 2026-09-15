@@ -89,6 +89,19 @@ def pin_violations(block):
 
 
 class LintPinContractTests(unittest.TestCase):
+    def test_delay_environment_requires_same_repo_head_and_base(self):
+        workflow = CI_PYTHON_DELAY.read_text(encoding="utf-8")
+        match = re.search(r"(?m)^      name: \$\{\{ (.*?) \}\}$", workflow)
+        self.assertIsNotNone(match, "delay environment expression missing")
+        expression = match.group(1)
+        for guard in (
+            "github.event.pull_request.base.ref == 'main'",
+            "github.event.pull_request.base.repo.full_name == github.repository",
+            "github.event.pull_request.head.repo.full_name == github.repository",
+        ):
+            with self.subTest(guard=guard):
+                self.assertIn(guard, expression)
+
     def test_current_workflow_satisfies_contract(self):
         for path in (CI_PYTHON, CI_PYTHON_DELAY):
             with self.subTest(workflow=path.name):

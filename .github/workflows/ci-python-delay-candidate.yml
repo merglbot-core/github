@@ -76,7 +76,7 @@ jobs:
     # The caller's variable is evaluated here because reusable-call `with` does
     # not accept the vars context. This workflow is used only by explicit pilots.
     environment:
-      name: ${{ inputs.ci-delay-candidate && vars.CI_DELAY_ENABLED == 'true' && github.event_name == 'pull_request' && github.run_attempt == '1' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.head.repo.full_name == github.repository && 'ci-pr-delay' || 'ci-immediate' }}
+      name: ${{ inputs.ci-delay-candidate && vars.CI_DELAY_ENABLED == 'true' && github.event_name == 'pull_request' && github.run_attempt == '1' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.base.repo.full_name == github.repository && github.event.pull_request.head.repo.full_name == github.repository && 'ci-pr-delay' || 'ci-immediate' }}
       # GitHub retains environment wait timers without a deployment record:
       # https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/control-deployments#using-environments-without-deployments
       deployment: false

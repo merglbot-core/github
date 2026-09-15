@@ -217,14 +217,20 @@ class ExperimentTests(unittest.TestCase):
 
     def test_recovery_with_five_old_cases(self):
         import runtime
-        now = dt.datetime.now(dt.timezone.utc)
+        now = NOW
         self.state["counted_prs"] = ["historical#" + str(i) for i in range(5)]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             c.atomic(root / "state.json", self.state)
             c.atomic(root / "runtime.json", {"stopped": True})
+            base_datetime = dt.datetime
+            class FixedDateTime(base_datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return now if tz is not None else now.replace(tzinfo=None)
             def run_controller(path):
-                with patch.object(sys, "argv", ["controller.py", "tick", "--state-dir", str(path), "--apply"]):
+                with patch.object(c.dt, "datetime", FixedDateTime), patch.object(
+                        sys, "argv", ["controller.py", "tick", "--state-dir", str(path), "--apply"]):
                     self.assertEqual(c.main(), 0)
             with patch.object(runtime, "supervisor_unloaded", return_value=True), patch.object(runtime, "GitHub", return_value=self.gh), patch.object(c, "GitHub", return_value=self.gh):
                 runtime.recover_experiment(root, now)
