@@ -6,6 +6,6 @@ permissions:
   pull-requests: read
 jobs:
   docs-governance:
-    uses: merglbot-core/github/.github/workflows/reusable-docs-governance.yml@de880f245460e8ceb220b81562e58a5ecfd98c13
+    uses: merglbot-core/github/.github/workflows/reusable-docs-governance.yml@7f8317f0007204ac965469413d8252dfc27fd75d
     with:
       mode: advisory
