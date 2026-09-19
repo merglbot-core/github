@@ -87,6 +87,7 @@ jobs:
         # https://github.com/actions/checkout/blob/3d3c42e5aac5ba805825da76410c181273ba90b1/src/input-helper.ts#L73-L76
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.sha }}
           persist-credentials: false
           fetch-depth: ${{ inputs.ci-delay-candidate && 2 || 1 }}
 
