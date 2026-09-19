@@ -185,8 +185,13 @@ jobs:
           push: false
           tags: ${{ steps.refs.outputs.local_ref }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Scope the cache per image. Unscoped, every image workflow in a repo
+          # shares one cache manifest; when one merge triggers several image
+          # builds at once they overwrite it, the candidate build below misses
+          # the cache, re-runs non-reproducible RUN steps and the parity check
+          # refuses promotion (merglbot-core/platform#1456).
+          cache-from: type=gha,scope=${{ inputs.image_name }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.image_name }}
           provenance: false
           sbom: false
 
@@ -288,8 +293,8 @@ jobs:
           push: ${{ inputs.push }}
           tags: ${{ steps.refs.outputs.candidate_ref }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ inputs.image_name }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.image_name }}
           provenance: true
           sbom: true
 

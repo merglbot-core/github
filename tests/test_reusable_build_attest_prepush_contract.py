@@ -109,6 +109,15 @@ class ReusableBuildAttestPrePushContractTests(unittest.TestCase):
         self.assertIn("provenance: true", candidate_block)
         self.assertIn("sbom: true", candidate_block)
 
+        # Both builds read and write a per-image cache scope. A shared,
+        # unscoped manifest is overwritten by concurrent image workflows and
+        # the candidate build then misses the cache and fails parity
+        # (merglbot-core/platform#1456).
+        for block in (local_block, candidate_block):
+            self.assertIn("cache-from: type=gha,scope=${{ inputs.image_name }}", block)
+            self.assertIn("cache-to: type=gha,mode=max,scope=${{ inputs.image_name }}", block)
+            self.assertNotRegex(block, r"cache-(from|to): type=gha(,mode=max)?\n")
+
         parity_block = self.text[parity:promotion]
         self.assertIn("LOCAL_CONFIG_DIGEST", parity_block)
         self.assertIn("PUBLISHED_CONFIG_DIGEST", parity_block)
