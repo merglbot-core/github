@@ -83,10 +83,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        # No ref override: checkout pins the event's github.context.sha, also on reruns.
+        # Pin the SHA captured in the workflow-run context so an environment wait
+        # cannot follow a later update of refs/pull/<n>/merge.
         # https://github.com/actions/checkout/blob/3d3c42e5aac5ba805825da76410c181273ba90b1/src/input-helper.ts#L73-L76
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
           fetch-depth: ${{ inputs.ci-delay-candidate && 2 || 1 }}
 
