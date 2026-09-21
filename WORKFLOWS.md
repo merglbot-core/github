@@ -47,12 +47,17 @@ Two deliberate differences from the originals: the job runs with `pull-requests:
 every functional step carries `if: ${{ !cancelled() }}` with a final gate step, so one failing part
 no longer hides the other two the way three separate jobs never did.
 
-Check name for branch protection: **`PR Gate`** (context `pr-gate / PR Gate` when the caller names
-its job `pr-gate`).
+Check context for branch protection = `<caller job NAME> / PR Gate`. GitHub composes it from the
+caller job's **display name** (`name:`), falling back to the job id only when no `name:` is set.
+Every current consumer (infra, agents-orchestrator, merglbot-admin, business-analytics) names the
+job `PR Gate`, so the required context is **`PR Gate / PR Gate`** (`app_id 15368`); an unnamed
+`pr-gate:` job would emit `pr-gate / PR Gate` instead. Read the context from a live check run on
+the PR head before editing protection — never from this catalog (github#879, measured 21. 9. 2026).
 
 ```yaml
 jobs:
   pr-gate:
+    name: PR Gate
     uses: merglbot-core/github/.github/workflows/pr-gate.yml@<pinned-sha>
     permissions:
       contents: read
