@@ -1,0 +1,333 @@
+# =============================================================================
+# Reusable - PR Gate
+#
+# ONE job that runs the three cheap per-PR gates that used to be three separate
+# jobs: dependency review, PR hygiene checks and docs governance. The steps are
+# copied VERBATIM from security-dependency-review.yml, utility-pr-checks.yml and
+# reusable-docs-governance.yml — no rule, threshold, pin or message changed.
+#
+# WHY: GitHub bills ceil(seconds/60) PER JOB. Measured 2026-09-21 across five
+# repositories, the three jobs take 7-12 s each and are billed as 3 minutes;
+# as steps of one job they are ~30 s = 1 minute. On merglbot-core/infra alone
+# that is ~10 000 billed minutes a month (github#877).
+#
+# Gitleaks deliberately stays a separate workflow/job: it takes 53-58 s on its
+# own, so folding it in would cost a second billed minute anyway, and it needs
+# `security-events: write` which nothing else here should inherit.
+#
+# DIFFERENCES from the three originals, both deliberate:
+#   1. `pull-requests: write` (dependency-review needs it to post its summary
+#      comment; the pr-checks and docs-governance steps previously ran with
+#      `read`). No step here executes pull-request-controlled code: every action
+#      is SHA-pinned and check.mjs comes from the pinned hub checkout.
+#   2. ONE checkout with `fetch-depth: 0` (docs-governance needs full history)
+#      AND `persist-credentials: false` (dependency-review's hygiene choice).
+#      check.mjs's `git fetch` fallbacks are try/catch and fail open to
+#      DOCS_GOVERNANCE_STATE: unknown, which `mode: advisory` never fails on,
+#      so the stricter checkout cannot turn a green check red.
+#   3. Every functional step carries `if: ${{ !cancelled() }}` and a final gate
+#      step reports which part failed. Three separate jobs used to surface all
+#      three results on one run; without this, the first failure would hide the
+#      rest. Cancellation (superseded run) still skips cleanly, so a cancelled
+#      run does not post a spurious red.
+#
+# Check name for branch protection: **`PR Gate`** (context `pr-gate / PR Gate`
+# when the caller names its job `pr-gate`).
+# =============================================================================
+
+name: Reusable - PR Gate
+
+on:
+  workflow_call:
+    inputs:
+      # --- dependency review (security-dependency-review.yml) ---
+      fail-on-severity:
+        description: 'Minimum severity to fail the workflow (critical, high, moderate, low)'
+        type: string
+        default: 'moderate'
+        required: false
+      deny-licenses:
+        description: 'Comma-separated list of licenses to deny (e.g., GPL-3.0,AGPL-3.0)'
+        type: string
+        default: ''
+        required: false
+      comment-summary-in-pr:
+        description: 'Post a comment with the summary in the PR'
+        type: boolean
+        default: true
+        required: false
+      # --- PR hygiene (utility-pr-checks.yml) ---
+      max-pr-size:
+        description: 'Maximum PR size in LOC (GitHub additions+deletions; 0 to disable). See MERGLBOT_PR_SIZE_AND_REVIEW_HYGIENE.md (MERGLBOT-PR-001).'
+        type: number
+        default: 2000
+        required: false
+      enforce-conventional-commits:
+        description: 'Enforce conventional commit format in PR title'
+        type: boolean
+        default: true
+        required: false
+      allowed-branch-prefixes:
+        description: 'Comma-separated allowed branch prefixes (feat/,fix/,docs/,ci/)'
+        type: string
+        default: 'feat/,fix/,docs/,ci/,chore/,refactor/'
+        required: false
+      pull-request-number:
+        description: 'Pull request number (required when invoked via workflow_call)'
+        type: number
+        required: true
+      # --- docs governance (reusable-docs-governance.yml) ---
+      mode:
+        description: advisory | enforce
+        type: string
+        required: false
+        default: advisory
+      impact-prefixes:
+        description: comma-separated override of impactful path prefixes
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  pr-gate:
+    name: PR Gate
+    runs-on: ubuntu-24.04
+    # Sum of the three originals' budgets (15 + 10 + 5) so no part loses headroom.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Full history: PR runs check out a SHALLOW synthetic merge commit, so
+          # base...HEAD merge-base is unsatisfiable at depth 1 — check.mjs only
+          # deepens the BASE side and silently degrades to
+          # DOCS_GOVERNANCE_STATE: unknown (fail-open) on every consumer (#724).
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run Dependency Review
+        id: dependency_review
+        if: ${{ !cancelled() }}
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48  # v4.9.0
+        with:
+          fail-on-severity: ${{ inputs.fail-on-severity }}
+          deny-licenses: ${{ inputs.deny-licenses }}
+          comment-summary-in-pr: ${{ inputs.comment-summary-in-pr }}
+          
+          # Additional security configurations
+          vulnerability-check: true
+          license-check: true
+          
+          # Do not block required PR checks waiting for dependency snapshots
+          # that these repos do not produce; the default is fail-fast.
+          retry-on-snapshot-warnings: false
+
+      - name: Fetch PR metadata
+        id: pr-data
+        if: ${{ !cancelled() }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          github-token: ${{ github.token }}
+          result-encoding: string
+          script: |
+            const prNumber = Number(process.env.PR_NUMBER_INPUT || '0');
+            if (!Number.isFinite(prNumber) || prNumber <= 0) {
+              core.setFailed('pull-request-number input must be provided for reusable workflow calls.');
+              return;
+            }
+            
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            
+            core.setOutput('title', pr.title ?? '');
+            core.setOutput('branch', pr.head.ref ?? '');
+            core.setOutput('additions', String(pr.additions ?? 0));
+            core.setOutput('deletions', String(pr.deletions ?? 0));
+            core.setOutput('number', String(pr.number));
+        env:
+          PR_NUMBER_INPUT: ${{ inputs.pull-request-number }}
+
+      - name: Check PR title (Conventional Commits)
+        id: pr_title
+        if: ${{ !cancelled() && inputs.enforce-conventional-commits }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const title = process.env.PR_TITLE || '';
+            const pattern = /^(feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert)(\(.+\))?!?: .+/;
+            
+            if (!pattern.test(title)) {
+              core.setFailed(
+                `PR title "${title}" doesn't follow Conventional Commits format.\n` +
+                `Expected: type(scope)?: description\n` +
+                `Examples: feat: add login, fix(api): resolve timeout, docs: update README`
+              );
+            } else {
+              console.log(`✅ PR title follows Conventional Commits format`);
+            }
+        env:
+          PR_TITLE: ${{ steps.pr-data.outputs.title }}
+      
+      - name: Check branch naming
+        id: pr_branch
+        if: ${{ !cancelled() }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const branch = process.env.PR_BRANCH || '';
+            const allowedPrefixes = '${{ inputs.allowed-branch-prefixes }}'.split(',');
+            
+            const isValid = allowedPrefixes.some(prefix => branch.startsWith(prefix.trim()));
+            
+            if (!isValid) {
+              core.warning(
+                `Branch "${branch}" doesn't follow naming convention.\n` +
+                `Recommended prefixes: ${allowedPrefixes.join(', ')}`
+              );
+            } else {
+              console.log(`✅ Branch name follows convention`);
+            }
+        env:
+          PR_BRANCH: ${{ steps.pr-data.outputs.branch }}
+      
+      - name: Check PR size
+        id: pr_size
+        if: ${{ !cancelled() && inputs.max-pr-size > 0 }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const additions = Number(process.env.PR_ADDITIONS || '0');
+            const deletions = Number(process.env.PR_DELETIONS || '0');
+            const totalChanges = additions + deletions;
+            const maxSize = ${{ inputs.max-pr-size }};
+            
+            console.log(`📊 PR size: +${additions} -${deletions} (total: ${totalChanges} LOC)`);
+            
+            if (totalChanges > maxSize) {
+              core.warning(
+                `⚠️ Large PR detected: ${totalChanges} LOC (limit: ${maxSize}).\n` +
+                `Consider splitting into smaller PRs for easier review.`
+              );
+            } else {
+              console.log(`✅ PR size OK (${totalChanges}/${maxSize} LOC)`);
+            }
+        env:
+          PR_ADDITIONS: ${{ steps.pr-data.outputs.additions }}
+          PR_DELETIONS: ${{ steps.pr-data.outputs.deletions }}
+      
+      - name: Check for merge commits
+        id: pr_merge_commits
+        if: ${{ !cancelled() }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const prNumber = Number(process.env.PR_NUMBER || '0');
+            if (!Number.isFinite(prNumber) || prNumber <= 0) {
+              core.setFailed('PR metadata missing; ensure pull-request-number input is provided.');
+              return;
+            }
+
+            const { data: commits } = await github.rest.pulls.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            
+            const mergeCommits = commits.filter(commit => commit.parents.length > 1);
+            
+            if (mergeCommits.length > 0) {
+              core.warning(
+                `⚠️ Found ${mergeCommits.length} merge commit(s) in PR.\n` +
+                `Use rebase or squash merge to maintain linear history.`
+              );
+            } else {
+              console.log(`✅ No merge commits found`);
+            }
+        env:
+          PR_NUMBER: ${{ steps.pr-data.outputs.number }}
+      # Pin the governance CODE + config to the SAME hub commit the caller pinned
+      # this reusable workflow to (job.workflow_sha / job.workflow_repository reflect
+      # the CALLED workflow file — unlike github.workflow_sha, which is the caller's).
+      # Without this, a consumer pinned to hub@SHA_X still executed check.mjs and
+      # ssot-map.snapshot.json from mutable hub main (transitive supply-chain gap).
+      - name: Resolve pinned hub governance ref
+        if: ${{ !cancelled() }}
+        id: hubref
+        env:
+          JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          JOB_WORKFLOW_REPO: ${{ job.workflow_repository }}
+        run: |
+          # Fall back to the hub repo + this workflow's SHA if job.workflow_* is
+          # unavailable on this runner version, so the checkout always pins a commit.
+          repo="${JOB_WORKFLOW_REPO:-merglbot-core/github}"
+          ref="${JOB_WORKFLOW_SHA:-${GITHUB_SHA}}"
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "docs-governance code pinned to $repo@$ref"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ !cancelled() }}
+        with:
+          repository: ${{ steps.hubref.outputs.repo }}
+          ref: ${{ steps.hubref.outputs.ref }}
+          path: .docs-governance-hub
+          sparse-checkout: |
+            actions/docs-governance
+            config/ssot-map.snapshot.json
+      - name: docs-governance
+        id: docs_governance
+        if: ${{ !cancelled() }}
+        env:
+          DG_MODE: ${{ inputs.mode }}
+          DG_IMPACT_PREFIXES: ${{ inputs['impact-prefixes'] }}
+          DG_EVENT_PATH: ${{ github.event_path }}
+          DG_REPO: ${{ github.repository }}
+          DG_ACTION_PATH: ${{ github.workspace }}/.docs-governance-hub/actions/docs-governance
+        run: node "$DG_ACTION_PATH/check.mjs"
+
+      - name: Check gate results
+        if: ${{ !cancelled() }}
+        env:
+          DEPENDENCY_REVIEW: ${{ steps.dependency_review.outcome }}
+          PR_METADATA: ${{ steps.pr-data.outcome }}
+          PR_TITLE_CHECK: ${{ steps.pr_title.outcome }}
+          PR_BRANCH_CHECK: ${{ steps.pr_branch.outcome }}
+          PR_SIZE_CHECK: ${{ steps.pr_size.outcome }}
+          PR_MERGE_COMMITS: ${{ steps.pr_merge_commits.outcome }}
+          DOCS_GOVERNANCE: ${{ steps.docs_governance.outcome }}
+        run: |
+          set -euo pipefail
+          rc=0
+          # `skipped` is a legitimate outcome (an input switched the check off);
+          # only `failure` blocks, exactly as the separate jobs did.
+          for pair in \
+            "dependency-review:${DEPENDENCY_REVIEW}" \
+            "pr-checks/metadata:${PR_METADATA}" \
+            "pr-checks/title:${PR_TITLE_CHECK}" \
+            "pr-checks/branch:${PR_BRANCH_CHECK}" \
+            "pr-checks/size:${PR_SIZE_CHECK}" \
+            "pr-checks/merge-commits:${PR_MERGE_COMMITS}" \
+            "docs-governance:${DOCS_GOVERNANCE}"; do
+            name="${pair%%:*}"
+            outcome="${pair#*:}"
+            if [ "${outcome}" = "failure" ]; then
+              echo "::error::${name} failed"
+              rc=1
+            fi
+          done
+          if [ "${rc}" -eq 0 ]; then
+            echo "pr-gate: OK"
+          fi
+          exit "${rc}"
