@@ -31,6 +31,39 @@ Every consumer **must** follow [Rulebook v2](https://github.com/merglbot-public/
 3. Document the workflow in this table.
 4. Update consuming repos + branch protection rules if new statuses are required.
 
+## pr-gate.yml
+
+ONE job that runs the three cheap per-PR gates that used to be three separate jobs:
+dependency review, PR hygiene checks and docs governance. Steps are copied verbatim from
+`security-dependency-review.yml`, `utility-pr-checks.yml` and `reusable-docs-governance.yml` —
+no rule, threshold, action pin or message changed. GitHub bills `ceil(seconds/60)` **per job**,
+so three 7-12 s jobs cost 3 minutes while one ~30 s job costs 1 (github#877).
+
+Gitleaks stays separate on purpose: 53-58 s on its own would cost a second billed minute anyway,
+and it needs `security-events: write` that nothing else here should inherit.
+
+Two deliberate differences from the originals: the job runs with `pull-requests: write`
+(dependency-review posts its summary comment; no pull-request-controlled code executes here), and
+every functional step carries `if: ${{ !cancelled() }}` with a final gate step, so one failing part
+no longer hides the other two the way three separate jobs never did.
+
+Check name for branch protection: **`PR Gate`** (context `pr-gate / PR Gate` when the caller names
+its job `pr-gate`).
+
+```yaml
+jobs:
+  pr-gate:
+    uses: merglbot-core/github/.github/workflows/pr-gate.yml@<pinned-sha>
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      pull-request-number: ${{ github.event.pull_request.number }}
+      fail-on-severity: moderate
+      comment-summary-in-pr: true
+      mode: advisory
+```
+
 ## reusable-docs-governance.yml
 
 SSOT-aware documentation obligation gate (docs-governance program, 2026-07). Deterministic
