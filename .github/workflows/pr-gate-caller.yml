@@ -1,0 +1,46 @@
+# PR Gate for this repository (the hub consumes its own reusable workflow).
+#
+# Replaces the `docs-governance.yml` wrapper: the hub used to spend one billed
+# minute on a 8-9 s docs-governance job, while PR Gate runs the same check plus
+# dependency review and the PR hygiene checks in a single job (github#889).
+#
+# The pin is a released hub commit, never `@main`: a caller pinned to a moving
+# ref would execute unreviewed governance code (github#877).
+#
+# Migration safety, measured on this repository 22 September 2026:
+#   gh api repos/merglbot-core/github/branches/main/protection \
+#     --jq '[.required_status_checks.checks[].context]'
+#   -> ["ci","Merglbot PR Assistant v6"]
+#   gh api repos/merglbot-core/github/rulesets --jq 'length'  -> 0
+# `docs-governance` is NOT a required status check here and no ruleset requires
+# it, so deleting the wrapper cannot strand a pull request on a check that can
+# never report. `PR Gate / PR Gate` (app 15368) is added to protection only
+# after it has reported green on real pull requests, never in the same step as
+# the deletion - the ordering that keeps "Expected - waiting" impossible.
+name: PR Gate
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write # dependency-review posts its PR comment summary
+
+concurrency:
+  group: pr-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  pr-gate:
+    name: PR Gate
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: merglbot-core/github/.github/workflows/pr-gate.yml@c18318374446a401e87094f525f1330acb8e7ff5
+    with:
+      pull-request-number: ${{ github.event.pull_request.number }}
+      fail-on-severity: moderate
+      comment-summary-in-pr: true
+      enforce-conventional-commits: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+      mode: advisory
