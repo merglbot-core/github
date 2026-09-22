@@ -39,8 +39,29 @@ dependency review, PR hygiene checks and docs governance. Steps are copied verba
 no rule, threshold, action pin or message changed. GitHub bills `ceil(seconds/60)` **per job**,
 so three 7-12 s jobs cost 3 minutes while one ~30 s job costs 1 (github#877).
 
-Gitleaks stays separate on purpose: 53-58 s on its own would cost a second billed minute anyway,
-and it needs `security-events: write` that nothing else here should inherit.
+Gitleaks used to stay separate because the job took 53-58 s. Measured again 22. 9. 2026 on
+merglbot-extractors/shoptet-extractor, **45 of those seconds were `Upload SARIF report`** and the
+scan itself was ~1 s, so `gitleaks: true` now folds the scan into this job as an opt-in step
+(github#895). The step keeps the scan and the redacted `$GITHUB_STEP_SUMMARY` report and drops the
+SARIF upload, so no `security-events: write` is inherited and PR Gate stays around 20 s. Repos that
+switch it on delete their `security-gitleaks.yml` and keep a weekly full-tree scan for pushes that
+never open a PR. GHAS Secret Protection push protection is untouched either way.
+
+### Optional steps (all default to `false`, so existing callers are unaffected)
+
+| input | default | what it adds |
+|---|---|---|
+| `gitleaks` | `false` | gitleaks 8.18.4 (pinned by release checksum) over the working tree, `--no-git --redact`; findings fail the gate and are listed redacted in the job summary |
+| `gitleaks-config-path` | `''` | repo-relative gitleaks config; absolute paths and `..` are rejected |
+| `gitleaks-upload-report` | `false` | uploads the redacted JSON report as a 7-day artifact |
+| `markdown-danger-lint` | `false` | fails when changed Markdown documents `git push --force --all` (verbatim from `markdown-danger-lint.yml`) |
+| `pr-text-length` | `false` | PR title/body length limits, dependabot waived (verbatim from `length-check.yml`) |
+| `pr-text-max-title` | `100` | title limit in characters |
+| `pr-text-max-body` | `4000` | body limit in bytes |
+
+`markdown-danger-lint` and `pr-text-length` read `github.event.pull_request.*`, so a caller that
+switches them on needs `types: [opened, edited, synchronize, reopened]` — otherwise a title or body
+edit does not re-run the check.
 
 Two deliberate differences from the originals: the job runs with `pull-requests: write`
 (dependency-review posts its summary comment; no pull-request-controlled code executes here), and

@@ -87,6 +87,51 @@ on:
         type: string
         required: false
         default: ""
+      # --- optional secret scan (security-gitleaks.yml as a step, github#895) ---
+      # Folding gitleaks into this job removes one billed job-minute per PR sync
+      # (GitHub bills ceil(seconds/60) per JOB). Measured 2026-09-22 on
+      # merglbot-extractors/shoptet-extractor: the standalone job took 54 s, of
+      # which 45 s was `Upload SARIF report`; the scan itself is ~1 s. This step
+      # therefore keeps the scan and the redacted summary but NOT the SARIF
+      # upload, so PR Gate stays well inside one billed minute (~20 s total).
+      # Push protection (GHAS Secret Protection) is unaffected and still runs.
+      gitleaks:
+        description: 'Run a gitleaks secret scan as a step of this job (no SARIF upload)'
+        type: boolean
+        default: false
+        required: false
+      gitleaks-config-path:
+        description: 'Repo-relative path to a custom gitleaks config (optional)'
+        type: string
+        default: ''
+        required: false
+      gitleaks-upload-report:
+        description: 'Upload the redacted gitleaks JSON report as a build artifact'
+        type: boolean
+        default: false
+        required: false
+      # --- optional markdown danger lint (github#891) ---
+      markdown-danger-lint:
+        description: 'Fail when changed Markdown documents a `git push --force --all`'
+        type: boolean
+        default: false
+        required: false
+      # --- optional PR text length (length-check.yml as a step, github#891) ---
+      pr-text-length:
+        description: 'Enforce PR title/body length limits (dependabot is waived)'
+        type: boolean
+        default: false
+        required: false
+      pr-text-max-title:
+        description: 'Maximum PR title length in characters'
+        type: number
+        default: 100
+        required: false
+      pr-text-max-body:
+        description: 'Maximum PR body length in bytes'
+        type: number
+        default: 4000
+        required: false
 
 permissions:
   contents: read
@@ -297,6 +342,132 @@ jobs:
           DG_ACTION_PATH: ${{ github.workspace }}/.docs-governance-hub/actions/docs-governance
         run: node "$DG_ACTION_PATH/check.mjs"
 
+      # --- optional gitleaks secret scan (github#895) -------------------------
+      # Installed into RUNNER_TEMP (no sudo) and pinned by release checksum, so a
+      # compromised release asset cannot silently replace the scanner.
+      - name: Install gitleaks
+        if: ${{ !cancelled() && inputs.gitleaks }}
+        env:
+          GITLEAKS_VERSION: '8.18.4'
+          GITLEAKS_SHA256: 'ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d'
+        run: |
+          set -euo pipefail
+          dest="${RUNNER_TEMP}/gitleaks-bin"
+          mkdir -p "$dest"
+          curl -fsSL -o "${RUNNER_TEMP}/gitleaks.tgz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  ${RUNNER_TEMP}/gitleaks.tgz" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/gitleaks.tgz" -C "$dest" gitleaks
+          chmod +x "$dest/gitleaks"
+          echo "$dest" >> "$GITHUB_PATH"
+          "$dest/gitleaks" version
+
+      - name: Run gitleaks
+        id: gitleaks
+        if: ${{ !cancelled() && inputs.gitleaks }}
+        shell: bash
+        env:
+          GITLEAKS_CONFIG_PATH: ${{ inputs['gitleaks-config-path'] }}
+          REPORT_PATH: ${{ runner.temp }}/gitleaks-report.json
+        run: |
+          set -uo pipefail
+          # Reject absolute paths and traversal in the caller-supplied config path.
+          config_args=()
+          if [ -n "${GITLEAKS_CONFIG_PATH}" ]; then
+            case "${GITLEAKS_CONFIG_PATH}" in
+              /*|*..*) echo "::error::gitleaks-config-path must be a repo-relative path without '..'"; exit 1 ;;
+            esac
+            if [ ! -f "${GITLEAKS_CONFIG_PATH}" ]; then
+              echo "::error::gitleaks config not found: ${GITLEAKS_CONFIG_PATH}"; exit 1
+            fi
+            config_args+=("--config=${GITLEAKS_CONFIG_PATH}")
+          fi
+          # The checkout above uses persist-credentials: false, so there is no
+          # auth header in .git/config to scrub; --no-git scans the working tree.
+          rc=0
+          gitleaks detect --source=. --report-path="${REPORT_PATH}" --report-format=json \
+            --redact --no-git "${config_args[@]}" || rc=$?
+          count=0
+          if [ -f "${REPORT_PATH}" ]; then
+            count="$(jq 'length' "${REPORT_PATH}" 2>/dev/null || echo 0)"
+          fi
+          {
+            echo "### Secret scanning (gitleaks)"
+            echo ""
+            if [ "${count}" -eq 0 ]; then
+              echo "No secrets detected."
+            else
+              echo "**${count} finding(s)** (values redacted):"
+              echo ""
+              jq -r '.[0:20][] | "- `\(.RuleID)` \(.File):\(.StartLine)"' "${REPORT_PATH}" 2>/dev/null || true
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "${rc}"
+
+      - name: Upload gitleaks report (redacted)
+        if: ${{ !cancelled() && inputs.gitleaks && inputs['gitleaks-upload-report'] }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: gitleaks-report
+          path: ${{ runner.temp }}/gitleaks-report.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # --- optional markdown danger lint (github#891) -------------------------
+      - name: Markdown danger lint
+        id: markdown_danger_lint
+        if: ${{ !cancelled() && inputs['markdown-danger-lint'] }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CHANGED_LIST: ${{ runner.temp }}/changed_md.txt
+        run: |
+          set -uo pipefail
+          git diff --name-only "${BASE_SHA}"...HEAD -- '*.md' > "${CHANGED_LIST}" || true
+          count="$(wc -l < "${CHANGED_LIST}" 2>/dev/null || echo 0)"
+          if [ "${count}" -eq 0 ]; then
+            echo "No Markdown changed."
+            exit 0
+          fi
+          fail=0
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            [ -f "$f" ] || continue
+            if grep -nEi 'git\s+push.*(--all.*--force|--force.*--all|--all.*-f\b|-f\b.*--all)' "$f" \
+               | grep -viE 'never|do not|nepoužívej|nepouzivej|nepoužij'; then
+              echo "Dangerous pattern in $f (git push with --force + --all)."
+              fail=1
+            fi
+          done < "${CHANGED_LIST}"
+          if [ "${fail}" -ne 0 ]; then
+            echo "::error title=Unsafe git command detected::Found 'git push --force --all' in changed Markdown files."
+            exit 1
+          fi
+          echo "No dangerous patterns found."
+
+      # --- optional PR text length (github#891) -------------------------------
+      - name: Check PR text length
+        id: pr_text_length
+        if: ${{ !cancelled() && inputs['pr-text-length'] }}
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          MAX_TITLE: ${{ inputs['pr-text-max-title'] }}
+          MAX_BODY: ${{ inputs['pr-text-max-body'] }}
+        run: |
+          set -euo pipefail
+          # Dependabot bodies are machine-generated changelogs; keeping the limit
+          # made every dependabot PR permanently UNSTABLE (2026-07-06).
+          if [ "${AUTHOR}" = "dependabot[bot]" ]; then
+            echo "dependabot PR — length check waived"
+            exit 0
+          fi
+          title_len="${#TITLE}"
+          [ "${title_len}" -le "${MAX_TITLE}" ] || { echo "::error::PR title too long (${title_len} > ${MAX_TITLE})"; exit 1; }
+          body_len="$(printf '%s' "${BODY}" | wc -c)"
+          [ "${body_len}" -le "${MAX_BODY}" ] || { echo "::error::PR body too long (${body_len} > ${MAX_BODY})"; exit 1; }
+          echo "PR text length OK"
+
       - name: Check gate results
         if: ${{ !cancelled() }}
         env:
@@ -307,6 +478,9 @@ jobs:
           PR_SIZE_CHECK: ${{ steps.pr_size.outcome }}
           PR_MERGE_COMMITS: ${{ steps.pr_merge_commits.outcome }}
           DOCS_GOVERNANCE: ${{ steps.docs_governance.outcome }}
+          GITLEAKS: ${{ steps.gitleaks.outcome }}
+          MARKDOWN_DANGER_LINT: ${{ steps.markdown_danger_lint.outcome }}
+          PR_TEXT_LENGTH: ${{ steps.pr_text_length.outcome }}
         run: |
           set -euo pipefail
           rc=0
@@ -319,7 +493,10 @@ jobs:
             "pr-checks/branch:${PR_BRANCH_CHECK}" \
             "pr-checks/size:${PR_SIZE_CHECK}" \
             "pr-checks/merge-commits:${PR_MERGE_COMMITS}" \
-            "docs-governance:${DOCS_GOVERNANCE}"; do
+            "docs-governance:${DOCS_GOVERNANCE}" \
+            "gitleaks:${GITLEAKS}" \
+            "markdown-danger-lint:${MARKDOWN_DANGER_LINT}" \
+            "pr-text-length:${PR_TEXT_LENGTH}"; do
             name="${pair%%:*}"
             outcome="${pair#*:}"
             if [ "${outcome}" = "failure" ]; then

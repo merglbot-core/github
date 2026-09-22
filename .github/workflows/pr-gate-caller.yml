@@ -1,0 +1,35 @@
+# PR Gate for this repository (the hub consumes its own reusable workflow).
+#
+# Replaces the `docs-governance.yml` wrapper: the hub used to spend one billed
+# minute on a 8-9 s docs-governance job, while PR Gate runs the same check plus
+# dependency review and the PR hygiene checks in a single job (github#889).
+#
+# The pin is a released hub commit, never `@main`: a caller pinned to a moving
+# ref would execute unreviewed governance code (github#877).
+name: PR Gate
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write # dependency-review posts its PR comment summary
+
+concurrency:
+  group: pr-gate-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  pr-gate:
+    name: PR Gate
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: merglbot-core/github/.github/workflows/pr-gate.yml@c18318374446a401e87094f525f1330acb8e7ff5
+    with:
+      pull-request-number: ${{ github.event.pull_request.number }}
+      fail-on-severity: moderate
+      comment-summary-in-pr: true
+      enforce-conventional-commits: ${{ github.event.pull_request.user.login != 'dependabot[bot]' }}
+      mode: advisory
