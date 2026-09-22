@@ -6,6 +6,17 @@
 #
 # The pin is a released hub commit, never `@main`: a caller pinned to a moving
 # ref would execute unreviewed governance code (github#877).
+#
+# Migration safety, measured on this repository 22 September 2026:
+#   gh api repos/merglbot-core/github/branches/main/protection \
+#     --jq '[.required_status_checks.checks[].context]'
+#   -> ["ci","Merglbot PR Assistant v6"]
+#   gh api repos/merglbot-core/github/rulesets --jq 'length'  -> 0
+# `docs-governance` is NOT a required status check here and no ruleset requires
+# it, so deleting the wrapper cannot strand a pull request on a check that can
+# never report. `PR Gate / PR Gate` (app 15368) is added to protection only
+# after it has reported green on real pull requests, never in the same step as
+# the deletion - the ordering that keeps "Expected - waiting" impossible.
 name: PR Gate
 
 on:
