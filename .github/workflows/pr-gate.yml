@@ -135,11 +135,12 @@ on:
       # --- runner (merglbot-core/github#913) ---
       runs-on:
         description: >-
-          Runner label for the PR Gate job. Default `ubuntu-slim` (1 vCPU, 0.002 USD/min
-          vs 0.006 for ubuntu-24.04). Set `ubuntu-24.04` to roll back one caller without
-          a hub change.
+          Runner label for the PR Gate job. Default `ubuntu-24.04` (unchanged). A caller
+          opts in to `ubuntu-slim` (1 vCPU, 0.002 USD/min vs 0.006) with
+          `runs-on: ubuntu-slim`; the pilot callers' runs are the execution evidence
+          before the default flips in a separate change (merglbot-core/github#913).
         type: string
-        default: 'ubuntu-slim'
+        default: 'ubuntu-24.04'
         required: false
 
 permissions:
@@ -154,7 +155,8 @@ jobs:
     # lacks. Measured 2026-09-23: 13-18 s on 2 vCPU (admin, BA, shoptet), so even 2x slower
     # it stays in one billed minute at a third of the price. The check name
     # `PR Gate` is unchanged, so no branch protection edits are needed.
-    # Rollback for one repo: `with: runs-on: ubuntu-24.04`; for all: revert this line.
+    # This change keeps ubuntu-24.04 as the default: callers opt in per repository,
+    # and the default flips only after the pilot callers have green slim runs.
     runs-on: ${{ inputs.runs-on }}
     # The 1-vCPU runner terminates jobs at 15 min; 2 vCPU keeps the old 30 min budget
     # (sum of the three originals' budgets 15 + 10 + 5).
