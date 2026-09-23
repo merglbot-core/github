@@ -135,7 +135,8 @@ on:
       # --- runner (merglbot-core/github#913) ---
       runs-on:
         description: >-
-          Runner label for the PR Gate job. Default `ubuntu-24.04` (unchanged). A caller
+          Runner label for the PR Gate job: `ubuntu-24.04` (default, unchanged) or
+          `ubuntu-slim`; any other value is ignored and runs on ubuntu-24.04. A caller
           opts in to `ubuntu-slim` (1 vCPU, 0.002 USD/min vs 0.006) with
           `runs-on: ubuntu-slim`; the pilot callers' runs are the execution evidence
           before the default flips in a separate change (merglbot-core/github#913).
@@ -157,7 +158,9 @@ jobs:
     # `PR Gate` is unchanged, so no branch protection edits are needed.
     # This change keeps ubuntu-24.04 as the default: callers opt in per repository,
     # and the default flips only after the pilot callers have green slim runs.
-    runs-on: ${{ inputs.runs-on }}
+    # Allowlist, not pass-through: a caller can only choose between the two hosted labels;
+    # any other value (self-hosted, a larger runner) falls back to ubuntu-24.04.
+    runs-on: ${{ inputs.runs-on == 'ubuntu-slim' && 'ubuntu-slim' || 'ubuntu-24.04' }}
     # The 1-vCPU runner terminates jobs at 15 min; 2 vCPU keeps the old 30 min budget
     # (sum of the three originals' budgets 15 + 10 + 5).
     timeout-minutes: ${{ inputs.runs-on == 'ubuntu-slim' && 15 || 30 }}
