@@ -132,6 +132,15 @@ on:
         type: number
         default: 4000
         required: false
+      # --- runner (merglbot-core/github#913) ---
+      runs-on:
+        description: >-
+          Runner label for the PR Gate job. Default `ubuntu-slim` (1 vCPU, 0.002 USD/min
+          vs 0.006 for ubuntu-24.04). Set `ubuntu-24.04` to roll back one caller without
+          a hub change.
+        type: string
+        default: 'ubuntu-slim'
+        required: false
 
 permissions:
   contents: read
@@ -139,9 +148,17 @@ permissions:
 jobs:
   pr-gate:
     name: PR Gate
-    runs-on: ubuntu-24.04
-    # Sum of the three originals' budgets (15 + 10 + 5) so no part loses headroom.
-    timeout-minutes: 30
+    # ubuntu-slim (merglbot-core/github#913, EPIC #910): every step here is API calls,
+    # a git checkout and small node/shell scripts; gitleaks installs into RUNNER_TEMP
+    # without sudo and nothing uses Docker, which the unprivileged slim container
+    # lacks. Measured 2026-09-23: 13-18 s on 2 vCPU (admin, BA, shoptet), so even 2x slower
+    # it stays in one billed minute at a third of the price. The check name
+    # `PR Gate` is unchanged, so no branch protection edits are needed.
+    # Rollback for one repo: `with: runs-on: ubuntu-24.04`; for all: revert this line.
+    runs-on: ${{ inputs.runs-on }}
+    # The 1-vCPU runner terminates jobs at 15 min; 2 vCPU keeps the old 30 min budget
+    # (sum of the three originals' budgets 15 + 10 + 5).
+    timeout-minutes: ${{ inputs.runs-on == 'ubuntu-slim' && 15 || 30 }}
     permissions:
       contents: read
       pull-requests: write
