@@ -135,13 +135,13 @@ on:
       # --- runner (merglbot-core/github#913) ---
       runs-on:
         description: >-
-          Runner label for the PR Gate job: `ubuntu-24.04` (default, unchanged) or
-          `ubuntu-slim`; any other value is ignored and runs on ubuntu-24.04. A caller
-          opts in to `ubuntu-slim` (1 vCPU, 0.002 USD/min vs 0.006) with
-          `runs-on: ubuntu-slim`; the pilot callers' runs are the execution evidence
-          before the default flips in a separate change (merglbot-core/github#913).
+          Runner label for the PR Gate job: `ubuntu-slim` (default since 24 Sep 2026;
+          1 vCPU, 0.002 USD/min vs 0.006) or `ubuntu-24.04`; any other value runs on
+          ubuntu-24.04. Pilot evidence (merglbot-core/github#913): 10/10 green runs on
+          slim in three repositories incl. `gitleaks: true`, 13-21 s. Roll one caller
+          back with `runs-on: ubuntu-24.04`.
         type: string
-        default: 'ubuntu-24.04'
+        default: 'ubuntu-slim'
         required: false
 
 permissions:
@@ -156,8 +156,8 @@ jobs:
     # lacks. Measured 2026-09-23: 13-18 s on 2 vCPU (admin, BA, shoptet), so even 2x slower
     # it stays in one billed minute at a third of the price. The check name
     # `PR Gate` is unchanged, so no branch protection edits are needed.
-    # This change keeps ubuntu-24.04 as the default: callers opt in per repository,
-    # and the default flips only after the pilot callers have green slim runs.
+    # Default flipped to ubuntu-slim on 24 Sep 2026 after the pilot (10/10 green runs,
+    # 13-21 s); callers roll back individually with `runs-on: ubuntu-24.04`.
     # Allowlist, not pass-through: a caller can only choose between the two hosted labels;
     # any other value (self-hosted, a larger runner) falls back to ubuntu-24.04.
     runs-on: ${{ inputs.runs-on == 'ubuntu-slim' && 'ubuntu-slim' || 'ubuntu-24.04' }}
