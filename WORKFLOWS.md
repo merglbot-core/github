@@ -58,7 +58,7 @@ never open a PR. GHAS Secret Protection push protection is untouched either way.
 | `pr-text-length` | `false` | PR title/body length limits, dependabot waived (verbatim from `length-check.yml`) |
 | `pr-text-max-title` | `100` | title limit in characters |
 | `pr-text-max-body` | `4000` | body limit in bytes |
-| `runs-on` | `ubuntu-24.04` | `ubuntu-24.04` or `ubuntu-slim` (any other value falls back to `ubuntu-24.04`); `ubuntu-slim` (1 vCPU, 0.002 USD/min instead of 0.006, 15-min job cap) is the opt-in cost pilot of github#913 |
+| `runs-on` | `ubuntu-slim` | `ubuntu-slim` (1 vCPU, 0.002 USD/min, 15-min job cap) or `ubuntu-24.04`; any other value falls back to `ubuntu-24.04` (github#913) |
 
 `markdown-danger-lint` and `pr-text-length` read `github.event.pull_request.*`, so a caller that
 switches them on needs `types: [opened, edited, synchronize, reopened]` — otherwise a title or body
