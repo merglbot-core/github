@@ -22,6 +22,7 @@ class Installation(unittest.TestCase):
             old_source = (HERE / "fixture_legacy.py").read_bytes()
             old_state = b'{"registration_complete": false, "dod": {}}\n'
             installer.CODE.write_bytes(old_source)
+            installer.MODULE.write_bytes(b"old = 1\n")
             installer.STATE.write_bytes(old_state)
             expected = installer.digest(old_source)
             dry = installer.install(expected, True)
@@ -39,9 +40,24 @@ class Installation(unittest.TestCase):
                 installer.rollback(pathlib.Path(receipt["backup"]))
             self.assertNotEqual(installer.CODE.read_bytes(), old_source)
             installer.MODULE.write_bytes(original_module)
+            backup = pathlib.Path(receipt["backup"])
+            backup_code = backup / "autopilot.py"
+            backup_code.write_bytes(b"corrupt backup")
+            with self.assertRaises(RuntimeError):
+                installer.rollback(backup)
+            self.assertNotEqual(installer.CODE.read_bytes(), old_source)
+            self.assertEqual(installer.MODULE.read_bytes(), original_module)
+            backup_code.write_bytes(old_source)
+            backup_module = backup / "cost_888_literal.py"
+            backup_module.unlink()
+            with self.assertRaises(RuntimeError):
+                installer.rollback(backup)
+            self.assertNotEqual(installer.CODE.read_bytes(), old_source)
+            backup_module.write_bytes(b"old = 1\n")
             restored = installer.rollback(pathlib.Path(receipt["backup"]))
             self.assertEqual(restored["restored_source_sha256"], expected)
             self.assertEqual(installer.CODE.read_bytes(), old_source)
+            self.assertEqual(installer.MODULE.read_bytes(), b"old = 1\n")
             self.assertEqual(installer.STATE.read_bytes(), old_state)
 
     def test_owner_hold_and_occupied_lock_fail_before_write(self):

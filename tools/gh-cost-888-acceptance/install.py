@@ -75,6 +75,8 @@ def install(expected_sha, dry_run):
         compile(new_module, str(MODULE), "exec")
         facts = {"source_before_sha256": digest(old_code),
                  "source_after_sha256": digest(new_code),
+                 "module_before_present": old_module is not None,
+                 "module_before_sha256": digest(old_module) if old_module is not None else None,
                  "module_after_sha256": digest(new_module),
                  "state_sha256": digest(old_state)}
         if dry_run:
@@ -111,10 +113,18 @@ def rollback(backup):
             raise RuntimeError("newer autopilot source exists; no rollback")
         if not MODULE.exists() or digest(MODULE.read_bytes()) != manifest["module_after_sha256"]:
             raise RuntimeError("newer semantic module exists; no rollback")
-        write_atomic(CODE, (backup / "autopilot.py").read_bytes())
+        old_code = (backup / "autopilot.py").read_bytes()
         old_module = backup / "cost_888_literal.py"
-        if old_module.exists():
-            write_atomic(MODULE, old_module.read_bytes())
+        module_was_present = manifest["module_before_present"]
+        if old_module.exists() != module_was_present:
+            raise RuntimeError("backup module presence drift; no rollback")
+        old_module_bytes = old_module.read_bytes() if module_was_present else None
+        if digest(old_code) != manifest["source_before_sha256"] or (
+                module_was_present and digest(old_module_bytes) != manifest["module_before_sha256"]):
+            raise RuntimeError("backup digest mismatch; no rollback")
+        write_atomic(CODE, old_code)
+        if module_was_present:
+            write_atomic(MODULE, old_module_bytes)
         else:
             MODULE.unlink(missing_ok=True)
         return {"restored_source_sha256": digest(CODE.read_bytes()), "state_unchanged": True}
