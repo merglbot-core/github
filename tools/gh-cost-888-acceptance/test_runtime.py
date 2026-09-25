@@ -36,13 +36,16 @@ class PatchedVerifier(unittest.TestCase):
                 return {"content": base64.b64encode(workflow.encode()).decode()}
             if "/actions/workflows/" in path:
                 return {"total_count": total, "workflow_runs": rows}
+            if "/actions/runs/" in path and path.endswith("/jobs?per_page=100"):
+                return {"total_count": 1, "jobs": [{"conclusion": "success",
+                        "started_at": "2026-09-24T12:00:00Z", "completed_at": "2026-09-24T12:00:42Z"}]}
             if "/pulls?" in path:
                 return pulls
             self.fail(path)
         code = compile(ast.parse(patcher.NEW_FILTERED), "patched_filtered", "exec")
         scope = {"gh_json": api, "merged_at": lambda *_: SINCE,
                  "CALLS": {"n": 0}, "MAX_CALLS_PER_TICK": 60,
-                 "iso": lambda: "2026-09-25T12:00:00Z"}
+                 "iso": lambda: "2026-09-25T12:00:00Z", "DOD_MAX_SECONDS": 60}
         exec(code, scope)
         item = {"sub": 892, "repo": "merglbot-core/merglbot-admin",
                 "workflow": "terraform-validate.yml", "since_pr": "merglbot-core/merglbot-admin#1039",

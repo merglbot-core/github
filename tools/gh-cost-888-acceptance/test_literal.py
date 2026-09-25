@@ -14,10 +14,18 @@ class TerraformAcceptance(unittest.TestCase):
         self.assertTrue(literal.terraform_paths_filtered(source))
         self.assertFalse(literal.terraform_paths_filtered("# paths: terraform/**\non:\n  pull_request:\n"))
         self.assertFalse(literal.terraform_paths_filtered("on:\n  push:\n    paths:\n      - 'terraform/**'\n"))
+        self.assertFalse(literal.terraform_paths_filtered("on:\n  pull_request:\n    paths:\n      - 'docs/**'\n    branches:\n      - 'terraform/**'\n"))
+
+    def test_job_evidence_requires_one_short_successful_job(self):
+        good = {"total_count": 1, "jobs": [{"conclusion": "success",
+                "started_at": "2026-09-24T12:00:00Z", "completed_at": "2026-09-24T12:00:42Z"}]}
+        self.assertTrue(literal.one_short_successful_job(good, 60))
+        self.assertFalse(literal.one_short_successful_job({**good, "total_count": 2}, 60))
+        self.assertFalse(literal.one_short_successful_job({"total_count": 1, "jobs": [{**good["jobs"][0], "completed_at": "2026-09-24T12:01:02Z"}]}, 60))
 
     def test_only_successful_first_attempts_in_exact_workflow(self):
         rows = [{"id": i, "event": "pull_request", "created_at": "2026-09-24T00:00:00Z",
-                 "run_attempt": 1, "conclusion": "success"} for i in range(5)]
+                 "run_attempt": 1, "conclusion": "success", "job_verified": True} for i in range(5)]
         rows.append({"id": 8, "event": "pull_request", "created_at": "2026-09-24T00:00:00Z",
                      "run_attempt": 2, "conclusion": "success"})
         rows.append({"id": 9, "event": "pull_request", "created_at": "2026-09-24T00:00:00Z",

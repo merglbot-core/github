@@ -1,5 +1,7 @@
 """Exact natural-run evidence for #892; do not substitute PR Gate runs."""
 
+from datetime import datetime
+
 
 def terraform_paths_filtered(source):
     """Require direct PR trigger paths, not a comment or unrelated job text."""
@@ -20,9 +22,31 @@ def terraform_paths_filtered(source):
     paths = next((i for i, line in enumerate(body) if line == "    paths:"), None)
     if paths is None or sum(line == "    paths:" for line in body) != 1:
         return False
-    path_rows = [line.strip()[2:].strip().strip("'\"") for line in body[paths + 1:]
+    paths_end = next((i for i in range(paths + 1, len(body))
+                      if body[i].strip() and not body[i].lstrip().startswith("#")
+                      and len(body[i]) - len(body[i].lstrip(" ")) <= 4), len(body))
+    path_rows = [line.strip()[2:].strip().strip("'\"") for line in body[paths + 1:paths_end]
                  if line.startswith("      - ")]
     return "terraform/**" in path_rows
+
+
+def one_short_successful_job(payload, max_seconds):
+    """Require complete direct Jobs API evidence, with one successful bounded job."""
+    if not isinstance(payload, dict) or payload.get("total_count") != 1:
+        return False
+    jobs = payload.get("jobs")
+    if not isinstance(jobs, list) or len(jobs) != 1:
+        return False
+    job = jobs[0]
+    if job.get("conclusion") != "success":
+        return False
+    try:
+        start = datetime.fromisoformat(job["started_at"].replace("Z", "+00:00"))
+        end = datetime.fromisoformat(job["completed_at"].replace("Z", "+00:00"))
+        seconds = (end - start).total_seconds()
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return False
+    return 0 <= seconds <= max_seconds
 
 
 def qualifying_terraform_runs(runs, merged_at):
@@ -38,7 +62,8 @@ def qualifying_terraform_runs(runs, merged_at):
     good = [row for row in rows if row.get("event") == "pull_request"
             and row.get("created_at", "") > merged_at
             and row.get("run_attempt") == 1
-            and row.get("conclusion") == "success"]
+            and row.get("conclusion") == "success"
+            and row.get("job_verified") is True]
     return len(good)
 
 

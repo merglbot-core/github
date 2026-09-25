@@ -3,7 +3,7 @@
 
 NEW_FILTERED = '''def measure_filtered(state, item):
     """#892 requires five real Terraform workflow successes, not PR Gate runs."""
-    from cost_888_literal import qualifying_terraform_runs, qualifying_pr_count, terraform_paths_filtered
+    from cost_888_literal import qualifying_terraform_runs, qualifying_pr_count, terraform_paths_filtered, one_short_successful_job
     import base64
     repo = item["repo"]
     since = merged_at(state, item["since_pr"])
@@ -42,6 +42,24 @@ NEW_FILTERED = '''def measure_filtered(state, item):
         if len(rows) >= total:
             break
         page += 1
+    if any(not isinstance(row.get("created_at"), str) or not row.get("event")
+           or row.get("id") is None or "run_attempt" not in row
+           or "conclusion" not in row for row in rows):
+        return False
+    verified = 0
+    for row in rows:
+        if not (row["event"] == "pull_request" and row["created_at"] > since
+                and row["run_attempt"] == 1 and row["conclusion"] == "success"):
+            continue
+        if verified >= 5:
+            break
+        if CALLS["n"] > MAX_CALLS_PER_TICK - 8:
+            return False
+        jobs = gh_json(f"repos/{repo}/actions/runs/{row['id']}/jobs?per_page=100")
+        if jobs is None:
+            return False
+        row["job_verified"] = one_short_successful_job(jobs, DOD_MAX_SECONDS)
+        verified += int(row["job_verified"])
     good = qualifying_terraform_runs({"total_count": total, "workflow_runs": rows}, since)
     if good is None:
         return False
@@ -108,14 +126,14 @@ NEW_CLOSE_START = '''        items = [i for i in state.get("dod", {}).values() i
             if excluded and not excluded.get("met_at") and all(i.get("met_at") for i in others):
                 pr = gh_json("repos/merglbot-proteinaco/acquisition-analysis/pulls/184")
                 if pr is None or pr.get("state") != "closed" or pr.get("merged"):
-                    return False
+                    continue
                 bp = gh_json("repos/merglbot-proteinaco/acquisition-analysis/branches/main/protection")
                 if bp is None:
-                    return False
+                    continue
                 required = {check.get("context") for check in
                             (bp.get("required_status_checks") or {}).get("checks", [])}
                 if not {"gitleaks", "dependency-review", "Merglbot PR Assistant v6"} <= required:
-                    return False
+                    continue
                 economic_exception = exception_key
         if not items or any(not i.get("met_at") and
                             not (economic_exception and i is state["dod"][economic_exception]) for i in items):
