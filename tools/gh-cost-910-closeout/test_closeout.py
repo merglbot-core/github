@@ -108,7 +108,14 @@ class Closeout(unittest.TestCase):
         self.assertEqual(len([c for c in self.calls if c[0] == "comment"]), 1)
 
     def test_914_exception_requires_closed_unmerged_pr_and_weekly_signal(self):
-        state = {"subs": {"914": {}}, "dod": {"914|repo": {"sub": 914, "repo": "repo", "kind": "file_state", "met_at": "ok"}}}
+        state = {"subs": {"914": {}}, "dod": {
+            "914|repo": {"sub": 914, "repo": "repo", "kind": "file_state", "met_at": "ok"},
+            "914|merglbot-milan-private/plane_so": {
+                "sub": 914, "repo": "merglbot-milan-private/plane_so",
+                "kind": "no_push_runs", "met_at": None}}}
+        state["dod"]["914|repo"]["met_at"] = None
+        self.assertFalse(self.scope["close_finished_subs"](state))
+        state["dod"]["914|repo"]["met_at"] = "ok"
         self.exception_pr_closed = False
         self.assertFalse(self.scope["close_finished_subs"](state))
         self.exception_pr_closed = True
@@ -122,6 +129,7 @@ class Closeout(unittest.TestCase):
         body = [c[3] for c in self.calls if c[0] == "comment"][-1]
         self.assertIn("Ekonomická výjimka", body)
         self.assertIn("není implementovaná úspora", body)
+        self.assertEqual(body.count("| row | proof |"), 1)
 
     def test_epic_requires_live_closed_subissues_and_no_hold(self):
         state = {"subs": {"921": {"board_done_at": "old", "technical_hold": True}},

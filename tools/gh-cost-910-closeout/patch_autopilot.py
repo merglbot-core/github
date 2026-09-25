@@ -10,6 +10,12 @@ NEW_CLOSE_SUBS = '''def close_finished_subs(state):
         if record.get("board_done_at") or record.get("closed_elsewhere"):
             continue
         items = [i for i in state.get("dod", {}).values() if str(i.get("sub")) == str(sub)]
+        if str(sub) == "914":
+            # A future registry import may include the intentionally excluded
+            # plane_so row. Its no-push criterion is not an implemented saving.
+            items = [i for i in items
+                     if not (i.get("repo") == "merglbot-milan-private/plane_so"
+                             and i.get("kind") == "no_push_runs")]
         if not items or any(not i.get("met_at") for i in items):
             continue
         exception = ""
