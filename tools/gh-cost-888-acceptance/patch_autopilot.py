@@ -155,21 +155,35 @@ NEW_BODY = '''        title = "### Provozní DoD s ekonomickou výjimkou" if eco
                               if economic_exception and i is state["dod"][economic_exception] else dod_row(i)) for i in items)
 '''
 
-OLD_COMMENT_CALL = '''        if comment(EPIC_REPO, int(sub), body, state, f"dod:{sub}"):
-'''
-NEW_COMMENT_CALL = '''        comment_key = f"dod:{sub}:literal-v2" if str(sub) == "892" else f"dod:{sub}"
-        if comment(EPIC_REPO, int(sub), body, state, comment_key):
-'''
-
-OLD_RECORD_CLOSE = '''            record["board_done_at"] = iso()
+OLD_CLOSE_TAIL = '''        if comment(EPIC_REPO, int(sub), body, state, f"dod:{sub}"):
+            if not DRY_RUN:
+                gh("issue", "close", str(sub), "-R", EPIC_REPO, "--reason", "completed")
+            board(int(sub), STATUS_DONE)
+            record["board_done_at"] = iso()
             save_state(state)
             log(f"sub-issue #{sub} closed, board Done")
+            return True
 '''
-NEW_RECORD_CLOSE = '''            record["board_done_at"] = iso()
-            if str(sub) == "892":
-                record["literal_closeout_at"] = record["board_done_at"]
-            save_state(state)
-            log(f"sub-issue #{sub} closed, board Done")
+NEW_CLOSE_TAIL = '''        if DRY_RUN:
+            continue
+        comment_key = f"dod:{sub}:literal-v2" if str(sub) == "892" else f"dod:{sub}"
+        if not (stamped(state, comment_key) or comment(EPIC_REPO, int(sub), body, state, comment_key)):
+            continue
+        issue = gh_json(f"repos/{EPIC_REPO}/issues/{sub}")
+        if issue is None or issue.get("state") not in ("open", "closed"):
+            return False
+        if issue["state"] == "open":
+            code, _, _ = gh("issue", "close", str(sub), "-R", EPIC_REPO, "--reason", "completed")
+            if code != 0:
+                return False
+        if not board(int(sub), STATUS_DONE):
+            return False
+        record["board_done_at"] = iso()
+        if str(sub) == "892":
+            record["literal_closeout_at"] = record["board_done_at"]
+        save_state(state)
+        log(f"sub-issue #{sub} closed, board Done")
+        return True
 '''
 
 
@@ -183,8 +197,7 @@ def patch(source):
     for before, after in [(OLD_MEASURE_SKIP, NEW_MEASURE_SKIP),
                           (OLD_CLOSE_START, NEW_CLOSE_START),
                           (OLD_BODY, NEW_BODY),
-                          (OLD_COMMENT_CALL, NEW_COMMENT_CALL),
-                          (OLD_RECORD_CLOSE, NEW_RECORD_CLOSE)]:
+                          (OLD_CLOSE_TAIL, NEW_CLOSE_TAIL)]:
         if source.count(before) != 1:
             raise ValueError("autopilot closeout drift")
         source = source.replace(before, after, 1)

@@ -17,6 +17,7 @@ class CloseoutLifecycle(unittest.TestCase):
         self.calls = []
         self.issue_state = "closed"
         self.reopen_ok = True
+        self.close_ok = True
         self.board_ok = True
         self.exception_ok = True
         self.stamps = {"dod:892"}  # The historical proxy already posted a comment.
@@ -28,12 +29,14 @@ class CloseoutLifecycle(unittest.TestCase):
                     return 1, "", "reopen failed"
                 self.issue_state = "open"
             if args[:2] == ("issue", "close"):
+                if not self.close_ok:
+                    return 1, "", "close failed"
                 self.issue_state = "closed"
             return 0, "", ""
 
         def gh_json(path):
             self.calls.append(("api", path))
-            if path.endswith("/issues/892"):
+            if path.endswith(("/issues/892", "/issues/889")):
                 return {"state": self.issue_state}
             if path.endswith("/pulls/184"):
                 return {"state": "closed", "merged": False} if self.exception_ok else {"state": "open"}
@@ -55,6 +58,7 @@ class CloseoutLifecycle(unittest.TestCase):
 
         self.scope = {"gh": gh, "gh_json": gh_json, "board": board,
                       "comment": comment, "save_state": lambda state: self.calls.append(("save",)),
+                      "stamped": lambda state, key: key in self.stamps,
                       "log": lambda msg: None, "iso": lambda: "2026-09-25T13:00:00Z",
                       "dod_row": lambda item: "| row | evidence |",
                       "DRY_RUN": False, "EPIC_REPO": "merglbot-core/github",
@@ -108,6 +112,27 @@ class CloseoutLifecycle(unittest.TestCase):
         self.assertEqual(state["subs"]["892"]["board_done_at"], "historical")
         self.board_ok = True
         self.assertTrue(self.scope["close_finished_subs"](state))  # Already-open retry.
+
+    def test_failed_close_and_board_retry_without_duplicate_comment(self):
+        state = self.state_892()
+        close = self.scope["close_finished_subs"]
+        self.assertTrue(close(state))  # Reopen stale proxy.
+        state["dod"]["892|merglbot-core/merglbot-admin"].update(
+            literal_verified=True, met_at="2026-09-25T13:00:00Z")
+        self.close_ok = False
+        self.assertFalse(close(state))
+        self.assertIsNone(state["subs"]["892"]["board_done_at"])
+        self.assertIn("dod:892:literal-v2", self.stamps)
+        self.close_ok = True
+        self.board_ok = False
+        self.assertFalse(close(state))
+        self.assertEqual(self.issue_state, "closed")
+        self.assertIsNone(state["subs"]["892"]["board_done_at"])
+        self.board_ok = True
+        self.assertTrue(close(state))
+        self.assertEqual(state["subs"]["892"]["board_done_at"], "2026-09-25T13:00:00Z")
+        comments = [c for c in self.calls if c[0] == "comment" and c[2] == "dod:892:literal-v2"]
+        self.assertEqual(len(comments), 1)
 
     def test_889_exception_accepts_only_preserved_protection(self):
         excluded = {"sub": 889, "repo": "merglbot-proteinaco/acquisition-analysis", "met_at": None}
