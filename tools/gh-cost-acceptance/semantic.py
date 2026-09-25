@@ -80,6 +80,9 @@ def push_run_counts(runs, since, known_premerge_shas):
     ids = [row.get("id") for row in rows]
     if any(value is None for value in ids) or len(ids) != len(set(ids)):
         return None
+    if any(not isinstance(row.get("created_at"), str) or not row["created_at"]
+           or not isinstance(row.get("event"), str) or not row["event"] for row in rows):
+        return None
     after = [run for run in rows if run.get("created_at", "") > since]
     pushes = [run for run in after if run.get("event") == "push"]
     real = [run for run in pushes if run.get("head_sha") not in known_premerge_shas]

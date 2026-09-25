@@ -19,18 +19,14 @@ class Installation(unittest.TestCase):
             installer.MODULE = base / "cost_semantic.py"
             installer.STATE = base / "state.json"
             installer.HOLD = base / "OWNER_HOLD"
-            live_source = pathlib.Path.home() / ".merglbot/gh-cost-910/autopilot.py"
-            if live_source.exists():
-                old_source = live_source.read_bytes()
-            else:
-                patch_spec = importlib.util.spec_from_file_location("cost_patch", HERE / "patch_autopilot.py")
-                patch_module = importlib.util.module_from_spec(patch_spec)
-                patch_spec.loader.exec_module(patch_module)
-                old_source = ("def measure_no_push_runs(state, item):\n"
-                              "    item[\"push_runs\"] = 0\n"
-                              "    note = 'per_page=50'\n"
-                              "\n\ndef measure_file_state(state, item):\n"
-                              + patch_module.OLD_MISSING).encode()
+            patch_spec = importlib.util.spec_from_file_location("cost_patch", HERE / "patch_autopilot.py")
+            patch_module = importlib.util.module_from_spec(patch_spec)
+            patch_spec.loader.exec_module(patch_module)
+            old_source = ("def measure_no_push_runs(state, item):\n"
+                          "    item[\"push_runs\"] = 0\n"
+                          "    note = 'per_page=50'\n"
+                          "\n\ndef measure_file_state(state, item):\n"
+                          + patch_module.OLD_MISSING).encode()
             old_state = b'{"registration_complete": false, "dod": {}}\n'
             installer.CODE.write_bytes(old_source)
             installer.STATE.write_bytes(old_state)

@@ -76,6 +76,7 @@ NEW_NO_PUSH = '''def measure_no_push_runs(state, item):
     current = gh_json(f"repos/{repo}/branches/main")
     if (current or {}).get("commit", {}).get("sha") != main_sha:
         return False
+    item["pagination_complete"] = True
     item["pushes"] = len(commits)
     need_schedule = item.get("need_schedule", False)
     if item["push_runs"] == 0 and item["pushes"] >= 1 and (not need_schedule or item["schedule_runs"] >= 1):

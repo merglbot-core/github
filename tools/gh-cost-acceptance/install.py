@@ -10,6 +10,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import stat
 from pathlib import Path
 import tempfile
 
@@ -28,9 +29,10 @@ def digest(data):
 
 
 def write_atomic(path, data):
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
     fd, name = tempfile.mkstemp(prefix=".cost-acceptance-", dir=path.parent)
     try:
-        os.fchmod(fd, 0o600)
+        os.fchmod(fd, mode)
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)
             stream.flush()

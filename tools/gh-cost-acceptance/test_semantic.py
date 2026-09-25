@@ -43,6 +43,10 @@ class PushRun(unittest.TestCase):
                                                   "2026-09-23", set())["post_merge_pushes"], 1)
         self.assertIsNone(semantic.push_run_counts({"total_count": 2, "workflow_runs": [row, row]},
                                                     "2026-09-23", set()))
+        self.assertIsNone(semantic.push_run_counts({"total_count": 1, "workflow_runs": [{"id": 4, "event": "push"}]},
+                                                    "2026-09-23", set()))
+        self.assertIsNone(semantic.push_run_counts({"total_count": 1, "workflow_runs": [{"id": 4, "created_at": "2026-09-24"}]},
+                                                    "2026-09-23", set()))
 
     def test_current_main_trigger_contract(self):
         source = "on:\n  pull_request:\n    branches: [main]\n  schedule:\n    - cron: '15 3 * * 1'\n"
