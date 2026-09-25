@@ -1,6 +1,7 @@
 """Exercise the patched production closeout function against actual helper contracts."""
 
 import importlib.util
+import datetime as dt
 import pathlib
 import unittest
 
@@ -83,6 +84,18 @@ class CloseoutLifecycle(unittest.TestCase):
         self.assertEqual(self.issue_state, "closed")
         self.assertIn("dod:892:literal-v2", self.stamps)
         self.assertEqual(state["subs"]["892"]["board_done_at"], "2026-09-25T13:00:00Z")
+        self.assertEqual(state["subs"]["892"]["literal_closeout_at"], "2026-09-25T13:00:00Z")
+        self.scope.update(dt=dt, RUN_COUNT_INTERVAL_HOURS=6, CALLS={"n": 0},
+                          MAX_CALLS_PER_TICK=60,
+                          parse=lambda value: dt.datetime.fromisoformat(value.replace("Z", "+00:00")),
+                          now=lambda: dt.datetime(2026, 9, 26, tzinfo=dt.timezone.utc),
+                          phase=lambda *args: self.calls.append(("phase", args)))
+        self.scope["MEASURES"]["filtered"] = lambda *_: True
+        state["dod"]["892|merglbot-core/merglbot-admin"]["kind"] = "filtered"
+        self.assertTrue(self.scope["measure_dod"](state))
+        self.assertFalse(any(call[0] == "phase" for call in self.calls))
+        state["dod"]["892|merglbot-core/merglbot-admin"]["literal_verified"] = False
+        self.assertFalse(close(state))  # A completed literal closeout is never reopened by proxy logic.
 
     def test_failed_reopen_or_board_does_not_record_completion(self):
         state = self.state_892()

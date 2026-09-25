@@ -15,7 +15,9 @@ Install only after exact-current-head substantive V6 approval and merge.
 `install.py --expected-sha SHA --dry-run` validates the live code; without
 `--dry-run` it installs under the existing autopilot lock with code/state
 backup. `install.py --rollback DIR` restores code only if both installed files
-still match the recorded hashes. OWNER_HOLD blocks either mutation.
+still match the recorded hashes. It deliberately leaves `state.json` and any
+measured `literal_verified`, `qualified_runs` or `met_at` values intact; a
+rollback requires separate state revalidation. OWNER_HOLD blocks either mutation.
 
 Verify the next natural tick, issue and Project status, current main, API
 pagination and unchanged state fields outside the scoped DoD. Leave billing

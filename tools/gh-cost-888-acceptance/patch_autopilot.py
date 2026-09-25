@@ -93,7 +93,7 @@ NEW_FILTERED = '''def measure_filtered(state, item):
 OLD_MEASURE_SKIP = '''        if item.get("met_at") or CALLS["n"] > MAX_CALLS_PER_TICK - 8:
             continue
 '''
-NEW_MEASURE_SKIP = '''        if (item.get("met_at") and item.get("sub") != 892) or CALLS["n"] > MAX_CALLS_PER_TICK - 8:
+NEW_MEASURE_SKIP = '''        if (item.get("met_at") and (str(item.get("sub")) != "892" or item.get("literal_verified"))) or CALLS["n"] > MAX_CALLS_PER_TICK - 8:
             continue
 '''
 
@@ -105,7 +105,7 @@ OLD_CLOSE_START = '''        if record.get("board_done_at") or record.get("close
 '''
 
 NEW_CLOSE_START = '''        items = [i for i in state.get("dod", {}).values() if str(i.get("sub")) == str(sub)]
-        if str(sub) == "892" and record.get("board_done_at") and not all(i.get("literal_verified") for i in items):
+        if str(sub) == "892" and record.get("board_done_at") and not record.get("literal_closeout_at") and not all(i.get("literal_verified") for i in items):
             issue = gh_json(f"repos/{EPIC_REPO}/issues/892")
             if issue is None or issue.get("state") not in ("open", "closed"):
                 return False
@@ -161,6 +161,17 @@ NEW_COMMENT_CALL = '''        comment_key = f"dod:{sub}:literal-v2" if str(sub) 
         if comment(EPIC_REPO, int(sub), body, state, comment_key):
 '''
 
+OLD_RECORD_CLOSE = '''            record["board_done_at"] = iso()
+            save_state(state)
+            log(f"sub-issue #{sub} closed, board Done")
+'''
+NEW_RECORD_CLOSE = '''            record["board_done_at"] = iso()
+            if str(sub) == "892":
+                record["literal_closeout_at"] = record["board_done_at"]
+            save_state(state)
+            log(f"sub-issue #{sub} closed, board Done")
+'''
+
 
 def patch(source):
     a = source.index("def measure_filtered(state, item):\n")
@@ -172,7 +183,8 @@ def patch(source):
     for before, after in [(OLD_MEASURE_SKIP, NEW_MEASURE_SKIP),
                           (OLD_CLOSE_START, NEW_CLOSE_START),
                           (OLD_BODY, NEW_BODY),
-                          (OLD_COMMENT_CALL, NEW_COMMENT_CALL)]:
+                          (OLD_COMMENT_CALL, NEW_COMMENT_CALL),
+                          (OLD_RECORD_CLOSE, NEW_RECORD_CLOSE)]:
         if source.count(before) != 1:
             raise ValueError("autopilot closeout drift")
         source = source.replace(before, after, 1)
