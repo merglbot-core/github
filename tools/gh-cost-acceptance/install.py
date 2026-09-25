@@ -107,6 +107,8 @@ def rollback(backup):
         manifest = json.loads((backup / "manifest.json").read_text())
         if digest(CODE.read_bytes()) != manifest["source_after_sha256"]:
             raise RuntimeError("newer autopilot source exists; no rollback")
+        if not MODULE.exists() or digest(MODULE.read_bytes()) != manifest["module_after_sha256"]:
+            raise RuntimeError("newer semantic module exists; no rollback")
         write_atomic(CODE, (backup / "autopilot.py").read_bytes())
         old_module = backup / "cost_semantic.py"
         if old_module.exists():

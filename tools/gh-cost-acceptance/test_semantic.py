@@ -18,6 +18,9 @@ class Hub(unittest.TestCase):
         self.assertFalse(semantic.hub_slim_configured(source.replace("    timeout-minutes: " + semantic.SLIM_TIMEOUT,
                                                                 "    timeout-minutes: 360")))
         self.assertFalse(semantic.hub_slim_configured("# default: ubuntu-slim\n# runs-on: " + semantic.SLIM_RUNNER))
+        spoofed = source.replace("        default: 'ubuntu-slim'", "        default: 'ubuntu-24.04'")
+        spoofed = spoofed.replace("        description: >-", "        description: >-\n          default: ubuntu-slim", 1)
+        self.assertFalse(semantic.hub_slim_configured(spoofed))
 
     def test_duplicate_mapping_is_not_a_pass(self):
         source = (HERE.parent.parent / ".github" / "workflows" / "pr-gate.yml").read_text()
@@ -47,6 +50,8 @@ class PushRun(unittest.TestCase):
         self.assertTrue(semantic.main_trigger_contract(source, require_schedule=True))
         self.assertFalse(semantic.main_trigger_contract(source + "on:\n  push:\n"))
         self.assertFalse(semantic.main_trigger_contract("on:\n  push:\n  pull_request:\n"))
+        self.assertFalse(semantic.main_trigger_contract("on:\n  pull_request:\n  push: {branches: [main]}\n"))
+        self.assertFalse(semantic.main_trigger_contract("on:\n  pull_request:\n  'push':\n"))
         self.assertTrue(semantic.main_trigger_contract("on:\n  schedule:\n    - cron: '30 2 * * 1'\n",
                                                        require_schedule=True))
 

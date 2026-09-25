@@ -54,8 +54,9 @@ def hub_slim_configured(source):
     runner = _mapping_block(inputs, "runs-on", 6)
     if runner is None:
         return False
-    defaults = [line.strip() for line in runner
-                if re.fullmatch(r"\s+default:\s*['\"]?ubuntu-slim['\"]?\s*", line)]
+    defaults = [line.strip() for line in runner if line.startswith("        default:")]
+    defaults = [value for value in defaults
+                if re.fullmatch(r"default:\s*['\"]?ubuntu-slim['\"]?\s*", value)]
     if len(defaults) != 1:
         return False
     declarations = [line.strip() for line in job
@@ -95,8 +96,14 @@ def main_trigger_contract(source, require_schedule=False):
     on = _mapping_block(lines, "on", 0)
     if on is None:
         return False
-    trigger_keys = [line.strip().split(":", 1)[0] for line in on
-                    if re.match(r"^  [A-Za-z_]+:\s*(?:#.*)?$", line)]
+    declarations = [line for line in on
+                    if line.startswith("  ") and not line.startswith("    ")
+                    and line.strip() and not line.lstrip().startswith("#")]
+    if any(not re.fullmatch(r"  [A-Za-z_]+:\s*(?:#.*)?", line) for line in declarations):
+        return False
+    trigger_keys = [line.strip().split(":", 1)[0] for line in declarations]
+    if len(trigger_keys) != len(set(trigger_keys)):
+        return False
     return (("pull_request" in trigger_keys or (require_schedule and "schedule" in trigger_keys))
             and "push" not in trigger_keys
             and (not require_schedule or "schedule" in trigger_keys))
