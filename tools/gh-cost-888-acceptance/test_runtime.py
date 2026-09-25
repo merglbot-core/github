@@ -19,13 +19,13 @@ SINCE = "2026-09-23T11:00:00Z"
 
 
 class PatchedVerifier(unittest.TestCase):
-    def run_measure(self, successful, *, page_total=None, main_end="head"):
+    def run_measure(self, successful, *, page_total=None, main_end="head", pull_count=8):
         workflow = "on:\n  pull_request:\n    branches: [main]\n    paths:\n      - 'terraform/**'\n"
         rows = [{"id": index + 1, "event": "pull_request", "created_at": "2026-09-24T12:00:00Z",
                  "run_attempt": 1, "conclusion": "success"} for index in range(successful)]
         total = successful if page_total is None else page_total
         pulls = [{"number": index + 1, "created_at": "2026-09-24T11:00:00Z"}
-                 for index in range(8)]
+                 for index in range(pull_count)]
         seen = []
         def api(path):
             seen.append(path)
@@ -57,6 +57,7 @@ class PatchedVerifier(unittest.TestCase):
         ok, item = self.run_measure(1)
         self.assertTrue(ok)
         self.assertEqual(item["runs_after"], 1)
+        self.assertEqual(item["qualified_runs"], 1)
         self.assertFalse(item["literal_verified"])
         self.assertIsNone(item["met_at"])
 
@@ -65,6 +66,15 @@ class PatchedVerifier(unittest.TestCase):
         self.assertTrue(ok)
         self.assertTrue(item["literal_verified"])
         self.assertEqual(item["runs_after"], 5)
+        self.assertEqual(item["qualified_runs"], 5)
+
+    def test_six_runs_for_six_prs_are_not_reduced_execution(self):
+        ok, item = self.run_measure(6, pull_count=6)
+        self.assertTrue(ok)
+        self.assertEqual(item["qualified_runs"], 5)
+        self.assertEqual(item["runs_after"], 6)
+        self.assertFalse(item["literal_verified"])
+        self.assertIsNone(item["met_at"])
 
     def test_incomplete_page_or_moving_main_cannot_accept(self):
         self.assertFalse(self.run_measure(5, page_total=6)[0])

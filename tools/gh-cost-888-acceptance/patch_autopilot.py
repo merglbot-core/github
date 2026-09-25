@@ -82,8 +82,9 @@ NEW_FILTERED = '''def measure_filtered(state, item):
     current = gh_json(f"repos/{repo}/branches/main")
     if (current or {}).get("commit", {}).get("sha") != main_sha:
         return False
-    item["runs_after"], item["prs_after"] = good, prs
-    item["literal_verified"] = good >= 5 and good < prs
+    all_pr_runs = sum(row["event"] == "pull_request" and row["created_at"] > since for row in rows)
+    item["runs_after"], item["qualified_runs"], item["prs_after"] = all_pr_runs, good, prs
+    item["literal_verified"] = good >= 5 and all_pr_runs < prs
     item["met_at"] = iso() if item["literal_verified"] else None
     return True
 '''
