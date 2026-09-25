@@ -46,6 +46,13 @@ class Installation(unittest.TestCase):
                 installer.rollback(pathlib.Path(receipt["backup"]))
             self.assertNotEqual(installer.CODE.read_bytes(), old_source)
             installer.MODULE.write_bytes(original_module)
+            backup = pathlib.Path(receipt["backup"])
+            backup_code = backup / "autopilot.py"
+            backup_code.write_bytes(b"corrupt backup")
+            with self.assertRaises(RuntimeError):
+                installer.rollback(backup)
+            self.assertNotEqual(installer.CODE.read_bytes(), old_source)
+            backup_code.write_bytes(old_source)
             restored = installer.rollback(pathlib.Path(receipt["backup"]))
             self.assertEqual(restored["restored_source_sha256"], expected)
             self.assertEqual(installer.CODE.read_bytes(), old_source)

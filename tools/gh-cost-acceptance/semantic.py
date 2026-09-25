@@ -55,9 +55,8 @@ def hub_slim_configured(source):
     if runner is None:
         return False
     defaults = [line.strip() for line in runner if line.startswith("        default:")]
-    defaults = [value for value in defaults
-                if re.fullmatch(r"default:\s*['\"]?ubuntu-slim['\"]?\s*", value)]
-    if len(defaults) != 1:
+    if len(defaults) != 1 or not re.fullmatch(
+            r"default:\s*['\"]?ubuntu-slim['\"]?\s*", defaults[0]):
         return False
     declarations = [line.strip() for line in job
                     if re.match(r"^    (runs-on|timeout-minutes):", line)]

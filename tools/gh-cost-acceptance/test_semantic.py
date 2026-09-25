@@ -12,6 +12,8 @@ class Hub(unittest.TestCase):
     def test_actual_main_workflow(self):
         source = (HERE.parent.parent / ".github" / "workflows" / "pr-gate.yml").read_text()
         self.assertTrue(semantic.hub_slim_configured(source))
+        conflicting = source.replace("        default: 'ubuntu-slim'", "        default: 'ubuntu-slim'\n        default: 'ubuntu-24.04'", 1)
+        self.assertFalse(semantic.hub_slim_configured(conflicting))
         self.assertFalse(semantic.hub_slim_configured(source.replace("default: 'ubuntu-slim'", "default: 'ubuntu-24.04'")))
         self.assertFalse(semantic.hub_slim_configured(source.replace("    runs-on: " + semantic.SLIM_RUNNER,
                                                                 "    runs-on: ubuntu-24.04")))
