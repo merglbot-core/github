@@ -106,14 +106,16 @@ OLD_CLOSE_START = '''        if record.get("board_done_at") or record.get("close
 
 NEW_CLOSE_START = '''        items = [i for i in state.get("dod", {}).values() if str(i.get("sub")) == str(sub)]
         if str(sub) == "892" and record.get("board_done_at") and not record.get("literal_closeout_at") and not all(i.get("literal_verified") for i in items):
+            if DRY_RUN:
+                continue
             issue = gh_json(f"repos/{EPIC_REPO}/issues/892")
             if issue is None or issue.get("state") not in ("open", "closed"):
                 return False
-            if not DRY_RUN and issue["state"] == "closed":
+            if issue["state"] == "closed":
                 code, _, _ = gh("issue", "reopen", "892", "-R", EPIC_REPO)
                 if code != 0:
                     return False
-            if not DRY_RUN and not board(892, STATUS_IN_PROGRESS):
+            if not board(892, STATUS_IN_PROGRESS):
                 return False
             record["board_done_at"] = None
             record["closed_elsewhere"] = False

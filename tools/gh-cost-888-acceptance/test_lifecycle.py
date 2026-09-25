@@ -113,6 +113,17 @@ class CloseoutLifecycle(unittest.TestCase):
         self.board_ok = True
         self.assertTrue(self.scope["close_finished_subs"](state))  # Already-open retry.
 
+    def test_dry_run_does_not_consume_pending_reopen(self):
+        state = self.state_892()
+        self.scope["DRY_RUN"] = True
+        self.assertFalse(self.scope["close_finished_subs"](state))
+        self.assertEqual(state["subs"]["892"]["board_done_at"], "historical")
+        self.assertEqual(self.issue_state, "closed")
+        self.assertFalse(any(c[0] in ("api", "gh", "board", "save") for c in self.calls))
+        self.scope["DRY_RUN"] = False
+        self.assertTrue(self.scope["close_finished_subs"](state))
+        self.assertEqual(self.issue_state, "open")
+
     def test_failed_close_and_board_retry_without_duplicate_comment(self):
         state = self.state_892()
         close = self.scope["close_finished_subs"]
