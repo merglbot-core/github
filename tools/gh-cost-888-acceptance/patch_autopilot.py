@@ -105,7 +105,10 @@ OLD_CLOSE_START = '''        if record.get("board_done_at") or record.get("close
 
 NEW_CLOSE_START = '''        items = [i for i in state.get("dod", {}).values() if str(i.get("sub")) == str(sub)]
         if str(sub) == "892" and record.get("board_done_at") and not all(i.get("literal_verified") for i in items):
-            if not DRY_RUN:
+            issue = gh_json(f"repos/{EPIC_REPO}/issues/892")
+            if issue is None or issue.get("state") not in ("open", "closed"):
+                return False
+            if not DRY_RUN and issue["state"] == "closed":
                 code, _, _ = gh("issue", "reopen", "892", "-R", EPIC_REPO)
                 if code != 0:
                     return False
@@ -151,6 +154,12 @@ NEW_BODY = '''        title = "### Provozní DoD s ekonomickou výjimkou" if eco
                               if economic_exception and i is state["dod"][economic_exception] else dod_row(i)) for i in items)
 '''
 
+OLD_COMMENT_CALL = '''        if comment(EPIC_REPO, int(sub), body, state, f"dod:{sub}"):
+'''
+NEW_COMMENT_CALL = '''        comment_key = f"dod:{sub}:literal-v2" if str(sub) == "892" else f"dod:{sub}"
+        if comment(EPIC_REPO, int(sub), body, state, comment_key):
+'''
+
 
 def patch(source):
     a = source.index("def measure_filtered(state, item):\n")
@@ -161,7 +170,8 @@ def patch(source):
     source = source[:a] + NEW_FILTERED + source[b:]
     for before, after in [(OLD_MEASURE_SKIP, NEW_MEASURE_SKIP),
                           (OLD_CLOSE_START, NEW_CLOSE_START),
-                          (OLD_BODY, NEW_BODY)]:
+                          (OLD_BODY, NEW_BODY),
+                          (OLD_COMMENT_CALL, NEW_COMMENT_CALL)]:
         if source.count(before) != 1:
             raise ValueError("autopilot closeout drift")
         source = source.replace(before, after, 1)
