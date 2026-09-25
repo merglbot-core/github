@@ -14,21 +14,32 @@ class Closeout(unittest.TestCase):
         source = patcher.patch((HERE / "fixture_legacy.py").read_text())
         self.calls = []
         self.stamps = set()
-        self.issues = {"913": "open", "914": "open", "921": "open", "910": "open"}
+        self.issues = {"913": "open", "914": "open", "921": "open", "910": "open",
+                       "930": "closed"}
         self.close_ok = True
         self.board_ok = True
         self.exception_pr_closed = True
         self.weekly_schedule = True
+        self.schedule_expression = "30 2 * * 1"
+        self.project_done = True
+        self.children_complete = True
         self.main_sha = "head"
 
         def gh_json(path):
             self.calls.append(("api", path))
             if path.endswith("/pulls/35"):
                 return {"state": "closed" if self.exception_pr_closed else "open", "merged": False}
+            if "/sub_issues?" in path:
+                if not self.children_complete:
+                    return None
+                return [{"number": int(k), "state": v}
+                        for k, v in self.issues.items() if k != "910"]
             if path.endswith("/branches/main"):
                 return {"commit": {"sha": self.main_sha}}
             if path.endswith("/codeql-analysis.yml?ref=head"):
-                source = "on:\n  schedule:\n    - cron: '30 2 * * 1'\n" if self.weekly_schedule else "on:\n  push:\n"
+                source = ("on:\n  push:\n    branches: [main, release/*]\n"
+                          "  schedule:\n    - cron: '" + self.schedule_expression + "'\n"
+                          ) if self.weekly_schedule else "on:\n  push:\n"
                 return {"content": base64.b64encode(source.encode()).decode()}
             if "/issues/" in path:
                 return {"state": self.issues[path.rsplit("/", 1)[1]]}
@@ -53,7 +64,17 @@ class Closeout(unittest.TestCase):
             self.calls.append(("board", number, option))
             return self.board_ok
 
+        item_map = {int(k): "item-" + k for k in self.issues}
+        def gh_graphql(query):
+            self.calls.append(("graphql", query))
+            for item in item_map.values():
+                if 'node(id:"' + item + '")' in query:
+                    return {"node": {"id": item, "project": {"id": "project-66"},
+                                     "fieldValueByName": {"optionId": "done" if self.project_done else "todo"}}}
+            raise AssertionError(query)
+
         scope = {"gh_json": gh_json, "gh": gh, "comment": comment, "board": board,
+                 "gh_graphql": gh_graphql, "BOARD_ITEMS": item_map, "PROJECT_ID": "project-66",
                  "stamped": lambda state, key: key in self.stamps,
                  "save_state": lambda state: self.calls.append(("save",)),
                  "log": lambda message: None, "notify": lambda *args: None,
@@ -94,6 +115,9 @@ class Closeout(unittest.TestCase):
         self.weekly_schedule = False
         self.assertFalse(self.scope["close_finished_subs"](state))
         self.weekly_schedule = True
+        self.schedule_expression = "30 2 * * 2"
+        self.assertFalse(self.scope["close_finished_subs"](state))
+        self.schedule_expression = "30 2 * * 1"
         self.assertTrue(self.scope["close_finished_subs"](state))
         body = [c[3] for c in self.calls if c[0] == "comment"][-1]
         self.assertIn("Ekonomická výjimka", body)
@@ -106,12 +130,24 @@ class Closeout(unittest.TestCase):
         state["subs"]["921"].pop("technical_hold")
         self.assertFalse(self.scope["close_epic"](state))
         self.issues["921"] = "closed"
+        self.issues["913"] = "closed"
+        self.issues["914"] = "closed"
         self.board_ok = False
         self.assertFalse(self.scope["close_epic"](state))
         self.assertNotIn("closed_at", state)
         self.board_ok = True
         self.assertTrue(self.scope["close_epic"](state))
         self.assertEqual(state["closed_at"], "2026-09-25T13:00:00Z")
+
+    def test_historical_markers_cannot_close_when_project_or_subissue_missing(self):
+        state = {"subs": {"921": {"board_done_at": "old"}}, "billing": {}}
+        self.issues.update({"921": "closed", "913": "closed", "914": "closed"})
+        self.project_done = False
+        self.assertFalse(self.scope["close_epic"](state))
+        self.project_done = True
+        self.children_complete = False
+        self.assertFalse(self.scope["close_epic"](state))
+        self.assertNotIn("closed_at", state)
 
 
 if __name__ == "__main__":

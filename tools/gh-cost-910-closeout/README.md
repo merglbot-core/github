@@ -18,9 +18,17 @@ Install only after a substantive current-head V6 approval and protected merge.
 Supply freshly read SHA-256 digests of the live code and state to `install.py`
 with `--expected-code` and `--expected-state`; run `--dry-run` first. The
 installer checks OWNER_HOLD, takes the existing lock, backs up code and state,
-and refuses source or state drift. `--rollback` restores both only when the
-installed code and state still match its manifest; it refuses to discard a
-newer natural tick. No job, workflow, credential or fleet process is restarted.
+and refuses source or state drift. `--rollback` refuses a newer natural tick
+and refuses to restore unsafe legacy closeout while #921's technical hold is
+active. Keep the backup for a reviewed recovery patch; do not manually restore
+its old `board_done_at` marker. No job, workflow, credential or fleet process
+is restarted.
+
+For #914, `plane_so` is a documented low-volume economic exception. Its
+current weekly Monday 02:30 UTC CodeQL schedule and main/release push signal
+must both remain; the retained push is not counted as a saving. EPIC closeout
+reads every page of the native sub-issue collection (including #930) and each
+child Project 66 Status. Historical local Done markers cannot replace them.
 
 Verify an ordinary launchd tick, the live open #921 issue, Project 66 In
 Progress, the scheduled #922 billing window, and unchanged unrelated DoD.

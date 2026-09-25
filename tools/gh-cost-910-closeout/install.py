@@ -101,6 +101,11 @@ def rollback(backup):
             raise RuntimeError("backup corrupt")
         if digest(CODE.read_bytes()) != facts["code_after_sha256"] or digest(STATE.read_bytes()) != facts["state_after_sha256"]:
             raise RuntimeError("newer code or state exists; rebase rollback before restoring")
+        current = json.loads(STATE.read_bytes())
+        # The legacy code ignores this hold and can close #921/EPIC from its
+        # historical Done mark. Never restore it while the hold is active.
+        if (current.get("subs", {}).get("921") or {}).get("technical_hold"):
+            raise RuntimeError("unsafe legacy rollback: #921 technical hold is active")
         write_atomic(CODE, old_code)
         write_atomic(STATE, old_state)
         return {"restored_code_sha256": digest(CODE.read_bytes()),

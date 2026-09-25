@@ -47,9 +47,11 @@ class Installation(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 installer.rollback(backup)
             (backup / "state.json").write_bytes(original_backup)
-            result = installer.rollback(backup)
-            self.assertEqual(result["restored_code_sha256"], code_sha)
-            self.assertEqual(installer.STATE.read_bytes(), original_state)
+            with self.assertRaisesRegex(RuntimeError, "unsafe legacy rollback"):
+                installer.rollback(backup)
+            self.assertEqual(installer.digest(installer.CODE.read_bytes()),
+                             receipt["code_after_sha256"])
+            self.assertTrue(json.loads(installer.STATE.read_bytes())["subs"]["921"]["technical_hold"])
 
     def test_hold_and_live_lock_block_install(self):
         with tempfile.TemporaryDirectory() as temp:

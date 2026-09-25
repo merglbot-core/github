@@ -27,9 +27,14 @@ NEW_CLOSE_SUBS = '''def close_finished_subs(state):
             import base64
             import re
             source = base64.b64decode(wf["content"]).decode("utf-8", "replace")
+            # This low-traffic repository is a documented exception to the
+            # no-push saving. Preserve its existing push coverage and require
+            # the literal weekly Monday CodeQL schedule, not any cron.
             if not (re.search(r"(?m)^on:\\s*$", source)
+                    and re.search(r"(?m)^  push:\\s*$", source)
+                    and re.search(r"(?m)^    branches: \\[main, release/\\*\\]\\s*$", source)
                     and re.search(r"(?m)^  schedule:\\s*$", source)
-                    and re.search(r"(?m)^    - cron:\\s*['\\\"]?[^'\\\"\\n]+", source)):
+                    and re.search(r"(?m)^    - cron: ['\\\"]30 2 \\* \\* 1['\\\"]\\s*$", source)):
                 continue
             current = gh_json("repos/merglbot-milan-private/plane_so/branches/main")
             if (current or {}).get("commit", {}).get("sha") != main_sha:
@@ -56,13 +61,29 @@ NEW_CLOSE_SUBS = '''def close_finished_subs(state):
             code, _, _ = gh("issue", "close", str(sub), "-R", EPIC_REPO, "--reason", "completed")
             if code != 0:
                 return False
-        if not board(int(sub), STATUS_DONE):
+        if not board(int(sub), STATUS_DONE) or not project_status_done(int(sub)):
             return False
         record["board_done_at"] = iso()
         save_state(state)
         log(f"sub-issue #{sub} closed, board Done")
         return True
     return False
+'''
+
+
+NEW_PROJECT_STATUS = '''def project_status_done(issue_number):
+    """Confirm the Project 66 item belongs to this board and is Done."""
+    item_id = BOARD_ITEMS.get(int(issue_number))
+    if not item_id:
+        return False
+    query = ('query { node(id:"' + item_id + '") { ... on ProjectV2Item '
+             '{ id project { id } fieldValueByName(name:"Status") '
+             '{ ... on ProjectV2ItemFieldSingleSelectValue { optionId } } } } }')
+    data = gh_graphql(query)
+    node = (data or {}).get("node") or {}
+    return (node.get("id") == item_id
+            and (node.get("project") or {}).get("id") == PROJECT_ID
+            and (node.get("fieldValueByName") or {}).get("optionId") == STATUS_DONE)
 '''
 
 
@@ -76,9 +97,27 @@ NEW_CLOSE_EPIC = '''def close_epic(state):
                  if not rec.get("board_done_at") and not rec.get("closed_elsewhere")]
     if open_subs:
         return False
-    for sub in state.get("subs", {}):
-        issue = gh_json(f"repos/{EPIC_REPO}/issues/{sub}")
-        if issue is None or issue.get("state") != "closed":
+    # Read the canonical sub-issue collection, including children omitted from
+    # the local registry such as #930. A full page requires another page.
+    seen = set()
+    for page in range(1, 11):
+        children = gh_json(f"repos/{EPIC_REPO}/issues/{EPIC}/sub_issues?per_page=100&page={page}")
+        if not isinstance(children, list):
+            return False
+        for child in children:
+            if not isinstance(child, dict) or not isinstance(child.get("number"), int):
+                return False
+            if child["number"] in seen or child.get("state") != "closed":
+                return False
+            seen.add(child["number"])
+        if len(children) < 100:
+            break
+    else:
+        return False
+    if not seen or not set(map(int, state.get("subs", {}))).issubset(seen):
+        return False
+    for sub in seen:
+        if not project_status_done(sub):
             return False
     body = ("### EPIC uzavřen\\n\\nSub-issues jsou živě zavřené a Project potvrzený; "
             f"akceptace #{BILLING_SUB} je zapsaná ({state['billing'].get('saved_usd_month')} USD/měsíc, "
@@ -95,7 +134,7 @@ NEW_CLOSE_EPIC = '''def close_epic(state):
             code, _, _ = gh("issue", "close", str(EPIC), "-R", EPIC_REPO, "--reason", "completed")
             if code != 0:
                 return False
-        if not board(EPIC, STATUS_DONE):
+        if not board(EPIC, STATUS_DONE) or not project_status_done(EPIC):
             return False
     state["closed_at"] = iso()
     save_state(state)
@@ -111,7 +150,7 @@ def patch(source):
     old = source[a:b]
     if 'record["board_done_at"] = iso()' not in old or 'f"dod:{sub}"' not in old:
         raise ValueError("close_finished_subs drift")
-    source = source[:a] + NEW_CLOSE_SUBS + source[b:]
+    source = source[:a] + NEW_PROJECT_STATUS + "\n\n" + NEW_CLOSE_SUBS + source[b:]
     a = source.index("def close_epic(state):\n")
     b = source.index("\n\n# --------------------------------------------------------------------------- daily note", a)
     old = source[a:b]
