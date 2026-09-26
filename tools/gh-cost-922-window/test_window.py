@@ -28,8 +28,8 @@ class WindowTests(unittest.TestCase):
                           billing_days=lambda start, days: [(start + dt.timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)])
         exec(compile((HERE / "runtime.py").read_text(), "runtime.py", "exec"), self.scope)
         self.state = dict(registration_complete=True, prs={
-            "org/repo#1": dict(state="verified", merged_at="2026-09-23T19:34:46Z"),
-            "org/repo#2": dict(state="verified", merged_at="2026-09-24T17:29:53Z")})
+            "org/repo#1": dict(state="verified", merged_at="2026-09-23T19:34:46Z", merge_sha="b" * 40),
+            "org/repo#2": dict(state="verified", merged_at="2026-09-24T17:29:53Z", merge_sha="c" * 40)})
         # Synthetic metadata models an explicitly complete migrated registry.
         self.state["billing_followups"] = {key: dict(merged_at="2026-09-24T12:00:00Z",
             merge_sha="a" * 40, base_ref="main", scope_issue="merglbot-core/github#921")
@@ -164,6 +164,18 @@ class WindowTests(unittest.TestCase):
             self.state["billing"] = {"extra_repos": extra}
             self.assertFalse(self.run_handler())
         self.assertNotIn("post", self.calls)
+
+    def test_sha_only_correction_preserves_proof_and_blocks_closeout(self):
+        self.run_handler()
+        self.state["billing"]["posted_at"] = "old proof"
+        old = copy.deepcopy(self.state["billing"])
+        key = self.scope["BILLING_REQUIRED_FOLLOWUPS"][0]
+        self.state["billing_followups"][key]["merge_sha"] = "d" * 40
+        self.assertFalse(self.run_handler())
+        for field, value in old.items():
+            self.assertEqual(self.state["billing"][field], value)
+        self.assertIn("scope_drift", self.state["billing"])
+        self.assertNotIn("close", self.calls)
 
 
 if __name__ == "__main__":

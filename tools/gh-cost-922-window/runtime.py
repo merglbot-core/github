@@ -47,6 +47,9 @@ def billing_inputs(state):
                 stamp = record.get("merged_at")
             if not isinstance(stamp, str) or not stamp:
                 raise ValueError("merge timestamp missing")
+            if not isinstance(record.get("merge_sha"), str) or not re.fullmatch(
+                    r"[0-9a-f]{40}", record["merge_sha"]):
+                raise ValueError("merge SHA missing or malformed")
             instant = dt.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
             if instant.tzinfo is None or instant.utcoffset() is None:
                 raise ValueError("merge timestamp lacks timezone")
@@ -78,7 +81,8 @@ def billing_window(state):
     if not isinstance(extra, list) or any(not isinstance(repo, str) or not re.fullmatch(
             r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) for repo in extra):
         raise ValueError("invalid extra billing repository scope")
-    identity = {"merges": [[iso(instant), key] for instant, key in inputs],
+    records = {**state["prs"], **state["billing_followups"]}
+    identity = {"merges": [[iso(instant), key, records[key]["merge_sha"]] for instant, key in inputs],
                 "repos": sorted({key.rsplit("#", 1)[0] for _, key in inputs} | set(extra))}
     fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return dict(first_merge_at=iso(first), last_merge_at=iso(last),
