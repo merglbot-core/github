@@ -39,8 +39,13 @@ class InstallationTests(unittest.TestCase):
         context.start()
         self.addCleanup(context.stop)
 
-    def run_install(self, billing, dry=False, closed_at=None):
-        original = {"billing": billing, "dod": {"natural": "keep"}, "subs": {"921": "owner"}}
+    def run_install(self, acceptance_markers, dry=False, closed_at=None):
+        # This fixture accepts lifecycle sentinels only, never financial/customer
+        # data. CodeQL previously mistook the parameter named "billing" for it.
+        self.assertLessEqual(set(acceptance_markers), {"posted_at", "closed_at"})
+        self.assertTrue(all(value in (None, "historical acceptance")
+                            for value in acceptance_markers.values()))
+        original = {"billing": acceptance_markers, "dod": {"natural": "keep"}, "subs": {"921": "owner"}}
         if closed_at:
             original["closed_at"] = closed_at
         self.old_state = json.dumps(original).encode()
