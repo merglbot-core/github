@@ -14,10 +14,6 @@ def patch(source):
                    '                log("billing numeric provenance unavailable; acceptance blocked")\n'
                    '                return False\n'
                    '            for item in items:')
-    if helper.rstrip() + "\n" in source and source.count(replacement) == 1:
-        return source
-    if any(node.name in {"billing_usage_items", "billing_numbers_finite"} for node in functions):
-        raise ValueError("billing numeric helper drift")
     node = next(node for node in functions if node.name == "post_billing")
     lines = source.splitlines(keepends=True)
     body = "".join(lines[node.lineno - 1:node.end_lineno])
@@ -32,12 +28,21 @@ def patch(source):
     derived_guard = ('    if not billing_numbers_finite((saved_usd, model, 0.8 * model)):\n'
                      '        log("billing derived amount unavailable; acceptance blocked")\n'
                      '        return False\n' + artifact)
-    for old, new in [('for item in data.get("usageItems", []):', replacement),
+    transformations = [('for item in data.get("usageItems", []):', replacement),
                      ('item.get("grossAmount") or 0', 'item["grossAmount"]'),
                      ('item.get("quantity") or 0', 'item["quantity"]'),
                      (artifact, accumulated_guard),
                      ('        rows.append(f"| {repo}', row_guard + '        rows.append(f"| {repo}'),
-                     ('    verdict = "FAKT"', derived_guard + '    verdict = "FAKT"')]:
+                     ('    verdict = "FAKT"', derived_guard + '    verdict = "FAKT"')]
+    if any(node.name in {"billing_usage_items", "billing_numbers_finite"} for node in functions):
+        # Every transformation must be complete inside the evaluator, including
+        # all finite-value guards. A matching helper/loop alone is insufficient.
+        if (source.count(helper.rstrip() + "\n") == 1
+                and all(body.count(new) == 1 for _, new in transformations)
+                and not any(old in body for old, _ in transformations[:3])):
+            return source
+        raise ValueError("incomplete billing numeric patch or helper drift")
+    for old, new in transformations:
         if body.count(old) != 1:
             raise ValueError("billing evaluator source drift")
         body = body.replace(old, new)

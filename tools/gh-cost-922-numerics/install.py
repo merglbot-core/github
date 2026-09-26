@@ -31,7 +31,7 @@ def install(expected_code, expected_state, dry_run=False):
         billing = captured.get("billing", {})
         if not isinstance(billing, dict):
             raise RuntimeError("invalid billing state")
-        if billing.get("posted_at") or billing.get("closed_at"):
+        if captured.get("closed_at") or billing.get("posted_at") or billing.get("closed_at"):
             raise RuntimeError("published/closed billing acceptance requires reconciliation")
         new_code = patcher.patch(old_code.decode()).encode()
         facts = dict(code_before=expected_code, code_after=shared.digest(new_code), state_unchanged=expected_state)

@@ -39,8 +39,10 @@ class InstallationTests(unittest.TestCase):
         context.start()
         self.addCleanup(context.stop)
 
-    def run_install(self, billing, dry=False):
+    def run_install(self, billing, dry=False, closed_at=None):
         original = {"billing": billing, "dod": {"natural": "keep"}, "subs": {"921": "owner"}}
+        if closed_at:
+            original["closed_at"] = closed_at
         self.old_state = json.dumps(original).encode()
         self.state.write_bytes(self.old_state)
         return installer.install(shared.digest(self.old_code), shared.digest(self.old_state), dry)
@@ -55,6 +57,13 @@ class InstallationTests(unittest.TestCase):
                     self.assertEqual(self.state.read_bytes(), self.old_state)
                     self.assertFalse((self.base / "backups").exists())
                     self.assertFalse((self.base / "autopilot/lock").exists())
+
+    def test_top_level_actual_epic_closure_marker_rejects_install(self):
+        with self.assertRaisesRegex(RuntimeError, "requires reconciliation"):
+            self.run_install({}, closed_at="historical closure")
+        self.assertEqual(self.code.read_bytes(), self.old_code)
+        self.assertEqual(self.state.read_bytes(), self.old_state)
+        self.assertFalse((self.base / "backups").exists())
 
     def test_unpublished_install_replaces_only_source_and_retains_backup(self):
         result = self.run_install({"posted_at": None, "closed_at": None})

@@ -1,3 +1,4 @@
+import ast
 import copy
 import importlib.util
 import json
@@ -12,6 +13,21 @@ spec.loader.exec_module(patcher)
 
 
 class EvaluatorTests(unittest.TestCase):
+    def test_partial_patch_is_rejected_even_with_matching_helper_and_loop(self):
+        source = patcher.patch((HERE / "fixture_post_billing.py").read_text())
+        for message in ("billing accumulation overflow", "billing daily totals overflow",
+                        "billing derived amount unavailable"):
+            guard = next(node for node in ast.walk(ast.parse(source))
+                         if isinstance(node, ast.If) and any(
+                             isinstance(value, ast.Constant) and isinstance(value.value, str)
+                             and message in value.value for value in ast.walk(node)))
+            lines = source.splitlines(keepends=True)
+            del lines[guard.lineno - 1:guard.end_lineno]
+            incomplete = "".join(lines)
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, "incomplete billing numeric patch"):
+                    patcher.patch(incomplete)
+
     def run_evaluator(self, patched, after, before=None, repeats=1):
         source = (HERE / "fixture_post_billing.py").read_text()
         if patched:
