@@ -11,7 +11,9 @@ are preserved rather than changing correction/credit semantics. Missing,
 null, string, boolean, nonfinite or invalid data block before artifacts, comments,
 state writes or issue closure. Genuine numeric zero and a complete empty usage
 array remain valid. Other products and storage retain their separate scope.
-The fixed fixture regression compares old and patched evaluator behavior.
+The regression preserves the original numeric/control flow; report prose is shortened.
+Complete UTC date/timestamp formats and accumulated/derived finiteness are checked.
+Published or closed acceptance rejects installation and requires reconciliation.
 
 This does not establish settlement, net savings, attribution, API pagination or
 freshness. The existing #934 acceptance contract remains required. It does not

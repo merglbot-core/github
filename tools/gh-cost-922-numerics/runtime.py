@@ -31,9 +31,21 @@ def billing_usage_items(data):
             if not isinstance(item.get(field), str) or not item[field].strip():
                 return None
         try:
-            if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", item["date"][:10]):
+            # The evaluator consumes UTC calendar days. Accept a complete date or
+            # an explicit UTC ISO timestamp, never an arbitrary suffix or offset.
+            if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?(?:Z|\+00:00))?", item["date"]):
                 return None
             datetime.date.fromisoformat(item["date"][:10])
+            if len(item["date"]) > 10:
+                datetime.datetime.fromisoformat(item["date"].replace("Z", "+00:00"))
         except ValueError:
             return None
     return data["usageItems"]
+
+
+def billing_numbers_finite(values):
+    import math
+    try:
+        return all(type(value) in (int, float) and math.isfinite(value) for value in values)
+    except OverflowError:
+        return False

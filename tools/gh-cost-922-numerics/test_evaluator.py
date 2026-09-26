@@ -12,7 +12,7 @@ spec.loader.exec_module(patcher)
 
 
 class EvaluatorTests(unittest.TestCase):
-    def run_evaluator(self, patched, after):
+    def run_evaluator(self, patched, after, before=None, repeats=1):
         source = (HERE / "fixture_post_billing.py").read_text()
         if patched:
             source = patcher.patch(source)
@@ -22,7 +22,7 @@ class EvaluatorTests(unittest.TestCase):
         calls = []
         row = dict(product="actions", sku="Actions Linux", organizationName="org",
                    repositoryName="repo", date="2026-09-09", grossAmount=200.0, quantity=33333.0)
-        data = {"usageItems": [row, {**row, "date": "2026-09-27", **after}]}
+        data = {"usageItems": [{**row, **(before or {})}] * repeats + [{**row, "date": "2026-09-27", **after}]}
         with tempfile.TemporaryDirectory() as tmp:
             scope = dict(json=json, BILLING_DIR=Path(tmp), BILLING_WINDOW_DAYS=14,
                          BILLING_SUB=922, EPIC_REPO="org/program", STATUS_DONE="done", DRY_RUN=False,
@@ -34,6 +34,8 @@ class EvaluatorTests(unittest.TestCase):
                          board=lambda *args: calls.append("board"), notify=lambda *args: None)
             exec(compile(source, "fixture_post_billing.py", "exec"), scope)
             result = scope["post_billing"](state, state["billing"])
+            if patched and not result:
+                self.assertFalse((Path(tmp) / "acceptance.json").exists())
         return result, state, calls
 
     def test_existing_null_counterexample_closes_but_patch_blocks(self):
@@ -41,6 +43,16 @@ class EvaluatorTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(state["billing"]["verdict"], "FAKT")
         self.assertIn("close", calls)
+
+    def test_finite_inputs_with_overflow_cannot_write_or_close(self):
+        for before, repeats in (({"grossAmount": 1e308}, 1),
+                                ({"grossAmount": 1e308}, 2),
+                                ({"quantity": 1e308}, 2)):
+            with self.subTest(before=before, repeats=repeats):
+                result, state, calls = self.run_evaluator(True, {"grossAmount": 0, "quantity": 0}, before, repeats)
+                self.assertFalse(result)
+                self.assertNotIn("posted_at", state["billing"])
+                self.assertEqual(calls, [])
         result, state, calls = self.run_evaluator(True, {"grossAmount": None, "quantity": None})
         self.assertFalse(result)
         self.assertNotIn("posted_at", state["billing"])

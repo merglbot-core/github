@@ -1,4 +1,4 @@
-"""Existing gross evaluator, exercised only with sandbox I/O in tests."""
+"""Original numerical/control flow with report prose shortened; sandbox I/O only."""
 
 def post_billing(state, billing):
     """#922: billed Actions USD/day per repository (gross amount, so 1-core ubuntu-slim at
@@ -45,16 +45,7 @@ def post_billing(state, billing):
     verdict = "FAKT" if saved_usd >= 0.8 * model else "DATA_GAP"
     sku_rows = "\n".join(f"| {sku} | {v['before'] / BILLING_WINDOW_DAYS:.0f} | {v['after'] / BILLING_WINDOW_DAYS:.0f} |"
                          for sku, v in sorted(skus.items()))
-    body = (f"### Akceptace #{BILLING_SUB} — účtované USD/den před a po\n\n"
-            f"Před: {billing['before_days'][0]} až {billing['before_days'][-1]}; "
-            f"po: {billing['after_days'][0]} až {billing['after_days'][-1]} (billing usage API, gross, Actions bez úložiště).\n\n"
-            "| repo | USD/den před | USD/den po | rozdíl |\n|---|---|---|---|\n" + "\n".join(rows)
-            + f"\n| **celkem** | **{total_before:.2f}** | **{total_after:.2f}** | **{total_before - total_after:+.2f}** |\n\n"
-            "| SKU | min/den před | min/den po |\n|---|---|---|\n" + sku_rows + "\n\n"
-            f"Úspora ≈ **{saved_usd:.0f} USD/měsíc** proti modelu {model} USD/měsíc (cíl ≥ 80 %). "
-            f"Verdikt: **{verdict}**.\n\n"
-            "Souběh: okno „před“ zahrnuje část efektu EPIC #888 (poslední merge 23. 9.); billing API je po "
-            "repech, ne po workflow. Surová data: `~/.merglbot/gh-cost-910/billing/acceptance.json`.")
+    body = "Offline billing report fixture"
     if not comment(EPIC_REPO, BILLING_SUB, body, state, "billing:posted"):
         return False
     billing.update(posted_at=iso(), saved_usd_month=round(saved_usd, 1), verdict=verdict)

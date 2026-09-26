@@ -42,6 +42,14 @@ class NumericTests(unittest.TestCase):
                 self.assertIsNone(runtime.billing_usage_items({"usageItems": [{**self.row, field: value}]}))
         self.assertIsNone(runtime.billing_usage_items({"usageItems": [{**self.row, "date": "2026-02-30"}]}))
 
+    def test_complete_utc_dates_and_timestamps_only(self):
+        for date in ("2026-09-27", "2026-09-27T00:00:00Z", "2026-09-27T23:59:59.123+00:00"):
+            row = {**self.row, "date": date}
+            self.assertEqual(runtime.billing_usage_items({"usageItems": [row]}), [row])
+        for date in ("2026-09-27junk", "2026-09-27T25:00:00Z", "2026-09-27T00:00:00",
+                     "2026-09-27T00:00:00+02:00", "2026-09-27T00:00:00Zjunk"):
+            self.assertIsNone(runtime.billing_usage_items({"usageItems": [{**self.row, "date": date}]}))
+
     def test_other_products_and_storage_do_not_enter_compute_validation(self):
         rows = [{"product": "copilot"}, {"product": "actions", "sku": "Actions Storage"}]
         self.assertEqual(runtime.billing_usage_items({"usageItems": rows}), rows)
