@@ -10,6 +10,11 @@ before scheduling, posting or closing. It preserves all rollout and DoD state.
 PRs `verified` or adds them to the rollout verifier. The billing repository set
 includes these follow-ups. Future relevant follow-ups must likewise be registered;
 this is not an automatic census of every new GitHub PR.
+An absent or partial registry is blocked: all eight known follow-up PRs listed
+in `BILLING_REQUIRED_FOLLOWUPS` must be present. Extra registered merges are also
+included. The reviewed installer must verify the complete supplied batch live.
+The patcher accepts byte-identical installed code to support later registration;
+helper/constant collisions or a different installed patch fail closed.
 
 Windows retain the existing convention: 14 complete UTC days before the first
 merge, 14 complete UTC days after the last, and the existing two-day allowance
@@ -21,6 +26,8 @@ Pending/unknown rollout states, incomplete registration, malformed timestamps
 and unverified follow-ups block acceptance. A changed published acceptance is
 preserved with `scope_drift` and requires reconciliation; it cannot close the EPIC.
 Input fingerprints distinguish changed scope even when the extrema stay equal.
+They include the normalized effective repository set, including `extra_repos`;
+changing that set cannot reuse old acceptance.
 Unchanged ticks do not post repeated scheduling comments.
 
 The existing gross billing evaluator and separate #934 net/settled acceptance

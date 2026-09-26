@@ -30,6 +30,10 @@ class WindowTests(unittest.TestCase):
         self.state = dict(registration_complete=True, prs={
             "org/repo#1": dict(state="verified", merged_at="2026-09-23T19:34:46Z"),
             "org/repo#2": dict(state="verified", merged_at="2026-09-24T17:29:53Z")})
+        # Synthetic metadata models an explicitly complete migrated registry.
+        self.state["billing_followups"] = {key: dict(merged_at="2026-09-24T12:00:00Z",
+            merge_sha="a" * 40, base_ref="main", scope_issue="merglbot-core/github#921")
+            for key in self.scope["BILLING_REQUIRED_FOLLOWUPS"]}
 
     def run_handler(self):
         return self.scope["billing_acceptance"](self.state)
@@ -95,6 +99,8 @@ class WindowTests(unittest.TestCase):
         self.assertNotIn("post", self.calls)
 
     def test_offsets_are_sorted_by_instant(self):
+        self.state["billing_followups"] = {key: {**record, "merged_at": "2026-09-23T22:30:00Z"}
+            for key, record in self.state["billing_followups"].items()}
         self.state["prs"]["org/repo#1"]["merged_at"] = "2026-09-24T01:00:00+03:00"
         self.state["prs"]["org/repo#2"]["merged_at"] = "2026-09-23T23:00:00Z"
         self.run_handler()
@@ -127,6 +133,37 @@ class WindowTests(unittest.TestCase):
         self.clock = dt.datetime(2026, 10, 12, 6, tzinfo=UTC)
         self.run_handler()
         self.assertEqual(self.calls.count("post"), 1)
+
+    def test_missing_or_partial_migration_cannot_schedule_or_close(self):
+        self.state.pop("billing_followups")
+        self.assertFalse(self.run_handler())
+        self.state["billing_followups"] = {}
+        self.assertFalse(self.run_handler())
+        self.add_followup()
+        self.assertFalse(self.run_handler())
+        self.assertNotIn("post", self.calls)
+        self.assertNotIn("comment", self.calls)
+
+    def test_extra_repository_changes_invalidate_published_scope(self):
+        self.run_handler()
+        self.state["billing"]["posted_at"] = "old proof"
+        self.state["billing"]["extra_repos"] = ["extra/repo"]
+        self.assertFalse(self.run_handler())
+        self.assertIn("scope_drift", self.state["billing"])
+        self.assertNotIn("close", self.calls)
+
+    def test_extra_repository_order_and_duplicates_do_not_change_scope(self):
+        self.state["billing"] = {"extra_repos": ["extra/a", "extra/b"]}
+        self.run_handler()
+        self.state["billing"]["extra_repos"] = ["extra/b", "extra/a", "extra/a"]
+        self.run_handler()
+        self.assertEqual(self.calls.count("comment"), 1)
+
+    def test_invalid_extra_repository_fails_closed(self):
+        for extra in ("extra/repo", [None], ["malformed"]):
+            self.state["billing"] = {"extra_repos": extra}
+            self.assertFalse(self.run_handler())
+        self.assertNotIn("post", self.calls)
 
 
 if __name__ == "__main__":

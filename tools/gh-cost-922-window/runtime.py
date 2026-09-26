@@ -1,5 +1,16 @@
 """Injected billing-window guard; uses the existing autopilot's I/O helpers."""
 
+BILLING_REQUIRED_FOLLOWUPS = (
+    "merglbot-extractors/denatura-forecast-exporter#467",
+    "merglbot-denatura/acquisition-analysis#199",
+    "merglbot-proteinaco/acquisition-analysis#186",
+    "merglbot-core/merglbot-admin#1104",
+    "merglbot-core/project-management-app#395",
+    "Merglevsky-cz/Merglbot.io#53",
+    "Merglevsky-cz/shoptet_bq_all_clients#32",
+    "merglbot-core/infra#3154",
+)
+
 
 def billing_inputs(state):
     """Keep financial follow-ups separate from rollout verification/DoD records."""
@@ -7,9 +18,11 @@ def billing_inputs(state):
     if state.get("registration_complete") is not True:
         raise ValueError("registration incomplete")
     records = state.get("prs")
-    followups = state.get("billing_followups", {})
+    followups = state.get("billing_followups")
     if not isinstance(records, dict) or not records or not isinstance(followups, dict):
         raise ValueError("billing registry missing")
+    if not set(BILLING_REQUIRED_FOLLOWUPS).issubset(followups):
+        raise ValueError("known follow-up registry incomplete")
     merged = []
     for source, entries in (("rollout", records), ("followup", followups)):
         for key, record in entries.items():
@@ -60,8 +73,14 @@ def billing_window(state):
     # window still changes the measured scope and invalidates old acceptance.
     import hashlib
     import json
-    identity = [[iso(instant), key] for instant, key in inputs]
-    fingerprint = hashlib.sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()
+    import re
+    extra = state.get("billing", {}).get("extra_repos", [])
+    if not isinstance(extra, list) or any(not isinstance(repo, str) or not re.fullmatch(
+            r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) for repo in extra):
+        raise ValueError("invalid extra billing repository scope")
+    identity = {"merges": [[iso(instant), key] for instant, key in inputs],
+                "repos": sorted({key.rsplit("#", 1)[0] for _, key in inputs} | set(extra))}
+    fingerprint = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return dict(first_merge_at=iso(first), last_merge_at=iso(last),
                 before_days=before, after_days=after, due_at=iso(due),
                 input_fingerprint=fingerprint)
