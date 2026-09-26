@@ -27,6 +27,12 @@ def install(expected_code, expected_state, dry_run=False):
         old_code, old_state = code.read_bytes(), state.read_bytes()
         if shared.digest(old_code) != expected_code or shared.digest(old_state) != expected_state:
             raise RuntimeError("autopilot source/state drift")
+        captured = json.loads(old_state)
+        billing = captured.get("billing", {})
+        if not isinstance(billing, dict):
+            raise RuntimeError("invalid billing state")
+        if billing.get("posted_at") or billing.get("closed_at"):
+            raise RuntimeError("published/closed billing acceptance requires reconciliation")
         new_code = patcher.patch(old_code.decode()).encode()
         facts = dict(code_before=expected_code, code_after=shared.digest(new_code), state_unchanged=expected_state)
         if dry_run:
