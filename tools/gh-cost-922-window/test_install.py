@@ -38,6 +38,9 @@ class InstallTests(unittest.TestCase):
             context = patch.object(installer, name, value)
             context.start()
             self.addCleanup(context.stop)
+        context = patch.object(installer, "required_followups", return_value={"org/repo#1"})
+        context.start()
+        self.addCleanup(context.stop)
 
     def install(self, dry=False):
         return installer.install(installer.digest(self.old_code), installer.digest(self.old_state), self.followups, dry)
@@ -53,11 +56,54 @@ class InstallTests(unittest.TestCase):
         self.assertEqual((backup / "state.json").read_bytes(), self.old_state)
         self.assertFalse((self.base / "autopilot/lock").exists())
 
+    def test_later_registration_accepts_exact_patch_and_preserves_newer_dod(self):
+        self.install()
+        current = json.loads(self.state.read_bytes())
+        current["dod"]["proof"]["met_at"] = "new natural tick"
+        self.state.write_text(json.dumps(current))
+        self.old_code, self.old_state = self.code.read_bytes(), self.state.read_bytes()
+        self.followups["org/repo#2"] = {**self.followups["org/repo#1"], "merged_at": "2026-09-27T17:00:00Z"}
+        self.install()
+        self.assertEqual(self.code.read_bytes(), self.old_code)
+        result = json.loads(self.state.read_bytes())
+        self.assertEqual(result["dod"], current["dod"])
+        self.assertEqual(set(result["billing_followups"]), {"org/repo#1", "org/repo#2"})
+
     def test_dry_run_does_not_write(self):
         self.install(True)
         self.assertEqual(self.code.read_bytes(), self.old_code)
         self.assertEqual(self.state.read_bytes(), self.old_state)
         self.assertFalse((self.base / "backups").exists())
+
+    def test_empty_or_partial_batch_is_rejected_before_network_or_writes(self):
+        with patch.object(installer, "required_followups", return_value={"org/repo#1", "org/repo#2"}), \
+                patch.object(installer.subprocess, "run") as run:
+            for keys in ([], ["org/repo#1"]):
+                with self.assertRaises(ValueError):
+                    installer.verify_followups(keys)
+            run.assert_not_called()
+            with self.assertRaises(ValueError):
+                self.install()
+        self.assertEqual(self.code.read_bytes(), self.old_code)
+
+    def test_missing_metadata_requires_exact_registered_head_proof(self):
+        key = "original/repo#4"
+        self.original["prs"][key] = {"head": "b" * 40, "state": "verified", "merged_at": None,
+                                     "merge_sha": None, "owner_note": "keep"}
+        self.state.write_text(json.dumps(self.original))
+        self.old_state = self.state.read_bytes()
+        with self.assertRaises(RuntimeError):
+            self.install()
+        proof = {key: {"head": "c" * 40, "merged_at": "2026-09-23T21:05:38Z", "merge_sha": "d" * 40}}
+        with self.assertRaises(RuntimeError):
+            installer.install(installer.digest(self.old_code), installer.digest(self.old_state), self.followups, repairs=proof)
+        proof[key]["head"] = "b" * 40
+        installer.install(installer.digest(self.old_code), installer.digest(self.old_state), self.followups, repairs=proof)
+        current = json.loads(self.state.read_bytes())
+        self.assertEqual(current["prs"][key]["state"], "verified")
+        self.assertEqual(current["prs"][key]["owner_note"], "keep")
+        self.assertEqual(current["prs"][key]["merged_at"], proof[key]["merged_at"])
+        self.assertEqual(current["subs"], self.original["subs"])
 
     def test_drift_owner_hold_lock_and_posted_acceptance_stop_install(self):
         self.state.write_text(json.dumps({**self.original, "newer_tick": True}))

@@ -4,6 +4,12 @@ Activate only from the protected, substantively V6-reviewed main commit. Compute
 fresh SHA256s of `~/.merglbot/gh-cost-910/{autopilot.py,state.json}` immediately
 before invoking the installer. Pass them as `--expected-code` and
 `--expected-state`, and repeat `--followup org/repo#PR` for each verified follow-up.
+All eight `BILLING_REQUIRED_FOLLOWUPS` are mandatory; empty and partial batches
+fail before API calls or writes. Include future additional follow-ups too. The
+same command accepts an already byte-identical reviewed patch for registration.
+It also repairs missing merge metadata in existing verified rollout records:
+fresh GitHub main-merge proof must match each registered head and any existing
+timestamp/SHA. Only `merged_at` and `merge_sha` are filled, never state or DoD.
 First use `--dry-run`; re-read hashes before the real install if any tick intervenes.
 Every live follow-up is checked against GitHub before taking the existing lock.
 The installer honors OWNER_HOLD and the core API reserve, refuses stale hashes,

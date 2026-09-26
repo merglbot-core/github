@@ -16,6 +16,13 @@ HOLD = Path.home() / ".claude/merglbot-preauth/OWNER_HOLD"
 HERE = Path(__file__).resolve().parent
 
 
+def required_followups():
+    spec = importlib.util.spec_from_file_location("window_runtime", HERE / "runtime.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return set(module.BILLING_REQUIRED_FOLLOWUPS)
+
+
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -36,13 +43,13 @@ def atomic(path, data):
 
 
 def verify_followups(keys):
-    if len(keys) > 20 or len(set(keys)) != len(keys):
-        raise ValueError("follow-up batch must be unique and at most 20 PRs")
+    if not required_followups().issubset(keys) or len(keys) > 20 or len(set(keys)) != len(keys):
+        raise ValueError("supply the complete known follow-up set, unique and at most 20 PRs")
     # This is a real request's core header, not the rate_limit endpoint.
     result = subprocess.run(["gh", "api", "-i", "user", "--jq", ".login"],
                             capture_output=True, text=True, timeout=30, check=True)
     match = re.search(r"(?im)^x-ratelimit-remaining:\s*(\d+)", result.stdout)
-    if not match or int(match[1]) < 2000 + len(keys) + 5:
+    if not match or int(match[1]) < 2000 + 40 + 5:
         raise RuntimeError("shared core reserve unavailable")
     records = {}
     for key in keys:
@@ -66,7 +73,34 @@ def verify_followups(keys):
     return records
 
 
-def install(expected_code, expected_state, followups, dry_run=False):
+def verify_missing_metadata(state):
+    missing = {key: pr for key, pr in state["prs"].items() if pr.get("state") == "verified"
+               and (not pr.get("merged_at") or not pr.get("merge_sha"))}
+    if len(missing) > 20:
+        raise ValueError("metadata repair batch exceeds 20")
+    repairs = {}
+    for key in missing:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*", key):
+            raise ValueError("invalid rollout PR key")
+        repo, number = key.rsplit("#", 1)
+        result = subprocess.run(["gh", "api", f"repos/{repo}/pulls/{number}", "--jq",
+            '{merged,merged_at,merge_sha:.merge_commit_sha,base_ref:.base.ref,head:.head.sha}'],
+            capture_output=True, text=True, timeout=30, check=True)
+        record = json.loads(result.stdout)
+        if record.get("merged") is not True or record.get("base_ref") != "main" \
+                or not re.fullmatch(r"[0-9a-f]{40}", record.get("merge_sha", "")):
+            raise ValueError("rollout metadata is not a main merge")
+        instant = dt.datetime.fromisoformat(record["merged_at"].replace("Z", "+00:00"))
+        if instant.tzinfo is None or instant > dt.datetime.now(dt.timezone.utc):
+            raise ValueError("invalid rollout merged_at")
+        repairs[key] = {field: record[field] for field in ("head", "merged_at", "merge_sha")}
+    return repairs
+
+
+def install(expected_code, expected_state, followups, dry_run=False, repairs=None):
+    if not required_followups().issubset(followups):
+        raise ValueError("incomplete follow-up set")
+    repairs = repairs or {}
     if HOLD.exists():
         raise RuntimeError("OWNER_HOLD present")
     lock = BASE / "autopilot/lock"
@@ -83,6 +117,17 @@ def install(expected_code, expected_state, followups, dry_run=False):
         state = json.loads(old_state)
         if state.get("closed_at") or state.get("billing", {}).get("posted_at"):
             raise RuntimeError("published/closed program requires reconciliation")
+        missing = {key for key, pr in state["prs"].items() if pr.get("state") == "verified"
+                   and (not pr.get("merged_at") or not pr.get("merge_sha"))}
+        if missing != set(repairs):
+            raise RuntimeError("missing rollout metadata requires complete live proof")
+        for key, proof in repairs.items():
+            record = state["prs"][key]
+            if record.get("head") != proof["head"] or any(record.get(field) not in
+                    (None, proof[field]) for field in ("merged_at", "merge_sha")):
+                raise RuntimeError("rollout head or existing merge metadata conflicts")
+            # Fill only API-confirmed missing metadata; never change state/DoD.
+            record.update(merged_at=proof["merged_at"], merge_sha=proof["merge_sha"])
         registered = state.setdefault("billing_followups", {})
         for key, record in followups.items():
             if key in state["prs"] or (key in registered and registered[key] != record):
@@ -124,7 +169,12 @@ def main():
     args = parser.parse_args()
     # Verify live GitHub before the lock, then compare exact fresh state under it.
     followups = verify_followups(args.followup)
-    print(json.dumps(install(args.expected_code, args.expected_state, followups, args.dry_run), sort_keys=True))
+    raw_state = (BASE / "state.json").read_bytes()
+    if digest(raw_state) != args.expected_state:
+        raise RuntimeError("state changed before metadata verification")
+    repairs = verify_missing_metadata(json.loads(raw_state))
+    print(json.dumps(install(args.expected_code, args.expected_state, followups,
+                            args.dry_run, repairs), sort_keys=True))
 
 
 if __name__ == "__main__":
