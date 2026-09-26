@@ -1624,7 +1624,8 @@ def named_review_bot_status(repo: str, number: int) -> tuple[bool, str]:
 
 def verify_merglbot(repo: str, number: int) -> dict[str, Any]:
     script = Path(__file__).resolve().parents[1] / "pr-assistant" / "verify-review-receipt.py"
-    proc = run_cmd(["python3", str(script), "--repo", repo, "--pr", str(number)], check=False)
+    proc = run_cmd(["python3", str(script), "--repo", repo, "--pr", str(number),
+                    "--assistant-version", "v6"], check=False)
     try:
         payload = json.loads(proc.stdout or "{}")
     except json.JSONDecodeError:
@@ -1662,7 +1663,7 @@ def is_current_head_merglbot_terminal_blocker(payload: dict[str, Any], head_sha:
     ]
     if verdict in {"approved_for_closeout", "approved"} and status == "success":
         return False
-    return bool(terminal_blockers) or verdict in {"changes_required", "blocked", "needs_work"} or status in {"blocked", "failed"}
+    return bool(terminal_blockers) or verdict in {"changes_required", "blocked", "needs_work", "blocked_missing_authority"} or status in {"blocked", "failed", "failure"}
 
 
 def merglbot_pr_head_changed(payload: dict[str, Any], expected_head_sha: str) -> bool:
