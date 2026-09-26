@@ -41,5 +41,5 @@ DoD, change owner exceptions, close #930, create a scheduler, or alter credentia
   python3 -m unittest discover -s tools/gh-cost-922-window -p 'test_*.py' -v
 ```
 
-The activation installer is a separate dependent change. Do not edit the running
-autopilot or add state records until that protected change has passed review.
+The installer and its lock/backup/rollback contract are documented in [INSTALL.md](INSTALL.md).
+Activate only after protected substantive exact-head review and main merge.
