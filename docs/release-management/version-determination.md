@@ -22,8 +22,11 @@ Validate locally with `node --test tests/release-version.test.mjs` (through the
 host's capped-run wrapper). Tests use synthetic provider results and do not run
 semantic-release, install packages, push tags or publish releases. Protected
 source delivery is separate from the minimal workflow authority change. Until
-that wiring lands and a natural run is verified, the production workflow still
-has its original behavior; no release or savings acceptance is claimed.
+that wiring lands, the production workflow retains its original inline version
+determination code, but the new root `.releaserc.json` already changes the
+configuration that this inline semantic-release invocation discovers. Its
+actual production outcome and natural-run acceptance require verification;
+neither unchanged overall behavior nor release or savings acceptance is claimed.
 
 The existing CI job uses Python unittest discovery. `test_release_version.py`
 invokes the Node behavior suite through that path; it fails if Node is absent,
