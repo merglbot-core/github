@@ -157,11 +157,11 @@ function gh(ghArgs, { retry404 = false } = {}) {
   throw lastErr;
 }
 function workflowStructure(body) {
-  // BaseLoader treats GitHub's `on` as a key; comments cannot masquerade as steps.
+  // Psych projects parsed YAML; comments cannot masquerade as steps.
   // Keep the parser's environment and output bounded and never pass it the token.
-  const parsed = execFileSync('python3', [new URL('./codeql_workflow_probe.py', import.meta.url).pathname], {
+  const parsed = execFileSync('ruby', [new URL('./codeql_workflow_probe.rb', import.meta.url).pathname], {
     input: body, encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024,
-    env: { PATH: process.env.PATH || '/usr/bin:/bin', PYTHONNOUSERSITE: '1' },
+    env: { PATH: process.env.PATH || '/usr/bin:/bin' },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   return JSON.parse(parsed);
