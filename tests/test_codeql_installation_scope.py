@@ -61,12 +61,17 @@ elif path == 'repos/merglbot-core/example/code-scanning/default-setup':
                                      'init_only', 'init_and_analyze',
                                      'unknown_before_conflict', 'disabled_step',
                                      'disabled_job', 'disabled_reusable',
+                                     'malformed_then_conflict', 'malformed_only',
                                      'reusable_conflict_then_unreadable',
                                      'conflict_then_unreadable') else 'not-configured'
     print(json.dumps({'state': state, 'languages': ['javascript']}))
 elif path == 'repos/merglbot-core/example/contents/.github/workflows':
     if mode == 'directory_object':
         print(json.dumps({'unexpected': True}))
+        sys.exit(0)
+    if mode in ('malformed_then_conflict', 'malformed_only'):
+        print(json.dumps([{}] + ([{'name': 'codeql.yml'}] if
+                           mode == 'malformed_then_conflict' else [])))
         sys.exit(0)
     print(json.dumps([{'name': 'codeql.yml'}] +
                      ([{'name': 'later.yml'}] if mode in
@@ -77,7 +82,7 @@ elif path == 'repos/merglbot-core/example/contents/.github/workflows':
            'mixed_case_action', 'local_composite', 'direct_and_local',
            'init_only', 'init_and_analyze',
            'unknown_before_conflict', 'disabled_step', 'disabled_job',
-           'disabled_reusable',
+           'disabled_reusable', 'malformed_then_conflict',
            'reusable_conflict_then_unreadable') else '[]')
 elif path == 'repos/merglbot-core/example/contents/.github/workflows/codeql.yml':
     if mode in ('unreadable_candidate', 'unknown_before_conflict'):
@@ -333,6 +338,20 @@ else:
         self.assertEqual(report["status"], "CONFLICT_PARTIAL")
         self.assertEqual(report["unswept"], ["merglbot-core/example"])
         self.assertEqual(report["conflicts"][0]["advanced_workflows"], ["later.yml"])
+
+    def test_malformed_entry_does_not_hide_later_conflict(self):
+        result = self.run_scanner(fixture_mode="malformed_then_conflict")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "CONFLICT_PARTIAL")
+        self.assertEqual(report["unswept"], ["merglbot-core/example"])
+        self.assertEqual(report["conflicts"][0]["advanced_workflows"], ["codeql.yml"])
+
+    def test_malformed_entry_alone_cannot_be_clean(self):
+        result = self.run_scanner(fixture_mode="malformed_only")
+        self.assertEqual(result.returncode, 1)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["unswept"], ["merglbot-core/example"])
 
     def test_statically_disabled_step_does_not_conflict(self):
         result = self.run_scanner(fixture_mode="disabled_step")

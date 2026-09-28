@@ -361,6 +361,13 @@ for (const org of orgs) {
     let workflowUnknown = false;
     if (configured) {
       for (const w of workflows) {
+        if (!w || typeof w !== 'object' || Array.isArray(w)
+            || typeof w.name !== 'string' || !/^[A-Za-z0-9_.-]{1,255}$/.test(w.name)
+            || w.name.includes('..') || w.type && w.type !== 'file') {
+          report.errors.push(`${full}: malformed workflow directory entry`);
+          workflowUnknown = true;
+          continue;
+        }
         if (!/\.ya?ml$/i.test(w.name)) continue;
         try {
           const body = workflowBody(full, w.name);
