@@ -1637,9 +1637,11 @@ def verify_merglbot(repo: str, number: int) -> dict[str, Any]:
     if payload.get("ok") and payload.get("autonomous_next_action") != "safe_to_merge":
         payload["ok"] = False
         payload.setdefault("blockers", []).append("merglbot_merge_authority_not_accepted")
-    if proc.returncode != 0 and not payload.get("blockers"):
-        payload["blockers"] = ["verify_review_receipt_failed"]
-        payload["transport_error"] = True
+    if proc.returncode != 0:
+        payload["ok"] = False
+        if not payload.get("blockers"):
+            payload["blockers"] = ["verify_review_receipt_failed"]
+            payload["transport_error"] = True
     return payload
 
 
@@ -2257,11 +2259,19 @@ def _process_pr_once(
             receipt.classification = "BLOCKED_UPDATE_BRANCH"
             receipt.blockers.append("update_branch:still_behind_after_update")
             return receipt
+        updated_head = refreshed.head_sha
         updated_ok, updated_review, updated_blockers = wait_for_updated_head_gates(refreshed)
         receipt.merglbot_receipt = updated_review
         if not updated_ok:
             receipt.classification = "BLOCKED_UPDATED_HEAD_GATES"
             receipt.blockers.extend(updated_blockers)
+            return receipt
+        refreshed = refresh_pr(pr.repo, pr.number)
+        if refreshed.head_sha != updated_head:
+            receipt.classification = "BLOCKED_UPDATED_HEAD_GATES"
+            receipt.blockers.append("updated_head_changed_after_gate_wait")
+            if apply:
+                receipt.terminal_close_loop_verdict = "REVIEW_REBIND_REQUIRED"
             return receipt
 
     if refreshed.merge_state == MERGE_REVIEW_GATE_STATE and allow_policy_alignment:

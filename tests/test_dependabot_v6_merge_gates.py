@@ -108,6 +108,20 @@ class FinalGateIntegration(unittest.TestCase):
     self.assertEqual(result.classification, "BLOCKED_FINAL_MERGLBOT")
     self.assertEqual(self.merge_calls, [])
 
+  def test_nonzero_verifier_exit_never_keeps_json_approval(self):
+    for blockers in [[], ["existing_failure"]]:
+      with self.subTest(blockers=blockers):
+        self.final_receipt.update(ok=True, blockers=blockers.copy())
+        self.m.run_cmd = lambda argv, check=False: types.SimpleNamespace(
+          returncode=1, stdout=json.dumps(self.final_receipt), stderr="fixture-private-diagnostic")
+        result = self.execute()
+        self.assertEqual(result.classification, "BLOCKED_FINAL_MERGLBOT")
+        self.assertFalse(result.merglbot_receipt["ok"])
+        self.assertEqual(self.merge_calls, [])
+        if blockers:
+          self.assertIn("existing_failure", result.merglbot_receipt["blockers"])
+        self.assertNotIn("fixture-private-diagnostic", json.dumps(result.merglbot_receipt))
+
   def test_dry_run_also_revalidates_without_merge(self):
     result = self.execute("dry-run")
     self.assertEqual(result.action, "would_merge")
@@ -196,13 +210,13 @@ class FinalGateIntegration(unittest.TestCase):
     self.assertEqual(self.merge_calls, [])
     self.assertIn("merglbot:authority_hold", result.blockers)
 
-  def test_strict_updated_head_waits_for_checks_and_review_then_merges(self):
+  def _strict_updated_head_wait(self, initial_state="CLEAN"):
     from dataclasses import replace
     self.pr.merge_state = "BEHIND"
     self.m.branch_protection = lambda *args: {"required_status_checks": {"strict": True}}
     next_head = "e" * 40
     def update(*args, **kw):
-      self.pr = replace(self.pr, head_sha=next_head, merge_state="CLEAN")
+      self.pr = replace(self.pr, head_sha=next_head, merge_state=initial_state)
       return {"ok": True, "final_head_sha": next_head}
     self.m.request_update_branch = update
     self.m.wait_for_merglbot = lambda *args, **kw: {"ok": True, "head_sha": HEAD}
@@ -217,6 +231,7 @@ class FinalGateIntegration(unittest.TestCase):
       reviews.append(1)
       if len(reviews) == 1:
         return {"ok": False, "head_sha": next_head, "blockers": ["v6_review_in_progress"]}
+      self.pr = replace(self.pr, merge_state="CLEAN")
       return {"ok": True, "head_sha": next_head, "autonomous_next_action": "safe_to_merge",
               "docs_obligation_requires_external_evidence": True}
     self.m.verify_merglbot = verify
@@ -231,6 +246,36 @@ class FinalGateIntegration(unittest.TestCase):
     self.assertEqual(result.action, "merged")
     self.assertEqual(self.merge_calls, [("fixture/example", 7, next_head)])
     self.assertEqual(delays, [self.m.MERGLBOT_REVIEW_POLL_SECONDS])
+
+  def test_strict_updated_head_waits_for_checks_and_review_then_merges(self):
+    self._strict_updated_head_wait()
+
+  def test_strict_updated_head_refreshes_blocked_or_unknown_state_after_wait(self):
+    for state in ["BLOCKED", "UNKNOWN"]:
+      with self.subTest(state=state):
+        self.setUp()
+        self._strict_updated_head_wait(state)
+
+  def test_strict_updated_head_change_after_wait_never_merges_unreviewed_head(self):
+    from dataclasses import replace
+    self.pr.merge_state = "BEHIND"
+    self.m.branch_protection = lambda *args: {"required_status_checks": {"strict": True}}
+    first, raced = "e" * 40, "f" * 40
+    self.m.wait_for_merglbot = lambda *args, **kw: {"ok": True, "head_sha": HEAD}
+    def update(*args, **kw):
+      self.pr = replace(self.pr, head_sha=first, merge_state="BLOCKED")
+      return {"ok": True}
+    def wait(pr):
+      self.pr = replace(self.pr, head_sha=raced, merge_state="CLEAN")
+      return True, {"ok": True, "head_sha": first}, []
+    self.m.request_update_branch = update
+    self.m.wait_for_updated_head_gates = wait
+    result = self.m._process_pr_once(self.pr, mode="apply", output_dir=Path("unused-fixture"),
+      allow_policy_alignment=False, workflow_url="fixture", validator_profile="maximum_autonomy_v2",
+      sibling_prs=[], autonomous_fix_loop=False, max_fix_iterations=5, max_review_iterations=5)
+    self.assertIn("updated_head_changed_after_gate_wait", result.blockers)
+    self.assertEqual(result.terminal_close_loop_verdict, "REVIEW_REBIND_REQUIRED")
+    self.assertEqual(self.merge_calls, [])
 
   def test_approved_behind_non_strict_does_not_sync(self):
     self.pr.merge_state = "BEHIND"
@@ -444,6 +489,12 @@ class CanonicalReceiptBridge(unittest.TestCase):
     newer_failure = copy.deepcopy(a)
     newer_failure.update(id=4, conclusion="failure")
     self.assertFalse(verify(3277, [a, b, newer_failure])["ok"])
+    for binding in [None, "malformed", "other/repo#3277"]:
+      incomplete = copy.deepcopy(a)
+      incomplete.update(id=5, conclusion="failure")
+      replacement = "" if binding is None else "<!-- MERGLBOT_REVIEW_SOURCE: " + binding + " -->"
+      incomplete["output"]["summary"] = incomplete["output"]["summary"].replace("<!-- MERGLBOT_REVIEW_SOURCE: merglbot-core/infra#3277 -->", replacement)
+      self.assertFalse(verify(3277, [a, b, incomplete])["ok"], binding)
 
   def result(self, replacement=None):
     path = ROOT / "scripts/pr-assistant/verify-review-receipt.py"

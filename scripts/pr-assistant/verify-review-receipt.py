@@ -234,13 +234,18 @@ def select_v6_check_run(
     completed = [run for run in trusted if str(run.get("status") or "") == "completed"]
     if repo and pr_number:
         # Commit-scoped siblings must not shadow this PR's bound receipt.
-        # With no matching receipt, retain the newest one so binding failures
-        # remain explicit. Untrusted publishers and pending runs stay global.
-        bound = [run for run in completed if parse_markers(
-            str((run.get("output") or {}).get("summary") or "")
-        ).get("MERGLBOT_REVIEW_SOURCE") == expected_review_source(repo, pr_number)]
-        if bound:
-            completed = bound
+        # Exclude only positively identified foreign PRs in this repository.
+        # Missing/malformed bindings still compete for newest and must fail
+        # evaluation. With only foreign receipts, retain the newest failure.
+        # Untrusted publishers and pending runs stay global.
+        candidates = []
+        for run in completed:
+            source = parse_markers(str((run.get("output") or {}).get("summary") or "")).get("MERGLBOT_REVIEW_SOURCE", "")
+            foreign = bool(re.fullmatch(re.escape(repo) + r"#[1-9][0-9]*", source)) and source != expected_review_source(repo, pr_number)
+            if not foreign:
+                candidates.append(run)
+        if candidates:
+            completed = candidates
     if not completed:
         return None, pending, untrusted_reasons
     newest = max(
