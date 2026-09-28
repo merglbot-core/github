@@ -122,9 +122,13 @@ elif path == 'repos/merglbot-core/second/code-scanning/default-setup':
 elif path == 'user/orgs':
     print(json.dumps([[{'login': 'merglbot-core'}]]))
 elif path.startswith('orgs/merglbot-core/repos?'):
-    print(json.dumps([[{'id': 17, 'name': 'example',
-                        'full_name': 'merglbot-core/example',
-                        'archived': False, 'disabled': False}]]))
+    repos = [{'id': 17, 'name': 'example',
+              'full_name': 'merglbot-core/example',
+              'archived': False, 'disabled': False}]
+    if mode == 'legacy_partial':
+        repos.append({'id': 18, 'name': 'second', 'full_name': 'merglbot-core/second',
+                      'archived': False, 'disabled': False})
+    print(json.dumps([repos]))
 else:
     sys.exit(21)
 """)
@@ -186,6 +190,20 @@ else:
         self.assertEqual([call[1] for call in self.calls_made()][:2],
                          ["user/orgs", "orgs/merglbot-core/repos?per_page=100&type=all"])
         self.assertTrue((self.root / ".merglbot/codeql-conflict/latest.json").exists())
+
+    def test_existing_scheduled_mode_permission_gap_is_degraded(self):
+        env = os.environ.copy()
+        env.update({"HOME": str(self.root), "PATH": f"{self.bin}:{env['PATH']}",
+                    "GH_CALLS": str(self.calls), "GH_PROOF": str(self.proof),
+                    "GH_FIXTURE_MODE": "legacy_partial"})
+        result = subprocess.run(["node", str(SCRIPT), "--json", "--quiet"],
+                                env=env, capture_output=True, text=True,
+                                timeout=15, check=False)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual((report["status"], report["repos_swept"], report["repos_active"]),
+                         ("DEGRADED", 1, 2))
+        self.assertEqual(report["unswept"], ["merglbot-core/second"])
 
     def test_mismatched_installation_stops_before_repository_reads(self):
         result = self.run_scanner(fixture_mode="mismatch")

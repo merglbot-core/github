@@ -292,7 +292,7 @@ for (const org of orgs) {
       if (/HTTP 404/.test(msg) || /Code Security must be enabled/.test(msg)) setup = { state: 'not-configured', languages: [] };
       else if (/not authorized to read code scanning/i.test(msg)) {
         report.unreadable.push(full);
-        if (scopeFile) { orgRow.unswept++; report.unswept.push(full); }
+        orgRow.unswept++; report.unswept.push(full);
         continue;
       }
       else { orgRow.unswept++; report.unswept.push(full); report.errors.push(`${full}: default-setup ${safeFailure(e)}`); continue; }
