@@ -63,10 +63,10 @@ class FinalGateIntegration(unittest.TestCase):
       return {"state": "MERGED", "merge_commit": "c" * 40}
     self.m.merge_pr = merge
 
-  def execute(self, mode="apply"):
+  def execute(self, mode="apply", max_reviews=5):
     return self.m.process_pr(self.pr, mode=mode, output_dir=Path("unused-fixture"),
       allow_policy_alignment=False, workflow_url="fixture", validator_profile="maximum_autonomy_v2",
-      sibling_prs=[], autonomous_fix_loop=False, max_fix_iterations=5, max_review_iterations=5)
+      sibling_prs=[], autonomous_fix_loop=False, max_fix_iterations=5, max_review_iterations=max_reviews)
 
   def test_clean_current_head_uses_final_checks_and_pinned_merge(self):
     result = self.execute()
@@ -114,6 +114,13 @@ class FinalGateIntegration(unittest.TestCase):
     self.assertEqual(len(self.check_calls), 2)
     self.assertEqual(self.merge_calls, [])
 
+  def test_dry_run_missing_receipt_does_not_claim_trigger_eligibility(self):
+    self.m.wait_for_merglbot = lambda *args, **kw: {"ok": False, "head_sha": HEAD, "blockers": []}
+    result = self.execute("dry-run")
+    self.assertEqual(result.classification, "REVIEW_STATUS_REQUIRED")
+    self.assertFalse(result.would_dispatch_merglbot_review)
+    self.assertEqual(self.merge_calls, [])
+
 
   def test_unclassified_docs_impact_cannot_merge_on_technical_approval(self):
     self.final_scope_class = "NO_CHANGE"
@@ -154,6 +161,32 @@ class FinalGateIntegration(unittest.TestCase):
     self.assertEqual(self.merge_calls, [])
 
 
+  def test_real_pipeline_rebinds_more_heads_than_legacy_counter(self):
+    from dataclasses import replace
+    current = [self.pr]
+    changes = [0]
+    self.m.refresh_pr = lambda *args: current[0]
+    def review(*args, **kw):
+      if changes[0] < 7:
+        changes[0] += 1
+        current[0] = replace(current[0], head_sha=str(changes[0]).zfill(40))
+        return {"ok": False, "head_sha": current[0].head_sha,
+                "head_changed_during_review_wait": True, "blockers": []}
+      self.final_receipt["head_sha"] = current[0].head_sha
+      return dict(self.final_receipt)
+    self.m.wait_for_merglbot = review
+    result = self.execute(max_reviews=1)
+    self.assertEqual(result.action, "merged")
+    self.assertEqual(result.review_iterations, 8)
+    self.assertEqual(self.merge_calls, [("fixture/example", 7, current[0].head_sha)])
+
+  def test_rebind_claim_without_new_head_stops_without_merge(self):
+    self.m.wait_for_merglbot = lambda *args, **kw: {"ok": False,
+      "head_changed_during_review_wait": True, "head_sha": HEAD, "blockers": []}
+    result = self.execute(max_reviews=1)
+    self.assertEqual(result.classification, "REVIEW_REBIND_CONTINUATION_REQUIRED")
+    self.assertEqual(self.merge_calls, [])
+
   def test_behind_authority_hold_does_not_sync(self):
     self.pr.merge_state = "BEHIND"
     self.m.wait_for_merglbot = lambda *args, **kw: {"ok": False, "head_sha": HEAD,
@@ -162,6 +195,42 @@ class FinalGateIntegration(unittest.TestCase):
     result = self.execute()
     self.assertEqual(self.merge_calls, [])
     self.assertIn("merglbot:authority_hold", result.blockers)
+
+  def test_strict_updated_head_waits_for_checks_and_review_then_merges(self):
+    from dataclasses import replace
+    self.pr.merge_state = "BEHIND"
+    self.m.branch_protection = lambda *args: {"required_status_checks": {"strict": True}}
+    next_head = "e" * 40
+    def update(*args, **kw):
+      self.pr = replace(self.pr, head_sha=next_head, merge_state="CLEAN")
+      return {"ok": True, "final_head_sha": next_head}
+    self.m.request_update_branch = update
+    self.m.wait_for_merglbot = lambda *args, **kw: {"ok": True, "head_sha": HEAD}
+    checks = []
+    def gates(*args):
+      checks.append(1)
+      pending = len(checks) == 2
+      return not pending, [{"bucket": "pending" if pending else "pass"}], ["pending"] if pending else [], []
+    self.m.required_checks = gates
+    reviews = []
+    def verify(*args):
+      reviews.append(1)
+      if len(reviews) == 1:
+        return {"ok": False, "head_sha": next_head, "blockers": ["v6_review_in_progress"]}
+      return {"ok": True, "head_sha": next_head, "autonomous_next_action": "safe_to_merge",
+              "docs_obligation_requires_external_evidence": True}
+    self.m.verify_merglbot = verify
+    clock = [0]
+    delays = []
+    def wait(n):
+      delays.append(n)
+      clock[0] += n
+    self.m.time = types.SimpleNamespace(monotonic=lambda: clock[0], sleep=wait)
+    self.m.trigger_merglbot_review = lambda *args, **kw: self.fail("updated-head duplicate trigger")
+    result = self.execute()
+    self.assertEqual(result.action, "merged")
+    self.assertEqual(self.merge_calls, [("fixture/example", 7, next_head)])
+    self.assertEqual(delays, [self.m.MERGLBOT_REVIEW_POLL_SECONDS])
 
   def test_approved_behind_non_strict_does_not_sync(self):
     self.pr.merge_state = "BEHIND"
@@ -194,6 +263,30 @@ class FinalGateIntegration(unittest.TestCase):
 
 
 class ReviewCadenceIntegration(unittest.TestCase):
+  def test_pending_checks_exit_eight_is_parsed_as_pending(self):
+    m = load_consumer()
+    m.run_cmd = lambda *args, **kw: types.SimpleNamespace(returncode=8,
+      stdout=json.dumps([{"name": "ci", "bucket": "pending", "state": "IN_PROGRESS"}]), stderr="")
+    ok, checks, blockers, diagnostics = m.required_checks("fixture/example", 7)
+    self.assertFalse(ok)
+    self.assertEqual(checks[0]["bucket"], "pending")
+    self.assertNotIn("required_checks_lookup_failed", blockers)
+
+  def test_updated_gates_stop_on_authority_failure_or_head_change(self):
+    for kind in ["authority", "failure", "head"]:
+      with self.subTest(kind=kind):
+        m = load_consumer()
+        pr = types.SimpleNamespace(repo="fixture/example", number=7, head_sha=HEAD)
+        m.refresh_pr = lambda *args: types.SimpleNamespace(head_sha="d" * 40 if kind == "head" else HEAD)
+        m.required_checks = lambda *args: (False, [{"bucket": "fail" if kind == "failure" else "pending"}], ["check_failure"], [])
+        m.verify_merglbot = lambda *args: {"ok": False, "head_sha": HEAD,
+          "autonomous_next_action": "request_authority" if kind == "authority" else None,
+          "blockers": ["authority_hold"] if kind == "authority" else ["v6_review_in_progress"]}
+        m.time = types.SimpleNamespace(monotonic=lambda: 0, sleep=lambda *args: self.fail("terminal state sleep"))
+        ok, review, blockers = m.wait_for_updated_head_gates(pr)
+        self.assertFalse(ok)
+        self.assertTrue(blockers)
+
   def test_trusted_login_alone_cannot_trigger(self):
     m = load_consumer()
     m.MERGLBOT_REVIEW_TRIGGER_TRUSTED = True
@@ -240,7 +333,7 @@ class ReviewCadenceIntegration(unittest.TestCase):
       delays.append(n)
       clock[0] += n
     m.time = types.SimpleNamespace(time=lambda: clock[0], sleep=wait)
-    m.verify_merglbot = lambda *args: calls.append(clock[0]) or {"ok": False, "head_sha": HEAD, "blockers": []}
+    m.verify_merglbot = lambda *args: calls.append(clock[0]) or {"ok": False, "head_sha": HEAD, "blockers": ["v6_review_in_progress"]}
     m.trigger_merglbot_review = lambda *args, **kw: {"method": "fixture"}
     result = m.wait_for_merglbot("fixture/example", 7, "fixture", HEAD, apply=True)
     self.assertIn("merglbot_review_poll_timeout", result["blockers"])
@@ -268,7 +361,7 @@ class ReviewCadenceIntegration(unittest.TestCase):
     calls = []
     def verify(*args):
       calls.append(clock[0])
-      return {"ok": len(calls) == 2, "head_sha": HEAD, "blockers": []}
+      return {"ok": len(calls) == 2, "head_sha": HEAD, "blockers": [] if len(calls) == 2 else ["v6_review_in_progress"]}
     m.verify_merglbot = verify
     m.trigger_merglbot_review = lambda *args, **kw: {"method": "fixture"}
     result = m.wait_for_merglbot("fixture/example", 7, "fixture", HEAD, apply=True)

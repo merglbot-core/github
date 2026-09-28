@@ -1530,10 +1530,15 @@ def required_checks(repo: str, number: int) -> tuple[bool, list[dict[str, Any]],
         ],
         check=False,
     )
-    if proc.returncode != 0:
-        reason = proc.stderr.strip() or "required_checks_lookup_failed"
+    if proc.returncode not in {0, 8}:
+        reason = "required_checks_lookup_failed"
         return False, [], [reason], [{"category": "lookup_failed", "reason": reason}]
-    checks = json.loads(proc.stdout or "[]")
+    try:
+        checks = json.loads(proc.stdout or "[]")
+    except json.JSONDecodeError:
+        return False, [], ["required_checks_non_json"], [{"category": "lookup_failed", "reason": "required_checks_non_json"}]
+    if not isinstance(checks, list) or (proc.returncode == 8 and not checks):
+        return False, [], ["required_checks_invalid_pending_payload"], []
     diagnostics = [classify_required_check_blocker(check) for check in checks if check.get("bucket") != "pass"]
     blockers = [str(item["reason"]) for item in diagnostics]
     return len(blockers) == 0, checks, blockers, diagnostics
@@ -1798,19 +1803,13 @@ def wait_for_merglbot(repo: str, number: int, head_ref: str, head_sha: str, *, a
         return first
     if not apply:
         return first
-    try:
-        dispatch = trigger_merglbot_review(repo, number, head_ref, head_sha, review_status=review_status)
-    except GhError as exc:
-        blocker = classify_merglbot_trigger_error(str(exc))
-        return {
-            "ok": False,
-            "blockers": [blocker],
-            "dispatch": {
-                "method": "comment_trigger",
-                "ref": head_ref,
-                "head_sha": head_sha,
-            },
-        }
+    dispatch = None
+    if "v6_review_in_progress" not in first.get("blockers", []):
+        try:
+            dispatch = trigger_merglbot_review(repo, number, head_ref, head_sha, review_status=review_status)
+        except GhError as exc:
+            first.setdefault("blockers", []).append(classify_merglbot_trigger_error(str(exc)))
+            return first
     deadline = time.time() + MERGLBOT_REVIEW_WAIT_SECONDS
     latest = first
     while time.time() + MERGLBOT_REVIEW_POLL_SECONDS <= deadline:
@@ -2018,7 +2017,60 @@ def validate_file_scope_for_current_head(
     return True, after_scope
 
 
-def process_pr(
+def wait_for_updated_head_gates(pr: PullRequest) -> tuple[bool, dict[str, Any], list[str]]:
+    """Observe auto-fired updated-head gates without dispatching another review."""
+    deadline = time.monotonic() + MERGLBOT_REVIEW_WAIT_SECONDS
+    while True:
+        fresh = refresh_pr(pr.repo, pr.number)
+        if fresh.head_sha != pr.head_sha:
+            return False, {}, ["updated_head_changed_during_gate_wait"]
+        checks_ok, checks, blockers, _ = required_checks(pr.repo, pr.number)
+        review = verify_merglbot(pr.repo, pr.number)
+        if merglbot_pr_head_changed(review, pr.head_sha):
+            return False, review, ["updated_head_changed_during_gate_wait"]
+        if review.get("transport_error") or is_current_head_merglbot_terminal_blocker(review, pr.head_sha):
+            return False, review, list(review.get("blockers", []))
+        if checks_ok and review.get("ok"):
+            return True, review, []
+        pending_review_blockers = {"missing_merglbot_review_receipt", "v6_review_in_progress", "missing_v6_receipt"}
+        if not review.get("ok") and any(b not in pending_review_blockers for b in review.get("blockers", [])):
+            return False, review, list(review.get("blockers", []))
+        # Failures, unknown states and skipped checks are not pending jobs.
+        if not checks_ok and (not checks or any(c.get("bucket") not in {"pass", "pending", "expected", "waiting"} for c in checks)):
+            return False, review, blockers or ["updated_head_checks_not_pending"]
+        if time.monotonic() + MERGLBOT_REVIEW_POLL_SECONDS > deadline:
+            return False, review, ["updated_head_gate_diagnosis_deadline"]
+        time.sleep(MERGLBOT_REVIEW_POLL_SECONDS)
+
+
+def process_pr(pr: PullRequest, **kwargs: Any) -> ItemReceipt:
+    """Rebind changed heads iteratively; the legacy counter never caps review.
+
+    A bounded job budget and unchanged-state stop preserve continuity without
+    recursive stack growth or replaying the same head indefinitely.
+    """
+    deadline = time.monotonic() + 1800
+    seen = {pr.head_sha}
+    iterations = 0
+    while True:
+        receipt = _process_pr_once(pr, **kwargs)
+        iterations += 1
+        receipt.review_iterations = iterations
+        if receipt.terminal_close_loop_verdict != "REVIEW_REBIND_REQUIRED":
+            return receipt
+        fresh = refresh_pr(pr.repo, pr.number)
+        if fresh.head_sha in seen or time.monotonic() >= deadline:
+            receipt.head_sha = fresh.head_sha
+            receipt.classification = "REVIEW_REBIND_CONTINUATION_REQUIRED"
+            receipt.terminal_close_loop_verdict = "UNCHANGED_HEAD_OR_JOB_DIAGNOSIS_DEADLINE"
+            receipt.blockers.append("review_rebind_state_or_budget_stop")
+            receipt.evidence.append("Continue from fresh head after diagnosis; no merge or iteration-cap approval")
+            return receipt
+        seen.add(fresh.head_sha)
+        pr = fresh
+
+
+def _process_pr_once(
     pr: PullRequest,
     *,
     mode: str,
@@ -2086,23 +2138,9 @@ def process_pr(
             "Merglbot blocked only by docs authority for VALIDATED_WORKFLOW_REF_ONLY; closeout validator authority permits continuation"
         )
     elif not merglbot.get("ok"):
-        if apply and merglbot.get("head_changed_during_review_wait") and max_review_iterations > 1:
-            retry_pr = refresh_pr(pr.repo, pr.number)
-            retry_receipt = process_pr(
-                retry_pr,
-                mode=mode,
-                output_dir=output_dir,
-                allow_policy_alignment=allow_policy_alignment,
-                workflow_url=workflow_url,
-                validator_profile=validator_profile,
-                sibling_prs=sibling_prs,
-                autonomous_fix_loop=autonomous_fix_loop,
-                max_fix_iterations=max_fix_iterations,
-                max_review_iterations=max_review_iterations - 1,
-            )
-            retry_receipt.review_iterations = max(retry_receipt.review_iterations, receipt.review_iterations + 1)
-            retry_receipt.evidence.insert(0, f"retried_after_merglbot_head_change:{pr.head_sha}->{retry_pr.head_sha}")
-            return retry_receipt
+        if apply and merglbot.get("head_changed_during_review_wait"):
+            receipt.terminal_close_loop_verdict = "REVIEW_REBIND_REQUIRED"
+            return receipt
         if not apply:
             if is_current_head_merglbot_terminal_blocker(merglbot, refreshed.head_sha):
                 receipt.merglbot_findings_ledger.extend(merglbot_findings_ledger(merglbot, refreshed.head_sha))
@@ -2120,10 +2158,9 @@ def process_pr(
                 receipt.evidence.append("Merglbot current-head review is terminal and not approved for closeout")
                 receipt.blockers.extend([f"merglbot:{blocker}" for blocker in merglbot.get("blockers", [])])
                 return receipt
-            receipt.action = "would_dispatch_review"
-            receipt.classification = "WOULD_DISPATCH_MERGLBOT_REVIEW"
-            receipt.would_dispatch_merglbot_review = True
-            receipt.evidence.append("Merglbot receipt is missing or stale; apply would dispatch a head-bound workflow review and revalidate")
+            receipt.classification = "REVIEW_STATUS_REQUIRED"
+            receipt.would_dispatch_merglbot_review = False
+            receipt.evidence.append("No current-head receipt: verify purpose-built status and trusted trigger eligibility; no running review or permitted trigger inferred")
             return receipt
         verdict = str(merglbot.get("verdict") or "").lower()
         if verdict in {"changes_required", "blocked", "needs_work"} or "review_not_approved_for_closeout" in [str(item) for item in merglbot.get("blockers", [])]:
@@ -2143,22 +2180,9 @@ def process_pr(
 
     refreshed = refresh_pr(pr.repo, pr.number)
     if reject_if_head_changed(receipt, refreshed, "head_changed_after_review"):
-        if apply and max_review_iterations > 1:
-            retry_receipt = process_pr(
-                refreshed,
-                mode=mode,
-                output_dir=output_dir,
-                allow_policy_alignment=allow_policy_alignment,
-                workflow_url=workflow_url,
-                validator_profile=validator_profile,
-                sibling_prs=sibling_prs,
-                autonomous_fix_loop=autonomous_fix_loop,
-                max_fix_iterations=max_fix_iterations,
-                max_review_iterations=max_review_iterations - 1,
-            )
-            retry_receipt.review_iterations = max(retry_receipt.review_iterations, receipt.review_iterations + 1)
-            retry_receipt.evidence.insert(0, f"retried_after_head_changed_after_review:{pr.head_sha}->{refreshed.head_sha}")
-            return retry_receipt
+        if apply:
+            receipt.terminal_close_loop_verdict = "REVIEW_REBIND_REQUIRED"
+            return receipt
         return receipt
 
     if refreshed.merge_state == "BEHIND":
@@ -2208,6 +2232,12 @@ def process_pr(
             receipt.classification = "BLOCKED_UPDATE_BRANCH"
             receipt.blockers.append("update_branch:still_behind_after_update")
             return receipt
+        updated_ok, updated_review, updated_blockers = wait_for_updated_head_gates(refreshed)
+        receipt.merglbot_receipt = updated_review
+        if not updated_ok:
+            receipt.classification = "BLOCKED_UPDATED_HEAD_GATES"
+            receipt.blockers.extend(updated_blockers)
+            return receipt
 
     if refreshed.merge_state == MERGE_REVIEW_GATE_STATE and allow_policy_alignment:
         alignment = align_review_gate(pr.repo, output_dir, apply=apply)
@@ -2218,22 +2248,9 @@ def process_pr(
             return receipt
         refreshed = refresh_pr(pr.repo, pr.number)
         if reject_if_head_changed(receipt, refreshed, "head_changed_after_policy_alignment"):
-            if apply and max_review_iterations > 1:
-                retry_receipt = process_pr(
-                    refreshed,
-                    mode=mode,
-                    output_dir=output_dir,
-                    allow_policy_alignment=allow_policy_alignment,
-                    workflow_url=workflow_url,
-                    validator_profile=validator_profile,
-                    sibling_prs=sibling_prs,
-                    autonomous_fix_loop=autonomous_fix_loop,
-                    max_fix_iterations=max_fix_iterations,
-                    max_review_iterations=max_review_iterations - 1,
-                )
-                retry_receipt.review_iterations = max(retry_receipt.review_iterations, receipt.review_iterations + 1)
-                retry_receipt.evidence.insert(0, f"retried_after_head_changed_after_policy_alignment:{pr.head_sha}->{refreshed.head_sha}")
-                return retry_receipt
+            if apply:
+                receipt.terminal_close_loop_verdict = "REVIEW_REBIND_REQUIRED"
+                return receipt
             return receipt
     elif refreshed.merge_state == MERGE_REVIEW_GATE_STATE:
         receipt.classification = "BLOCKED_MERGE_STATE"
@@ -2272,6 +2289,7 @@ def process_pr(
         pin_classes = {"LOCKFILE_ONLY", "VALIDATED_MANIFEST_DEP_ONLY", "VALIDATED_WORKFLOW_REF_ONLY"}
         classes = set((receipt.validated_scope_class or "").split("+"))
         if not docs_scope_ok or docs_pr.head_sha != refreshed.head_sha or not classes.issubset(pin_classes):
+            receipt.action = "blocked"
             receipt.classification = "BLOCKED_FINAL_DOCS_OBLIGATION"
             receipt.blockers.append("docs_obligation_final_scope_unproven")
             return receipt
