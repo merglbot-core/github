@@ -1,0 +1,15 @@
+# Dependabot V6 consumer migration proposal
+
+Status: proposed source change only. No running worker, gate, workflow, branch protection or credential configuration is changed by preparing this branch. Activation requires the separately authorized review-machinery decision; this proposal must not be autonomously merged as ordinary application code.
+
+The current closeout helper defaults to the historical receipt verifier, permits a local docs-authority exception and reads required checks before waiting for review. The proposed consumer selects the canonical V6 surface, keeps technical review distinct from merge authority, removes the local exception, and replays required checks and content-validated dependency-pin docs scope on the final head.
+
+A BEHIND branch is updated only after review approval and green checks, and only when freshly read strict protection requires it. Review/update polling is bounded to five to ten minutes; transport errors and authority holds are terminal. Trusted comment credentials alone do not permit retriggering: fresh repo/PR/head-bound purpose-built status must allow it.
+
+The current weekly caller does not supply that status. Its normal open/synchronize and keeper producers remain the review sources; explicit manual retriggers fail closed until a legitimate status consumer is wired. This proposal does not claim that a new continuation is running. Provider-recovery exceptions and retry-counter behavior still need their own canonical integration evidence.
+
+Dependency landing order: substantive current-head V6 and required checks first; separate activation authorization second; protected merge and natural-run runtime acceptance only afterward. No admin bypass or retrospective approval is implied. The workflow source was not changed. The observed same-repository local caller binds checkout correctly; frozen inventory does not prove global current caller coverage.
+
+Validation: offline consumer integration exercises clean merges, stale heads/checks, docs replay, authority holds, sync ordering, cadence and retrigger eligibility. The canonical verifier and existing consumer self-tests are also required. Repository suite results and exact source hashes are retained in the audit evidence; passing tests alone do not prove rollout or runtime acceptance.
+
+Canonical references: [PR policy](https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md), [V6](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_PR_ASSISTANT_V6.md), [docs obligations](https://github.com/merglbot-public/docs/blob/main/DOCUMENTATION_OBLIGATION_METHODOLOGY.md), [honest wait](https://github.com/merglbot-public/docs/blob/main/claude-code/rules/honest-wait.md).

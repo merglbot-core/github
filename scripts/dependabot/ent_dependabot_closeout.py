@@ -35,10 +35,10 @@ MERGLBOT_REVIEW_TRIGGER_COMMENT = os.environ.get("ENT_DEPENDABOT_REVIEW_TRIGGER_
 MERGLBOT_REVIEW_TRIGGER_TRUSTED = os.environ.get("ENT_DEPENDABOT_REVIEW_TRIGGER_TRUSTED", "false").strip().lower() in {"1", "true", "yes"}
 OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 REPOSITORY_RE = re.compile(r"\[`([^`]+/[^`]+)`\]\(https://github.com/[^)]+\).*\|\s*Active\s*\|")
-MERGLBOT_REVIEW_WAIT_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REVIEW_WAIT_SECONDS", "1500"))
-MERGLBOT_REVIEW_POLL_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REVIEW_POLL_SECONDS", "60"))
+MERGLBOT_REVIEW_WAIT_SECONDS = min(1800, max(0, int(os.environ.get("ENT_DEPENDABOT_REVIEW_WAIT_SECONDS", "1500"))))
+MERGLBOT_REVIEW_POLL_SECONDS = min(600, max(300, int(os.environ.get("ENT_DEPENDABOT_REVIEW_POLL_SECONDS", "300"))))
 REBASE_WAIT_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REBASE_WAIT_SECONDS", "600"))
-REBASE_POLL_SECONDS = int(os.environ.get("ENT_DEPENDABOT_REBASE_POLL_SECONDS", "60"))
+REBASE_POLL_SECONDS = min(600, max(300, int(os.environ.get("ENT_DEPENDABOT_REBASE_POLL_SECONDS", "300"))))
 OPEN_ITEM_LIST_LIMIT = 1000
 TRACKING_COMMENT_MAX_CHARS = 60000
 TRACKING_RECEIPT_ITEM_LIMIT = 10
@@ -1624,13 +1624,17 @@ def named_review_bot_status(repo: str, number: int) -> tuple[bool, str]:
 
 def verify_merglbot(repo: str, number: int) -> dict[str, Any]:
     script = Path(__file__).resolve().parents[1] / "pr-assistant" / "verify-review-receipt.py"
-    proc = run_cmd(["python3", str(script), "--repo", repo, "--pr", str(number)], check=False)
+    proc = run_cmd(["python3", str(script), "--repo", repo, "--pr", str(number), "--surface", "v6"], check=False)
     try:
         payload = json.loads(proc.stdout or "{}")
     except json.JSONDecodeError:
-        payload = {"ok": False, "blockers": ["verify_review_receipt_non_json"], "stderr": proc.stderr}
+        payload = {"ok": False, "blockers": ["verify_review_receipt_non_json"], "transport_error": True}
+    if payload.get("ok") and payload.get("autonomous_next_action") != "safe_to_merge":
+        payload["ok"] = False
+        payload.setdefault("blockers", []).append("merglbot_merge_authority_not_accepted")
     if proc.returncode != 0 and not payload.get("blockers"):
-        payload["blockers"] = [proc.stderr.strip() or "verify_review_receipt_failed"]
+        payload["blockers"] = ["verify_review_receipt_failed"]
+        payload["transport_error"] = True
     return payload
 
 
@@ -1660,6 +1664,8 @@ def is_current_head_merglbot_terminal_blocker(payload: dict[str, Any], head_sha:
         for blocker in (blockers if isinstance(blockers, list) else [])
         if str(blocker) in TERMINAL_MERGLBOT_REVIEW_BLOCKERS
     ]
+    if payload.get("autonomous_next_action") == "request_authority" or "merglbot_merge_authority_not_accepted" in (blockers or []):
+        return True
     if verdict in {"approved_for_closeout", "approved"} and status == "success":
         return False
     return bool(terminal_blockers) or verdict in {"changes_required", "blocked", "needs_work"} or status in {"blocked", "failed"}
@@ -1671,21 +1677,8 @@ def merglbot_pr_head_changed(payload: dict[str, Any], expected_head_sha: str) ->
 
 
 def workflow_ref_docs_authority_override_allowed(receipt: ItemReceipt, payload: dict[str, Any], head_sha: str) -> bool:
-    if receipt.validated_scope_class != "VALIDATED_WORKFLOW_REF_ONLY":
-        return False
-    review_head = str(payload.get("review_head_sha") or payload.get("head_sha") or "")
-    if review_head != head_sha or payload.get("current_head_match") is False:
-        return False
-    if str(payload.get("verdict") or "").strip().lower() != "blocked_missing_authority":
-        return False
-    if str(payload.get("status") or "").strip().lower() != "blocked":
-        return False
-    docs_state = str(payload.get("documentation_obligation_state") or "").strip().lower()
-    if docs_state not in {"missing", "unknown"}:
-        return False
-    blockers = {str(item) for item in payload.get("blockers", []) if str(item)}
-    allowed_blockers = {"review_not_approved_for_closeout", "review_docs_state_blocks_closeout"}
-    return "review_docs_state_blocks_closeout" in blockers and blockers.issubset(allowed_blockers)
+    # A local scope validator cannot override the canonical V6 authority verdict.
+    return False
 
 
 def merglbot_findings_ledger(payload: dict[str, Any], head_sha: str) -> list[dict[str, Any]]:
@@ -1749,7 +1742,7 @@ def classify_merglbot_trigger_error(message: str) -> str:
     return f"merglbot_review_comment_failed:{message}"
 
 
-def trigger_merglbot_review(repo: str, number: int, head_ref: str, head_sha: str) -> dict[str, Any]:
+def trigger_merglbot_review(repo: str, number: int, head_ref: str, head_sha: str, *, review_status: dict[str, Any] | None = None) -> dict[str, Any]:
     # v6 migrated PR review from the v3 `workflow_dispatch` workflow to the local worker fleet,
     # which is triggered by a `@merglbot review` comment (and auto-fires on PR open/sync). The old
     # dispatch path raised merglbot_review_workflow_missing in every enrolled repo (the v3 workflow
@@ -1771,6 +1764,15 @@ def trigger_merglbot_review(repo: str, number: int, head_ref: str, head_sha: str
     # merges on an approved current-head receipt.
     if not MERGLBOT_REVIEW_TRIGGER_TRUSTED:
         raise GhError("review_trigger_unavailable_app_author")
+    # Credential trust is separate from current-head retrigger eligibility.
+    # The caller must supply fresh purpose-built status; absence never permits
+    # a speculative trigger. Open/synchronize producers remain authoritative.
+    status = review_status or {}
+    if (status.get("ok") is not True or status.get("repo") != repo
+            or status.get("pr") != number or status.get("head") != head_sha
+            or status.get("should_retrigger") is not True
+            or status.get("v6_in_progress") is not False):
+        raise GhError("review_trigger_current_status_required")
     comment_url = post_comment_with_stdin(repo, number, MERGLBOT_REVIEW_TRIGGER_COMMENT)
     return {
         "method": "comment_trigger",
@@ -1781,8 +1783,10 @@ def trigger_merglbot_review(repo: str, number: int, head_ref: str, head_sha: str
     }
 
 
-def wait_for_merglbot(repo: str, number: int, head_ref: str, head_sha: str, *, apply: bool) -> dict[str, Any]:
+def wait_for_merglbot(repo: str, number: int, head_ref: str, head_sha: str, *, apply: bool, review_status: dict[str, Any] | None = None) -> dict[str, Any]:
     first = verify_merglbot(repo, number)
+    if first.get("transport_error"):
+        return first
     if merglbot_pr_head_changed(first, head_sha):
         first.setdefault("blockers", []).append("merglbot_pr_head_changed_before_review_dispatch")
         first["expected_head_sha"] = head_sha
@@ -1795,7 +1799,7 @@ def wait_for_merglbot(repo: str, number: int, head_ref: str, head_sha: str, *, a
     if not apply:
         return first
     try:
-        dispatch = trigger_merglbot_review(repo, number, head_ref, head_sha)
+        dispatch = trigger_merglbot_review(repo, number, head_ref, head_sha, review_status=review_status)
     except GhError as exc:
         blocker = classify_merglbot_trigger_error(str(exc))
         return {
@@ -1809,10 +1813,12 @@ def wait_for_merglbot(repo: str, number: int, head_ref: str, head_sha: str, *, a
         }
     deadline = time.time() + MERGLBOT_REVIEW_WAIT_SECONDS
     latest = first
-    while time.time() <= deadline:
-        time.sleep(min(MERGLBOT_REVIEW_POLL_SECONDS, max(0, deadline - time.time())))
+    while time.time() + MERGLBOT_REVIEW_POLL_SECONDS <= deadline:
+        time.sleep(MERGLBOT_REVIEW_POLL_SECONDS)
         latest = verify_merglbot(repo, number)
         latest["dispatch"] = dispatch
+        if latest.get("transport_error"):
+            return latest
         if merglbot_pr_head_changed(latest, head_sha):
             latest.setdefault("blockers", []).append("merglbot_pr_head_changed_during_review_wait")
             latest["expected_head_sha"] = head_sha
@@ -1862,8 +1868,8 @@ def request_update_branch(repo: str, number: int, expected_head_sha: str, *, app
         }
     deadline = time.time() + REBASE_WAIT_SECONDS
     latest = refresh_pr(repo, number)
-    while time.time() <= deadline:
-        time.sleep(min(REBASE_POLL_SECONDS, max(0, deadline - time.time())))
+    while time.time() + REBASE_POLL_SECONDS <= deadline:
+        time.sleep(REBASE_POLL_SECONDS)
         latest = refresh_pr(repo, number)
         current = latest.head_sha
         if current != expected_head_sha or latest.merge_state != "BEHIND":
@@ -2046,44 +2052,6 @@ def process_pr(
     if not scope_ok:
         return receipt
 
-    if refreshed.merge_state == "BEHIND":
-        if not apply:
-            receipt.action = "would_update_branch"
-            receipt.classification = "WOULD_UPDATE_BRANCH_THEN_REVALIDATE"
-            receipt.would_update_branch = True
-            receipt.update_branch = request_update_branch(pr.repo, pr.number, refreshed.head_sha, apply=False)
-            receipt.evidence.append("PR is behind base; apply would call update-branch API with expected_head_sha and revalidate")
-            return receipt
-        receipt.evidence.append("PR was behind base after scope validation; requested update-branch API")
-        update_branch = request_update_branch(pr.repo, pr.number, refreshed.head_sha, apply=apply)
-        receipt.update_branch = update_branch
-        if not update_branch.get("ok"):
-            receipt.classification = "BLOCKED_UPDATE_BRANCH"
-            receipt.blockers.extend([f"update_branch:{blocker}" for blocker in update_branch.get("blockers", [])])
-            return receipt
-        refreshed = refresh_pr(pr.repo, pr.number)
-        scope_ok, refreshed = validate_file_scope_for_current_head(
-            refreshed,
-            receipt,
-            validator_profile=validator_profile,
-            sibling_prs=sibling_prs,
-        )
-        if receipt.action == "would_close":
-            if apply:
-                receipt.action = "closed"
-                receipt.comment_url = close_pr(
-                    pr.repo,
-                    pr.number,
-                    close_comment(refreshed, receipt.classification, receipt.evidence, workflow_url, receipt.close_reopen_condition),
-                )
-            return receipt
-        if not scope_ok:
-            return receipt
-        if refreshed.merge_state == "BEHIND":
-            receipt.classification = "BLOCKED_UPDATE_BRANCH"
-            receipt.blockers.append("update_branch:still_behind_after_update")
-            return receipt
-
     checks_ok, checks, check_blockers, check_diagnostics = required_checks(pr.repo, pr.number)
     receipt.required_check_diagnostics.extend(check_diagnostics)
     if not checks_ok:
@@ -2193,6 +2161,54 @@ def process_pr(
             return retry_receipt
         return receipt
 
+    if refreshed.merge_state == "BEHIND":
+        protection = branch_protection(pr.repo, refreshed.base_ref)
+        strict = ((protection or {}).get("required_status_checks") or {}).get("strict")
+        if not isinstance(strict, bool):
+            receipt.classification = "BLOCKED_UPDATE_BRANCH"
+            receipt.blockers.append("update_branch:effective_strict_contract_unknown")
+            return receipt
+    else:
+        strict = False
+
+    if refreshed.merge_state == "BEHIND" and strict:
+        if not apply:
+            receipt.action = "would_update_branch"
+            receipt.classification = "WOULD_UPDATE_BRANCH_THEN_REVALIDATE"
+            receipt.would_update_branch = True
+            receipt.update_branch = request_update_branch(pr.repo, pr.number, refreshed.head_sha, apply=False)
+            receipt.evidence.append("Approved PR is behind strict base; apply would update-branch with expected_head_sha and revalidate")
+            return receipt
+        receipt.evidence.append("Approved PR is behind strict base; requested update-branch API")
+        update_branch = request_update_branch(pr.repo, pr.number, refreshed.head_sha, apply=apply)
+        receipt.update_branch = update_branch
+        if not update_branch.get("ok"):
+            receipt.classification = "BLOCKED_UPDATE_BRANCH"
+            receipt.blockers.extend([f"update_branch:{blocker}" for blocker in update_branch.get("blockers", [])])
+            return receipt
+        refreshed = refresh_pr(pr.repo, pr.number)
+        scope_ok, refreshed = validate_file_scope_for_current_head(
+            refreshed,
+            receipt,
+            validator_profile=validator_profile,
+            sibling_prs=sibling_prs,
+        )
+        if receipt.action == "would_close":
+            if apply:
+                receipt.action = "closed"
+                receipt.comment_url = close_pr(
+                    pr.repo,
+                    pr.number,
+                    close_comment(refreshed, receipt.classification, receipt.evidence, workflow_url, receipt.close_reopen_condition),
+                )
+            return receipt
+        if not scope_ok:
+            return receipt
+        if refreshed.merge_state == "BEHIND":
+            receipt.classification = "BLOCKED_UPDATE_BRANCH"
+            receipt.blockers.append("update_branch:still_behind_after_update")
+            return receipt
+
     if refreshed.merge_state == MERGE_REVIEW_GATE_STATE and allow_policy_alignment:
         alignment = align_review_gate(pr.repo, output_dir, apply=apply)
         receipt.evidence.append(f"policy_alignment={alignment.get('ok')}")
@@ -2224,10 +2240,42 @@ def process_pr(
         receipt.blockers.append("review_required_policy_alignment_disabled")
         return receipt
 
-    if refreshed.merge_state not in MERGE_READY_STATES:
+    if refreshed.merge_state not in MERGE_READY_STATES and not (refreshed.merge_state == "BEHIND" and strict is False):
         receipt.classification = "BLOCKED_MERGE_STATE"
         receipt.blockers.append(f"merge_state:{refreshed.merge_state}")
         return receipt
+
+    # An earlier check result can expire while review is pending. Re-read the
+    # current gates before either claiming eligibility or attempting a merge.
+    final_checks_ok, _, final_check_blockers, final_check_diagnostics = required_checks(pr.repo, pr.number)
+    receipt.required_check_diagnostics.extend(final_check_diagnostics)
+    if not final_checks_ok:
+        receipt.classification = "BLOCKED_FINAL_REQUIRED_CHECKS"
+        receipt.blockers.extend([f"required_check:{blocker}" for blocker in final_check_blockers])
+        return receipt
+    final_merglbot = verify_merglbot(pr.repo, pr.number)
+    receipt.merglbot_receipt = final_merglbot
+    if merglbot_pr_head_changed(final_merglbot, refreshed.head_sha) or not final_merglbot.get("ok"):
+        receipt.classification = "BLOCKED_FINAL_MERGLBOT"
+        receipt.blockers.extend([f"merglbot:{blocker}" for blocker in final_merglbot.get("blockers", [])])
+        if merglbot_pr_head_changed(final_merglbot, refreshed.head_sha):
+            receipt.blockers.append("head_changed_at_final_merglbot")
+        return receipt
+
+    if final_merglbot.get("docs_obligation_requires_external_evidence"):
+        # V6 check-run receipts intentionally omit the docs-state marker.
+        # Replay the existing content-aware pin-only classifier on this head;
+        # never infer no docs impact merely from technical approval.
+        docs_scope_ok, docs_pr = validate_file_scope_for_current_head(
+            refreshed, receipt, validator_profile=validator_profile, sibling_prs=sibling_prs,
+        )
+        pin_classes = {"LOCKFILE_ONLY", "VALIDATED_MANIFEST_DEP_ONLY", "VALIDATED_WORKFLOW_REF_ONLY"}
+        classes = set((receipt.validated_scope_class or "").split("+"))
+        if not docs_scope_ok or docs_pr.head_sha != refreshed.head_sha or not classes.issubset(pin_classes):
+            receipt.classification = "BLOCKED_FINAL_DOCS_OBLIGATION"
+            receipt.blockers.append("docs_obligation_final_scope_unproven")
+            return receipt
+        receipt.evidence.append("docs_obligation=no-doc-impact:current-head-content-validated-dependency-pins")
 
     if not apply:
         receipt.action = "would_merge"
@@ -3001,7 +3049,7 @@ The following **2 organizations** are in ENT scope.
             "blockers": ["review_not_approved_for_closeout", "review_docs_state_blocks_closeout"],
         },
         "a" * 40,
-    ) is True
+    ) is False
     assert workflow_ref_docs_authority_override_allowed(
         workflow_receipt,
         {
@@ -3345,7 +3393,9 @@ The following **2 organizations** are in ENT scope.
         assert stub_calls == []
         # trusted credential configured: the canonical comment is posted and reported
         MERGLBOT_REVIEW_TRIGGER_TRUSTED = True
-        dispatch = trigger_merglbot_review("o/r", 7, "dependabot/x", "a" * 40)
+        dispatch = trigger_merglbot_review("o/r", 7, "dependabot/x", "a" * 40,
+            review_status={"ok": True, "repo": "o/r", "pr": 7, "head": "a" * 40,
+                           "should_retrigger": True, "v6_in_progress": False})
     finally:
         post_comment_with_stdin = previous_post_comment
         MERGLBOT_REVIEW_TRIGGER_TRUSTED = previous_trigger_trusted
