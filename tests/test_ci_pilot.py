@@ -42,6 +42,12 @@ class Fake:
                         "eligible": True, "assessment": "Full diff reviewed: ordinary application fix; no excluded changes.",
                         "protection_sha256": c.digest(json.dumps({"protection": self.snap["protection"], "rules": []}, sort_keys=True))}
 
+    def pages(self, path, key=None, size=100):
+        if path.endswith('/actions/variables') and key == 'variables':
+            repo = path[len('repos/'):].split('/actions/')[0]
+            return [{'name': k, 'value': v} for k, v in self.values[repo].items()]
+        raise AssertionError('unexpected fake API surface')
+
     def selectors(self, repo):
         return self.values[repo].copy()
 
@@ -94,7 +100,7 @@ class PilotTests(unittest.TestCase):
         self.assertEqual(self.activate()["action"], "observe")
         self.assertEqual([w[1] for w in self.gh.writes], [c.BASE_VAR, c.SHA_VAR, c.PR_VAR])
         self.assertEqual(self.gh.values[repo][c.BASE_VAR], self.gh.receipt["base"])
-        self.assertEqual(c.tick(self.gh, self.state, NOW, True)["action"], "observe")
+        self.assertEqual(c.tick(self.gh, self.state, NOW, True, clock=lambda: NOW)["action"], "observe")
         self.gh.snap["pr"]["base"]["sha"] = "d" * 40
         self.assert_clean(c.tick(self.gh, self.state, NOW, True))
         self.assertEqual([w[1] for w in self.gh.writes[-3:]], [c.PR_VAR, c.SHA_VAR, c.BASE_VAR])
@@ -114,7 +120,7 @@ class PilotTests(unittest.TestCase):
         self.assertEqual(self.activate()["action"], "observe")
         self.assertEqual([w[1] for w in self.gh.writes], [c.SHA_VAR, c.PR_VAR])
         recovered = json.loads(json.dumps(self.state))
-        self.assertEqual(c.tick(self.gh, recovered, NOW, True)["action"], "observe")
+        self.assertEqual(c.tick(self.gh, recovered, NOW, True, clock=lambda: NOW)["action"], "observe")
         self.assertEqual(recovered["counted_prs"], [])
 
     def test_head_base_closed_merge_hold_and_paths_cleanup(self):

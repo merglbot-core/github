@@ -56,6 +56,149 @@ class ExperimentTests(unittest.TestCase):
         return a.experiment_tick(self.gh, self.state, now, True, receipt,
                                  clock=lambda: now, supervisor_ready=kw.pop("supervisor_ready", lambda: True), **kw)
 
+    def test_compatibility_case_cannot_be_synthetic_or_baseline(self):
+        for kind, mode in (("synthetic", "delay"), ("natural", "baseline")):
+            result = self.tick({**self.spec, "pr": a.COMPATIBILITY_PR,
+                                "kind": kind, "mode": mode})
+            self.assertEqual("compatibility_requires_natural_delay", result["reason"])
+            self.assertFalse(any(value is not None for _, _, value in self.gh.writes))
+        result = self.tick({**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"})
+        self.assertEqual("active", result["status"])
+
+    def test_natural_no_event_times_out_at_24h_and_cannot_reactivate(self):
+        import runtime
+        spec = {**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"}
+        self.tick(spec)
+        self.assertEqual("active", self.tick(now=NOW + dt.timedelta(hours=24, seconds=-1))["status"])
+        result = self.tick(now=NOW + dt.timedelta(hours=24))
+        self.assertEqual("compatibility_no_event_24h", result["reason"])
+        self.assertFalse(any(self.gh.values.values()))
+        self.assertTrue(runtime.schedule(result, NOW)["stopped"])
+        self.assertIsNone(self.state["experiment"]["active"])
+        self.assertEqual("compatibility_no_event_24h", self.tick(spec)["reason"])
+
+    def test_natural_event_within_window_keeps_selection(self):
+        self.tick({**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"})
+        case = self.state["experiment"]["cases"][0]
+        case["measurements"] = {"head": {"latest": {"observations": [
+            {"attempt": 1, "created_at": (NOW + dt.timedelta(hours=1)).isoformat()}
+        ]}}}
+        self.assertEqual("active", self.tick(now=NOW + dt.timedelta(hours=24))["status"])
+
+    def test_late_event_or_rerun_cannot_rescue_expired_window(self):
+        for offset, attempt in [(24, 1), (-1, 1), (1, 2)]:
+            with self.subTest(offset=offset, attempt=attempt):
+                self.state = {"experiment": {"version": 1, "cases": [], "active": None}}
+                self.gh.values = {repo: {} for repo in c.REPOS}
+                self.tick({**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"})
+                case = self.state["experiment"]["cases"][0]
+                case["measurements"] = {"head": {"latest": {"observations": [
+                    {"attempt": attempt, "created_at": (NOW + dt.timedelta(hours=offset)).isoformat()}
+                ]}}}
+                with patch.object(a.measurements, "observe", return_value={"unfinished_runs": 1, "data_gaps": 0}):
+                    result = self.tick(now=NOW + dt.timedelta(hours=24))
+                self.assertEqual("drain_admitted_runs", result["action"])
+                self.assertFalse(any(self.gh.values.values()))
+
+    def test_timeout_empty_inventory_is_complete_but_read_failure_is_not(self):
+        case = {"branch": "test", "pr": a.COMPATIBILITY_PR,
+                "started_at": NOW.isoformat(), "stopped_at": (NOW + dt.timedelta(hours=24)).isoformat(),
+                "reason": "compatibility_no_event_24h", "initial_base": "b" * 40}
+        result = REAL_OBSERVE(self.gh, case, NOW + dt.timedelta(hours=24))
+        self.assertEqual(0, result["data_gaps"])
+        self.assertEqual(0, result["unfinished_runs"])
+        self.observation.stop()
+        with patch.object(self.gh, "pages", side_effect=RuntimeError("API unavailable")):
+            result = a.measurements.histories(self.gh, {"cases": [case]}, NOW)
+        self.assertEqual(1, result["data_gaps"])
+
+    def test_measurement_read_failure_recovers_and_failure_returns(self):
+        self.observation.stop()
+        spec = {**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"}
+        self.assertEqual("active", self.tick(spec)["status"])
+        with patch.object(self.gh, "pages", side_effect=c.Gap("github_command_failed")):
+            failed = self.tick(now=NOW + dt.timedelta(minutes=1))
+        self.assertEqual("measurement_gap", failed["reason"])
+        self.assertGreater(failed["history"]["data_gaps"], 0)
+        self.assertFalse(any(self.gh.values.values()))
+        recovered = self.tick(now=NOW + dt.timedelta(minutes=2))
+        self.assertEqual("inactive", recovered["status"])
+        self.assertEqual(0, recovered["history"]["data_gaps"])
+        self.assertTrue(self.state["experiment"]["cases"][0]["empty_phase_verified"])
+        self.assertEqual("active", self.tick(spec, now=NOW + dt.timedelta(minutes=3))["status"])
+        with patch.object(self.gh, "pages", side_effect=c.Gap("github_command_failed")):
+            failed_again = self.tick(now=NOW + dt.timedelta(minutes=4))
+        self.assertGreater(failed_again["history"]["data_gaps"], 0)
+        self.assertFalse(any(self.gh.values.values()))
+        self.assertTrue(all("empty_phase_verified" not in case
+                            for case in self.state["experiment"]["cases"]))
+
+    def test_retry_after_read_failure_preserves_first_natural_window(self):
+        spec = {**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"}
+        self.tick(spec)
+        with patch.object(a, "snapshot", side_effect=c.Gap("github_command_failed")):
+            self.tick(now=NOW + dt.timedelta(hours=1))
+        self.assertEqual("active", self.tick(spec, now=NOW + dt.timedelta(hours=2))["status"])
+        self.assertEqual(2, len(self.state["experiment"]["cases"]))
+        result = self.tick(now=NOW + dt.timedelta(hours=24))
+        self.assertEqual("compatibility_no_event_24h", result["reason"])
+        self.assertFalse(any(self.gh.values.values()))
+
+    def test_expired_retry_never_writes_a_selector(self):
+        spec = {**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"}
+        self.tick(spec)
+        with patch.object(a, "snapshot", side_effect=c.Gap("github_command_failed")):
+            self.tick(now=NOW + dt.timedelta(hours=1))
+        self.gh.writes.clear()
+        result = self.tick(spec, now=NOW + dt.timedelta(hours=24))
+        self.assertEqual("compatibility_no_event_24h", result["reason"])
+        self.assertFalse(any(value is not None for _, _, value in self.gh.writes))
+
+    def test_prior_phase_timely_event_is_preserved_on_retry(self):
+        spec = {**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"}
+        self.tick(spec)
+        self.state["experiment"]["cases"][0]["measurements"] = {"head": {"latest": {"observations": [
+            {"attempt": 1, "created_at": (NOW + dt.timedelta(minutes=10)).isoformat()}
+        ]}}}
+        with patch.object(a, "snapshot", side_effect=c.Gap("github_command_failed")):
+            self.tick(now=NOW + dt.timedelta(hours=1))
+        self.assertEqual("active", self.tick(spec, now=NOW + dt.timedelta(hours=24))["status"])
+
+    def test_other_pr_refused_by_real_snapshot_before_any_api(self):
+        self.snapshot.stop()
+        with self.assertRaisesRegex(c.Gap, "unsupported_compatibility_pr"):
+            a.snapshot(self.gh, a.COMPATIBILITY_PR + 1, "a" * 64)
+
+    def test_closed_compatibility_case_drains_then_stops_without_reactivation(self):
+        import runtime
+        spec = {**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"}
+        self.tick(spec)
+        with patch.object(a, "snapshot", side_effect=c.Gap("compatibility_case_closed")):
+            with patch.object(a.measurements, "observe", return_value={"unfinished_runs": 1, "data_gaps": 0}):
+                result = self.tick()
+                self.assertEqual("drain_admitted_runs", result["action"])
+                self.assertFalse(runtime.schedule(result, NOW)["stopped"])
+            result = self.tick()
+            self.assertEqual("cleanup_verified", result["action"])
+            self.assertTrue(runtime.schedule(result, NOW)["stopped"])
+        self.gh.writes.clear()
+        self.assertEqual("compatibility_case_closed", self.tick(spec)["reason"])
+        self.assertFalse(any(value is not None for _, _, value in self.gh.writes))
+
+    def test_scope_expansion_then_contraction_cannot_reselect_case(self):
+        import runtime
+        spec = {**self.spec, "pr": a.COMPATIBILITY_PR, "kind": "natural"}
+        self.tick(spec)
+        with patch.object(a, "snapshot", side_effect=c.Gap("compatibility_scope_expanded")):
+            result = self.tick()
+        self.assertEqual("compatibility_scope_expanded", result["reason"])
+        self.assertFalse(any(self.gh.values.values()))
+        self.assertTrue(runtime.schedule(result, NOW)["stopped"])
+        self.gh.writes.clear()
+        # The ordinary valid snapshot is restored, representing scope contraction.
+        self.assertEqual("compatibility_scope_expanded", self.tick(spec)["reason"])
+        self.assertFalse(any(value is not None for _, _, value in self.gh.writes))
+
     def test_cleanup_keeps_racing_attempt(self):
         self.tick(self.spec)
         arrival, finished = NOW + dt.timedelta(seconds=1), NOW + dt.timedelta(seconds=2)
@@ -74,14 +217,20 @@ class ExperimentTests(unittest.TestCase):
 
     def test_recovery_with_five_old_cases(self):
         import runtime
-        now = dt.datetime.now(dt.timezone.utc)
+        now = NOW
         self.state["counted_prs"] = ["historical#" + str(i) for i in range(5)]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             c.atomic(root / "state.json", self.state)
             c.atomic(root / "runtime.json", {"stopped": True})
+            base_datetime = dt.datetime
+            class FixedDateTime(base_datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return now if tz is not None else now.replace(tzinfo=None)
             def run_controller(path):
-                with patch.object(sys, "argv", ["controller.py", "tick", "--state-dir", str(path), "--apply"]):
+                with patch.object(c.dt, "datetime", FixedDateTime), patch.object(
+                        sys, "argv", ["controller.py", "tick", "--state-dir", str(path), "--apply"]):
                     self.assertEqual(c.main(), 0)
             with patch.object(runtime, "supervisor_unloaded", return_value=True), patch.object(runtime, "GitHub", return_value=self.gh), patch.object(c, "GitHub", return_value=self.gh):
                 runtime.recover_experiment(root, now)
@@ -214,6 +363,52 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual("inactive", self.tick({"begin": True})["status"])
         self.assertEqual(["historical#1", "historical#2"], self.state["counted_prs"])
 
+
+
+class LiveMainSourceTests(unittest.TestCase):
+    def fixture(self, race=False, bad_workflow=False):
+        import base64
+        from test_ci_pilot import Fake
+        gh = Fake()
+        for side in ("head", "base"):
+            gh.snap["pr"][side]["repo"]["full_name"] = a.REPO
+        gh.snap["pr"]["head"]["ref"] = "business-branch"
+        gh.snap["paths"] = ["scripts/measure-job-coverage-live.py"]
+        gh.snap["workflow_sha256"] = c.digest("workflow")
+        gh.snap["protection"]["required_status_checks"]["checks"] = [
+            {"context": "Merglbot PR Assistant v6", "app_id": 3518182},
+            {"context": "Unit tests", "app_id": 15368}]
+        protection = c.digest(json.dumps({"protection": gh.snap["protection"], "rules": []}, sort_keys=True))
+        calls = []
+        def api(path):
+            calls.append(path)
+            if path.endswith("/pulls/2733"):
+                return copy.deepcopy(gh.snap["pr"])
+            if path.endswith("/git/ref/heads/main"):
+                reads = sum(x.endswith("/git/ref/heads/main") for x in calls)
+                return {"object": {"sha": ("e" if race and reads > 1 else "d") * 40}}
+            if "?ref=" + "d" * 40 in path:
+                value = "classifier" if "ci-delay-admission.py" in path else ("changed" if bad_workflow else "workflow")
+                return {"content": base64.b64encode(value.encode()).decode()}
+            raise AssertionError(path)
+        gh.api = api
+        return gh, protection, calls
+
+    def test_lagging_pr_base_keeps_identity_and_checks_live_source(self):
+        gh, protection, calls = self.fixture()
+        with patch.object(a, "WORKFLOW_HASH", c.digest("workflow")), patch.object(a, "CLASSIFIER_HASH", c.digest("classifier")):
+            receipt, _ = a.snapshot(gh, a.COMPATIBILITY_PR, protection)
+        self.assertEqual("b" * 40, receipt["base"])
+        self.assertEqual("d" * 40, receipt["source_base"])
+        self.assertEqual(2, sum(x.endswith("/git/ref/heads/main") for x in calls))
+
+    def test_source_movement_and_changed_live_workflow_refuse(self):
+        for kwargs, reason in (({"race": True}, "main_source_race"),
+                               ({"bad_workflow": True}, "unverified_main_workflow")):
+            gh, protection, _ = self.fixture(**kwargs)
+            with self.subTest(reason=reason), patch.object(a, "WORKFLOW_HASH", c.digest("workflow")), patch.object(a, "CLASSIFIER_HASH", c.digest("classifier")):
+                with self.assertRaisesRegex(c.Gap, reason):
+                    a.snapshot(gh, a.COMPATIBILITY_PR, protection)
 
 
 if __name__ == "__main__":

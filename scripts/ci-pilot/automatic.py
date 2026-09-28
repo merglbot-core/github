@@ -8,28 +8,56 @@ from github_client import AUTO_MODE, AUTO_PR, DEADLINE, REPOS, Gap, digest, inst
 
 REPO = REPOS[1]
 WORKFLOW_HASH = "cae8723a5b7dd9b87b766a174a3630f08d7bb624bc7d6cfd9bb1a186aaba7c4d"
-CLASSIFIER_HASH = "8304e9c9a23bf6b828dd3b07d5f2a390c30b3a7b25b9f8d057772d44a789003a"
-PATHS = {"scripts/reconcile-alert-config.py", "scripts/reconcile-alert-estate.py",
-         "tests/test_reconcile_alert_config.py", "tests/test_reconcile_alert_estate.py"}
+CLASSIFIER_HASH = "91da4fbe5508232d771a13e823ede79d6ebee03fff3867f5b0194e95859805c0"
+COMPATIBILITY_PR = 2733
+PATHS = {"scripts/measure-job-coverage-live.py",
+         "tests/test_measure_job_coverage_live_head_regressions.py"}
 
 
 def snapshot(gh, number, protection_hash):
     from controller import eligible
+    if number != COMPATIBILITY_PR:
+        raise Gap("unsupported_compatibility_pr")
     p = gh.api(f"repos/{REPO}/pulls/{number}")
     r = {"repo": REPO, "pr": number, "head": p["head"]["sha"], "base": p["base"]["sha"]}
-    if gh.api(f"repos/{REPO}/git/ref/heads/main")["object"]["sha"] != r["base"]:
-        raise Gap("advanced_main")
+    if p.get("state") == "closed":
+        raise Gap("compatibility_case_closed")
+    source_base = gh.api(f"repos/{REPO}/git/ref/heads/main")["object"]["sha"]
     s = gh.snapshot(r)
-    content = gh.api(f"repos/{REPO}/contents/scripts/ci-delay-admission.py?ref={r['base']}")
+    content = gh.api(f"repos/{REPO}/contents/scripts/ci-delay-admission.py?ref={source_base}")
     classifier = base64.b64decode(content["content"]).decode()
+    live_workflow = gh.api(f"repos/{REPO}/contents/.github/workflows/python-script-tests.yml?ref={source_base}")
+    if digest(base64.b64decode(live_workflow["content"]).decode()) != WORKFLOW_HASH:
+        raise Gap("unverified_main_workflow")
     if s["workflow_sha256"] != WORKFLOW_HASH or digest(classifier) != CLASSIFIER_HASH:
         raise Gap("unverified_experiment_source")
-    if not set(s["paths"]) <= PATHS or not s["paths"] or p["labels"]:
+    if not set(s["paths"]) <= PATHS:
+        raise Gap("compatibility_scope_expanded")
+    if not s["paths"] or p["labels"]:
         raise Gap("excluded_experiment_scope")
     r.update(paths=s["paths"], diff_sha256=s["diff_sha256"], protection_sha256=protection_hash,
              workflow_sha256=WORKFLOW_HASH, eligible=True, assessment="Automatic bounded path admission")
     eligible(r, {**s, "selector_supported": True})
+    if gh.api(f"repos/{REPO}/git/ref/heads/main")["object"]["sha"] != source_base:
+        raise Gap("main_source_race")
+    r["source_base"] = source_base
     return r, p["head"]["ref"]
+
+
+def check_natural_window(experiment, pr, now):
+    """Retries preserve the first selection window and its observed events."""
+    cases = [c for c in experiment["cases"] if c["pr"] == pr and c["kind"] == "natural"]
+    if not cases:
+        return
+    start = min(instant(c["started_at"]) for c in cases)
+    limit = start + dt.timedelta(hours=24)
+    if now < limit:
+        return
+    observations = [o for case in cases for entry in case.get("measurements", {}).values()
+                    for o in entry.get("latest", {}).get("observations", [])]
+    if not any(o.get("attempt") == 1 and start <= instant(o["created_at"]) < limit
+               for o in observations):
+        raise Gap("compatibility_no_event_24h")
 
 
 def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
@@ -70,7 +98,11 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
 
     try:
         check_time()
+        if experiment.get("terminal_reason"):
+            raise Gap(experiment["terminal_reason"])
         if receipt == {"stop": True}:
+            if any(c.get("pr") == COMPATIBILITY_PR for c in experiment["cases"]):
+                raise Gap("compatibility_finished")
             raise Gap("selection_complete")
         active = experiment.get("active")
         selectors = {repo: values for repo in REPOS if (values := gh.selectors(repo))}
@@ -79,6 +111,8 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
                     or receipt.get("kind") not in ("synthetic", "natural")
                     or receipt.get("mode") not in ("baseline", "delay") or active is not None):
                 raise Gap("invalid_experiment_selection")
+            if receipt["pr"] == COMPATIBILITY_PR and (receipt["kind"], receipt["mode"]) != ("natural", "delay"):
+                raise Gap("compatibility_requires_natural_delay")
             existing = [c for c in experiment["cases"] if c["pr"] == receipt["pr"]]
             if any(c["kind"] != receipt["kind"] for c in existing):
                 raise Gap("case_provenance_changed")
@@ -90,6 +124,9 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
             previous = history()
             if previous["unfinished_runs"] or previous["data_gaps"]:
                 raise Gap("previous_phase_incomplete")
+            if receipt["kind"] == "natural":
+                check_natural_window(experiment, receipt["pr"],
+                                     max(now, clock() if clock else dt.datetime.now(dt.timezone.utc)))
             r, branch = snapshot(gh, receipt["pr"], receipt["protection_sha256"])
             if not apply:
                 return {"action": "activation_available", "status": "readonly"}
@@ -105,6 +142,9 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
                 snapshot(gh, active["pr"], active["protection_sha256"])
                 if not supervisor_ready():
                     raise Gap("supervisor_not_ready")
+                if active["kind"] == "natural":
+                    check_natural_window(experiment, active["pr"],
+                                         max(now, clock() if clock else dt.datetime.now(dt.timezone.utc)))
                 active["write_attempted"] = True
                 persist(state)
                 gh.mutate(REPO, name, value)
@@ -125,11 +165,16 @@ def experiment_tick(gh, state, now, apply=False, receipt=None, hold=False,
         if historical["data_gaps"]:
             raise Gap("measurement_gap")
         check_time()
+        if active is not None and active["kind"] == "natural":
+            check_natural_window(experiment, active["pr"],
+                                 max(now, clock() if clock else dt.datetime.now(dt.timezone.utc)))
         persist(state)
         return {"action": "observe" if active is not None else "await_experiment_selection",
                 "status": "active" if active is not None else "inactive", "history": historical}
     except Exception as error:
         reason = str(error) if isinstance(error, Gap) else "experiment_read_gap"
+        if apply and reason in ("compatibility_case_closed", "compatibility_finished", "compatibility_scope_expanded", "compatibility_no_event_24h", "deadline"):
+            experiment["terminal_reason"] = reason
         clean = cleanup(gh, apply)
         if clean and apply and experiment.get("active") is not None:
             case = experiment["cases"][experiment["active"]]

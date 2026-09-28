@@ -55,9 +55,11 @@ def atomic(path, value):
 
 
 class GitHub:
+    command_timeout = 90
+
     def command(self, args, raw=False, env=None):
         try:
-            result = subprocess.run(args, capture_output=True, text=True, timeout=90, env=env)
+            result = subprocess.run(args, capture_output=True, text=True, timeout=self.command_timeout, env=env)
         except subprocess.TimeoutExpired as error:
             error.output = error.stderr = None
             raise Gap("github_command_timeout") from None

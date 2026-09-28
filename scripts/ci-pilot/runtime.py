@@ -83,9 +83,47 @@ def recover_experiment(state_dir, now):
     return 0
 
 
+def recover_window(state_dir, now):
+    """Rearm only an unstarted prepared window after retiring the old service."""
+    from controller import history_evidence
+    from github_client import Gap
+    from repo_window import disable
+    import experiment_measurements
+    with (state_dir / "controller.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        state = json.loads((state_dir / "state.json").read_text())
+        window = state.get("repo_window", {})
+        if (window.get("phase") != "prepared" or window.get("started_at")
+                or window.get("disabled") or window.get("stopped_at") or state.get("receipt")
+                or state.get("experiment", {}).get("active") is not None
+                or (state_dir / "OWNER_HOLD").exists()
+                or (Path.home() / ".claude/merglbot-preauth/OWNER_HOLD").exists()
+                or not supervisor_unloaded()):
+            raise Gap("window_recovery_ineligible")
+        gh = GitHub()
+        if not disable(gh) or not cleanup(gh, False):
+            raise Gap("window_recovery_selectors_present")
+        history = history_evidence(gh, state, now)
+        experiment = state.get("experiment")
+        if experiment is not None:
+            if experiment.get("version") != 1 or not isinstance(experiment.get("cases"), list):
+                raise Gap("window_recovery_experiment_invalid")
+            cases = [case for case in experiment["cases"] if not (
+                case.get("phase") == "aborted_no_write" and case.get("write_attempted") is False)]
+            retained = experiment_measurements.histories(gh, {**experiment, "cases": cases}, now)
+            if any(retained[k] for k in ("unfinished_runs", "data_gaps")):
+                raise Gap("window_recovery_experiment_history_gap")
+        if any(history[k] for k in ("unfinished_runs", "data_gaps")) or not supervisor_unloaded():
+            raise Gap("window_recovery_history_or_supervisor_gap")
+        # No state/history rewrite and no health assertion before a real fresh wake.
+        atomic(state_dir / "runtime.json", {"stopped": False, "healthy": False,
+               "next_due": now.isoformat(), "admitted_runs": "observed_complete"})
+    return 0
+
+
 def schedule(result, now):
-    terminal = (result.get("action") == "cleanup_verified"
-                and result.get("reason") in ("deadline", "case_limit"))
+    terminal = (result.get("action") == "repo_window_complete") or (result.get("action") == "cleanup_verified"
+                and result.get("reason") in ("deadline", "case_limit", "compatibility_case_closed", "compatibility_finished", "compatibility_scope_expanded", "compatibility_no_event_24h"))
     history = result.get("history") or {}
     active = result.get("status") in ("active", "unverified", "pending") or history.get("unfinished_runs", 0) > 0
     return {"stopped": terminal,
@@ -140,7 +178,21 @@ def locked_cleanup(state_dir):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return False
-        return cleanup(GitHub(), True)
+        from repo_window import emergency_stop
+        gh = GitHub()
+        gh.command_timeout = 20
+        state = None
+        storage_ok = True
+        try:
+            state = json.loads((state_dir / 'state.json').read_text())
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError):
+            storage_ok = False
+        window_clean = emergency_stop(gh, state, True, lambda s: atomic(state_dir / 'state.json', s),
+                                      lambda: dt.datetime.now(dt.timezone.utc))
+        legacy_clean = cleanup(gh, True)
+        return window_clean and legacy_clean and storage_ok
 
 
 def unload():
@@ -163,6 +215,7 @@ def sync_heartbeat(state_dir, plan, now):
 def wake(state_dir, now):
     plan_path = state_dir / "runtime.json"
     invalid_state = False
+    cutoff = None
     try:
         plan = json.loads(plan_path.read_text()) if plan_path.exists() else {}
         state = json.loads((state_dir / "state.json").read_text()) if (state_dir / "state.json").exists() else {}
@@ -174,18 +227,27 @@ def wake(state_dir, now):
             raise ValueError("invalid_counter_shape")
         if plan.get("next_due"):
             instant(plan["next_due"])
+        window = state.get("repo_window")
+        cutoff = window.get("expires_at") if isinstance(window, dict) else DEADLINE
+        if window is not None and (not isinstance(window, dict) or (
+                window.get("phase") in ("activating", "active") and cutoff is None)):
+            raise ValueError("invalid_window_state")
+        if cutoff is not None:
+            if not isinstance(cutoff, str) or instant(cutoff).tzinfo is None:
+                raise ValueError("invalid_window_deadline")
     except (ValueError, OSError, TypeError, AttributeError):
-        plan, state = {}, {}
+        plan, state, cutoff = {}, {}, None
         invalid_state = True
     if plan.get("stopped"):
         verified = sync_heartbeat(state_dir, plan, now)
         atomic(plan_path, plan)
         return unload() if verified else 1
     due = plan.get("next_due")
-    urgent = (now >= instant(DEADLINE) or len(state.get("counted_prs", [])) >= 5
+    window = state.get("repo_window")
+    urgent = ((cutoff is not None and now >= instant(cutoff)) or (window is None and len(state.get("counted_prs", [])) >= 5)
               or (state_dir / "OWNER_HOLD").exists()
               or (Path.home() / ".claude/merglbot-preauth/OWNER_HOLD").exists())
-    active = bool(state.get("receipt")) or (isinstance(state.get("experiment"), dict)
+    active = (isinstance(window, dict) and window.get("phase") in ("activating", "active", "stopping")) or bool(state.get("receipt")) or (isinstance(state.get("experiment"), dict)
               and state["experiment"].get("active") is not None)
     if due and not urgent and not active and now < instant(due):
         if plan.get("healthy") is True:
@@ -221,7 +283,7 @@ def wake(state_dir, now):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("wake", "plist", "cleanup", "recover-experiment"))
+    parser.add_argument("command", choices=("wake", "plist", "cleanup", "recover-experiment", "recover-window"))
     parser.add_argument("--state-dir", type=Path, required=True)
     args = parser.parse_args()
     state_dir = args.state_dir.resolve()
@@ -245,6 +307,8 @@ def main():
         except BlockingIOError:
             return 0
         now = dt.datetime.now(dt.timezone.utc)
+        if args.command == "recover-window":
+            return recover_window(state_dir, now)
         if args.command == "recover-experiment":
             return recover_experiment(state_dir, now)
         return wake(state_dir, now)

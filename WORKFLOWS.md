@@ -8,6 +8,7 @@ Every consumer **must** follow [Rulebook v2](https://github.com/merglbot-public/
 | `.github/workflows/merglbot-pr-assistant-v1-reusable.yml` | Claude-powered PR reviewer (suggest/apply modes). | `workflow_call` from repo-level wrapper. Typically triggered on `pull_request` + optional `workflow_dispatch` with labels. | Inputs: `trigger_labels`, `skip_labels`, `model`, `temperature`, `max_output_chars`, `max_diff_lines`, `mode`. Requires caller to guard against fork PRs. | Secret `ANTHROPIC_API_KEY` (inherit). Produces `ai-review` comment; status = `review`. |
 | `.github/workflows/length-check.yml` | Ensures PR title ≤100 chars, body ≤4000 bytes. | `workflow_call`. Usually configured as org-level required workflow. | No inputs. Uses PR payload to compute lengths. | No secrets. Status name `PR Text Length Check (central)`. |
 | `.github/workflows/reusable-codeql-analysis.yml` | Shared CodeQL scan for JS/TS repos. | `workflow_call` with `languages` input (default `javascript`). | Consumers should set job name `codeql` to satisfy required status `[build, test, codeql]`. | No secrets needed; uses default `actions` permissions. |
+| `.github/workflows/ci-python-delay-candidate.yml` | Dedicated opt-in Python CI for the bounded ten-minute PR test-delay pilot; the established `ci-python.yml` remains unchanged. | `workflow_call`, pinned to an exact commit by a pilot caller. Only same-repo PRs to `main` on their first attempt use `ci-pr-delay` when the caller passes `ci-delay-candidate: true` and sets `CI_DELAY_ENABLED=true`; all other runs use `ci-immediate`. | Requires clean caller environments: `ci-pr-delay` admits PR merge refs, while `ci-immediate` admits every caller ref routed there, including `main` and PR merge refs. The timer is configured only on `ci-pr-delay`. Preserves Python tests and the `Python CI` job name, records checkout head/base and the selected environment in one aggregate acceptance marker, and uses `deployment: false`. | No secrets or cloud login. `contents: read`; the caller's existing required check remains mandatory. |
 | `.github/workflows/reusable-build-attest.yml` | Builds a local linux/amd64 image, reclaims the selected builder's local BuildKit cache while retaining the tagged scan image, runs fail-closed Trivy before any registry write, then publishes an isolated candidate with SBOM/provenance and promotes release tags only after local/published config-digest parity. | `workflow_call`; callers must pin an exact commit SHA. `scan=false` remains an explicit opt-out, while the default is fail-closed scanning. | Candidate tags are unique to the workflow run. A failed scan creates no Artifact Registry version; a parity failure leaves only the quarantined candidate and never moves branch/SHA/latest tags. | WIF resource names are passed through `wif_provider` and `wif_service_account`; Binary Authorization signing runs only when both `attest` and `push` are enabled. |
 | `.github/workflows/reusable-deploy-cloud-run.yml` | Builds, pushes, scans (Trivy HIGH/CRITICAL), signs (keyless Cosign via GitHub OIDC), and deploys a container to Cloud Run via WIF. | `workflow_call` from service repos once CI checks pass. | Inputs: `service`, `region`, `project_id`, `service_account`, `environment`, `dockerfile`, `env_vars`, `secrets`. For cross-project secrets the workflow uses recovery-safe ordering: base rollout first, then fresh YAML export + alias reconcile, never stale YAML replay before the target image/env rollout. Publishes a minimal deployment job summary and only caller-visible outputs produced by workflow-owned steps: `deployment_mode`, plus optional alias-only coordination outputs such as alias names or counts when a same-org caller needs them. All other coordination stays internal to the reusable workflow, and full Secret Manager resource paths must never leave the workflow via outputs or summaries. Also uploads a CycloneDX SBOM artifact (365-day retention; attached to private-tag releases by default). Supports private GitHub Packages during Docker build only through the built-in BuildKit secret mount pattern (`id=node_auth_token`) backed by `github.token`; this is not a generic build-arg/build-secret interface. | Secrets: `GCP_WIF_PROVIDER`, `GCP_WIF_SERVICE_ACCOUNT`, `GAR_LOCATION`. Current caller permissions remain `contents: write`, `id-token: write`, `security-events: write`, `actions: read` because GitHub validates nested job permissions before the tag-only `publish_release_sbom` guard is evaluated; add `packages: read` when the Docker build resolves private GitHub Packages through the built-in secret-mount path. A future split into separate read-only deploy and release-SBOM entrypoints can lower normal deploy callers back to `contents: read`. |
 | `.github/workflows/automated-release.yml` | Semantic-release automation for repos on `main`. | Triggered on push to `main` (excluding docs) and manual `workflow_dispatch` with optional version. | Auto-determines version unless `inputs.version` supplied. Publishes changelog + release notes and emits explicit `release_outcome` values: `release_created`, `release_already_exists`, `release_skipped_no_version`. | Requires default `GITHUB_TOKEN` write access; Slack notification is sent only for `release_created`. |
@@ -29,6 +30,66 @@ Every consumer **must** follow [Rulebook v2](https://github.com/merglbot-public/
 2. Follow MERGLBOT reusable workflow guidelines (least-privilege permissions, WIF, concurrency).
 3. Document the workflow in this table.
 4. Update consuming repos + branch protection rules if new statuses are required.
+
+## pr-gate.yml
+
+ONE job that runs the three cheap per-PR gates that used to be three separate jobs:
+dependency review, PR hygiene checks and docs governance. Steps are copied verbatim from
+`security-dependency-review.yml`, `utility-pr-checks.yml` and `reusable-docs-governance.yml` —
+no rule, threshold, action pin or message changed. GitHub bills `ceil(seconds/60)` **per job**,
+so three 7-12 s jobs cost 3 minutes while one ~30 s job costs 1 (github#877).
+
+Gitleaks used to stay separate because the job took 53-58 s. Measured again 22. 9. 2026 on
+merglbot-extractors/shoptet-extractor, **45 of those seconds were `Upload SARIF report`** and the
+scan itself was ~1 s, so `gitleaks: true` now folds the scan into this job as an opt-in step
+(github#895). The step keeps the scan and the redacted `$GITHUB_STEP_SUMMARY` report and drops the
+SARIF upload, so no `security-events: write` is inherited and PR Gate stays around 20 s. Repos that
+switch it on delete their `security-gitleaks.yml` and keep a weekly full-tree scan for pushes that
+never open a PR. GHAS Secret Protection push protection is untouched either way.
+
+### Optional steps (all default to `false`, so existing callers are unaffected)
+
+| input | default | what it adds |
+|---|---|---|
+| `gitleaks` | `false` | gitleaks 8.18.4 (pinned by release checksum) over the working tree, `--no-git --redact`; findings fail the gate and are listed redacted in the job summary |
+| `gitleaks-config-path` | `''` | repo-relative gitleaks config; absolute paths and `..` are rejected |
+| `gitleaks-upload-report` | `false` | uploads the redacted JSON report as a 7-day artifact |
+| `markdown-danger-lint` | `false` | fails when changed Markdown documents `git push --force --all` (verbatim from `markdown-danger-lint.yml`) |
+| `pr-text-length` | `false` | PR title/body length limits, dependabot waived (verbatim from `length-check.yml`) |
+| `pr-text-max-title` | `100` | title limit in characters |
+| `pr-text-max-body` | `4000` | body limit in bytes |
+| `runs-on` | `ubuntu-slim` | `ubuntu-slim` (1 vCPU, 0.002 USD/min, 15-min job cap) or `ubuntu-24.04`; any other value falls back to `ubuntu-24.04` (github#913) |
+
+`markdown-danger-lint` and `pr-text-length` read `github.event.pull_request.*`, so a caller that
+switches them on needs `types: [opened, edited, synchronize, reopened]` — otherwise a title or body
+edit does not re-run the check.
+
+Two deliberate differences from the originals: the job runs with `pull-requests: write`
+(dependency-review posts its summary comment; no pull-request-controlled code executes here), and
+every functional step carries `if: ${{ !cancelled() }}` with a final gate step, so one failing part
+no longer hides the other two the way three separate jobs never did.
+
+Check context for branch protection = `<caller job NAME> / PR Gate`. GitHub composes it from the
+caller job's **display name** (`name:`), falling back to the job id only when no `name:` is set.
+Every current consumer (infra, agents-orchestrator, merglbot-admin, business-analytics) names the
+job `PR Gate`, so the required context is **`PR Gate / PR Gate`** (`app_id 15368`); an unnamed
+`pr-gate:` job would emit `pr-gate / PR Gate` instead. Read the context from a live check run on
+the PR head before editing protection — never from this catalog (github#879, measured 21. 9. 2026).
+
+```yaml
+jobs:
+  pr-gate:
+    name: PR Gate
+    uses: merglbot-core/github/.github/workflows/pr-gate.yml@<pinned-sha>
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      pull-request-number: ${{ github.event.pull_request.number }}
+      fail-on-severity: moderate
+      comment-summary-in-pr: true
+      mode: advisory
+```
 
 ## reusable-docs-governance.yml
 

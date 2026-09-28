@@ -1,4 +1,52 @@
-# Bounded CI delay supervisor
+# CI delay supervisor
+
+## Active successor: five-hour repository window
+
+Owner-approved September 13, 2026 (infra#2688): infra and exporter share one
+five-hour window. Preserve historical evidence; retire the selection modes below.
+`CI_DELAY_ENABLED=true` delays first-attempt same-repo main PRs ten minutes,
+including drafts and every diff class. Unset/false, forks, other bases and reruns
+are immediate; push workflows are unchanged. GitHub compares strings without
+case sensitivity; the controller writes `true`. No admission runner or V6/LPW,
+Terraform, protection or fb-viz change.
+
+Install only reviewed source under the existing label and locks, after retiring
+the old supervisor and verifying terminal history and absent old selectors.
+Keep switches off until both workflow deliveries and scoped deployments pass.
+Prepare a JSON mapping of exactly both repo names to reviewed main workflow and
+protection hashes (`workflow_sha256`, `protection_sha256`, conventions below).
+Do not update hashes to accept unexplained drift.
+
+Run with the installed controller and state directory:
+
+```sh
+controller.py prepare-window --state-dir <state-dir> --receipt <contracts.json> --apply
+runtime.py recover-window --state-dir <state-dir>
+# Bootstrap the same supervisor and verify its fresh successful wake.
+controller.py start-window --state-dir <state-dir> --apply
+controller.py stop-window --state-dir <state-dir> --apply
+# Optional: add --repo merglbot-core/infra to stop only infra.
+```
+
+Recovery preserves history and refuses started windows, holds or unfinished prior
+runs. Activation validates both repos and supervision, durably records the five-hour
+deadline before writing switches, and rolls back partial activation. Restarts cannot
+extend or re-enable it; a per-repo stop persists.
+
+Observe every five minutes while active or draining; the active session stops at
+the deadline. Scheduled removal occurs on the next wake. Host sleep/API failure
+can delay removal: retry and report unverified until readback succeeds. Inspect
+already waiting runs separately and supervise until they finish.
+
+Use natural pushes only. Older PR branches may carry old workflows. Timer and
+checkout-parent proof, final-head V6 evidence and standard merge remain session
+acceptance duties; observation metadata proves neither review nor billing savings.
+Require one complete natural case per repo. At expiry remove switches and report
+counts, latency, runner work and pending closeouts. No extension, 15 minutes or
+estate rollout without a new owner decision.
+
+## Historical bounded selector supervisor
+
 
 ```sh
 python3 scripts/ci-pilot/controller.py tick --state-dir /absolute/state
@@ -116,3 +164,102 @@ The reviewed observer measures all attempts; gaps stay explicit. Include admissi
 runner time and checkout proof. The agent owns V6/merge and GO evidence.
 Zero-write aborts stay audited but unmeasured; attempted writes remain conservative.
 No production rollout.
+
+
+## Natural compatibility case 2733
+
+The automatic adapter now accepts only `merglbot-core/infra#2733`, in natural
+`delay` mode. Its two assessed Python paths and base-owned classifier digest
+are pinned in `automatic.py`. This does not activate selection. Install only
+after the replacement classifier PR has been reviewed, merged, and its live
+base digest verified. Reconcile that digest after any classifier review fix.
+
+Use a separate state directory for this compatibility case, preserving all old
+state and case counts. The existing absolute September 14, 2026, 19:03:19 UTC
+cutoff is a shorter bound than seven days. Only one selection may exist across
+all supported repositories; no synthetic or baseline mode for this case.
+Prove a real supervisor wake and exact loaded source before activation.
+
+The base-owned classifier rechecks each event and applies its conservative
+Python capability envelope; the supervising agent also reads each new head's
+full semantic diff. A syntax refusal is an immediate-test fallback, not proof
+of a V6 finding. Scope expansion ends the case. Current scope admission never
+substitutes for full exact-head V6 evidence and required-check verification.
+
+Closed compatibility PRs and explicit case termination are persistent terminal
+states. Selectors are removed first; already admitted jobs are observed until
+complete before the supervisor unloads. A read gap cannot certify completion.
+Historical experiment phase transitions retain their existing behavior.
+
+Success requires captured final pending-environment timer, checkout parents,
+substantive V6 and standard merge while selection remains active. Do not count
+mere timestamp spacing or an immediate final run as delayed acceptance.
+Refs: merglbot-core/infra#2688.
+
+### Live main source and PR metadata base
+
+Automatic admission validates the reviewed classifier and workflow at the live
+`refs/heads/main` commit, with a second reference read after the snapshot. The
+PR metadata base may lag that branch; it remains unchanged in the receipt and
+PR identity validation. Both the metadata-base workflow and live-main workflow
+must match the pinned workflow. A branch movement during validation refuses
+admission. The per-event classifier still requires the event head/base to match
+live refs; selecting a PR does not approve a stale event or change merge rules.
+
+The previous #2683 case merged before activation; #2696 stays closed. The
+replacement #2733 assessment covers the coverage calculator and its head
+regression tests, with unchanged ten-minute waiting and September 14 cutoff.
+Reuse the inactive compatibility state and preserve the two historical natural
+case counts in the overall five-case accounting. The selected business PR is
+completed by its development agent; the pilot does not take over that workstream.
+
+### September 12 assessed repair refresh
+
+The classifier digest now binds the assessed ancestor
+`0146939ca86efcd0009cb290707ba5106efb79c5` (infra #2737). The natural run
+34708056870 selected immediate tests against the older ancestor and is not a
+delayed case. Its completed phase stays archived; never erase its terminal
+state to claim uninterrupted selection. Any new phase uses a separate state
+directory and the same supervisor label only after the previous service is
+unloaded. Carry forward the overall case ledger and original experiment end.
+
+This update does not activate selection.
+The automatic compatibility adapter removes selection after 24 hours without
+an observed first-attempt natural event within that selection window. A late
+event or rerun cannot reset the window. Already admitted jobs are drained before
+the supervisor stops, and empty successful inventories are an expected timeout
+outcome. Failed inventory reads remain data gaps. The absolute September 14
+deadline is unchanged; a new candidate still requires a fresh scope assessment.
+
+### Recovery after an empty read-failure phase
+
+After a GitHub command failure, selection remains off until all inventory and
+per-head reads succeed. A successfully read stopped interval with no events is
+recorded as `empty_phase_verified`, not as a tested or accepted case. A later
+read failure clears that observation and remains a data gap. Existing terminal
+case stops are unchanged; recovery does not automatically reselect a PR.
+
+If the operator reselects the same natural PR through the existing checked
+activation path, its 24-hour window starts at its earliest phase in the
+experiment. Prior timely events are retained; an expired retry cannot write
+a selector. Phase history and the absolute cutoff are preserved.
+
+### Filter-pinning assessment binding
+
+The adapter digest binds the bounded assessment of business head
+`d8b7e3e171d5ac5a91b39ec2d258fdd66cf0e8ec`. Install only after the matching
+infra classifier is reviewed and merged. Keep the current recovered state and
+its earliest selection window; no fresh experiment, history reset, automatic
+reselection, or wider path grant is introduced. Revalidate the then-current
+business head before activation. This binding is not business V6 approval.
+
+The predicate-compatibility binding pins the classifier assessed at
+`d4a0c63265b62c783e381d485d2eb506575145c1`. Install only after that matching infra assessment
+has merged; retain the current state, selection history, deadlines and single
+supervisor. This source binding alone is not delayed-CI or V6 acceptance.
+
+The new observer measures first attempts eligible for delay only. Reruns are
+explicitly immediate in both workflows and are excluded from delayed admission
+and drain evidence. Their runner cost needs separate measurement; this observer
+is not a complete billing inventory. Final acceptance cannot use an immediate
+rerun in place of delayed final-head tests.
