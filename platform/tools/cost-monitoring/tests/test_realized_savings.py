@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -258,3 +259,30 @@ def test_changed_eligible_verdict_is_delivered_again():
     current = receipt(verdict="MISMATCH", state="MISMATCH", amount=0)
     result = realized_savings.attach_delivery_state(current, previous)
     assert result["delivery"]["transition"] == "DELIVER_NEW_VERDICT"
+
+
+def test_empty_selector_arrays_are_null_safe():
+    # BigQuery binds an empty ARRAY parameter as NULL: ARRAY_LENGTH(NULL) = 0 is
+    # NULL, so a bare comparison dropped every row of every action (monitoring#587).
+    sql, _ = realized_savings._query_sql([action(services=(), sku_contains=())])
+    assert "IFNULL(ARRAY_LENGTH(@services_0), 0) = 0" in sql
+    assert "IFNULL(ARRAY_LENGTH(@skus_0), 0) = 0" in sql
+    assert not re.search(r"(?<!IFNULL)\(ARRAY_LENGTH\(@\w+\) = 0", sql)
+
+
+def test_scope_without_billing_rows_is_named_not_blamed_on_export_freshness():
+    item = action()
+    result = realized_savings.classify_action(item, [], {}, eligible_time(item))
+    assert result["state"] == "DATA_GAP"
+    assert result["reason"] == "no_billing_rows_in_scope"
+
+
+def test_networking_scenarios_select_the_service_billing_actually_uses():
+    config = Path(__file__).resolve().parents[1] / "config/realized-savings.yml"
+    actions, _ = realized_savings.load_actions(config)
+    by_id = {item.action_id: item for item in actions}
+    # Measured 2026-09-28: Cloud Armor and the legacy LB bill under "Networking".
+    assert by_id["orphan_cloud_armor"].services == ("Networking",)
+    assert "Cloud Armor" in by_id["orphan_cloud_armor"].sku_contains
+    assert by_id["legacy_admin_lb"].services == ("Networking",)
+    assert "Load Balancer" in by_id["legacy_admin_lb"].sku_contains
