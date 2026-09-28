@@ -53,17 +53,23 @@ elif path == 'repos/merglbot-core/example/code-scanning/default-setup':
     if mode == 'ambiguous_404':
         print('HTTP 404 Resource not found', file=sys.stderr)
         sys.exit(1)
-    state = 'configured' if mode in ('reusable', 'unrelated', 'real_conflict',
+    state = 'unknown' if mode == 'unknown_state' else 'configured' if mode in ('reusable', 'unrelated', 'real_conflict',
                                      'partial_conflict', 'unreadable_candidate',
                                      'commented_action', 'dual_trigger', 'reusable_caller',
+                                     'nested_reusable', 'directory_object', 'mixed_case_action',
+                                     'local_composite', 'direct_and_local',
                                      'conflict_then_unreadable') else 'not-configured'
     print(json.dumps({'state': state, 'languages': ['javascript']}))
 elif path == 'repos/merglbot-core/example/contents/.github/workflows':
+    if mode == 'directory_object':
+        print(json.dumps({'unexpected': True}))
+        sys.exit(0)
     print(json.dumps([{'name': 'codeql.yml'}] +
                      ([{'name': 'later.yml'}] if mode == 'conflict_then_unreadable' else [])) if mode in
           ('reusable', 'unrelated', 'real_conflict', 'partial_conflict',
            'unreadable_candidate', 'commented_action', 'dual_trigger',
-           'reusable_caller', 'conflict_then_unreadable') else '[]')
+           'reusable_caller', 'nested_reusable', 'conflict_then_unreadable',
+           'mixed_case_action', 'local_composite', 'direct_and_local') else '[]')
 elif path == 'repos/merglbot-core/example/contents/.github/workflows/codeql.yml':
     if mode == 'unreadable_candidate':
         print('HTTP 403 not authorized', file=sys.stderr)
@@ -74,18 +80,34 @@ elif path == 'repos/merglbot-core/example/contents/.github/workflows/codeql.yml'
         print('  workflow_call:')
     print('jobs:')
     print('  scan:')
-    if mode == 'reusable_caller':
+    if mode in ('reusable_caller', 'nested_reusable'):
         print('    uses: merglbot-core/github/.github/workflows/reusable-codeql-analysis.yml@0123456789abcdef0123456789abcdef01234567')
     else:
         print('    steps:')
         if mode == 'commented_action':
             print('      # - uses: github/codeql-action/analyze@v4')
             print('      - uses: actions/checkout@v4')
+        elif mode == 'local_composite':
+            print('      - uses: ./.github/actions/scan')
+        elif mode == 'direct_and_local':
+            print('      - uses: github/codeql-action/analyze@v4')
+            print('      - uses: ./.github/actions/scan')
+        elif mode == 'mixed_case_action':
+            print('      - uses: GitHub/codeql-action/analyze@v4')
         elif mode == 'unrelated':
             print('      - uses: actions/checkout@v4')
         else:
             print('      - uses: github/codeql-action/analyze@v4')
 elif path == 'repos/merglbot-core/github/contents/.github/workflows/reusable-codeql-analysis.yml?ref=0123456789abcdef0123456789abcdef01234567':
+    print('on: workflow_call')
+    print('jobs:')
+    print('  scan:')
+    if mode == 'nested_reusable':
+        print('    uses: ./.github/workflows/nested.yml')
+        sys.exit(0)
+    print('    steps:')
+    print('      - uses: github/codeql-action/analyze@v4')
+elif path == 'repos/merglbot-core/github/contents/.github/workflows/nested.yml?ref=0123456789abcdef0123456789abcdef01234567':
     print('on: workflow_call')
     print('jobs:')
     print('  scan:')
@@ -229,6 +251,12 @@ else:
         self.assertIn('repos/merglbot-core/github/contents/.github/workflows/reusable-codeql-analysis.yml?ref=0123456789abcdef0123456789abcdef01234567',
                       [call[1] for call in self.calls_made()])
 
+    def test_nested_reusable_keeps_pinned_ref(self):
+        result = self.run_scanner(fixture_mode="nested_reusable")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn('repos/merglbot-core/github/contents/.github/workflows/nested.yml?ref=0123456789abcdef0123456789abcdef01234567',
+                      [call[1] for call in self.calls_made()])
+
     def test_conflict_survives_later_unreadable_workflow(self):
         result = self.run_scanner(fixture_mode="conflict_then_unreadable")
         self.assertEqual(result.returncode, 1, result.stderr)
@@ -236,6 +264,32 @@ else:
         self.assertEqual(report["status"], "CONFLICT_PARTIAL")
         self.assertEqual(report["unswept"], ["merglbot-core/example"])
         self.assertEqual(report["conflicts"][0]["advanced_workflows"], ["codeql.yml"])
+
+    def test_unknown_default_setup_state_is_unswept(self):
+        result = self.run_scanner(fixture_mode="unknown_state")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(json.loads(result.stdout)["unswept"], ["merglbot-core/example"])
+
+    def test_invalid_workflow_directory_is_unswept(self):
+        result = self.run_scanner(fixture_mode="directory_object")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(json.loads(result.stdout)["unswept"], ["merglbot-core/example"])
+
+    def test_mixed_case_codeql_action_is_conflict(self):
+        result = self.run_scanner(fixture_mode="mixed_case_action")
+        self.assertEqual(result.returncode, 2, result.stderr)
+
+    def test_local_composite_is_unverified(self):
+        result = self.run_scanner(fixture_mode="local_composite")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(json.loads(result.stdout)["unswept"], ["merglbot-core/example"])
+
+    def test_direct_conflict_survives_unverified_composite(self):
+        result = self.run_scanner(fixture_mode="direct_and_local")
+        self.assertEqual(result.returncode, 1)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "CONFLICT_PARTIAL")
+        self.assertEqual(report["conflicts"][0]["repo"], "merglbot-core/example")
 
     def test_conflict_with_unswept_repo_exits_as_incomplete(self):
         result = self.run_scanner(fixture_mode="partial_conflict")

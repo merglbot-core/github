@@ -29,7 +29,7 @@ import { join, resolve } from 'node:path';
 // Filenames from github#789's estate sweep + a content probe for anything else that
 // calls the CodeQL analyze action under a different name.
 const ADVANCED_NAMES = /^(codeql(-analysis)?|security-codeql)\.ya?ml$/i;
-const ANALYZE_ACTION = /^github\/codeql-action\/(analyze|init)@/;
+const ANALYZE_ACTION = /^github\/codeql-action\/(analyze|init)@/i;
 
 const args = process.argv.slice(2);
 const wantJson = args.includes('--json');
@@ -170,26 +170,31 @@ function workflowBody(repo, file, ref) {
   const path = `repos/${repo}/contents/.github/workflows/${file}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`;
   return gh(['api', path, '-H', 'Accept: application/vnd.github.raw'], { retry404: true });
 }
-function reusableTarget(uses, repo) {
+function reusableTarget(uses, repo, ref) {
   const local = /^\.\/\.github\/workflows\/([A-Za-z0-9_.-]+\.ya?ml)$/.exec(uses);
-  if (local && !local[1].includes('..')) return { repo, file: local[1], ref: null };
+  if (local && !local[1].includes('..')) return { repo, file: local[1], ref };
   const remote = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/\.github\/workflows\/([A-Za-z0-9_.-]+\.ya?ml)@([A-Za-z0-9._/-]+)$/.exec(uses);
   if (remote && !remote[3].includes('..') && !remote[4].includes('..')) {
     return { repo: `${remote[1]}/${remote[2]}`, file: remote[3], ref: remote[4] };
   }
   throw new Error('unresolved_reusable_workflow');
 }
-function invokesCodeql(body, repo, visited = new Set(), depth = 0) {
+function invokesCodeql(body, repo, ref = null, visited = new Set(), depth = 0) {
   if (depth > 4) throw new Error('reusable_workflow_depth_exceeded');
   const shape = workflowStructure(body);
+  // Local composite actions can hide CodeQL steps. Until their action.yml is
+  // inspected, a clean answer is not justified for this repository.
+  if (shape.step_uses.some(uses => uses.startsWith('./'))) {
+    throw new Error('unresolved_local_action');
+  }
   let found = shape.step_uses.some(uses => ANALYZE_ACTION.test(uses));
   for (const uses of shape.job_uses) {
-    const target = reusableTarget(uses, repo);
+    const target = reusableTarget(uses, repo, ref);
     const key = `${target.repo}/${target.file}@${target.ref || 'default'}`;
     if (visited.has(key)) throw new Error('reusable_workflow_cycle');
     visited.add(key);
     const nested = workflowBody(target.repo, target.file, target.ref);
-    if (invokesCodeql(nested, target.repo, visited, depth + 1)) found = true;
+    if (invokesCodeql(nested, target.repo, target.ref, visited, depth + 1)) found = true;
     visited.delete(key);
   }
   return found;
@@ -292,6 +297,11 @@ for (const org of orgs) {
       }
       else { orgRow.unswept++; report.unswept.push(full); report.errors.push(`${full}: default-setup ${safeFailure(e)}`); continue; }
     }
+    if (!setup || !['configured', 'not-configured'].includes(setup.state)) {
+      orgRow.unswept++; report.unswept.push(full);
+      report.errors.push(`${full}: default-setup state unverified`);
+      continue;
+    }
     const configured = setup.state === 'configured';
     if (configured) { orgRow.default_setup++; report.default_setup_configured++; }
 
@@ -301,7 +311,7 @@ for (const org of orgs) {
     let workflows = [];
     try {
       workflows = ghJson(`repos/${full}/contents/.github/workflows`);
-      if (!Array.isArray(workflows)) workflows = [];
+      if (!Array.isArray(workflows)) throw new Error('invalid_workflow_directory');
     } catch (e) {
       const msg = String(e.stderr || e.message || e);
       if (scopeFile && /HTTP 404/.test(msg)) {
@@ -324,7 +334,8 @@ for (const org of orgs) {
           const body = workflowBody(full, w.name);
           const structure = workflowStructure(body);
           if (structure.triggers.length === 1 && structure.triggers[0] === 'workflow_call') continue;
-          if (invokesCodeql(body, full)) advancedFiles.push(w.name);
+          if (structure.step_uses.some(uses => ANALYZE_ACTION.test(uses))) advancedFiles.push(w.name);
+          if (invokesCodeql(body, full) && !advancedFiles.includes(w.name)) advancedFiles.push(w.name);
         } catch (e) {
           // An unreadable workflow leaves the repo's advanced-side UNKNOWN: fail closed, unsweep it.
           orgRow.unswept++; report.unswept.push(full);

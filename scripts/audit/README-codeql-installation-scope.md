@@ -36,6 +36,9 @@ probe parses YAML structure without executing it, follows reusable workflow
 calls, and treats unreadable or unresolved calls as unswept. A sole
 `workflow_call` trigger does not execute in the workflow's own repository;
 other triggers alongside it do. Commented action references do not count.
+Local composite action references are currently unswept because the scanner
+does not inspect their action definitions; a known direct conflict remains in
+the report even when another path is unresolved.
 It scans only active repositories from that exact set. An unrelated visible
 public repository, missing selected repository, wrong installation, permission
 failure, or incomplete scan cannot become a clean result. This mode never calls
