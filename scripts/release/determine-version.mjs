@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
@@ -47,13 +47,69 @@ export function determineVersion(manualVersion, run) {
   return classifyDryRun(run());
 }
 
-export function main(env = process.env) {
+export function runDryRun({ timeoutMs = 120000, outputLimit = LIMIT } = {}) {
+  // Test overrides may tighten bounds only. The CLI exposes neither override.
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 120000
+      || !Number.isInteger(outputLimit) || outputLimit <= 0 || outputLimit > LIMIT) {
+    return Promise.resolve({ error: true });
+  }
+  return new Promise((resolve) => {
+    const child = spawn('npx', ['--no-install', 'semantic-release', '--dry-run', '--no-ci'],
+      { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    const stdout = [], stderr = [];
+    let bytes = 0, failed = false, done = false, deadline, drainDeadline;
+    const killGroup = () => {
+      if (!child.pid) return;
+      try { process.kill(-child.pid, 'SIGKILL'); } catch (error) {
+        if (error.code !== 'ESRCH') failed = true;
+      }
+    };
+    const finish = (status, signal) => {
+      if (done) return;
+      done = true;
+      clearTimeout(deadline);
+      clearTimeout(drainDeadline);
+      resolve(failed ? { error: true } : {
+        status, signal, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr),
+      });
+    };
+    const stop = () => {
+      failed = true;
+      stdout.length = 0;
+      stderr.length = 0;
+      killGroup();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      drainDeadline ??= setTimeout(() => finish(null, 'SIGKILL'), 2000);
+    };
+    const collect = (target) => (chunk) => {
+      if (failed || done) return;
+      bytes += chunk.length;
+      if (bytes > outputLimit) { stop(); return; }
+      target.push(chunk);
+    };
+    child.stdout.on('data', collect(stdout));
+    child.stderr.on('data', collect(stderr));
+    child.stdout.on('error', stop);
+    child.stderr.on('error', stop);
+    child.on('error', () => { failed = true; finish(null, null); });
+    child.on('exit', () => {
+      // A completed CLI must not leave same-group descendants holding pipes open.
+      killGroup();
+      drainDeadline ??= setTimeout(stop, 2000);
+    });
+    child.on('close', finish);
+    deadline = setTimeout(stop, timeoutMs);
+  });
+}
+
+export async function main(env = process.env) {
   try {
     if (!env.GITHUB_OUTPUT) throw new Error('RELEASE_OUTPUT_MISSING');
-    const result = determineVersion(env.RELEASE_VERSION_INPUT ?? '', () => spawnSync(
-      'npx', ['--no-install', 'semantic-release', '--dry-run', '--no-ci'],
-      { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: LIMIT, timeout: 120000, killSignal: 'SIGKILL' },
-    ));
+    const manual = env.RELEASE_VERSION_INPUT ?? '';
+    const result = manual !== ''
+      ? { version: validateVersion(manual), skip: false }
+      : classifyDryRun(await runDryRun());
     appendFileSync(env.GITHUB_OUTPUT, result.skip ? 'skip=true\n' : `version=${result.version}\nskip=false\n`);
     return 0;
   } catch {
@@ -64,5 +120,5 @@ export function main(env = process.env) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  process.exitCode = main();
+  process.exitCode = await main();
 }

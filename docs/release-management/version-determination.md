@@ -7,7 +7,10 @@ branch and suppressed errors are not a release decision. Manual versions must
 be SemVer and enter through an environment variable, never shell interpolation.
 Provider output remains in memory and is not printed on failure.
 
-The subprocess has a two-minute deadline and a one-MiB output bound; npx may
+The subprocess has a two-minute deadline and a one-MiB aggregate output bound.
+Timeout or overflow kills its isolated process group, including ordinary
+descendants; normal completion also cleans up remaining group members. This
+does not prove containment of deliberately detached processes. npx may
 only use an already installed package. The existing package installation policy
 is unchanged. The parser recognizes upstream logger outcome records and rejects
 unknown or contradictory output; changing the installed semantic-release
