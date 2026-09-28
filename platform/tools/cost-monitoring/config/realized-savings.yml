@@ -34,15 +34,21 @@ actions:
   - id: orphan_cloud_armor
     cutoff: "2026-08-08T19:09:55Z"
     project_ids: [mb-portal-prd]
-    services: [Network Security]
+    # Billing export files Cloud Armor under the Networking service ("Networking
+    # Cloud Armor Policy" / "Networking Cloud Armor Rule"), never under "Network
+    # Security" - measured 2026-09-28, monitoring#587.
+    services: [Networking]
     sku_contains: [Cloud Armor]
     billing_lag_days: 3
 
   - id: legacy_admin_lb
     cutoff: "2026-08-09T10:24:00Z"
     project_ids: [mb-portal-prd]
-    services: [Compute Engine]
-    sku_contains: [Load Balancing, Forwarding Rule]
+    # The legacy LB bills under Networking ("Cloud Load Balancer Forwarding Rule
+    # Minimum Global", "Global External Application Load Balancer ... Data
+    # Processing"), not Compute Engine - measured 2026-09-28, monitoring#587.
+    services: [Networking]
+    sku_contains: [Load Balancer, Forwarding Rule]
     billing_lag_days: 3
 
   - id: ruzovyslon_offboarding
