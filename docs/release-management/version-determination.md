@@ -43,3 +43,8 @@ An isolated local bare-repository check also exercised the real semantic-release
 a docs-only commit after the baseline tag produced an explicit skip. Neither
 dry run created a tag. This fixture is separate from the default CI unit suite,
 uses no GitHub/cloud credentials and does not prove the pinned Ubuntu runtime.
+
+The same two cases also passed using an isolated global install with no local
+`node_modules` or `package.json`. npm/npx used a temporary prefix and empty
+configuration files; no system global installation was changed. This closes
+the local-versus-global resolution fixture gap, not production acceptance.
