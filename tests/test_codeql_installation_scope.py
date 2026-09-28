@@ -54,23 +54,46 @@ elif path == 'repos/merglbot-core/example/code-scanning/default-setup':
         print('HTTP 404 Resource not found', file=sys.stderr)
         sys.exit(1)
     state = 'configured' if mode in ('reusable', 'unrelated', 'real_conflict',
-                                     'partial_conflict', 'unreadable_candidate') else 'not-configured'
+                                     'partial_conflict', 'unreadable_candidate',
+                                     'commented_action', 'dual_trigger', 'reusable_caller',
+                                     'conflict_then_unreadable') else 'not-configured'
     print(json.dumps({'state': state, 'languages': ['javascript']}))
 elif path == 'repos/merglbot-core/example/contents/.github/workflows':
-    print(json.dumps([{'name': 'codeql.yml'}]) if mode in
+    print(json.dumps([{'name': 'codeql.yml'}] +
+                     ([{'name': 'later.yml'}] if mode == 'conflict_then_unreadable' else [])) if mode in
           ('reusable', 'unrelated', 'real_conflict', 'partial_conflict',
-           'unreadable_candidate') else '[]')
+           'unreadable_candidate', 'commented_action', 'dual_trigger',
+           'reusable_caller', 'conflict_then_unreadable') else '[]')
 elif path == 'repos/merglbot-core/example/contents/.github/workflows/codeql.yml':
     if mode == 'unreadable_candidate':
         print('HTTP 403 not authorized', file=sys.stderr)
         sys.exit(1)
     print('on:')
     print('  workflow_call:' if mode == 'reusable' else '  push:')
-    if mode != 'unrelated':
-        print('jobs:')
-        print('  scan:')
+    if mode == 'dual_trigger':
+        print('  workflow_call:')
+    print('jobs:')
+    print('  scan:')
+    if mode == 'reusable_caller':
+        print('    uses: merglbot-core/github/.github/workflows/reusable-codeql-analysis.yml@0123456789abcdef0123456789abcdef01234567')
+    else:
         print('    steps:')
-        print('      - uses: github/codeql-action/analyze@v4')
+        if mode == 'commented_action':
+            print('      # - uses: github/codeql-action/analyze@v4')
+            print('      - uses: actions/checkout@v4')
+        elif mode == 'unrelated':
+            print('      - uses: actions/checkout@v4')
+        else:
+            print('      - uses: github/codeql-action/analyze@v4')
+elif path == 'repos/merglbot-core/github/contents/.github/workflows/reusable-codeql-analysis.yml?ref=0123456789abcdef0123456789abcdef01234567':
+    print('on: workflow_call')
+    print('jobs:')
+    print('  scan:')
+    print('    steps:')
+    print('      - uses: github/codeql-action/analyze@v4')
+elif path == 'repos/merglbot-core/example/contents/.github/workflows/later.yml':
+    print('HTTP 403 not authorized', file=sys.stderr)
+    sys.exit(1)
 elif path == 'repos/merglbot-core/second/code-scanning/default-setup':
     print('HTTP 403 not authorized to read code scanning', file=sys.stderr)
     sys.exit(1)
@@ -188,6 +211,31 @@ else:
         result = self.run_scanner(fixture_mode="real_conflict")
         self.assertEqual(result.returncode, 2)
         self.assertEqual(json.loads(result.stdout)["status"], "CONFLICT")
+
+    def test_commented_action_is_not_a_conflict(self):
+        result = self.run_scanner(fixture_mode="commented_action")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["conflicts"], [])
+
+    def test_workflow_call_plus_push_is_executable(self):
+        result = self.run_scanner(fixture_mode="dual_trigger")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["status"], "CONFLICT")
+
+    def test_reusable_caller_follows_actual_workflow(self):
+        result = self.run_scanner(fixture_mode="reusable_caller")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["status"], "CONFLICT")
+        self.assertIn('repos/merglbot-core/github/contents/.github/workflows/reusable-codeql-analysis.yml?ref=0123456789abcdef0123456789abcdef01234567',
+                      [call[1] for call in self.calls_made()])
+
+    def test_conflict_survives_later_unreadable_workflow(self):
+        result = self.run_scanner(fixture_mode="conflict_then_unreadable")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "CONFLICT_PARTIAL")
+        self.assertEqual(report["unswept"], ["merglbot-core/example"])
+        self.assertEqual(report["conflicts"][0]["advanced_workflows"], ["codeql.yml"])
 
     def test_conflict_with_unswept_repo_exits_as_incomplete(self):
         result = self.run_scanner(fixture_mode="partial_conflict")

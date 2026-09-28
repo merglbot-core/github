@@ -29,6 +29,13 @@ complete paginated repository ID/name/owner set to equal the reviewed file.
 The subprocess uses an empty isolated `gh` config directory, disables prompts
 and clears secondary token variables so an expired lease cannot fall back to
 the operator's saved `gh` login.
+Workflow inspection requires `python3` with PyYAML available on the scheduled
+host. Keep `codeql_workflow_probe.py` beside the scanner when installing it;
+verify that dependency before replacing the existing scheduled script. The
+probe parses YAML structure without executing it, follows reusable workflow
+calls, and treats unreadable or unresolved calls as unswept. A sole
+`workflow_call` trigger does not execute in the workflow's own repository;
+other triggers alongside it do. Commented action references do not count.
 It scans only active repositories from that exact set. An unrelated visible
 public repository, missing selected repository, wrong installation, permission
 failure, or incomplete scan cannot become a clean result. This mode never calls

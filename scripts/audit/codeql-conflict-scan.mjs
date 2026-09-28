@@ -29,7 +29,7 @@ import { join, resolve } from 'node:path';
 // Filenames from github#789's estate sweep + a content probe for anything else that
 // calls the CodeQL analyze action under a different name.
 const ADVANCED_NAMES = /^(codeql(-analysis)?|security-codeql)\.ya?ml$/i;
-const ANALYZE_ACTION = /github\/codeql-action\/(analyze|init)@/;
+const ANALYZE_ACTION = /^github\/codeql-action\/(analyze|init)@/;
 
 const args = process.argv.slice(2);
 const wantJson = args.includes('--json');
@@ -156,11 +156,43 @@ function gh(ghArgs, { retry404 = false } = {}) {
   }
   throw lastErr;
 }
-// A workflow that only offers itself via `workflow_call:` (a reusable workflow) never runs
-// on its host repo, so it cannot collide with that repo's default setup.
-const RUN_TRIGGERS = /^\s*(push|pull_request|pull_request_target|schedule|workflow_dispatch|merge_group):/m;
-function isReusableOnly(body) {
-  return /^\s*workflow_call:/m.test(body) && !RUN_TRIGGERS.test(body);
+function workflowStructure(body) {
+  // BaseLoader treats GitHub's `on` as a key; comments cannot masquerade as steps.
+  // Keep the parser's environment and output bounded and never pass it the token.
+  const parsed = execFileSync('python3', [new URL('./codeql_workflow_probe.py', import.meta.url).pathname], {
+    input: body, encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024,
+    env: { PATH: process.env.PATH || '/usr/bin:/bin', PYTHONNOUSERSITE: '1' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  return JSON.parse(parsed);
+}
+function workflowBody(repo, file, ref) {
+  const path = `repos/${repo}/contents/.github/workflows/${file}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`;
+  return gh(['api', path, '-H', 'Accept: application/vnd.github.raw'], { retry404: true });
+}
+function reusableTarget(uses, repo) {
+  const local = /^\.\/\.github\/workflows\/([A-Za-z0-9_.-]+\.ya?ml)$/.exec(uses);
+  if (local && !local[1].includes('..')) return { repo, file: local[1], ref: null };
+  const remote = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/\.github\/workflows\/([A-Za-z0-9_.-]+\.ya?ml)@([A-Za-z0-9._/-]+)$/.exec(uses);
+  if (remote && !remote[3].includes('..') && !remote[4].includes('..')) {
+    return { repo: `${remote[1]}/${remote[2]}`, file: remote[3], ref: remote[4] };
+  }
+  throw new Error('unresolved_reusable_workflow');
+}
+function invokesCodeql(body, repo, visited = new Set(), depth = 0) {
+  if (depth > 4) throw new Error('reusable_workflow_depth_exceeded');
+  const shape = workflowStructure(body);
+  let found = shape.step_uses.some(uses => ANALYZE_ACTION.test(uses));
+  for (const uses of shape.job_uses) {
+    const target = reusableTarget(uses, repo);
+    const key = `${target.repo}/${target.file}@${target.ref || 'default'}`;
+    if (visited.has(key)) throw new Error('reusable_workflow_cycle');
+    visited.add(key);
+    const nested = workflowBody(target.repo, target.file, target.ref);
+    if (invokesCodeql(nested, target.repo, visited, depth + 1)) found = true;
+    visited.delete(key);
+  }
+  return found;
 }
 function ghJson(path, { paginate = false } = {}) {
   const a = ['api', path];
@@ -284,29 +316,30 @@ for (const org of orgs) {
     // this repository; even codeql.yml may be unrelated or reusable-only.
     const advancedFiles = configured ? []
       : workflows.filter(w => ADVANCED_NAMES.test(w.name)).map(w => w.name);
+    let workflowUnknown = false;
     if (configured) {
       for (const w of workflows) {
         if (!/\.ya?ml$/i.test(w.name)) continue;
         try {
-          const body = gh(['api', `repos/${full}/contents/.github/workflows/${w.name}`, '-H', 'Accept: application/vnd.github.raw'], { retry404: true });
-          if (ANALYZE_ACTION.test(body) && !isReusableOnly(body)) advancedFiles.push(w.name);
+          const body = workflowBody(full, w.name);
+          const structure = workflowStructure(body);
+          if (structure.triggers.length === 1 && structure.triggers[0] === 'workflow_call') continue;
+          if (invokesCodeql(body, full)) advancedFiles.push(w.name);
         } catch (e) {
           // An unreadable workflow leaves the repo's advanced-side UNKNOWN: fail closed, unsweep it.
           orgRow.unswept++; report.unswept.push(full);
           report.errors.push(`${full}: could not read ${w.name}: ${safeFailure(e)}`);
-          advancedFiles.length = 0; advancedFiles.push(null); break;
+          workflowUnknown = true; break;
         }
       }
     }
-    if (advancedFiles.includes(null)) continue; // unswept above
     if (advancedFiles.length) { orgRow.advanced++; report.advanced_workflow++; }
-    report.repos_swept++;
-
     if (configured && advancedFiles.length) {
       orgRow.conflicts++;
       report.conflicts.push({ repo: full, default_setup_languages: setup.languages || [], advanced_workflows: advancedFiles });
       log(`CONFLICT ${full}: default-setup=${(setup.languages || []).join(',')} advanced=${advancedFiles.join(',')}`);
     }
+    if (!workflowUnknown) report.repos_swept++;
   }
   report.orgs[org] = orgRow;
   log(`${org}: repos=${orgRow.repos} default_setup=${orgRow.default_setup} advanced=${orgRow.advanced} conflicts=${orgRow.conflicts} unswept=${orgRow.unswept}`);
@@ -314,7 +347,9 @@ for (const org of orgs) {
 
 if (report.conflicts.length) report.status = 'CONFLICT';
 if (report.unswept.length) report.status = report.conflicts.length ? 'CONFLICT_PARTIAL' : 'DEGRADED';
-if (report.repos_swept === 0) { report.status = 'ERROR'; report.errors.push('zero repos swept — silent zero is not a clean zero'); }
+if (report.repos_swept === 0 && !report.conflicts.length) {
+  report.status = 'ERROR'; report.errors.push('zero repos swept — silent zero is not a clean zero');
+}
 
 finish(report.status === 'ERROR' || report.unswept.length ? 1
   : report.conflicts.length ? 2 : 0);
