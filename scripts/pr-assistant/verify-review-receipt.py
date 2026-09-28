@@ -246,6 +246,19 @@ def select_v6_check_run(
                 candidates.append(run)
         if candidates:
             completed = candidates
+        elif pending:
+            # Positively identified foreign receipts are not a prior verdict
+            # for this PR. A trusted pending run must also identify this PR
+            # through its source or (before markers exist) Checks API links.
+            for run in trusted:
+                if str(run.get("status") or "") == "completed":
+                    continue
+                source = parse_markers(str((run.get("output") or {}).get("summary") or "")).get("MERGLBOT_REVIEW_SOURCE", "")
+                links = [item["number"] for item in (run.get("pull_requests") or [])
+                         if isinstance(item, dict) and type(item.get("number")) is int]
+                bound = source == expected_review_source(repo, pr_number) and (not links or pr_number in links)
+                if bound or (not source and pr_number in links):
+                    return None, pending, untrusted_reasons
     if not completed:
         return None, pending, untrusted_reasons
     newest = max(

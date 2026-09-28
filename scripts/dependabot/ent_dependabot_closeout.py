@@ -2265,6 +2265,8 @@ def _process_pr_once(
         if not updated_ok:
             receipt.classification = "BLOCKED_UPDATED_HEAD_GATES"
             receipt.blockers.extend(updated_blockers)
+            if apply and "updated_head_changed_during_gate_wait" in updated_blockers:
+                receipt.terminal_close_loop_verdict = "REVIEW_REBIND_REQUIRED"
             return receipt
         refreshed = refresh_pr(pr.repo, pr.number)
         if refreshed.head_sha != updated_head:

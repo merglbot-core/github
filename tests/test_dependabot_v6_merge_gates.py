@@ -277,6 +277,26 @@ class FinalGateIntegration(unittest.TestCase):
     self.assertEqual(result.terminal_close_loop_verdict, "REVIEW_REBIND_REQUIRED")
     self.assertEqual(self.merge_calls, [])
 
+  def test_strict_updated_head_change_during_wait_rebinds_outer_loop(self):
+    from dataclasses import replace
+    self.pr.merge_state = "BEHIND"
+    self.m.branch_protection = lambda *args: {"required_status_checks": {"strict": True}}
+    synced, pushed = "e" * 40, "f" * 40
+    self.m.wait_for_merglbot = lambda *args, **kw: {"ok": True, "head_sha": args[3]}
+    def update(*args, **kw):
+      self.pr = replace(self.pr, head_sha=synced, merge_state="CLEAN")
+      return {"ok": True}
+    def wait(pr):
+      self.pr = replace(self.pr, head_sha=pushed, merge_state="CLEAN")
+      self.final_receipt["head_sha"] = pushed
+      return False, {}, ["updated_head_changed_during_gate_wait"]
+    self.m.request_update_branch = update
+    self.m.wait_for_updated_head_gates = wait
+    result = self.execute()
+    self.assertEqual(result.action, "merged")
+    self.assertEqual(self.merge_calls, [("fixture/example", 7, pushed)])
+    self.assertEqual(result.review_iterations, 2)
+
   def test_approved_behind_non_strict_does_not_sync(self):
     self.pr.merge_state = "BEHIND"
     self.m.branch_protection = lambda *args: {"required_status_checks": {"strict": False}}
@@ -495,6 +515,19 @@ class CanonicalReceiptBridge(unittest.TestCase):
       replacement = "" if binding is None else "<!-- MERGLBOT_REVIEW_SOURCE: " + binding + " -->"
       incomplete["output"]["summary"] = incomplete["output"]["summary"].replace("<!-- MERGLBOT_REVIEW_SOURCE: merglbot-core/infra#3277 -->", replacement)
       self.assertFalse(verify(3277, [a, b, incomplete])["ok"], binding)
+    requested_pending = copy.deepcopy(a)
+    requested_pending.update(id=6, status="in_progress", conclusion=None)
+    only_foreign = verify(3277, [b, requested_pending])
+    self.assertEqual(set(only_foreign["blockers"]), {"v6_review_in_progress", "missing_merglbot_review_receipt"})
+    self.assertTrue(load_consumer().pending_merglbot_review_can_wait(only_foreign, case["head_sha"]))
+    requested_pending["output"]["summary"] = ""
+    self.assertEqual(set(verify(3277, [b, requested_pending])["blockers"]), {"v6_review_in_progress", "missing_merglbot_review_receipt"})
+    requested_pending["pull_requests"] = [{"number": 3278}]
+    self.assertTrue(any(x.startswith("review_source_pr_mismatch:") for x in verify(3277, [b, requested_pending])["blockers"]))
+    requested_pending["pull_requests"] = [{"number": 3277}]
+    requested_pending["output"]["summary"] = "<!-- MERGLBOT_REVIEW_SOURCE: malformed -->"
+    self.assertTrue(any(x.startswith("review_source_pr_mismatch:") for x in verify(3277, [b, requested_pending])["blockers"]))
+    self.assertTrue(any(x.startswith("v6_check_run_untrusted_producer:") for x in verify(3277, [b, requested_pending, forged])["blockers"]))
 
   def result(self, replacement=None):
     path = ROOT / "scripts/pr-assistant/verify-review-receipt.py"
