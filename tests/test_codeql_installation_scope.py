@@ -40,21 +40,37 @@ Path(os.environ['GH_PROOF']).write_text(json.dumps({
     'isolated_config': Path(os.environ.get('GH_CONFIG_DIR', '')).name.startswith('merglbot-codeql-gh-'),
 }))
 path = args[1]
+mode = os.environ.get('GH_FIXTURE_MODE')
 if path.startswith('installation/repositories?'):
-    repo_id = 18 if os.environ.get('GH_FIXTURE_MODE') == 'mismatch' else 17
+    repo_id = 18 if mode == 'mismatch' else 17
     repos = [{'id': repo_id, 'name': 'example', 'full_name': 'merglbot-core/example',
               'archived': False, 'disabled': False}]
-    if os.environ.get('GH_FIXTURE_MODE') == 'partial':
+    if mode in ('partial', 'partial_conflict'):
         repos.append({'id': 18, 'name': 'second', 'full_name': 'merglbot-core/second',
                       'archived': False, 'disabled': False})
     print(json.dumps([{'total_count': len(repos), 'repositories': repos}]))
 elif path == 'repos/merglbot-core/example/code-scanning/default-setup':
-    if os.environ.get('GH_FIXTURE_MODE') == 'ambiguous_404':
+    if mode == 'ambiguous_404':
         print('HTTP 404 Resource not found', file=sys.stderr)
         sys.exit(1)
-    print(json.dumps({'state': 'not-configured', 'languages': []}))
+    state = 'configured' if mode in ('reusable', 'unrelated', 'real_conflict',
+                                     'partial_conflict', 'unreadable_candidate') else 'not-configured'
+    print(json.dumps({'state': state, 'languages': ['javascript']}))
 elif path == 'repos/merglbot-core/example/contents/.github/workflows':
-    print('[]')
+    print(json.dumps([{'name': 'codeql.yml'}]) if mode in
+          ('reusable', 'unrelated', 'real_conflict', 'partial_conflict',
+           'unreadable_candidate') else '[]')
+elif path == 'repos/merglbot-core/example/contents/.github/workflows/codeql.yml':
+    if mode == 'unreadable_candidate':
+        print('HTTP 403 not authorized', file=sys.stderr)
+        sys.exit(1)
+    print('on:')
+    print('  workflow_call:' if mode == 'reusable' else '  push:')
+    if mode != 'unrelated':
+        print('jobs:')
+        print('  scan:')
+        print('    steps:')
+        print('      - uses: github/codeql-action/analyze@v4')
 elif path == 'repos/merglbot-core/second/code-scanning/default-setup':
     print('HTTP 403 not authorized to read code scanning', file=sys.stderr)
     sys.exit(1)
@@ -72,7 +88,7 @@ else:
     def run_scanner(self, *, token=True, fixture_mode=None, org="merglbot-core"):
         scope = json.loads(self.scope.read_text())
         scope["organization"] = org
-        if fixture_mode == "partial":
+        if fixture_mode in ("partial", "partial_conflict"):
             scope["repositories"].append({"id": 18, "name": "second"})
         self.scope.write_text(json.dumps(scope))
         env = os.environ.copy()
@@ -156,6 +172,38 @@ else:
         self.assertEqual(report["status"], "ERROR")
         self.assertEqual(report["unswept"], ["merglbot-core/example"])
         self.assertEqual(len(self.calls_made()), 2)
+
+    def test_reusable_only_matching_filename_is_not_a_conflict(self):
+        report = json.loads(self.run_scanner(fixture_mode="reusable").stdout)
+        self.assertEqual((report["status"], report["conflicts"]), ("OK", []))
+        self.assertIn('repos/merglbot-core/example/contents/.github/workflows/codeql.yml',
+                      [call[1] for call in self.calls_made()])
+
+    def test_unrelated_matching_filename_is_not_a_conflict(self):
+        result = self.run_scanner(fixture_mode="unrelated")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(json.loads(result.stdout)["conflicts"], [])
+
+    def test_executing_codeql_workflow_is_a_conflict(self):
+        result = self.run_scanner(fixture_mode="real_conflict")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(json.loads(result.stdout)["status"], "CONFLICT")
+
+    def test_conflict_with_unswept_repo_exits_as_incomplete(self):
+        result = self.run_scanner(fixture_mode="partial_conflict")
+        self.assertEqual(result.returncode, 1)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "CONFLICT_PARTIAL")
+        self.assertEqual(report["unswept"], ["merglbot-core/second"])
+        self.assertEqual([c["repo"] for c in report["conflicts"]],
+                         ["merglbot-core/example"])
+
+    def test_unreadable_matching_workflow_is_unswept(self):
+        result = self.run_scanner(fixture_mode="unreadable_candidate")
+        self.assertEqual(result.returncode, 1)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["unswept"], ["merglbot-core/example"])
+        self.assertEqual(report["conflicts"], [])
 
     def test_excluded_org_fails_before_network(self):
         result = self.run_scanner(org="lrtch")

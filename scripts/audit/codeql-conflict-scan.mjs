@@ -279,8 +279,12 @@ for (const org of orgs) {
       }
       if (!/HTTP 404/.test(msg)) { orgRow.unswept++; report.unswept.push(full); report.errors.push(`${full}: workflows ${safeFailure(e)}`); continue; }
     }
-    const advancedFiles = workflows.filter(w => ADVANCED_NAMES.test(w.name)).map(w => w.name);
-    if (configured && !advancedFiles.length) {
+    // Names are only a cheap hint when default setup is off. A configured
+    // repository must prove the workflow actually invokes CodeQL and runs in
+    // this repository; even codeql.yml may be unrelated or reusable-only.
+    const advancedFiles = configured ? []
+      : workflows.filter(w => ADVANCED_NAMES.test(w.name)).map(w => w.name);
+    if (configured) {
       for (const w of workflows) {
         if (!/\.ya?ml$/i.test(w.name)) continue;
         try {
@@ -312,7 +316,7 @@ if (report.conflicts.length) report.status = 'CONFLICT';
 if (report.unswept.length) report.status = report.conflicts.length ? 'CONFLICT_PARTIAL' : 'DEGRADED';
 if (report.repos_swept === 0) { report.status = 'ERROR'; report.errors.push('zero repos swept — silent zero is not a clean zero'); }
 
-finish(report.status === 'ERROR' || report.status === 'DEGRADED' ? 1
+finish(report.status === 'ERROR' || report.unswept.length ? 1
   : report.conflicts.length ? 2 : 0);
 
 function finish(code) {
