@@ -54,7 +54,9 @@ export function runDryRun({ timeoutMs = 120000, outputLimit = LIMIT } = {}) {
     return Promise.resolve({ error: true });
   }
   return new Promise((resolve) => {
-    const child = spawn('npx', ['--no-install', 'semantic-release', '--dry-run', '--no-ci'],
+    // Explicit analysis options apply only to this invocation, not existing workflows.
+    const child = spawn('npx', ['--no-install', 'semantic-release', '--dry-run', '--no-ci',
+      '--branches', 'main', '--plugins', '@semantic-release/commit-analyzer,@semantic-release/release-notes-generator'],
       { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     const stdout = [], stderr = [];
     let bytes = 0, failed = false, done = false, deadline, drainDeadline;

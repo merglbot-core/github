@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -97,6 +97,9 @@ for (const overflow of [false, true]) {
       pid = Number(readFileSync(pidFile, 'utf8'));
       assert.ok(Number.isSafeInteger(pid) && pid > 1);
       const observed = spawnSync('/bin/ps', ['-p', String(pid), '-o', 'stat='], { timeout: 2000 });
+      assert.ifError(observed.error);
+      assert.ok(observed.status === 0 || observed.status === 1, 'fixture process inspection failed');
+      assert.equal(observed.stderr.length, 0, 'fixture process inspection emitted an error');
       const state = observed.stdout.toString().trim();
       assert.ok(state === '' || state.startsWith('Z'), `fixture descendant still runnable: ${state}`);
     } finally {
@@ -106,6 +109,27 @@ for (const overflow of [false, true]) {
     }
   });
 }
+
+test('automatic CLI explicitly selects analysis plugins and branch from an unrelated working directory', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'release-version-config-'));
+  const helper = fileURLToPath(new URL('../scripts/release/determine-version.mjs', import.meta.url));
+  try {
+    assert.equal(existsSync(fileURLToPath(new URL('../.releaserc.json', import.meta.url))), false);
+    const out = join(dir, 'output');
+    const args = ['--no-install', 'semantic-release', '--dry-run', '--no-ci', '--branches', 'main',
+      '--plugins', '@semantic-release/commit-analyzer,@semantic-release/release-notes-generator'];
+    writeFileSync(join(dir, 'npx'), `#!${process.execPath}\n` +
+      `const assert = require('node:assert/strict');\n` +
+      `assert.deepEqual(process.argv.slice(2), ${JSON.stringify(args)});\n` +
+      `process.stdout.write(${JSON.stringify(log('The next release version is 1.2.3'))});\n`, { mode: 0o700 });
+    const child = spawnSync(process.execPath, [helper], {
+      cwd: dir, env: { ...process.env, PATH: dir, GITHUB_OUTPUT: out, RELEASE_VERSION_INPUT: '' }, timeout: 5000,
+    });
+    assert.equal(child.status, 0);
+    assert.equal(child.stdout.length + child.stderr.length, 0);
+    assert.equal(readFileSync(out, 'utf8'), 'version=1.2.3\nskip=false\n');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 for (const [message, expected] of [
   ['Release note for version 1.2.3:', 'version=1.2.3\nskip=false\n'],

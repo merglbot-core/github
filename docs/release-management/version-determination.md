@@ -23,23 +23,26 @@ host's capped-run wrapper). Tests use synthetic provider results and do not run
 semantic-release, install packages, push tags or publish releases. Protected
 source delivery is separate from the minimal workflow authority change. Until
 that wiring lands, the production workflow retains its original inline version
-determination code, but the new root `.releaserc.json` already changes the
-configuration that this inline semantic-release invocation discovers. Its
-actual production outcome and natural-run acceptance require verification;
-neither unchanged overall behavior nor release or savings acceptance is claimed.
+determination code. The helper selects analysis plugins and the `main` branch
+only through explicit CLI arguments; no auto-discovered root release
+configuration is introduced. Actual production outcome and natural-run
+acceptance still require verification; no release or savings acceptance is claimed.
 
 The existing CI job uses Python unittest discovery. `test_release_version.py`
 invokes the Node behavior suite through that path; it fails if Node is absent,
 if the suite fails or if its deadline expires. A Node-only file by itself would
 not be collected by that job. No separate CI workflow or dispatch is needed.
 
-The root is not an npm package. `.releaserc.json` restricts version analysis to
-`main` and the commit-analyzer/release-notes-generator plugins, with dry-run
-as the default. It does not load npm, GitHub-publish, changelog-writing or git
+The root is not an npm package. The helper's explicit `--branches main` and
+`--plugins` arguments restrict version analysis to the
+commit-analyzer/release-notes-generator plugins, with `--dry-run` required.
+It does not load npm, GitHub-publish, changelog-writing or git
 commit plugins. Tag and GitHub release creation remain in the existing workflow.
 This prevents default npm publishing prerequisites from being mistaken for
-an empty release decision. Authentication and natural-run acceptance remain
-separate requirements.
+an empty release decision without changing configuration discovery in the
+existing inline workflow. Authentication and natural-run acceptance remain
+separate requirements. The analysis settings are fixed in the helper and do
+not depend on an auto-discovered file in the caller's working directory.
 
 An isolated local bare-repository check also exercised the real semantic-release
 25.0.9 package on Node 22.23.2: an initial feature commit produced version 1.0.0;
@@ -50,4 +53,9 @@ uses no GitHub/cloud credentials and does not prove the pinned Ubuntu runtime.
 The same two cases also passed using an isolated global install with no local
 `node_modules` or `package.json`. npm/npx used a temporary prefix and empty
 configuration files; no system global installation was changed. This closes
-the local-versus-global resolution fixture gap, not production acceptance.
+the local-versus-global resolution fixture gap for that dated configuration,
+not production acceptance. After isolating analysis to explicit CLI arguments,
+the global-install cases were repeated successfully from an unrelated fixture
+directory with no root release configuration, `node_modules` or `package.json`.
+This verifies the current helper's intended global-install layout; the earlier
+local-install fixture does not independently revalidate every later source change.
