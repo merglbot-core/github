@@ -157,6 +157,13 @@ def classify_action(
         base["reason"] = "equal_post_window_or_billing_lag_incomplete"
         return base
 
+    if not health:
+        # Health is attached per action only to its own aggregate rows, so an
+        # empty mapping means the scope matched no billing row in either window
+        # (wrong service/SKU selector, or a query that filtered everything). Say
+        # so instead of blaming export freshness, which is a different failure.
+        base.update(state="DATA_GAP", reason="no_billing_rows_in_scope")
+        return base
     latest_usage = health.get("latest_usage_date")
     latest_partition = health.get("latest_partition_date")
     if not latest_usage or not latest_partition:
@@ -228,6 +235,10 @@ def _query_sql(actions: list[Action]) -> tuple[str, list[bigquery.QueryParameter
                 bigquery.ArrayQueryParameter(f"skus_{index}", "STRING", list(action.sku_contains)),
             ]
         )
+        # BigQuery binds an EMPTY array parameter as NULL, so ARRAY_LENGTH(@x) = 0
+        # is NULL (not TRUE) and a bare "no filter" branch silently drops every
+        # row. Every run from 2026-09-07 to 2026-09-28 read DATA_GAP for all
+        # actions because of it (monitoring#587). IFNULL keeps "empty = no filter".
         action_parts.append(f"""
             SELECT @action_{index} AS action_id,
                    IF(usage_start_time < @cutoff_{index}, 'pre', 'post') AS period,
@@ -237,8 +248,8 @@ def _query_sql(actions: list[Action]) -> tuple[str, list[bigquery.QueryParameter
              WHERE project_id IN UNNEST(@projects_{index})
                AND usage_start_time >= @pre_start_{index}
                AND usage_start_time < @post_end_{index}
-               AND (ARRAY_LENGTH(@services_{index}) = 0 OR service IN UNNEST(@services_{index}))
-               AND (ARRAY_LENGTH(@skus_{index}) = 0 OR EXISTS (
+               AND (IFNULL(ARRAY_LENGTH(@services_{index}), 0) = 0 OR service IN UNNEST(@services_{index}))
+               AND (IFNULL(ARRAY_LENGTH(@skus_{index}), 0) = 0 OR EXISTS (
                      SELECT 1 FROM UNNEST(@skus_{index}) needle WHERE STRPOS(LOWER(sku), LOWER(needle)) > 0))
             """)
         health_parts.append(f"""
