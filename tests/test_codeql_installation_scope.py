@@ -59,6 +59,8 @@ elif path == 'repos/merglbot-core/example/code-scanning/default-setup':
                                      'nested_reusable', 'directory_object', 'mixed_case_action',
                                      'local_composite', 'direct_and_local',
                                      'init_only', 'init_and_analyze',
+                                     'unknown_before_conflict', 'disabled_step',
+                                     'disabled_job', 'disabled_reusable',
                                      'reusable_conflict_then_unreadable',
                                      'conflict_then_unreadable') else 'not-configured'
     print(json.dumps({'state': state, 'languages': ['javascript']}))
@@ -67,15 +69,18 @@ elif path == 'repos/merglbot-core/example/contents/.github/workflows':
         print(json.dumps({'unexpected': True}))
         sys.exit(0)
     print(json.dumps([{'name': 'codeql.yml'}] +
-                     ([{'name': 'later.yml'}] if mode == 'conflict_then_unreadable' else [])) if mode in
+                     ([{'name': 'later.yml'}] if mode in
+                      ('conflict_then_unreadable', 'unknown_before_conflict') else [])) if mode in
           ('reusable', 'unrelated', 'real_conflict', 'partial_conflict',
            'unreadable_candidate', 'commented_action', 'dual_trigger',
            'reusable_caller', 'nested_reusable', 'conflict_then_unreadable',
            'mixed_case_action', 'local_composite', 'direct_and_local',
            'init_only', 'init_and_analyze',
+           'unknown_before_conflict', 'disabled_step', 'disabled_job',
+           'disabled_reusable',
            'reusable_conflict_then_unreadable') else '[]')
 elif path == 'repos/merglbot-core/example/contents/.github/workflows/codeql.yml':
-    if mode == 'unreadable_candidate':
+    if mode in ('unreadable_candidate', 'unknown_before_conflict'):
         print('HTTP 403 not authorized', file=sys.stderr)
         sys.exit(1)
     print('on:')
@@ -84,7 +89,12 @@ elif path == 'repos/merglbot-core/example/contents/.github/workflows/codeql.yml'
         print('  workflow_call:')
     print('jobs:')
     print('  scan:')
-    if mode in ('reusable_caller', 'nested_reusable', 'reusable_conflict_then_unreadable'):
+    if mode == 'disabled_job':
+        print('    if: false')
+    if mode == 'disabled_reusable':
+        print('    if: ${{ false }}')
+    if mode in ('reusable_caller', 'nested_reusable', 'reusable_conflict_then_unreadable',
+                'disabled_reusable'):
         print('    uses: merglbot-core/github/.github/workflows/reusable-codeql-analysis.yml@0123456789abcdef0123456789abcdef01234567')
         if mode == 'reusable_conflict_then_unreadable':
             print('  later:')
@@ -108,6 +118,10 @@ elif path == 'repos/merglbot-core/example/contents/.github/workflows/codeql.yml'
         elif mode == 'unrelated':
             print('      - uses: actions/checkout@v4')
         else:
+            if mode == 'disabled_step':
+                print('      - if: false')
+                print('        uses: github/codeql-action/analyze@v4')
+                sys.exit(0)
             print('      - uses: github/codeql-action/analyze@v4')
 elif path == 'repos/merglbot-core/github/contents/.github/workflows/reusable-codeql-analysis.yml?ref=0123456789abcdef0123456789abcdef01234567':
     print('on: workflow_call')
@@ -128,6 +142,13 @@ elif path == 'repos/merglbot-core/github/contents/.github/workflows/missing.yml?
     print('HTTP 403 not authorized', file=sys.stderr)
     sys.exit(1)
 elif path == 'repos/merglbot-core/example/contents/.github/workflows/later.yml':
+    if mode == 'unknown_before_conflict':
+        print('on: push')
+        print('jobs:')
+        print('  scan:')
+        print('    steps:')
+        print('      - uses: github/codeql-action/analyze@v4')
+        sys.exit(0)
     print('HTTP 403 not authorized', file=sys.stderr)
     sys.exit(1)
 elif path == 'repos/merglbot-core/second/code-scanning/default-setup':
@@ -304,6 +325,60 @@ else:
         self.assertEqual(report["status"], "CONFLICT_PARTIAL")
         self.assertEqual(report["unswept"], ["merglbot-core/example"])
         self.assertEqual(report["conflicts"][0]["advanced_workflows"], ["codeql.yml"])
+
+    def test_earlier_unknown_does_not_hide_later_conflict(self):
+        result = self.run_scanner(fixture_mode="unknown_before_conflict")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "CONFLICT_PARTIAL")
+        self.assertEqual(report["unswept"], ["merglbot-core/example"])
+        self.assertEqual(report["conflicts"][0]["advanced_workflows"], ["later.yml"])
+
+    def test_statically_disabled_step_does_not_conflict(self):
+        result = self.run_scanner(fixture_mode="disabled_step")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["conflicts"], [])
+
+    def test_statically_disabled_job_does_not_conflict(self):
+        result = self.run_scanner(fixture_mode="disabled_job")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["conflicts"], [])
+
+    def test_statically_disabled_reusable_job_is_not_resolved(self):
+        result = self.run_scanner(fixture_mode="disabled_reusable")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["conflicts"], [])
+        self.assertNotIn('repos/merglbot-core/github/contents/.github/workflows/reusable-codeql-analysis.yml?ref=0123456789abcdef0123456789abcdef01234567',
+                         [call[1] for call in self.calls_made()])
+
+    def test_symlinked_output_directory_cannot_replace_scheduled_report(self):
+        scheduled = self.root / '.merglbot' / 'codeql-conflict'
+        scheduled.mkdir(parents=True)
+        (scheduled / 'latest.json').write_text('sentinel')
+        self.output.symlink_to(scheduled, target_is_directory=True)
+        result = self.run_scanner()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((scheduled / 'latest.json').read_text(), 'sentinel')
+        self.assertEqual(self.calls_made(), [])
+
+    def test_symlinked_output_file_cannot_replace_scheduled_report(self):
+        scheduled = self.root / '.merglbot' / 'codeql-conflict'
+        scheduled.mkdir(parents=True)
+        (scheduled / 'latest.json').write_text('sentinel')
+        self.output.mkdir()
+        (self.output / 'latest.json').symlink_to(scheduled / 'latest.json')
+        result = self.run_scanner()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((scheduled / 'latest.json').read_text(), 'sentinel')
+        self.assertEqual(self.calls_made(), [])
+
+    def test_broken_output_file_symlink_is_denied(self):
+        self.output.mkdir()
+        (self.output / 'latest.json').symlink_to(self.root / 'missing-report.json')
+        result = self.run_scanner()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.root / 'missing-report.json').exists())
+        self.assertEqual(self.calls_made(), [])
 
     def test_unknown_default_setup_state_is_unswept(self):
         result = self.run_scanner(fixture_mode="unknown_state")

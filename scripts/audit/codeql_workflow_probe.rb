@@ -4,6 +4,14 @@
 require 'json'
 require 'yaml'
 
+def statically_disabled?(condition)
+  return true if condition == false
+  return false unless condition.is_a?(String)
+
+  normalized = condition.strip
+  normalized.match?(/\A(?:false|\$\{\{\s*false\s*\}\})\z/i)
+end
+
 def probe(body)
   workflow = YAML.safe_load(body, permitted_classes: [], permitted_symbols: [], aliases: false)
   raise 'invalid_workflow' unless workflow.is_a?(Hash)
@@ -25,6 +33,7 @@ def probe(body)
   job_uses = []
   jobs.each_value do |job|
     raise 'invalid_workflow' unless job.is_a?(Hash)
+    next if statically_disabled?(job['if'])
 
     if job.key?('uses')
       raise 'invalid_workflow' unless job['uses'].is_a?(String)
@@ -36,6 +45,7 @@ def probe(body)
 
     steps.each do |step|
       raise 'invalid_workflow' unless step.is_a?(Hash)
+      next if statically_disabled?(step['if'])
       next unless step.key?('uses')
 
       raise 'invalid_workflow' unless step['uses'].is_a?(String)

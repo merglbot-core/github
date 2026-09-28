@@ -20,7 +20,8 @@ The ID and name above are synthetic test values. For a real canary, bind the
 approved organization and repository IDs to one installation grant. The caller
 must inject its short-lived installation token as `GH_TOKEN` and specify both
 `--installation-scope <file>` and `--output-dir <isolated-dir>`. The output
-directory must differ from the ordinary scheduled report location. No token
+directory must differ from the ordinary scheduled report location, including
+symlink aliases; existing symlinked report files are refused. No token
 value belongs in the scope file or command arguments.
 
 Before scanning, the tool refuses a missing `GH_TOKEN`, queries the
@@ -36,6 +37,9 @@ probe parses YAML structure without executing it, follows reusable workflow
 calls, and treats unreadable or unresolved calls as unswept. A sole
 `workflow_call` trigger does not execute in the workflow's own repository;
 other triggers alongside it do. Commented action references do not count.
+Statically disabled jobs and steps are excluded. An unreadable workflow does
+not stop inspection of later workflows, so confirmed conflicts remain visible
+alongside the incomplete coverage result.
 An `init` step without a confirmed `analyze` step is unverified rather than a
 proven conflict or a clean zero.
 Local composite action references are currently unswept because the scanner

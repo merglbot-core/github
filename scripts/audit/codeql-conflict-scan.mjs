@@ -22,9 +22,9 @@
 
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, appendFileSync, readFileSync,
-  mkdtempSync, chmodSync, rmSync } from 'node:fs';
+  mkdtempSync, chmodSync, rmSync, existsSync, lstatSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname, basename } from 'node:path';
 
 // Filenames from github#789's estate sweep + a content probe for anything else that
 // calls the CodeQL analyze action under a different name.
@@ -58,10 +58,33 @@ for (let i = 0; i < args.length; i++) {
 if (Boolean(scopeFile) !== Boolean(isolatedOutput) || scopeFile && onlyOrgs.length) {
   throw new Error('invalid_arguments');
 }
-const OUT_DIR = isolatedOutput ? resolve(isolatedOutput) : join(homedir(), '.merglbot', 'codeql-conflict');
-if (isolatedOutput && OUT_DIR === join(homedir(), '.merglbot', 'codeql-conflict')) {
-  throw new Error('output_must_be_isolated');
+const SCHEDULED_DIR = join(homedir(), '.merglbot', 'codeql-conflict');
+const OUT_DIR = isolatedOutput ? resolve(isolatedOutput) : SCHEDULED_DIR;
+function canonicalDestination(path) {
+  const missing = [];
+  let cursor = path;
+  while (!existsSync(cursor)) {
+    missing.unshift(basename(cursor));
+    const parent = dirname(cursor);
+    if (parent === cursor) throw new Error('invalid_output_path');
+    cursor = parent;
+  }
+  return resolve(realpathSync(cursor), ...missing);
 }
+function validateOutputIsolation() {
+  if (!isolatedOutput) return;
+  if (canonicalDestination(OUT_DIR) === canonicalDestination(SCHEDULED_DIR)) {
+    throw new Error('output_must_be_isolated');
+  }
+  for (const path of [join(OUT_DIR, 'latest.json'), join(OUT_DIR, 'history.jsonl')]) {
+    try {
+      if (lstatSync(path).isSymbolicLink()) throw new Error('output_file_symlink_denied');
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+}
+validateOutputIsolation();
 const LATEST = join(OUT_DIR, 'latest.json');
 const HISTORY = join(OUT_DIR, 'history.jsonl');
 const isolatedGhConfig = scopeFile ? mkdtempSync(join(tmpdir(), 'merglbot-codeql-gh-')) : null;
@@ -346,18 +369,17 @@ for (const org of orgs) {
           const result = invokesCodeql(body, full);
           if (result.found) advancedFiles.push(w.name);
           if (result.unknown) {
-            orgRow.unswept++; report.unswept.push(full);
             report.errors.push(`${full}: unresolved workflow indirection in ${w.name}`);
-            workflowUnknown = true; break;
+            workflowUnknown = true;
           }
         } catch (e) {
-          // An unreadable workflow leaves the repo's advanced-side UNKNOWN: fail closed, unsweep it.
-          orgRow.unswept++; report.unswept.push(full);
+          // Keep looking for proven conflicts in later files, but fail the coverage.
           report.errors.push(`${full}: could not read ${w.name}: ${safeFailure(e)}`);
-          workflowUnknown = true; break;
+          workflowUnknown = true;
         }
       }
     }
+    if (workflowUnknown) { orgRow.unswept++; report.unswept.push(full); }
     if (advancedFiles.length) { orgRow.advanced++; report.advanced_workflow++; }
     if (configured && advancedFiles.length) {
       orgRow.conflicts++;
@@ -381,6 +403,7 @@ finish(report.status === 'ERROR' || report.unswept.length ? 1
 
 function finish(code) {
   report.finished_at = new Date().toISOString();
+  validateOutputIsolation();
   mkdirSync(OUT_DIR, { recursive: true });
   writeFileSync(LATEST, JSON.stringify(report, null, 2) + '\n');
   appendFileSync(HISTORY, JSON.stringify({ at: report.at, status: report.status, swept: report.repos_swept, active: report.repos_active, conflicts: report.conflicts.map(c => c.repo), unswept: report.unswept.length }) + '\n');
