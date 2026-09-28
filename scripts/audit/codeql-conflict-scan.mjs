@@ -180,24 +180,31 @@ function reusableTarget(uses, repo, ref) {
   throw new Error('unresolved_reusable_workflow');
 }
 function invokesCodeql(body, repo, ref = null, visited = new Set(), depth = 0) {
-  if (depth > 4) throw new Error('reusable_workflow_depth_exceeded');
+  if (depth > 4) return { found: false, unknown: true };
   const shape = workflowStructure(body);
   // Local composite actions can hide CodeQL steps. Until their action.yml is
   // inspected, a clean answer is not justified for this repository.
-  if (shape.step_uses.some(uses => uses.startsWith('./'))) {
-    throw new Error('unresolved_local_action');
-  }
+  let unknown = shape.step_uses.some(uses => uses.startsWith('./'));
   let found = shape.step_uses.some(uses => ANALYZE_ACTION.test(uses));
   for (const uses of shape.job_uses) {
-    const target = reusableTarget(uses, repo, ref);
-    const key = `${target.repo}/${target.file}@${target.ref || 'default'}`;
-    if (visited.has(key)) throw new Error('reusable_workflow_cycle');
-    visited.add(key);
-    const nested = workflowBody(target.repo, target.file, target.ref);
-    if (invokesCodeql(nested, target.repo, target.ref, visited, depth + 1)) found = true;
-    visited.delete(key);
+    let key, added = false;
+    try {
+      const target = reusableTarget(uses, repo, ref);
+      key = `${target.repo}/${target.file}@${target.ref || 'default'}`;
+      if (visited.has(key)) throw new Error('reusable_workflow_cycle');
+      visited.add(key);
+      added = true;
+      const nested = workflowBody(target.repo, target.file, target.ref);
+      const result = invokesCodeql(nested, target.repo, target.ref, visited, depth + 1);
+      found ||= result.found;
+      unknown ||= result.unknown;
+    } catch {
+      unknown = true;
+    } finally {
+      if (added) visited.delete(key);
+    }
   }
-  return found;
+  return { found, unknown };
 }
 function ghJson(path, { paginate = false } = {}) {
   const a = ['api', path];
@@ -334,8 +341,13 @@ for (const org of orgs) {
           const body = workflowBody(full, w.name);
           const structure = workflowStructure(body);
           if (structure.triggers.length === 1 && structure.triggers[0] === 'workflow_call') continue;
-          if (structure.step_uses.some(uses => ANALYZE_ACTION.test(uses))) advancedFiles.push(w.name);
-          if (invokesCodeql(body, full) && !advancedFiles.includes(w.name)) advancedFiles.push(w.name);
+          const result = invokesCodeql(body, full);
+          if (result.found) advancedFiles.push(w.name);
+          if (result.unknown) {
+            orgRow.unswept++; report.unswept.push(full);
+            report.errors.push(`${full}: unresolved workflow indirection in ${w.name}`);
+            workflowUnknown = true; break;
+          }
         } catch (e) {
           // An unreadable workflow leaves the repo's advanced-side UNKNOWN: fail closed, unsweep it.
           orgRow.unswept++; report.unswept.push(full);

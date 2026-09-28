@@ -58,6 +58,7 @@ elif path == 'repos/merglbot-core/example/code-scanning/default-setup':
                                      'commented_action', 'dual_trigger', 'reusable_caller',
                                      'nested_reusable', 'directory_object', 'mixed_case_action',
                                      'local_composite', 'direct_and_local',
+                                     'reusable_conflict_then_unreadable',
                                      'conflict_then_unreadable') else 'not-configured'
     print(json.dumps({'state': state, 'languages': ['javascript']}))
 elif path == 'repos/merglbot-core/example/contents/.github/workflows':
@@ -69,7 +70,8 @@ elif path == 'repos/merglbot-core/example/contents/.github/workflows':
           ('reusable', 'unrelated', 'real_conflict', 'partial_conflict',
            'unreadable_candidate', 'commented_action', 'dual_trigger',
            'reusable_caller', 'nested_reusable', 'conflict_then_unreadable',
-           'mixed_case_action', 'local_composite', 'direct_and_local') else '[]')
+           'mixed_case_action', 'local_composite', 'direct_and_local',
+           'reusable_conflict_then_unreadable') else '[]')
 elif path == 'repos/merglbot-core/example/contents/.github/workflows/codeql.yml':
     if mode == 'unreadable_candidate':
         print('HTTP 403 not authorized', file=sys.stderr)
@@ -80,8 +82,11 @@ elif path == 'repos/merglbot-core/example/contents/.github/workflows/codeql.yml'
         print('  workflow_call:')
     print('jobs:')
     print('  scan:')
-    if mode in ('reusable_caller', 'nested_reusable'):
+    if mode in ('reusable_caller', 'nested_reusable', 'reusable_conflict_then_unreadable'):
         print('    uses: merglbot-core/github/.github/workflows/reusable-codeql-analysis.yml@0123456789abcdef0123456789abcdef01234567')
+        if mode == 'reusable_conflict_then_unreadable':
+            print('  later:')
+            print('    uses: merglbot-core/github/.github/workflows/missing.yml@0123456789abcdef0123456789abcdef01234567')
     else:
         print('    steps:')
         if mode == 'commented_action':
@@ -113,6 +118,9 @@ elif path == 'repos/merglbot-core/github/contents/.github/workflows/nested.yml?r
     print('  scan:')
     print('    steps:')
     print('      - uses: github/codeql-action/analyze@v4')
+elif path == 'repos/merglbot-core/github/contents/.github/workflows/missing.yml?ref=0123456789abcdef0123456789abcdef01234567':
+    print('HTTP 403 not authorized', file=sys.stderr)
+    sys.exit(1)
 elif path == 'repos/merglbot-core/example/contents/.github/workflows/later.yml':
     print('HTTP 403 not authorized', file=sys.stderr)
     sys.exit(1)
@@ -274,6 +282,14 @@ else:
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn('repos/merglbot-core/github/contents/.github/workflows/nested.yml?ref=0123456789abcdef0123456789abcdef01234567',
                       [call[1] for call in self.calls_made()])
+
+    def test_reusable_conflict_survives_later_unreadable_call(self):
+        result = self.run_scanner(fixture_mode="reusable_conflict_then_unreadable")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "CONFLICT_PARTIAL")
+        self.assertEqual(report["conflicts"][0]["advanced_workflows"], ["codeql.yml"])
+        self.assertEqual(report["unswept"], ["merglbot-core/example"])
 
     def test_conflict_survives_later_unreadable_workflow(self):
         result = self.run_scanner(fixture_mode="conflict_then_unreadable")
