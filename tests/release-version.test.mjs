@@ -31,7 +31,7 @@ test('nonzero exit with valid-looking output remains failure', () => {
   }
 });
 test('interruption, timeout and size overflow remain failure', () => {
-  for (const extra of [{ signal: 'SIGKILL' }, { error: new Error('timeout') }, { stdout: Buffer.alloc(1024 * 1024 + 1) }]) {
+  for (const extra of [{ signal: 'SIGKILL' }, { error: new Error('timeout') }, { stdout: Buffer.alloc(1024 * 1024 + 1) }, { stdout: Buffer.alloc(600000), stderr: Buffer.alloc(600000) }]) {
     assert.throws(() => classifyDryRun(result('', extra)));
   }
 });

@@ -20,7 +20,8 @@ export function classifyDryRun(result) {
     throw new Error('RELEASE_DRY_RUN_FAILED');
   }
   const outputs = [result.stdout, result.stderr];
-  if (outputs.some((value) => !Buffer.isBuffer(value) || value.length > LIMIT)) {
+  if (outputs.some((value) => !Buffer.isBuffer(value) || value.length > LIMIT)
+      || outputs.reduce((sum, value) => sum + value.length, 0) > LIMIT) {
     throw new Error('RELEASE_DRY_RUN_OUTPUT_INVALID');
   }
   const lines = Buffer.concat(outputs).toString('utf8').replace(/\x1b\[[0-9;]*m/g, '').split(/\r?\n/);
