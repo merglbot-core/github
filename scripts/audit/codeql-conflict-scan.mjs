@@ -29,7 +29,8 @@ import { join, resolve } from 'node:path';
 // Filenames from github#789's estate sweep + a content probe for anything else that
 // calls the CodeQL analyze action under a different name.
 const ADVANCED_NAMES = /^(codeql(-analysis)?|security-codeql)\.ya?ml$/i;
-const ANALYZE_ACTION = /^github\/codeql-action\/(analyze|init)@/i;
+const ANALYZE_ACTION = /^github\/codeql-action\/analyze@/i;
+const INIT_ACTION = /^github\/codeql-action\/init@/i;
 
 const args = process.argv.slice(2);
 const wantJson = args.includes('--json');
@@ -186,6 +187,7 @@ function invokesCodeql(body, repo, ref = null, visited = new Set(), depth = 0) {
   // inspected, a clean answer is not justified for this repository.
   let unknown = shape.step_uses.some(uses => uses.startsWith('./'));
   let found = shape.step_uses.some(uses => ANALYZE_ACTION.test(uses));
+  if (!found && shape.step_uses.some(uses => INIT_ACTION.test(uses))) unknown = true;
   for (const uses of shape.job_uses) {
     let key, added = false;
     try {

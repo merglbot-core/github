@@ -58,6 +58,7 @@ elif path == 'repos/merglbot-core/example/code-scanning/default-setup':
                                      'commented_action', 'dual_trigger', 'reusable_caller',
                                      'nested_reusable', 'directory_object', 'mixed_case_action',
                                      'local_composite', 'direct_and_local',
+                                     'init_only', 'init_and_analyze',
                                      'reusable_conflict_then_unreadable',
                                      'conflict_then_unreadable') else 'not-configured'
     print(json.dumps({'state': state, 'languages': ['javascript']}))
@@ -71,6 +72,7 @@ elif path == 'repos/merglbot-core/example/contents/.github/workflows':
            'unreadable_candidate', 'commented_action', 'dual_trigger',
            'reusable_caller', 'nested_reusable', 'conflict_then_unreadable',
            'mixed_case_action', 'local_composite', 'direct_and_local',
+           'init_only', 'init_and_analyze',
            'reusable_conflict_then_unreadable') else '[]')
 elif path == 'repos/merglbot-core/example/contents/.github/workflows/codeql.yml':
     if mode == 'unreadable_candidate':
@@ -99,6 +101,10 @@ elif path == 'repos/merglbot-core/example/contents/.github/workflows/codeql.yml'
             print('      - uses: ./.github/actions/scan')
         elif mode == 'mixed_case_action':
             print('      - uses: GitHub/codeql-action/analyze@v4')
+        elif mode in ('init_only', 'init_and_analyze'):
+            print('      - uses: github/codeql-action/init@v4')
+            if mode == 'init_and_analyze':
+                print('      - uses: github/codeql-action/analyze@v4')
         elif mode == 'unrelated':
             print('      - uses: actions/checkout@v4')
         else:
@@ -312,6 +318,18 @@ else:
     def test_mixed_case_codeql_action_is_conflict(self):
         result = self.run_scanner(fixture_mode="mixed_case_action")
         self.assertEqual(result.returncode, 2, result.stderr)
+
+    def test_init_only_is_unverified_not_a_conflict(self):
+        result = self.run_scanner(fixture_mode="init_only")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["conflicts"], [])
+        self.assertEqual(report["unswept"], ["merglbot-core/example"])
+
+    def test_init_and_analyze_is_conflict(self):
+        result = self.run_scanner(fixture_mode="init_and_analyze")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["status"], "CONFLICT")
 
     def test_local_composite_is_unverified(self):
         result = self.run_scanner(fixture_mode="local_composite")
