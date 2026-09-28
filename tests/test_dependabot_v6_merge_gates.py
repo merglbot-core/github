@@ -263,6 +263,51 @@ class FinalGateIntegration(unittest.TestCase):
 
 
 class ReviewCadenceIntegration(unittest.TestCase):
+  def test_active_rerun_supersedes_prior_terminal_outcome_in_both_waits(self):
+    for wait_kind in ["review", "updated"]:
+      for authority in [False, True]:
+        with self.subTest(wait_kind=wait_kind, authority=authority):
+          m = load_consumer()
+          clock, delays, calls = [0], [], []
+          def pause(n):
+            delays.append(n)
+            clock[0] += n
+          m.time = types.SimpleNamespace(time=lambda: clock[0], monotonic=lambda: clock[0], sleep=pause)
+          old = {"ok": False, "head_sha": HEAD, "review_head_sha": HEAD, "current_head_match": True,
+            "verdict": "approved_for_closeout" if authority else "changes_required", "status": "success" if authority else "failed",
+            "autonomous_next_action": "request_authority" if authority else "fix_findings",
+            "blockers": ["v6_review_in_progress", "merglbot_merge_authority_not_accepted" if authority else "actionable_findings_require_fix",
+                         "review_not_approved_for_closeout", "v6_check_run_not_success"]}
+          def verify(*args):
+            calls.append(clock[0])
+            return dict(old) if len(calls) == 1 else {"ok": True, "head_sha": HEAD, "blockers": [], "autonomous_next_action": "safe_to_merge"}
+          m.verify_merglbot = verify
+          m.trigger_merglbot_review = lambda *a, **kw: self.fail("active rerun retrigger")
+          pr = types.SimpleNamespace(repo="fixture/example", number=7, head_sha=HEAD)
+          m.refresh_pr = lambda *args: pr
+          m.required_checks = lambda *args: (True, [{"bucket": "pass"}], [], [])
+          if wait_kind == "review":
+            self.assertTrue(m.wait_for_merglbot(pr.repo, pr.number, "fixture", HEAD, apply=True)["ok"])
+          else:
+            self.assertTrue(m.wait_for_updated_head_gates(pr)[0])
+          self.assertEqual(delays, [m.MERGLBOT_REVIEW_POLL_SECONDS])
+
+  def test_pending_run_does_not_hide_untrusted_identity_or_transport_errors(self):
+    for blocker in ["v6_check_run_untrusted_producer:app_id=1", "review_source_pr_mismatch:other/repo#9", "unsupported_or_missing_receipt_schema"]:
+      for wait_kind in ["review", "updated"]:
+        with self.subTest(blocker=blocker, wait_kind=wait_kind):
+          m = load_consumer()
+          payload = {"ok": False, "head_sha": HEAD, "blockers": ["v6_review_in_progress", blocker]}
+          m.verify_merglbot = lambda *args: payload
+          m.time = types.SimpleNamespace(monotonic=lambda: 0, sleep=lambda n: self.fail("unsafe pending wait"))
+          pr = types.SimpleNamespace(repo="fixture/example", number=7, head_sha=HEAD)
+          m.refresh_pr = lambda *args: pr
+          m.required_checks = lambda *args: (True, [{"bucket": "pass"}], [], [])
+          if wait_kind == "review":
+            self.assertFalse(m.wait_for_merglbot(pr.repo, 7, "fixture", HEAD, apply=True)["ok"])
+          else:
+            self.assertFalse(m.wait_for_updated_head_gates(pr)[0])
+
   def test_pending_checks_exit_eight_is_parsed_as_pending(self):
     m = load_consumer()
     m.run_cmd = lambda *args, **kw: types.SimpleNamespace(returncode=8,
@@ -372,6 +417,34 @@ class ReviewCadenceIntegration(unittest.TestCase):
 
 
 class CanonicalReceiptBridge(unittest.TestCase):
+  def test_shared_head_selects_requested_pr_without_weakening_trust_or_pending(self):
+    import copy
+    path = ROOT / "scripts/pr-assistant/verify-review-receipt.py"
+    ns = {"__name__": "verifier_shared_head", "__file__": str(path)}
+    exec(compile(path.read_bytes(), str(path), "exec"), ns)
+    case = json.loads((ROOT / "projects/ai-efficiency-2026-09/fixtures/1383/05_ordinary_engine_run_passes_strict.json").read_text())
+    a = {"id": 1, "name": ns["V6_CHECK_NAME"], "status": "completed", "conclusion": "success",
+      "app": {"id": ns["TRUSTED_V6_CHECK_APP_ID"], "slug": ns["TRUSTED_V6_CHECK_APP_SLUG"], "owner": {"login": ns["TRUSTED_V6_CHECK_APP_OWNER"]}},
+      "pull_requests": [{"number": 3277}], "output": {"summary": case["summary"]}}
+    b = copy.deepcopy(a)
+    b.update(id=2, pull_requests=[{"number": 3278}])
+    b["output"]["summary"] = b["output"]["summary"].replace("merglbot-core/infra#3277", "merglbot-core/infra#3278")
+    def verify(number, runs):
+      return ns["verify_v6"]("merglbot-core/infra", {"number": number}, case["head_sha"], number,
+        read_json=lambda args: [{"check_runs": runs}])
+    self.assertTrue(verify(3277, [a, b])["ok"])
+    self.assertTrue(verify(3278, [a, b])["ok"])
+    self.assertFalse(verify(3279, [a, b])["ok"])
+    pending = copy.deepcopy(b)
+    pending.update(id=3, status="in_progress", conclusion=None)
+    self.assertIn("v6_review_in_progress", verify(3277, [a, b, pending])["blockers"])
+    forged = copy.deepcopy(b)
+    forged["app"]["id"] = 1
+    self.assertTrue(any(x.startswith("v6_check_run_untrusted_producer:") for x in verify(3277, [a, forged])["blockers"]))
+    newer_failure = copy.deepcopy(a)
+    newer_failure.update(id=4, conclusion="failure")
+    self.assertFalse(verify(3277, [a, b, newer_failure])["ok"])
+
   def result(self, replacement=None):
     path = ROOT / "scripts/pr-assistant/verify-review-receipt.py"
     module = types.ModuleType("candidate_verifier_bridge")

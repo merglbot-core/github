@@ -202,6 +202,7 @@ def v6_producer_rejection(run: dict[str, Any]) -> str:
 
 def select_v6_check_run(
     check_runs: list[dict[str, Any]],
+    *, repo: str = "", pr_number: int = 0,
 ) -> tuple[dict[str, Any] | None, bool, list[str]]:
     """Pick the newest COMPLETED v6 check run from the TRUSTED producer.
 
@@ -231,6 +232,15 @@ def select_v6_check_run(
             trusted.append(run)
     pending = any(str(run.get("status") or "") != "completed" for run in trusted)
     completed = [run for run in trusted if str(run.get("status") or "") == "completed"]
+    if repo and pr_number:
+        # Commit-scoped siblings must not shadow this PR's bound receipt.
+        # With no matching receipt, retain the newest one so binding failures
+        # remain explicit. Untrusted publishers and pending runs stay global.
+        bound = [run for run in completed if parse_markers(
+            str((run.get("output") or {}).get("summary") or "")
+        ).get("MERGLBOT_REVIEW_SOURCE") == expected_review_source(repo, pr_number)]
+        if bound:
+            completed = bound
     if not completed:
         return None, pending, untrusted_reasons
     newest = max(
@@ -603,7 +613,7 @@ def verify_v6(
             ]
         )
     )
-    selected, pending, untrusted_reasons = select_v6_check_run(check_runs)
+    selected, pending, untrusted_reasons = select_v6_check_run(check_runs, repo=repo, pr_number=pr_number)
     # Only "no v6 check run of any kind" may fall through to the v3 comment
     # surface. A run that claimed the v6 name from an untrusted producer must
     # fail closed here, never be silently ignored.

@@ -1653,8 +1653,29 @@ def merglbot_dispatch_inputs(number: int, head_sha: str) -> dict[str, str]:
     }
 
 
+def pending_merglbot_review_can_wait(payload: dict[str, Any], head_sha: str) -> bool:
+    """A trusted pending run supersedes only the prior receipt's outcome."""
+    blockers = payload.get("blockers", [])
+    if payload.get("transport_error") or merglbot_pr_head_changed(payload, head_sha):
+        return False
+    if "v6_review_in_progress" not in blockers:
+        return False
+    # Identity/schema contradictions are not an old verdict and remain stops.
+    superseded_outcomes = {
+        "v6_review_in_progress", "missing_merglbot_review_receipt", "missing_v6_receipt",
+        "review_not_approved_for_closeout", "v6_check_run_not_success",
+        "actionable_findings_require_fix", "actionable_findings_count_not_delivered",
+        "provider_degraded_or_missing", "no_engine_produced_verdict",
+        "merglbot_merge_authority_not_accepted", "review_docs_state_blocks_closeout",
+        "produced_fail_contradicts_approval", "carried_forward_not_verified_engine_run",
+    }
+    return all(blocker in superseded_outcomes for blocker in blockers)
+
+
 def is_current_head_merglbot_terminal_blocker(payload: dict[str, Any], head_sha: str) -> bool:
     if payload.get("ok"):
+        return False
+    if pending_merglbot_review_can_wait(payload, head_sha):
         return False
     review_head = payload.get("review_head_sha") or payload.get("head_sha")
     if review_head != head_sha:
@@ -1799,6 +1820,8 @@ def wait_for_merglbot(repo: str, number: int, head_ref: str, head_sha: str, *, a
         return first
     if first.get("ok"):
         return first
+    if "v6_review_in_progress" in first.get("blockers", []) and not pending_merglbot_review_can_wait(first, head_sha):
+        return first
     if is_current_head_merglbot_terminal_blocker(first, head_sha):
         return first
     if not apply:
@@ -1824,6 +1847,8 @@ def wait_for_merglbot(repo: str, number: int, head_ref: str, head_sha: str, *, a
             latest["head_changed_during_review_wait"] = True
             return latest
         if latest.get("ok"):
+            return latest
+        if "v6_review_in_progress" in latest.get("blockers", []) and not pending_merglbot_review_can_wait(latest, head_sha):
             return latest
         if is_current_head_merglbot_terminal_blocker(latest, head_sha):
             return latest
@@ -2033,7 +2058,7 @@ def wait_for_updated_head_gates(pr: PullRequest) -> tuple[bool, dict[str, Any], 
         if checks_ok and review.get("ok"):
             return True, review, []
         pending_review_blockers = {"missing_merglbot_review_receipt", "v6_review_in_progress", "missing_v6_receipt"}
-        if not review.get("ok") and any(b not in pending_review_blockers for b in review.get("blockers", [])):
+        if not review.get("ok") and not pending_merglbot_review_can_wait(review, pr.head_sha) and any(b not in pending_review_blockers for b in review.get("blockers", [])):
             return False, review, list(review.get("blockers", []))
         # Failures, unknown states and skipped checks are not pending jobs.
         if not checks_ok and (not checks or any(c.get("bucket") not in {"pass", "pending", "expected", "waiting"} for c in checks)):
