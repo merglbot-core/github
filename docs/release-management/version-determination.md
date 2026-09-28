@@ -22,3 +22,8 @@ semantic-release, install packages, push tags or publish releases. Protected
 source delivery is separate from the minimal workflow authority change. Until
 that wiring lands and a natural run is verified, the production workflow still
 has its original behavior; no release or savings acceptance is claimed.
+
+The existing CI job uses Python unittest discovery. `test_release_version.py`
+invokes the Node behavior suite through that path; it fails if Node is absent,
+if the suite fails or if its deadline expires. A Node-only file by itself would
+not be collected by that job. No separate CI workflow or dispatch is needed.
