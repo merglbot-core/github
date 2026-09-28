@@ -242,6 +242,14 @@ for (const org of orgs) {
       setup = ghJson(`repos/${full}/code-scanning/default-setup`);
     } catch (e) {
       const msg = String(e.stderr || e.message || e);
+      if (scopeFile && /HTTP 40[34]/.test(msg)) {
+        // A scoped token can see repository metadata while lacking this
+        // operation's permission. The 404/403 is ambiguous, not a clean no-op.
+        if (/not authorized to read code scanning/i.test(msg)) report.unreadable.push(full);
+        orgRow.unswept++; report.unswept.push(full);
+        report.errors.push(`${full}: default-setup unverified`);
+        continue;
+      }
       // 404 = code scanning not available; 403 "Code Security must be enabled" = no code scanning
       // at all on this repo. Neither can host a default setup, so neither can conflict: swept.
       if (/HTTP 404/.test(msg) || /Code Security must be enabled/.test(msg)) setup = { state: 'not-configured', languages: [] };
@@ -264,6 +272,11 @@ for (const org of orgs) {
       if (!Array.isArray(workflows)) workflows = [];
     } catch (e) {
       const msg = String(e.stderr || e.message || e);
+      if (scopeFile && /HTTP 404/.test(msg)) {
+        orgRow.unswept++; report.unswept.push(full);
+        report.errors.push(`${full}: workflows unverified`);
+        continue;
+      }
       if (!/HTTP 404/.test(msg)) { orgRow.unswept++; report.unswept.push(full); report.errors.push(`${full}: workflows ${safeFailure(e)}`); continue; }
     }
     const advancedFiles = workflows.filter(w => ADVANCED_NAMES.test(w.name)).map(w => w.name);

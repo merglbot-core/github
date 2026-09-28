@@ -35,6 +35,13 @@ failure, or incomplete scan cannot become a clean result. This mode never calls
 `/user/orgs` or `/orgs/{org}/repos`; `--org` in the legacy mode still uses
 personal-user discovery and is **not** an installation cutover.
 
+For this first canary, an ambiguous `403`/`404` from the CodeQL default-setup
+endpoint, or a `404` for the workflow directory, is unswept and nonzero. Those
+responses can mean unavailable configuration or missing operation permission;
+the scanner cannot distinguish them using its repository listing alone. Before
+expanding to repositories where those responses are expected, add an independently
+verified permission/absence proof. Never classify the ambiguity as a clean zero.
+
 Before adopting the mode in production, verify the App's repository
 Administration:read, Contents:read and Metadata:read permissions, negative
 off-target access, token refresh, natural scheduled coverage, and no hidden

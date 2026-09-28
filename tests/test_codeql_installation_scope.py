@@ -49,6 +49,9 @@ if path.startswith('installation/repositories?'):
                       'archived': False, 'disabled': False})
     print(json.dumps([{'total_count': len(repos), 'repositories': repos}]))
 elif path == 'repos/merglbot-core/example/code-scanning/default-setup':
+    if os.environ.get('GH_FIXTURE_MODE') == 'ambiguous_404':
+        print('HTTP 404 Resource not found', file=sys.stderr)
+        sys.exit(1)
     print(json.dumps({'state': 'not-configured', 'languages': []}))
 elif path == 'repos/merglbot-core/example/contents/.github/workflows':
     print('[]')
@@ -145,6 +148,14 @@ else:
                          ("DEGRADED", 1, 2))
         self.assertEqual(report["unswept"], ["merglbot-core/second"])
         self.assertEqual(report["unreadable"], ["merglbot-core/second"])
+
+    def test_ambiguous_codeql_404_cannot_be_clean(self):
+        result = self.run_scanner(fixture_mode="ambiguous_404")
+        self.assertEqual(result.returncode, 1)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["status"], "ERROR")
+        self.assertEqual(report["unswept"], ["merglbot-core/example"])
+        self.assertEqual(len(self.calls_made()), 2)
 
     def test_excluded_org_fails_before_network(self):
         result = self.run_scanner(org="lrtch")
