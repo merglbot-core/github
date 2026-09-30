@@ -162,14 +162,16 @@ REPLACEMENTS_888 = [
 ]
 
 REPLACEMENTS_910 = [
-    # #917 (V6 #968): both queries bounded, a failed jobs read decides nothing, runs without
-    # the job are remembered instead of re-queried every sweep.
+    # #917 (V6 #968, #970): both queries bounded; a failed or partial jobs read decides nothing;
+    # a run whose pilot job is not finished stays uncached and holds the verdict; a finished
+    # run without the job is remembered instead of re-queried every sweep.
     ('''    start = parse(since) - dt.timedelta(days=PILOT_WINDOW_DAYS)
     known = item.setdefault("runs", {})
     for created in (f"{start.strftime('%Y-%m-%d')}..{since[:10]}", f"%3E%3D{since[:10]}"):
 ''', '''    start = parse(since) - dt.timedelta(days=PILOT_WINDOW_DAYS)
     end = parse(since) + dt.timedelta(days=PILOT_WINDOW_DAYS)
     known = item.setdefault("runs", {})
+    pending = []
     for created in (f"{start.strftime('%Y-%m-%d')}..{since[:10]}", f"{since[:10]}..{end.strftime('%Y-%m-%d')}"):
 '''),
     ('''            jobs = (gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=30") or {}).get("jobs", [])
@@ -178,17 +180,25 @@ REPLACEMENTS_910 = [
                     known[run_id] = {"created": run["created_at"], "labels": j.get("labels") or [],
                                      "s": job_seconds(j) or 0, "concl": j.get("conclusion")}
                     break
-''', '''            listing = gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=30")
-            if not isinstance(listing, dict) or not isinstance(listing.get("jobs"), list):
-                # A failed read must not drop a run from the comparison: decide nothing now.
+''', '''            listing = gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100")
+            jobs = listing.get("jobs") if isinstance(listing, dict) else None
+            total = listing.get("total_count") if isinstance(listing, dict) else None
+            if (not isinstance(jobs, list) or not isinstance(total, int) or isinstance(total, bool)
+                    or total > len(jobs)):
+                # A failed or partial read must not drop a run from the comparison: decide nothing now.
                 item["incomplete_at"] = iso()
                 return False
-            for j in listing["jobs"]:
-                if (j.get("name") == job or (j.get("name") or "").endswith(" / " + job)) and j.get("completed_at"):
-                    known[run_id] = {"created": run["created_at"], "labels": j.get("labels") or [],
-                                     "s": job_seconds(j) or 0, "concl": j.get("conclusion")}
-                    break
+            matching = [j for j in jobs if j.get("name") == job or (j.get("name") or "").endswith(" / " + job)]
+            finished = [j for j in matching if j.get("status") == "completed" and j.get("completed_at")]
+            if finished:
+                j = finished[0]
+                known[run_id] = {"created": run["created_at"], "labels": j.get("labels") or [],
+                                 "s": job_seconds(j) or 0, "concl": j.get("conclusion")}
+            elif matching or run.get("status") != "completed":
+                # The pilot job (or its run) is still queued or running: keep it retryable.
+                pending.append(run_id)
             else:
+                # A finished run without the job (filtered out): remembered, never measured.
                 known[run_id] = {"created": run["created_at"], "labels": [], "s": 0, "concl": "absent"}
 '''),
     ('''    before = stats([r for r in known.values() if r["created"] < since and label not in r["labels"]])
@@ -196,6 +206,11 @@ REPLACEMENTS_910 = [
 ''', '''    lo, hi = iso(start), iso(end)
     before = stats([r for r in known.values() if lo <= r["created"] < since and label not in r["labels"]])
     after = stats([r for r in known.values() if since <= r["created"] < hi and label in r["labels"]])
+    item["pending_runs"] = sorted(pending)
+    if pending:
+        # Evidence of these runs is still being produced: no verdict until they finish.
+        item["before"], item["after"], item["verdict"] = before, after, None
+        return True
 '''),
     ('''PILOT_SAMPLE = 30
 ''', '''PILOT_SAMPLE = 30
