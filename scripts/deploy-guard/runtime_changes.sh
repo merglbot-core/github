@@ -152,10 +152,13 @@ find_base() {
     done <<< "$jobs"
     if (( matched == 0 || ok == 0 )); then continue; fi
     BASE_URL="$url"
-    if [[ $marker != none ]]; then
-      BASE="$marker"
-    elif [[ $event == push || $event == workflow_dispatch ]]; then
+    if [[ $event == push || $event == workflow_dispatch ]]; then
+      # These runs deploy their own head_sha; their title may be a commit title,
+      # so a marker there must agree with head_sha or the run is not trusted.
+      if [[ $marker != none && $marker != "$head" ]]; then decide true "fail-open:marker-mismatch"; fi
       BASE="$head"
+    elif [[ $marker != none ]]; then
+      BASE="$marker" # workflow_run: head_sha is the main tip, the run-name marker is the deploy
     else
       decide true "fail-open:legacy-marker"
     fi
@@ -188,7 +191,7 @@ DENY=(
   '^[^/]+\.md$'
   '^(tests?|e2e|__tests__|playwright|cypress)/'
   '^\.(gitignore|gitattributes|editorconfig|pre-commit-config\.yaml)$'
-  '^LICENSE'
+  '^(LICENSE|LICENCE|COPYING|NOTICE)(\.(md|txt|rst))?$'
   '^CODEOWNERS$'
   '^\.(vscode|devcontainer|claude|codex|cursor)/'
 )

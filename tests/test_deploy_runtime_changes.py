@@ -145,6 +145,20 @@ class RuntimeChangesTests(unittest.TestCase):
                 self.expect(result, "false", "non-runtime-only")
                 self.assertEqual(self.base, result["base-sha"])
 
+    def test_push_and_dispatch_runs_trust_head_sha_not_their_title(self) -> None:
+        undeployed = self.commit({"src/app.py": "v2"})
+        head = self.commit({"docs/a.md": "x"})
+        titles = {f"Deploy r @ {self.base}": ("runtime:src/app.py", self.base),  # marker == head_sha
+                  f"fix: revert {undeployed} (#12)": ("runtime:src/app.py", self.base),  # not a marker
+                  f"chore: bump @ {undeployed}": ("fail-open:marker-mismatch", "")}  # spoofed marker
+        for event in ("push", "workflow_dispatch"):
+            for title, (reason, base) in titles.items():
+                with self.subTest(event=event, title=title):
+                    spoof = run(self.base, 10, event) | {"display_title": title}
+                    result = self.guard(head, [spoof], {10: OK})
+                    self.expect(result, "true", reason)
+                    self.assertEqual(base, result["base-sha"])
+
     def test_marker_beats_head_sha_of_a_workflow_run(self) -> None:
         mid = self.commit({"src/app.py": "v2"})
         head = self.commit({"docs/a.md": "x"})
@@ -178,6 +192,12 @@ class RuntimeChangesTests(unittest.TestCase):
         self.expect(result, "false", "non-runtime-only")
         self.assertIn("NO-DEPLOY non-runtime-only", result["stdout"])
         self.assertIn("- non-runtime: `.github/workflows/ci.yml`", result["summary"])
+        legal = self.commit({"COPYING.txt": "x", "NOTICE": "x", "LICENCE.rst": "x"})
+        self.expect(self.deployed(docs_only, legal), "false", "non-runtime-only")
+        for path in ("LICENSE.js", "LICENSE-tools/main.py"):  # only root license files are legal text
+            with self.subTest(path):
+                prev = self.git("rev-parse", "HEAD")
+                self.expect(self.deployed(prev, self.commit({path: "x"})), "true", f"runtime:{path}")
 
     def test_force_runtime_paths_and_extras(self) -> None:
         prev = self.base
