@@ -60,7 +60,11 @@ def routes(caller_text, listing=None, mains=None, hub_text=None):
 
 
 HUB_DEFAULT_SLIM = ("on:\n  workflow_call:\n    inputs:\n      runs-on:\n        description: runner\n"
-                    "        type: string\n        default: ubuntu-slim\n      mode:\n        default: advisory\n")
+                    "        type: string\n        default: ubuntu-slim\n      mode:\n        default: advisory\n"
+                    "jobs:\n  gate:\n    runs-on: ${{ inputs.runs-on }}\n")
+# The pinned hub at c17b925b: allowlist expression, default ubuntu-24.04.
+HUB_ALLOWLIST = ("on:\n  workflow_call:\n    inputs:\n      runs-on:\n        default: ubuntu-24.04\n"
+                 "jobs:\n  pr-gate:\n    runs-on: ${{ inputs.runs-on == 'ubuntu-slim' && 'ubuntu-slim' || 'ubuntu-24.04' }}\n")
 
 
 class Basics(unittest.TestCase):
@@ -75,6 +79,9 @@ class Basics(unittest.TestCase):
         self.assertEqual(ca.billing_verdict(0, 400), "BEZ ÚSPORY")
         self.assertEqual(ca.billing_verdict(-5, 400), "BEZ ÚSPORY")
         self.assertEqual(ca.billing_verdict(0, 0), "BEZ ÚSPORY")  # V6 #969
+        for value in (float("nan"), float("inf")):
+            self.assertEqual(ca.billing_verdict(value, 400), "DATA_GAP")
+            self.assertFalse(ca.closes_billing(ca.billing_verdict(400, value)))
         self.assertTrue(ca.closes_billing("PARTIAL"))
         self.assertFalse(ca.closes_billing("BEZ ÚSPORY"))
         self.assertIn("30. 9. 2026", ca.verdict_note("PARTIAL"))
@@ -100,7 +107,10 @@ class Structure(unittest.TestCase):
                 "  branch:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@main\n"
                 "  short:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@c17b925\n")
         doc, reason = ca.parse_workflow(text)
-        self.assertEqual([(j, sha) for j, sha, _ in ca.hub_jobs(doc)], [("gate", HUB_SHA)], reason)
+        # Every job-level call counts (the caller check then requires exactly one, SHA-pinned);
+        # text in block scalars and step scripts never does.
+        self.assertEqual([(j, ref) for j, ref, _ in ca.hub_jobs(doc)],
+                         [("gate", HUB_SHA), ("branch", "main"), ("short", "c17b925")], reason)
 
     def test_hub_input_default(self):
         self.assertEqual(ca.hub_input_default(HUB_DEFAULT_SLIM, "runs-on"), "ubuntu-slim")
@@ -116,11 +126,13 @@ class Structure(unittest.TestCase):
 
 @unittest.skipUnless(HAS_YAML, "PyYAML not installed")
 class LiveCallerConfig(unittest.TestCase):
+    SLIM = "    with:\n      runs-on: ubuntu-slim\n"
+
     def run_check(self, gh, **kw):
         return ca.live_caller_config(gh, REPO, "pr-gate.yml", **kw)
 
-    def test_explicit_runner_is_verified_and_main_reread(self):
-        gh = FakeGH(routes(caller("    with:\n      runs-on: ubuntu-slim\n")))
+    def test_explicit_runner_through_the_pinned_hub_mapping(self):
+        gh = FakeGH(routes(caller(self.SLIM), hub_text=HUB_ALLOWLIST))
         result = self.run_check(gh, label="ubuntu-slim")
         self.assertTrue(result["ok"], result)
         self.assertEqual((result["runner"], result["runner_source"], result["hub_sha"]),
@@ -128,35 +140,22 @@ class LiveCallerConfig(unittest.TestCase):
         self.assertEqual(gh.calls.count(f"repos/{REPO}/branches/main"), 2)
 
     def test_hub_default_runner_counts_when_the_caller_sets_none(self):
-        gh = FakeGH(routes(caller(), hub_text=HUB_DEFAULT_SLIM))
-        result = self.run_check(gh, label="ubuntu-slim")
+        result = self.run_check(FakeGH(routes(caller(), hub_text=HUB_DEFAULT_SLIM)), label="ubuntu-slim")
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["runner_source"], "hub default")
+        self.assertFalse(self.run_check(FakeGH(routes(caller(), hub_text=HUB_ALLOWLIST)), label="ubuntu-slim")["ok"])
 
-    def test_other_runner_fails(self):
-        result = self.run_check(FakeGH(routes(caller("    with:\n      runs-on: ubuntu-24.04\n"))),
-                                label="ubuntu-slim")
-        self.assertFalse(result["ok"])
-        self.assertIn("ubuntu-24.04", result["reason"])
-
-    def test_rollout_files_must_match(self):
-        record = {"expected_files": [".github/workflows/pr-gate.yml", ".github/workflows/gitleaks-weekly.yml"],
-                  "deleted_files": [".github/workflows/security-gitleaks.yml"]}
-        listing = [{"path": ".github/workflows/pr-gate.yml"}, {"path": ".github/workflows/security-gitleaks.yml"}]
-        result = self.run_check(FakeGH(routes(caller(), listing=listing)), pr_record=record)
-        self.assertFalse(result["ok"])
-        self.assertIn("gitleaks-weekly.yml", result["reason"])
-        self.assertIn("security-gitleaks.yml", result["reason"])
+    def test_input_the_pinned_hub_ignores_does_not_count(self):
+        ignoring = HUB_ALLOWLIST.replace("${{ inputs.runs-on == 'ubuntu-slim' && 'ubuntu-slim' || 'ubuntu-24.04' }}",
+                                         "ubuntu-24.04")
+        self.assertFalse(self.run_check(FakeGH(routes(caller(self.SLIM), hub_text=ignoring)), label="ubuntu-slim")["ok"])
+        self.assertFalse(self.run_check(FakeGH(routes(caller(self.SLIM))), label="ubuntu-slim")["ok"])
 
     def test_another_jobs_runner_or_an_expression_does_not_count(self):
         other = caller() + "  lint:\n    runs-on: ubuntu-slim\n    steps:\n      - run: true\n"
-        result = self.run_check(FakeGH(routes(other, hub_text=HUB_DEFAULT_SLIM.replace("ubuntu-slim", "ubuntu-24.04"))),
-                                label="ubuntu-slim")
-        self.assertFalse(result["ok"])
-        self.assertIn("hub default", result["reason"])
+        self.assertFalse(self.run_check(FakeGH(routes(other, hub_text=HUB_ALLOWLIST)), label="ubuntu-slim")["ok"])
         expr = caller("    with:\n      runs-on: ${{ vars.RUNNER }}\n")
-        result = self.run_check(FakeGH(routes(expr)), label="ubuntu-slim")
-        self.assertFalse(result["ok"])
+        result = self.run_check(FakeGH(routes(expr, hub_text=HUB_ALLOWLIST)), label="ubuntu-slim")
         self.assertIn("not a literal", result["reason"])
 
     def test_text_in_a_block_scalar_cannot_pose_as_the_call(self):
@@ -165,17 +164,32 @@ class LiveCallerConfig(unittest.TestCase):
                 "jobs:\n  lint:\n    runs-on: ubuntu-slim\n    steps:\n      - run: true\n")
         self.assertFalse(self.run_check(FakeGH(routes(text)))["ok"])
 
-    def test_two_hub_calls_fail(self):
-        text = caller() + f"  second:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@{HUB_SHA}\n"
-        self.assertFalse(self.run_check(FakeGH(routes(text)))["ok"])
+    def test_extra_or_unpinned_hub_calls_fail(self):
+        for extra in (f"  second:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@{HUB_SHA}\n",
+                      "  second:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@main\n"):
+            self.assertFalse(self.run_check(FakeGH(routes(caller() + extra)))["ok"])
+        self.assertFalse(self.run_check(FakeGH(routes(
+            caller(uses="merglbot-core/github/.github/workflows/pr-gate.yml@main"))))["ok"])
 
-    def test_moving_main_fails(self):
+    def test_caller_must_run_on_pull_requests_to_main(self):
+        for text in (caller().replace("on: pull_request", "on: workflow_dispatch"),
+                     caller().replace("on: pull_request", "on:\n  pull_request:\n    branches: [release]"),
+                     caller("    if: false\n")):
+            result = self.run_check(FakeGH(routes(text)))
+            self.assertFalse(result["ok"])
+            self.assertIn("pull requests", result["reason"])
+
+    def test_rollout_files_must_match(self):
+        record = {"expected_files": [".github/workflows/pr-gate.yml", ".github/workflows/gitleaks-weekly.yml"],
+                  "deleted_files": [".github/workflows/security-gitleaks.yml"]}
+        listing = [{"path": ".github/workflows/pr-gate.yml"}, {"path": ".github/workflows/security-gitleaks.yml"}]
+        result = self.run_check(FakeGH(routes(caller(), listing=listing)), pr_record=record)
+        self.assertIn("gitleaks-weekly.yml", result["reason"])
+        self.assertIn("security-gitleaks.yml", result["reason"])
+
+    def test_moving_or_unreadable_main_fails(self):
         mains = [{"commit": {"sha": MAIN}}, {"commit": {"sha": MOVED}}]
-        result = self.run_check(FakeGH(routes(caller(), mains=mains)))
-        self.assertFalse(result["ok"])
-        self.assertIn("moved", result["reason"])
-
-    def test_unreadable_main_fails_closed(self):
+        self.assertIn("moved", self.run_check(FakeGH(routes(caller(), mains=mains)))["reason"])
         self.assertFalse(self.run_check(FakeGH({}))["ok"])
 
 

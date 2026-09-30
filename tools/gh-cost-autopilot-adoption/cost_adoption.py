@@ -9,6 +9,7 @@ match statements, no 3.11 UTC constant, and timestamps go through parse_utc().
 import base64
 import datetime as dt
 import json
+import math
 import re
 
 HUB = "merglbot-core/github"
@@ -22,6 +23,7 @@ VERDICT_NOTES = {
     "PARTIAL": ("Úspora je kladná, ale pod 80 % modelu. Podle rozhodnutí ownera z 30. 9. 2026 "
                 "ji zapisuji a sub-issue zavírám jako částečně splněné."),
     "BEZ ÚSPORY": "Úspora vyšla nulová nebo záporná. Sub-issue nechávám otevřené, rozhodne owner.",
+    "DATA_GAP": "Částky nejsou konečná čísla, verdikt nevydávám. Sub-issue nechávám otevřené.",
 }
 
 
@@ -37,7 +39,13 @@ def parse_utc(value):
 
 def billing_verdict(saved_usd, model_usd):
     """Owner decision 30 Sep 2026: FAKT closes, PARTIAL closes, BEZ ÚSPORY stays open.
-    A non-positive saving never closes, whatever the model (V6 #969)."""
+    A non-positive saving never closes, whatever the model; non-finite input is a data gap (V6 #969)."""
+    try:
+        finite = math.isfinite(saved_usd) and math.isfinite(model_usd)
+    except TypeError:
+        finite = False
+    if not finite:
+        return "DATA_GAP"
     if saved_usd <= 0:
         return "BEZ ÚSPORY"
     if saved_usd >= 0.8 * model_usd:
@@ -100,15 +108,64 @@ def parse_workflow(text):
 
 
 def hub_jobs(doc, hub_path=HUB_PR_GATE):
-    """Jobs whose own `uses:` pins the hub workflow to a full SHA: [(job_id, sha, job)]."""
-    pattern = re.compile("^" + re.escape(HUB + "/" + hub_path) + r"@([0-9a-f]{40})$")
+    """Every job whose own `uses:` calls the hub workflow, at any ref: [(job_id, ref, job)].
+    Callers count all of them, so an extra unpinned call cannot hide (V6 #969)."""
+    prefix = HUB + "/" + hub_path + "@"
     found = []
     for job_id, job in doc["jobs"].items():
         uses = job.get("uses") if isinstance(job, dict) else None
-        match = pattern.match(uses.strip()) if isinstance(uses, str) else None
-        if match:
-            found.append((job_id, match.group(1), job))
+        if isinstance(uses, str) and uses.strip().startswith(prefix):
+            found.append((job_id, uses.strip()[len(prefix):], job))
     return found
+
+
+def runs_on_pull_requests(doc, job):
+    """The caller must run on pull requests to main and the job must not be disabled (V6 #969)."""
+    triggers = doc.get("on", doc.get(True))
+    if isinstance(triggers, str):
+        triggers = {triggers: None}
+    elif isinstance(triggers, list):
+        triggers = {t: None for t in triggers}
+    if not isinstance(triggers, dict) or "pull_request" not in triggers:
+        return False
+    spec = triggers.get("pull_request") or {}
+    branches = spec.get("branches") if isinstance(spec, dict) else None
+    ignored = spec.get("branches-ignore") if isinstance(spec, dict) else None
+    if branches is not None and not any(b in ("main", "*", "**") for b in branches or []):
+        return False
+    if ignored and "main" in ignored:
+        return False
+    return job.get("if") not in (False, "false", "${{ false }}")
+
+
+def hub_runner(hub_text, value):
+    """Runner the pinned hub workflow really uses for input `runs-on` = value. Only a literal
+    label, a pass-through `${{ inputs.runs-on }}` or the allowlist form
+    `${{ inputs.runs-on == 'X' && 'X' || 'Y' }}` are understood; anything else is None."""
+    try:
+        import yaml
+        doc = yaml.safe_load(hub_text)
+    except Exception:  # noqa: BLE001 - missing PyYAML or bad YAML both mean "unknown"
+        return None
+    jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    if not isinstance(jobs, dict) or not jobs:
+        return None
+    runners = set()
+    for job in jobs.values():
+        spec = job.get("runs-on") if isinstance(job, dict) else None
+        if not isinstance(spec, str):
+            return None
+        spec = spec.strip()
+        allow = re.fullmatch(r"\$\{\{\s*inputs\.runs-on\s*==\s*'([\w.-]+)'\s*&&\s*'([\w.-]+)'\s*\|\|\s*'([\w.-]+)'\s*\}\}", spec)
+        if "${{" not in spec:
+            runners.add(spec)
+        elif re.fullmatch(r"\$\{\{\s*inputs\.runs-on\s*\}\}", spec):
+            runners.add(value)
+        elif allow and allow.group(1) == allow.group(2):
+            runners.add(allow.group(2) if value == allow.group(1) else allow.group(3))
+        else:
+            return None
+    return runners.pop() if len(runners) == 1 else None
 
 
 def hub_input_default(text, name):
@@ -157,23 +214,29 @@ def live_caller_config(gh_json, repo, workflow, pr_record=None, label=None):
     if doc is None:
         return {"ok": False, "reason": reason, "main_sha": main}
     calls = hub_jobs(doc)
-    if len(calls) != 1:
-        return {"ok": False, "reason": f"expected one job calling the pinned hub PR Gate, found {len(calls)}",
-                "main_sha": main}
+    if len(calls) != 1 or not SHA.match(calls[0][1]):
+        return {"ok": False, "reason": f"expected exactly one hub PR Gate call pinned to a full SHA, found "
+                f"{[ref for _, ref, _ in calls]}", "main_sha": main}
     job_id, hub_sha, job = calls[0]
+    if not runs_on_pull_requests(doc, job):
+        return {"ok": False, "reason": "caller does not run on pull requests to main", "main_sha": main}
     evidence = {"ok": True, "reason": "caller verified on main", "main_sha": main,
                 "hub_sha": hub_sha, "job": job_id, "workflow": path}
     if label:
         # Only the hub-calling job's own `with.runs-on` counts; an expression is unresolved
-        # and fails closed; without the input the pinned hub default applies (V6 #969).
+        # and fails closed; without the input the pinned hub default applies. Either way the
+        # pinned hub workflow decides the effective runner (V6 #969).
         inputs = job.get("with") if isinstance(job.get("with"), dict) else {}
+        hub = _text(gh_json, HUB, HUB_PR_GATE, hub_sha)
+        if hub is None:
+            return {"ok": False, "reason": "pinned hub workflow unreadable", "main_sha": main}
         if "runs-on" in inputs:
-            runner, source = inputs["runs-on"], "with.runs-on"
-            if not isinstance(runner, str) or "${{" in runner:
-                return {"ok": False, "reason": f"runs-on {runner!r} is not a literal label", "main_sha": main}
+            value, source = inputs["runs-on"], "with.runs-on"
+            if not isinstance(value, str) or "${{" in value:
+                return {"ok": False, "reason": f"runs-on {value!r} is not a literal label", "main_sha": main}
         else:
-            hub = _text(gh_json, HUB, HUB_PR_GATE, hub_sha)
-            runner, source = (hub_input_default(hub, "runs-on") if hub else None), "hub default"
+            value, source = hub_input_default(hub, "runs-on"), "hub default"
+        runner = hub_runner(hub, value)
         if runner != label:
             return {"ok": False, "reason": f"effective runner {runner!r} ({source}) is not {label}",
                     "main_sha": main}
