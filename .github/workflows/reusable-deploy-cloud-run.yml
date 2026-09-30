@@ -137,50 +137,76 @@ jobs:
         id: build
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
+          IMAGE_BASE: ${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.IMAGE_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.SERVICE }}
+          IMAGE_TAG: ${{ github.sha }}
+          INPUT_DOCKERFILE: ${{ inputs.dockerfile }}
         run: |
           set -euo pipefail
-          IMAGE="${{ env.GAR_LOCATION }}-docker.pkg.dev/${{ env.IMAGE_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.SERVICE }}"
-          TAG="${{ github.sha }}"
-          
-          docker build \
-            --secret id=node_auth_token,env=NODE_AUTH_TOKEN \
-            -t "${IMAGE}:${TAG}" \
-            -f "${{ inputs.dockerfile }}" .
-          
-          # Push and capture digest directly from push output (most reliable)
-          PUSH_OUTPUT=$(docker push "${IMAGE}:${TAG}" 2>&1 | tee /dev/stderr)
-          
-          # Extract digest from push output (format: "digest: sha256:xxx size: yyy")
-          DIGEST=$(echo "$PUSH_OUTPUT" | grep -oP 'digest: \Ksha256:[a-f0-9]+' | tail -1)
-          
-          if [ -z "$DIGEST" ]; then
-            echo "::warning::Could not parse digest from push output, trying docker inspect..."
-            # Fallback to docker inspect with retries
-            for attempt in {1..5}; do
-              FULL_IMAGE_WITH_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${TAG}" 2>/dev/null || true)
-              if [ -n "$FULL_IMAGE_WITH_DIGEST" ]; then
-                DIGEST="${FULL_IMAGE_WITH_DIGEST#*@}"
-                break
-              fi
-              echo "Digest not yet available (attempt ${attempt}/5). Retrying in 2s..."
-              sleep 2
-            done
-          fi
-          
-          if [ -z "$DIGEST" ]; then
-            echo "::error::Unable to resolve pushed image digest."
+          build_image() {
+            docker build \
+              --secret id=node_auth_token,env=NODE_AUTH_TOKEN \
+              -t "$1" \
+              -f "$INPUT_DOCKERFILE" .
+          }
+          # BEGIN image-publish
+          # Idempotent (github#909): the tag is the commit SHA, so an existing tag is
+          # adopted, never rebuilt or re-pushed (immutable repos reject a re-push).
+          ref="${IMAGE_BASE}:${IMAGE_TAG}"
+          IMAGE_DIGEST=""
+          probe_rc=0
+          probe_out="$(docker pull --quiet "$ref" 2>&1)" || probe_rc=$?
+          if [ "$probe_rc" -eq 0 ]; then
+            IMAGE_ADOPTED=true
+            echo "::notice::Image tag ${ref} already exists; adopting it (no rebuild, no push)."
+          elif [[ $probe_out =~ (denied|unauthorized|forbidden|toomanyrequests) ]]; then
+            printf '%s\n' "$probe_out" >&2
+            echo "::error::Probing ${ref} was refused; not guessing whether the tag exists."
+            exit 1
+          elif [[ $probe_out =~ (manifest\ unknown|MANIFEST_UNKNOWN|manifest\ for\ [^[:space:]]+\ not\ found|failed\ to\ resolve\ reference\ .*:\ not\ found) ]]; then
+            IMAGE_ADOPTED=false
+            build_image "$ref"
+            push_rc=0
+            push_out="$(docker push "$ref" 2>&1)" || push_rc=$?
+            printf '%s\n' "$push_out"
+            if [ "$push_rc" -ne 0 ]; then
+              echo "::error::docker push ${ref} failed (exit ${push_rc})."
+              exit 1
+            fi
+            if [[ $push_out =~ digest:\ (sha256:[0-9a-f]{64}) ]]; then IMAGE_DIGEST="${BASH_REMATCH[1]}"; fi
+          else
+            printf '%s\n' "$probe_out" >&2
+            echo "::error::Unexpected result probing ${ref} (exit ${probe_rc}); not guessing whether the tag exists."
             exit 1
           fi
-          
-          FULL_IMAGE_WITH_DIGEST="${IMAGE}@${DIGEST}"
-          
-          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
-          echo "full_image=${FULL_IMAGE_WITH_DIGEST}" >> "$GITHUB_OUTPUT"
-          
-          echo "✅ Image pushed: ${FULL_IMAGE_WITH_DIGEST}"
-      
+          # Both paths: fall back to the local RepoDigests of this exact repository.
+          attempt=0
+          while [ -z "$IMAGE_DIGEST" ] && [ "$attempt" -lt 5 ]; do
+            attempt=$((attempt + 1))
+            repo_digests="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$ref")" || repo_digests=""
+            while IFS= read -r line; do
+              if [[ $line == "${IMAGE_BASE}@"* ]]; then
+                IMAGE_DIGEST="${line#"${IMAGE_BASE}@"}"
+                break
+              fi
+            done <<< "$repo_digests"
+            if [ -z "$IMAGE_DIGEST" ]; then sleep 2; fi
+          done
+          if ! [[ $IMAGE_DIGEST =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Unable to resolve a sha256 digest for ${ref} (got '${IMAGE_DIGEST}')."
+            exit 1
+          fi
+          IMAGE_REF="${IMAGE_BASE}@${IMAGE_DIGEST}"
+          # END image-publish
+
+          {
+            echo "image=${IMAGE_BASE}"
+            echo "tag=${IMAGE_TAG}"
+            echo "digest=${IMAGE_DIGEST}"
+            echo "full_image=${IMAGE_REF}"
+            echo "adopted=${IMAGE_ADOPTED}"
+          } >> "$GITHUB_OUTPUT"
+          echo "✅ Image ready: ${IMAGE_REF} (adopted: ${IMAGE_ADOPTED})"
+
       # Container Security: Trivy Scanning
       # - SARIF is non-blocking (Code Scanning visibility)
       # - Separate gate blocks deploy on CRITICAL (no gating softening)
