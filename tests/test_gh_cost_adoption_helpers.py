@@ -2,14 +2,21 @@
 import base64
 import datetime as dt
 import importlib.util
+import json
 import pathlib
+import sys
+import types
 import unittest
 
 try:
-    import yaml  # noqa: F401  (ships with the launchd Python the autopilots run on)
-    HAS_YAML = True
+    import yaml  # noqa: F401  (the real parser; it ships with the launchd Python)
 except ImportError:
-    HAS_YAML = False
+    # Hub CI installs no PyYAML before unittest discovery. Every workflow fixture below is JSON,
+    # which is valid YAML, so a JSON-backed stand-in drives the same code paths there instead
+    # of skipping them (V6 #969). With PyYAML present the real parser reads the same fixtures.
+    _shim = types.ModuleType("yaml")
+    _shim.safe_load, _shim.YAMLError = json.loads, ValueError
+    sys.modules["yaml"] = _shim
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
@@ -19,6 +26,7 @@ SPEC.loader.exec_module(ca)
 
 MAIN, MOVED, HUB_SHA = "a" * 40, "b" * 40, "c" * 40
 REPO = "o/r"
+PIN = f"merglbot-core/github/.github/workflows/pr-gate.yml@{HUB_SHA}"
 
 
 def content(text):
@@ -42,9 +50,23 @@ class FakeGH:
         return value
 
 
-def caller(extra="", uses=None):
-    uses = uses or f"merglbot-core/github/.github/workflows/pr-gate.yml@{HUB_SHA}"
-    return f"name: PR Gate\non: pull_request\njobs:\n  pr-gate:\n    uses: {uses}\n{extra}"
+def caller(job=None, on="pull_request", jobs=None, uses=PIN, env=None):
+    gate = dict({"uses": uses}, **(job or {}))
+    doc = {"name": "PR Gate", "on": on, "jobs": dict({"pr-gate": gate}, **(jobs or {}))}
+    if env:
+        doc["env"] = env
+    return json.dumps(doc)
+
+
+def hub(runs_on, default="ubuntu-24.04"):
+    return json.dumps({"on": {"workflow_call": {"inputs": {"runs-on": {"type": "string", "default": default},
+                                                           "mode": {"default": "advisory"}}}},
+                       "jobs": {"pr-gate": {"runs-on": runs_on}}})
+
+
+# The pinned hub at c17b925b: allowlist expression, default ubuntu-24.04.
+HUB_ALLOWLIST = hub("${{ inputs.runs-on == 'ubuntu-slim' && 'ubuntu-slim' || 'ubuntu-24.04' }}")
+HUB_DEFAULT_SLIM = hub("${{ inputs.runs-on }}", default="ubuntu-slim")
 
 
 def routes(caller_text, listing=None, mains=None, hub_text=None):
@@ -54,18 +76,10 @@ def routes(caller_text, listing=None, mains=None, hub_text=None):
         [{"path": ".github/workflows/pr-gate.yml"}, {"path": ".github/workflows/ci.yml"}],
         f"repos/{REPO}/contents/.github/workflows/pr-gate.yml?ref={MAIN}": content(caller_text),
     }
-    hub = hub_text if hub_text is not None else HUB_ALLOWLIST
-    if hub:
-        base[f"repos/merglbot-core/github/contents/.github/workflows/pr-gate.yml?ref={HUB_SHA}"] = content(hub)
+    text = hub_text if hub_text is not None else HUB_ALLOWLIST
+    if text:
+        base[f"repos/merglbot-core/github/contents/.github/workflows/pr-gate.yml?ref={HUB_SHA}"] = content(text)
     return base
-
-
-HUB_DEFAULT_SLIM = ("on:\n  workflow_call:\n    inputs:\n      runs-on:\n        description: runner\n"
-                    "        type: string\n        default: ubuntu-slim\n      mode:\n        default: advisory\n"
-                    "jobs:\n  gate:\n    runs-on: ${{ inputs.runs-on }}\n")
-# The pinned hub at c17b925b: allowlist expression, default ubuntu-24.04.
-HUB_ALLOWLIST = ("on:\n  workflow_call:\n    inputs:\n      runs-on:\n        default: ubuntu-24.04\n"
-                 "jobs:\n  pr-gate:\n    runs-on: ${{ inputs.runs-on == 'ubuntu-slim' && 'ubuntu-slim' || 'ubuntu-24.04' }}\n")
 
 
 class Basics(unittest.TestCase):
@@ -99,43 +113,39 @@ class Basics(unittest.TestCase):
 
 
 
-@unittest.skipUnless(HAS_YAML, "PyYAML not installed")
 class Structure(unittest.TestCase):
-    def test_only_job_level_pinned_calls_count(self):
-        text = (f"on: pull_request\nenv:\n  NOTE: |\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@{MAIN}\n"
-                "jobs:\n"
-                f"  gate:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@{HUB_SHA}  # pinned\n"
-                "  other:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: |\n"
-                f"          uses: merglbot-core/github/.github/workflows/pr-gate.yml@{MOVED}\n"
-                "  branch:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@main\n"
-                "  short:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@c17b925\n")
+    def test_only_job_level_calls_count_with_any_ref_and_casing(self):
+        text = caller(env={"NOTE": f"uses: {PIN}"}, jobs={
+            "other": {"runs-on": "ubuntu-24.04", "steps": [{"run": f"uses: {PIN}"}]},
+            "branch": {"uses": "merglbot-core/github/.github/workflows/pr-gate.yml@main"},
+            "short": {"uses": "merglbot-core/github/.github/workflows/pr-gate.yml@c17b925"},
+            "cased": {"uses": f"Merglbot-Core/GitHub/.github/workflows/pr-gate.yml@{HUB_SHA}"}})
         doc, reason = ca.parse_workflow(text)
-        # Every job-level call counts (the caller check then requires exactly one, SHA-pinned);
-        # text in block scalars and step scripts never does.
         self.assertEqual([(j, ref) for j, ref, _ in ca.hub_jobs(doc)],
-                         [("gate", HUB_SHA), ("branch", "main"), ("short", "c17b925")], reason)
+                         [("pr-gate", HUB_SHA), ("branch", "main"), ("short", "c17b925"), ("cased", HUB_SHA)], reason)
 
     def test_hub_input_default(self):
         self.assertEqual(ca.hub_input_default(HUB_DEFAULT_SLIM, "runs-on"), "ubuntu-slim")
         self.assertEqual(ca.hub_input_default(HUB_DEFAULT_SLIM, "mode"), "advisory")
         self.assertIsNone(ca.hub_input_default(HUB_DEFAULT_SLIM, "absent"))
-        expression = HUB_DEFAULT_SLIM.replace("default: ubuntu-slim", "default: ${{ vars.RUNNER }}")
-        self.assertIsNone(ca.hub_input_default(expression, "runs-on"))
+        self.assertIsNone(ca.hub_input_default(hub("x", default="${{ vars.RUNNER }}"), "runs-on"))
+
+    def test_bare_on_key_read_as_true_still_counts(self):
+        self.assertTrue(ca.runs_on_pull_requests({True: "pull_request"}, {}))
 
     def test_unparseable_or_jobless_workflow_fails(self):
         self.assertIsNone(ca.parse_workflow("jobs: [unclosed")[0])
-        self.assertIsNone(ca.parse_workflow("name: x\n")[0])
+        self.assertIsNone(ca.parse_workflow(json.dumps({"name": "x"}))[0])
 
 
-@unittest.skipUnless(HAS_YAML, "PyYAML not installed")
 class LiveCallerConfig(unittest.TestCase):
-    SLIM = "    with:\n      runs-on: ubuntu-slim\n"
+    SLIM = {"with": {"runs-on": "ubuntu-slim"}}
 
     def run_check(self, gh, **kw):
         return ca.live_caller_config(gh, REPO, "pr-gate.yml", **kw)
 
     def test_explicit_runner_through_the_pinned_hub_mapping(self):
-        gh = FakeGH(routes(caller(self.SLIM), hub_text=HUB_ALLOWLIST))
+        gh = FakeGH(routes(caller(self.SLIM)))
         result = self.run_check(gh, label="ubuntu-slim")
         self.assertTrue(result["ok"], result)
         self.assertEqual((result["runner"], result["runner_source"], result["hub_sha"]),
@@ -146,46 +156,48 @@ class LiveCallerConfig(unittest.TestCase):
         result = self.run_check(FakeGH(routes(caller(), hub_text=HUB_DEFAULT_SLIM)), label="ubuntu-slim")
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["runner_source"], "hub default")
-        self.assertFalse(self.run_check(FakeGH(routes(caller(), hub_text=HUB_ALLOWLIST)), label="ubuntu-slim")["ok"])
+        self.assertFalse(self.run_check(FakeGH(routes(caller())), label="ubuntu-slim")["ok"])
 
     def test_input_the_pinned_hub_ignores_does_not_count(self):
-        ignoring = HUB_ALLOWLIST.replace("${{ inputs.runs-on == 'ubuntu-slim' && 'ubuntu-slim' || 'ubuntu-24.04' }}",
-                                         "ubuntu-24.04")
-        self.assertFalse(self.run_check(FakeGH(routes(caller(self.SLIM), hub_text=ignoring)), label="ubuntu-slim")["ok"])
+        self.assertFalse(self.run_check(FakeGH(routes(caller(self.SLIM), hub_text=hub("ubuntu-24.04"))),
+                                        label="ubuntu-slim")["ok"])
         self.assertFalse(self.run_check(FakeGH(routes(caller(self.SLIM), hub_text="")), label="ubuntu-slim")["ok"])
 
     def test_another_jobs_runner_or_an_expression_does_not_count(self):
-        other = caller() + "  lint:\n    runs-on: ubuntu-slim\n    steps:\n      - run: true\n"
-        self.assertFalse(self.run_check(FakeGH(routes(other, hub_text=HUB_ALLOWLIST)), label="ubuntu-slim")["ok"])
-        expr = caller("    with:\n      runs-on: ${{ vars.RUNNER }}\n")
-        result = self.run_check(FakeGH(routes(expr, hub_text=HUB_ALLOWLIST)), label="ubuntu-slim")
+        other = caller(jobs={"lint": {"runs-on": "ubuntu-slim", "steps": [{"run": "true"}]}})
+        self.assertFalse(self.run_check(FakeGH(routes(other)), label="ubuntu-slim")["ok"])
+        result = self.run_check(FakeGH(routes(caller({"with": {"runs-on": "${{ vars.RUNNER }}"}}))), label="ubuntu-slim")
         self.assertIn("not a literal", result["reason"])
 
-    def test_text_in_a_block_scalar_cannot_pose_as_the_call(self):
-        text = ("on: pull_request\nenv:\n  NOTE: |\n"
-                f"    uses: merglbot-core/github/.github/workflows/pr-gate.yml@{HUB_SHA}\n"
-                "jobs:\n  lint:\n    runs-on: ubuntu-slim\n    steps:\n      - run: true\n")
+    def test_text_in_a_string_cannot_pose_as_the_call(self):
+        text = json.dumps({"on": "pull_request", "env": {"NOTE": f"uses: {PIN}"},
+                           "jobs": {"lint": {"runs-on": "ubuntu-slim", "steps": [{"run": "true"}]}}})
         self.assertFalse(self.run_check(FakeGH(routes(text)))["ok"])
 
-    def test_extra_or_unpinned_hub_calls_fail(self):
-        for extra in (f"  second:\n    uses: Merglbot-Core/GitHub/.github/workflows/pr-gate.yml@{HUB_SHA}\n",
-                      f"  second:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@{HUB_SHA}\n",
-                      "  second:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@main\n"):
-            self.assertFalse(self.run_check(FakeGH(routes(caller() + extra)))["ok"])
+    def test_extra_unpinned_or_differently_cased_calls_fail(self):
+        for extra in ({"second": {"uses": f"Merglbot-Core/GitHub/.github/workflows/pr-gate.yml@{HUB_SHA}"}},
+                      {"second": {"uses": "merglbot-core/github/.github/workflows/pr-gate.yml@main"}}):
+            self.assertFalse(self.run_check(FakeGH(routes(caller(jobs=extra))))["ok"])
         self.assertFalse(self.run_check(FakeGH(routes(
             caller(uses="merglbot-core/github/.github/workflows/pr-gate.yml@main"))))["ok"])
 
-    def test_caller_must_run_on_pull_requests_to_main(self):
-        for text in (caller().replace("on: pull_request", "on: workflow_dispatch"),
-                     caller().replace("on: pull_request", "on:\n  pull_request:\n    branches: [release]"),
-                     caller().replace("on: pull_request", "on:\n  pull_request:\n    branches-ignore: ['**']"),
-                     caller().replace("on: pull_request", "on:\n  pull_request:\n    paths: [src/**]"),
-                     caller().replace("on: pull_request", "on:\n  pull_request:\n    types: [labeled]"),
-                     caller("    if: false\n"),
-                     caller("    if: ${{ false && github.event_name == 'pull_request' }}\n")):
+    def test_caller_must_provably_run_on_pull_requests_to_main(self):
+        cases = [caller(on="workflow_dispatch"),
+                 caller(on={"pull_request": {"branches": ["release"]}}),
+                 caller(on={"pull_request": {"branches": ["**", "!main"]}}),
+                 caller(on={"pull_request": {"branches-ignore": ["**"]}}),
+                 caller(on={"pull_request": {"paths": ["src/**"]}}),
+                 caller(on={"pull_request": {"types": ["labeled"]}}),
+                 caller({"if": "false"}),
+                 caller({"if": "${{ false && github.event_name == 'pull_request' }}"}),
+                 caller({"needs": ["prep"]}, jobs={"prep": {"if": "false", "runs-on": "ubuntu-24.04",
+                                                            "steps": [{"run": "true"}]}})]
+        for text in cases:
             result = self.run_check(FakeGH(routes(text)))
-            self.assertFalse(result["ok"])
+            self.assertFalse(result["ok"], text)
             self.assertIn("pull requests", result["reason"])
+        self.assertTrue(self.run_check(FakeGH(routes(caller(on={"pull_request": {
+            "branches": ["main"], "types": ["opened", "synchronize", "reopened"]}}))))["ok"])
 
     def test_missing_pinned_hub_workflow_fails_without_a_label(self):
         result = self.run_check(FakeGH(routes(caller(), hub_text="")))
@@ -198,6 +210,8 @@ class LiveCallerConfig(unittest.TestCase):
                   f"repos/{REPO}/contents/.github/workflows?ref={MAIN}": [{"path": 1}]}
         self.assertFalse(self.run_check(FakeGH(broken), pr_record={"expected_files": [3]})["ok"])
         self.assertFalse(ca.owner_exception_live_ok(FakeGH({}), {"owner_exception": {"pr": 5, "required_contexts": ["x"]}})[0])
+        self.assertFalse(ca.billing_retry_blocked(None, ca.parse_utc("2026-10-09T08:00:00Z")))
+        self.assertIn("ověřeno", ca.exception_notes([{"owner_exception": {"text": "x"}, "owner_exception_check": {"reason": None}}], "895"))
 
     def test_rollout_files_must_match(self):
         record = {"expected_files": [".github/workflows/pr-gate.yml", ".github/workflows/gitleaks-weekly.yml"],

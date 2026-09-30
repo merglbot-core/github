@@ -66,7 +66,7 @@ def billing_retry_blocked(billing, now):
     never blocks the retry."""
     try:
         return bool(billing.get("retry_after")) and now < parse_utc(billing["retry_after"])
-    except (TypeError, ValueError):
+    except (AttributeError, TypeError, ValueError):
         return False
 
 
@@ -148,13 +148,16 @@ def runs_on_pull_requests(doc, job):
     if set(spec) - {"branches", "types"}:
         return False
     branches = spec.get("branches")
-    if branches is not None and not (isinstance(branches, list) and any(b in ("main", "*", "**") for b in branches)):
-        return False
+    if branches is not None and not (isinstance(branches, list) and all(isinstance(b, str) for b in branches)
+                                     and not any(b.startswith("!") for b in branches)
+                                     and any(b in ("main", "*", "**") for b in branches)):
+        return False  # negated or unresolved patterns fail closed (V6 #969)
     types = spec.get("types")
     if types is not None and not (isinstance(types, list) and {"opened", "synchronize", "reopened"} <= set(types)):
         return False
-    # Any job-level condition is unresolved here and could disable the gate (V6 #969).
-    return "if" not in job
+    # A job-level condition or a dependency on other jobs is unresolved here and could skip
+    # the gate (V6 #969).
+    return "if" not in job and not job.get("needs")
 
 
 def hub_runner(hub_text, value):
@@ -246,7 +249,7 @@ def _live_caller_config(gh_json, repo, workflow, pr_record=None, label=None):
                 f"{[ref for _, ref, _ in calls]}", "main_sha": main}
     job_id, hub_sha, job = calls[0]
     if not runs_on_pull_requests(doc, job):
-        return {"ok": False, "reason": "caller does not run on pull requests to main", "main_sha": main}
+        return {"ok": False, "reason": "caller does not provably run on pull requests to main", "main_sha": main}
     # The pinned hub revision must exist and be a reusable workflow, runner check or not.
     hub = _text(gh_json, HUB, HUB_PR_GATE, hub_sha)
     hub_doc = parse_workflow(hub)[0] if hub else None
@@ -320,7 +323,7 @@ def exception_notes(items, sub):
         seen.add(key)
         tail = ("Měření pokračuje; až doslovné kritérium (≥ 5 kvalifikovaných běhů) dojde, "
                 "doplním jeden komentář." if str(sub) == "892" else
-                "Při uzavření živě ověřeno: " + (item.get("owner_exception_check") or {}).get("reason", "") + ".")
+                "Při uzavření živě ověřeno: " + str((item.get("owner_exception_check") or {}).get("reason") or "") + ".")
         notes.append(f"\n\n**Výjimka ownera** ({exception.get('decided_at_prague', '')}): "
                      f"„{exception.get('text', '')}“. {exception.get('basis', '')} {tail}")
     return "".join(notes)
