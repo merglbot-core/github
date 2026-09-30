@@ -55,7 +55,7 @@ never open a PR. GHAS Secret Protection push protection is untouched either way.
 | `gitleaks` | `false` | gitleaks 8.18.4 (pinned by release checksum) over the working tree, `--no-git --redact`; findings fail the gate and are listed redacted in the job summary |
 | `gitleaks-config-path` | `''` | repo-relative gitleaks config; absolute paths and `..` are rejected |
 | `gitleaks-upload-report` | `false` | uploads the redacted JSON report as a 7-day artifact |
-| `markdown-danger-lint` | `false` | fails when changed Markdown documents `git push --force --all` (verbatim from `markdown-danger-lint.yml`) |
+| `markdown-danger-lint` | `false` | fails when changed Markdown recommends force-pushing all branches at once (the pattern lives in `markdown-danger-lint.yml`; lines saying never or do not are allowed) |
 | `pr-text-length` | `false` | PR title/body length limits, dependabot waived (verbatim from `length-check.yml`) |
 | `pr-text-max-title` | `100` | title limit in characters |
 | `pr-text-max-body` | `4000` | body limit in bytes |
@@ -162,7 +162,8 @@ jobs:
       actions: read
       contents: read
     with:
-      deploy-sha: ${{ github.sha }}
+      # The same SHA the run-name records and the deploy uses (workflow_run: the triggering head).
+      deploy-sha: ${{ github.event.workflow_run.head_sha || github.sha }}
   deploy:
     needs: [runtime-changes]
     if: ${{ !cancelled() && needs.runtime-changes.outputs.runtime != 'false' }}
