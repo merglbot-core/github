@@ -1,0 +1,94 @@
+# Self-test for reusable-deploy-runtime-changes.yml (merglbot-core/github#909):
+# runs the real guard, in dry-run mode (no API call, base from base-override),
+# on both hosted runner labels the callers use, then asserts the decisions.
+name: deploy-guard-selftest
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/reusable-deploy-runtime-changes.yml'
+      - '.github/workflows/deploy-guard-selftest.yml'
+      - 'scripts/deploy-guard/**'
+      - 'tests/test_deploy_runtime_changes.py'
+
+permissions: {}
+
+concurrency:
+  group: deploy-guard-selftest-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  diff-2404:
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/reusable-deploy-runtime-changes.yml
+    with:
+      deploy-sha: ${{ github.event.pull_request.head.sha }}
+      base-override: ${{ github.event.pull_request.base.sha }}
+      dry-run: true
+      runs-on: ubuntu-24.04
+
+  diff-slim:
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/reusable-deploy-runtime-changes.yml
+    with:
+      deploy-sha: ${{ github.event.pull_request.head.sha }}
+      base-override: ${{ github.event.pull_request.base.sha }}
+      dry-run: true
+      runs-on: ubuntu-slim
+
+  noop-slim:
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/reusable-deploy-runtime-changes.yml
+    with:
+      deploy-sha: ${{ github.event.pull_request.head.sha }}
+      base-override: ${{ github.event.pull_request.head.sha }}
+      dry-run: true
+      runs-on: ubuntu-slim
+
+  assert:
+    needs: [diff-2404, diff-slim, noop-slim]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Assert guard decisions
+        shell: bash
+        env:
+          A_RUNTIME: ${{ needs.diff-2404.outputs.runtime }}
+          A_REASON: ${{ needs.diff-2404.outputs.reason }}
+          A_BASE: ${{ needs.diff-2404.outputs.base-sha }}
+          B_RUNTIME: ${{ needs.diff-slim.outputs.runtime }}
+          B_REASON: ${{ needs.diff-slim.outputs.reason }}
+          B_BASE: ${{ needs.diff-slim.outputs.base-sha }}
+          C_RUNTIME: ${{ needs.noop-slim.outputs.runtime }}
+          C_REASON: ${{ needs.noop-slim.outputs.reason }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          fail=0
+          check_diff() { # both runners must reach a real diff decision, never an error
+            local name="$1" runtime="$2" reason="$3" base="$4"
+            echo "${name}: runtime=${runtime} reason=${reason} base=${base}"
+            if [[ $runtime != true && $runtime != false ]]; then echo "::error::${name}: no decision"; fail=1; fi
+            if [[ $reason == fail-open:error* || $reason == fail-open:missing-tool* || -z $reason ]]; then
+              echo "::error::${name}: guard errored (${reason})"; fail=1
+            fi
+            if [[ $base != "$PR_BASE" ]]; then echo "::error::${name}: base-sha not propagated"; fail=1; fi
+          }
+          check_diff diff-2404 "$A_RUNTIME" "$A_REASON" "$A_BASE"
+          check_diff diff-slim "$B_RUNTIME" "$B_REASON" "$B_BASE"
+          if [[ $A_RUNTIME != "$B_RUNTIME" || $A_REASON != "$B_REASON" ]]; then
+            echo "::error::runners disagree"; fail=1
+          fi
+          echo "noop-slim: runtime=${C_RUNTIME} reason=${C_REASON}"
+          if [[ $C_RUNTIME != false || $C_REASON != already-deployed ]]; then
+            echo "::error::noop-slim: expected runtime=false already-deployed"; fail=1
+          fi
+          exit "$fail"

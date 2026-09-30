@@ -1,0 +1,148 @@
+# =============================================================================
+# Reusable - Deploy runtime-changes guard (merglbot-core/github#909)
+#
+# Replaces the inline `runtime-changes` job of the Cloud Run deploy callers. It
+# decides `runtime` by diffing the LAST SUCCESSFULLY DEPLOYED commit of the
+# calling workflow (not HEAD^) against `deploy-sha` and classifying every path
+# against a deny-list of non-runtime paths, so allowlist drift, SIGPIPE, replaced
+# pending runs and multi-commit pushes can no longer skip a runtime change.
+# Every uncertainty resolves to runtime=true; see scripts/deploy-guard/runtime_changes.sh.
+#
+# The script is checked out from the SAME hub commit the caller pinned this
+# workflow to (job.workflow_sha, as pr-gate.yml does for docs-governance), so
+# the code that decides is the code the caller pinned.
+#
+# Caller contract:
+#   - job permissions `actions: read` + `contents: read`
+#   - `run-name: Deploy <repo> @ ${{ github.event.workflow_run.head_sha || github.sha }}`
+#     (the ` @ <40 hex>` suffix records which commit a run deployed)
+#   - gate downstream jobs on `needs.<job>.outputs.runtime != 'false'` with
+#     `!cancelled()`, so a failed guard job still deploys (fail-open)
+# =============================================================================
+name: Reusable - Deploy runtime-changes guard
+
+on:
+  workflow_call:
+    inputs:
+      deploy-sha:
+        description: 'Full 40-char commit SHA the caller is about to deploy'
+        type: string
+        required: true
+      workflow-file:
+        description: 'Caller workflow file name (default: derived from github.workflow_ref)'
+        type: string
+        default: ''
+        required: false
+      deploy-job-regex:
+        description: 'Bash ERE matching the API names of the jobs that deploy (all must succeed for a run to count as deployed)'
+        type: string
+        default: '^deploy$'
+        required: false
+      deny-extra:
+        description: 'Extra non-runtime path regexes (bash ERE), one per line'
+        type: string
+        default: ''
+        required: false
+      force-runtime-extra:
+        description: 'Extra always-runtime path regexes (bash ERE), one per line'
+        type: string
+        default: ''
+        required: false
+      runs-on:
+        description: '`ubuntu-24.04` (default) or `ubuntu-slim`; any other value runs on ubuntu-24.04'
+        type: string
+        default: 'ubuntu-24.04'
+        required: false
+      dry-run:
+        description: 'Self-test only: no GitHub API call; the base comes from base-override'
+        type: boolean
+        default: false
+        required: false
+      base-override:
+        description: 'Self-test only (honoured with dry-run): base commit SHA'
+        type: string
+        default: ''
+        required: false
+    outputs:
+      runtime:
+        description: "'true' = deploy, 'false' = proven non-runtime change"
+        value: ${{ jobs.runtime-changes.outputs.runtime }}
+      reason:
+        description: 'Decision token, e.g. runtime:<path>, non-runtime-only, fail-open:no-base'
+        value: ${{ jobs.runtime-changes.outputs.reason }}
+      base-sha:
+        description: 'Last successfully deployed commit used as the diff base (empty when unknown)'
+        value: ${{ jobs.runtime-changes.outputs.base-sha }}
+
+permissions: {}
+
+jobs:
+  runtime-changes:
+    name: runtime-changes
+    # Allowlist, not pass-through (as pr-gate.yml): only the two hosted labels.
+    runs-on: ${{ inputs.runs-on == 'ubuntu-slim' && 'ubuntu-slim' || 'ubuntu-24.04' }}
+    timeout-minutes: 5
+    permissions:
+      actions: read   # list the caller workflow's runs and their jobs
+      contents: read
+    outputs:
+      runtime: ${{ steps.decide.outputs.runtime }}
+      reason: ${{ steps.decide.outputs.reason }}
+      base-sha: ${{ steps.decide.outputs.base-sha }}
+    steps:
+      - name: Check out the commit to deploy (full history, no blobs)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ inputs.deploy-sha }}
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Resolve pinned hub ref
+        id: hubref
+        shell: bash
+        env:
+          JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          JOB_WORKFLOW_REPO: ${{ job.workflow_repository }}
+        run: |
+          set -euo pipefail
+          repo="${JOB_WORKFLOW_REPO:-merglbot-core/github}"
+          ref="${JOB_WORKFLOW_SHA:-}"
+          # A local call (the hub self-test) runs the hub at GITHUB_SHA.
+          if [[ -z $ref && $repo == "$GITHUB_REPOSITORY" ]]; then ref="$GITHUB_SHA"; fi
+          if ! [[ $ref =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Cannot resolve the pinned hub commit (job.workflow_sha='${ref}')."
+            exit 1
+          fi
+          {
+            echo "repo=$repo"
+            echo "ref=$ref"
+          } >> "$GITHUB_OUTPUT"
+          echo "deploy guard code pinned to $repo@$ref"
+
+      - name: Check out the guard script from the pinned hub commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: ${{ steps.hubref.outputs.repo }}
+          ref: ${{ steps.hubref.outputs.ref }}
+          path: .deploy-guard-hub
+          sparse-checkout: scripts/deploy-guard
+          persist-credentials: false
+
+      - name: Decide
+        id: decide
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RC_DEPLOY_SHA: ${{ inputs.deploy-sha }}
+          RC_WORKFLOW_FILE: ${{ inputs.workflow-file }}
+          RC_WORKFLOW_REF: ${{ github.workflow_ref }}
+          RC_DEPLOY_JOB_REGEX: ${{ inputs.deploy-job-regex }}
+          RC_DENY_EXTRA: ${{ inputs.deny-extra }}
+          RC_FORCE_EXTRA: ${{ inputs.force-runtime-extra }}
+          RC_DRY_RUN: ${{ inputs.dry-run }}
+          RC_BASE_OVERRIDE: ${{ inputs.base-override }}
+          RC_EVENT: ${{ github.event_name }}
+          RC_RUN_ID: ${{ github.run_id }}
+          RC_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: bash "$GITHUB_WORKSPACE/.deploy-guard-hub/scripts/deploy-guard/runtime_changes.sh"
