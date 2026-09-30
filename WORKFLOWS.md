@@ -130,7 +130,8 @@ docs-governance).
 |---|---|---|
 | `manual`, `rerun` | true | `workflow_dispatch`, or `run_attempt > 1` |
 | `fail-open:no-base` | true | none of the 10 newest completed `main` runs (current run excluded) has every job matching `deploy-job-regex` concluded `success`; or any API/jq error |
-| `fail-open:legacy-marker` | true | that run has no ` @ <40 hex>` run-name marker and its event is not `push`/`workflow_dispatch` (those use `head_sha`) |
+| `fail-open:marker-mismatch` | true | that run is a `push`/`workflow_dispatch` run (base = its `head_sha`) whose title carries a ` @ <40 hex>` marker that differs from `head_sha` |
+| `fail-open:legacy-marker` | true | that run has another event (`workflow_run`), where the base is the run-name marker, and has no marker |
 | `already-deployed` | false | base == `deploy-sha` |
 | `fail-open:base-missing` | true | base commit is not in the clone |
 | `stale-trigger` | false | `deploy-sha` is an ancestor of base (production is never rolled back) |
@@ -140,7 +141,8 @@ docs-governance).
 
 Deny-list (anchored bash ERE; add more with `deny-extra`, one per line): `^\.github/`, `^docs/`,
 `^[^/]+\.md$`, `^(tests?|e2e|__tests__|playwright|cypress)/`,
-`^\.(gitignore|gitattributes|editorconfig|pre-commit-config\.yaml)$`, `^LICENSE`, `^CODEOWNERS$`,
+`^\.(gitignore|gitattributes|editorconfig|pre-commit-config\.yaml)$`,
+`^(LICENSE|LICENCE|COPYING|NOTICE)(\.(md|txt|rst))?$`, `^CODEOWNERS$`,
 `^\.(vscode|devcontainer|claude|codex|cursor)/`. Force-runtime (add more with
 `force-runtime-extra`): the calling workflow file and `^\.github/actions/`. Malformed inputs, an
 invalid regex or any unexpected error fail open (`fail-open:*`). `dry-run`/`base-override` exist
