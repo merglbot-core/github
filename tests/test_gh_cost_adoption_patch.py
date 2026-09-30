@@ -286,7 +286,12 @@ class BillingGuards(unittest.TestCase):
 
 
 class JobRunsCensus(unittest.TestCase):
-    """The patched job_runs measurement: low traffic is accepted only on a complete census."""
+    """The patched low-traffic measurements: accepted only on a complete, finished census.
+
+    888 measure_job_runs (the 910 copy gets the same replacements) and 910 measure_runner_label
+    run from their adopted text against a stub of the runs/jobs API."""
+    CASES = (("job_runs", "job_runs_adopted.py.txt", "measure_job_runs", pa.REPLACEMENTS_888),
+             ("runner_label", "runner_label_adopted.py.txt", "measure_runner_label", pa.REPLACEMENTS_910))
 
     def setUp(self):
         import datetime as dt
@@ -294,9 +299,10 @@ class JobRunsCensus(unittest.TestCase):
         import types
         self.dt = dt
         self.since = "2026-09-22T17:41:00Z"
-        self.runs, self.jobs, self.total = [], {}, None
+        self.reset()
         fake = types.ModuleType("cost_adoption")
-        fake.live_caller_config = lambda *a, **k: {"ok": True, "main_sha": "a" * 40, "hub_sha": "c" * 40}
+        fake.live_caller_config = lambda *a, **k: {"ok": True, "main_sha": "a" * 40, "hub_sha": "c" * 40,
+                                                   "runner": "ubuntu-slim", "runner_source": "explicit"}
         self.saved = sys.modules.get("cost_adoption")
         sys.modules["cost_adoption"] = fake
 
@@ -307,32 +313,37 @@ class JobRunsCensus(unittest.TestCase):
         else:
             sys.modules["cost_adoption"] = self.saved
 
+    def reset(self):
+        self.runs, self.jobs, self.listing = [], {}, None
+
     def gh_json(self, path):
         import re
         if "/workflows/" in path:
-            total = len(self.runs) if self.total is None else self.total
-            return {"total_count": total, "workflow_runs": list(self.runs)}
-        run_id = re.search(r"/runs/(\d+)/jobs", path).group(1)
-        return self.jobs.get(run_id)
+            if self.listing is not None:
+                return self.listing
+            return {"total_count": len(self.runs), "workflow_runs": list(self.runs)}
+        return self.jobs.get(re.search(r"/runs/(\d+)/jobs", path).group(1))
 
-    def measure(self):
+    def measure(self, kind, item=None):
         dt = self.dt
-        source = (ROOT / "tests/fixtures/gh_cost_adoption/job_runs_adopted.py.txt").read_text()
+        _, fixture, name, replacements = next(c for c in self.CASES if c[0] == kind)
+        source = (ROOT / "tests/fixtures/gh_cost_adoption" / fixture).read_text()
         applied = 0
-        for before, after in pa.REPLACEMENTS_888:
+        for before, after in replacements:
             if before in source:
                 source, applied = source.replace(before, after, 1), applied + 1
         self.assertEqual(applied, 2)
         ns = {"dt": dt, "gh_json": self.gh_json, "log": lambda *_: None, "CALLS": {"n": 0},
               "MAX_CALLS_PER_TICK": 60, "DOD_MAX_SECONDS": 60, "DOD_RUNS": 5, "LOW_TRAFFIC_GRACE_DAYS": 14,
-              "merged_at": lambda state, key: self.since,
+              "merged_at": lambda state, key: self.since, "item_since": lambda state, i: self.since,
               "now": lambda: dt.datetime(2026, 10, 7, tzinfo=dt.timezone.utc),
               "iso": lambda m=None: "2026-10-07T00:00:00Z",
               "parse": lambda v: dt.datetime.fromisoformat(v.replace("Z", "+00:00")),
               "job_seconds": lambda j: 30}
-        exec(compile(source, "job_runs_patched", "exec"), ns)
-        item = {"sub": 889, "repo": "o/r", "since_pr": "o/r#1"}
-        ns["measure_job_runs"]({"prs": {"o/r#1": {"merged_at": self.since}}}, item)
+        exec(compile(source, f"{kind}_patched", "exec"), ns)
+        item = item if item is not None else {"sub": 889, "repo": "o/r", "since_pr": "o/r#1", "workflow": "w.yml",
+                                              "job": "PR Gate", "label": "ubuntu-slim"}
+        ns[name]({"prs": {"o/r#1": {"merged_at": self.since}}}, item)
         return item
 
     def add(self, status="completed", jobs=True):
@@ -340,30 +351,54 @@ class JobRunsCensus(unittest.TestCase):
         self.runs.append({"id": int(run_id), "status": status, "conclusion": "success",
                           "created_at": "2026-09-25T10:00:00Z"})
         if jobs:
-            self.jobs[run_id] = {"total_count": 1, "jobs": [{"started_at": "a", "completed_at": "b",
+            self.jobs[run_id] = {"total_count": 1, "jobs": [{"name": "PR Gate", "labels": ["ubuntu-slim"],
+                                                             "started_at": "a", "completed_at": "b",
                                                              "conclusion": "success"}]}
         return run_id
 
     def test_a_complete_quiet_census_is_accepted_with_the_live_check(self):
-        self.add()
-        item = self.measure()
-        self.assertEqual((item.get("low_traffic"), item.get("census_incomplete")), (True, False))
-
-    def test_an_unfinished_unread_or_unlisted_run_blocks_low_traffic(self):
-        for case in ("running", "unread", "partial_jobs", "unlisted"):
-            self.runs, self.jobs, self.total = [], {}, None
+        for kind, *_ in self.CASES:
+            self.reset()
             self.add()
-            if case == "running":
-                self.add(status="in_progress")
-            elif case == "unread":
-                self.add(jobs=False)
-            elif case == "partial_jobs":
-                self.jobs[self.add()]["total_count"] = 2
-            else:
-                self.total = 5
-            item = self.measure()
-            self.assertNotIn("met_at", item, case)
-            self.assertTrue(item["census_incomplete"], case)
+            item = self.measure(kind)
+            self.assertEqual((item.get("low_traffic"), item.get("census_incomplete")), (True, False), kind)
+
+    def test_an_unfinished_unread_unlisted_or_malformed_census_blocks_low_traffic(self):
+        for kind, *_ in self.CASES:
+            for case in ("running", "unread", "partial_jobs", "unlisted", "no_list", "not_a_list", "bad_row"):
+                self.reset()
+                self.add()
+                if case == "running":
+                    self.add(status="in_progress")
+                elif case == "unread":
+                    self.add(jobs=False)
+                elif case == "partial_jobs":
+                    self.jobs[self.add()]["total_count"] = 2
+                elif case == "unlisted":
+                    self.listing = {"total_count": 5, "workflow_runs": list(self.runs)}
+                elif case == "no_list":
+                    self.listing = {"total_count": 0}
+                elif case == "not_a_list":
+                    self.listing = {"total_count": 0, "workflow_runs": {"id": 1}}
+                else:
+                    self.listing = {"total_count": 2, "workflow_runs": list(self.runs) + ["run"]}
+                item = self.measure(kind)
+                self.assertNotIn("met_at", item, (kind, case))
+                self.assertTrue(item["census_incomplete"], (kind, case))
+
+    def test_a_measured_run_that_is_re_run_holds_low_traffic(self):
+        for kind, *_ in self.CASES:
+            self.reset()
+            run_id = self.add()
+            item = self.measure(kind)
+            self.assertTrue(item.get("low_traffic"), kind)
+            item.pop("met_at")
+            item.pop("low_traffic")
+            self.runs[0]["status"] = "in_progress"
+            item = self.measure(kind, item)
+            self.assertIn(run_id, item["runs"])
+            self.assertNotIn("met_at", item, kind)
+            self.assertTrue(item["census_incomplete"], kind)
 
 
 class PilotBehaviour(unittest.TestCase):
@@ -570,7 +605,8 @@ class PilotBehaviour(unittest.TestCase):
 
     def test_a_failed_or_partial_read_decides_nothing(self):
         broken = self.add(6, 550, arm=True)
-        for listing in (None, {"jobs": []}, {"total_count": 101, "jobs": self.jobs[broken]["jobs"]}):
+        for listing in (None, {"jobs": []}, {"total_count": 101, "jobs": self.jobs[broken]["jobs"]},
+                        {"total_count": 1, "jobs": ["job"]}):
             self.jobs[broken] = listing
             ok, item = self.measure()
             self.assertFalse(ok)

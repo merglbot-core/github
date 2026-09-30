@@ -25,17 +25,22 @@ REPLACEMENTS_888 = [
     if not isinstance(runs, dict):
         return False
     known = item.setdefault("runs", {})
-    listed = runs.get("workflow_runs") if isinstance(runs.get("workflow_runs"), list) else []
+    listed = runs.get("workflow_runs")
     total = runs.get("total_count")
     # The low-traffic branch below decides on the absence of bad runs, so it needs the complete
-    # census: every run listed, finished and read (owner rule 30 Sep 2026, V6 #970).
-    incomplete = not isinstance(total, int) or isinstance(total, bool) or total > len(listed)
-    for run in listed:
+    # census: a well-formed listing of every run, each finished and read (owner rule 30 Sep 2026,
+    # V6 #970). A malformed listing is never read as an empty one.
+    incomplete = (not isinstance(listed, list) or not all(isinstance(r, dict) for r in listed)
+                  or not isinstance(total, int) or isinstance(total, bool) or total > len(listed))
+    for run in listed if not incomplete else []:
         run_id = str(run.get("id"))
-        if run_id in known or run.get("created_at", "") < since:
+        if run.get("created_at", "") < since:
             continue
         if run.get("status") != "completed":
+            # Checked before the cache: a measured run that is being re-run is unfinished again.
             incomplete = True
+            continue
+        if run_id in known:
             continue
         if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
             incomplete = True
@@ -425,8 +430,8 @@ REPLACEMENTS_910 = [
                                       f"{iso(a)}..{iso(b - dt.timedelta(seconds=1))}&per_page=100&page={page}")
                     batch = listing.get("workflow_runs") if isinstance(listing, dict) else None
                     total = listing.get("total_count") if isinstance(listing, dict) else None
-                    if (not isinstance(batch, list) or not isinstance(total, int) or isinstance(total, bool)
-                            or total > PILOT_CENSUS_MAX):
+                    if (not isinstance(batch, list) or not all(isinstance(r, dict) for r in batch)
+                            or not isinstance(total, int) or isinstance(total, bool) or total > PILOT_CENSUS_MAX):
                         return failed()
                     runs.update((str(r.get("id")), r) for r in batch)
                     if not batch or page * 100 >= total:
@@ -485,8 +490,8 @@ REPLACEMENTS_910 = [
             listing = gh_json(f"repos/{repo}/actions/runs/{rid}/attempts/1/jobs?per_page=100")
             jobs = listing.get("jobs") if isinstance(listing, dict) else None
             total = listing.get("total_count") if isinstance(listing, dict) else None
-            if (not isinstance(jobs, list) or not isinstance(total, int) or isinstance(total, bool)
-                    or total > len(jobs)):
+            if (not isinstance(jobs, list) or not all(isinstance(j, dict) for j in jobs)
+                    or not isinstance(total, int) or isinstance(total, bool) or total > len(jobs)):
                 return failed()
             matching = [j for j in jobs if j.get("name") == job or (j.get("name") or "").endswith(" / " + job)]
             finished = [j for j in matching if j.get("status") == "completed" and j.get("completed_at")]
@@ -572,17 +577,22 @@ PILOT_CENSUS_VERSION = 2
     if not isinstance(runs, dict):
         return False
     known = item.setdefault("runs", {})
-    listed = runs.get("workflow_runs") if isinstance(runs.get("workflow_runs"), list) else []
+    listed = runs.get("workflow_runs")
     total = runs.get("total_count")
     # The low-traffic branch below decides on the absence of bad runs, so it needs the complete
-    # census: every run listed, finished and read (owner rule 30 Sep 2026, V6 #970).
-    incomplete = not isinstance(total, int) or isinstance(total, bool) or total > len(listed)
-    for run in listed:
+    # census: a well-formed listing of every run, each finished and read (owner rule 30 Sep 2026,
+    # V6 #970). A malformed listing is never read as an empty one.
+    incomplete = (not isinstance(listed, list) or not all(isinstance(r, dict) for r in listed)
+                  or not isinstance(total, int) or isinstance(total, bool) or total > len(listed))
+    for run in listed if not incomplete else []:
         run_id = str(run.get("id"))
-        if run_id in known or run.get("created_at", "") < since:
+        if run.get("created_at", "") < since:
             continue
         if run.get("status") != "completed":
+            # Checked before the cache: a measured run that is being re-run is unfinished again.
             incomplete = True
+            continue
+        if run_id in known:
             continue
         if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
             incomplete = True
@@ -626,17 +636,22 @@ PILOT_CENSUS_VERSION = 2
     if not isinstance(runs, dict):
         return False
     known = item.setdefault("runs", {})
-    listed = runs.get("workflow_runs") if isinstance(runs.get("workflow_runs"), list) else []
+    listed = runs.get("workflow_runs")
     total = runs.get("total_count")
     # The low-traffic branch below decides on the absence of bad runs, so it needs the complete
-    # census: every run listed, finished and read (owner rule 30 Sep 2026, V6 #970).
-    incomplete = not isinstance(total, int) or isinstance(total, bool) or total > len(listed)
-    for run in listed:
+    # census: a well-formed listing of every run, each finished and read (owner rule 30 Sep 2026,
+    # V6 #970). A malformed listing is never read as an empty one.
+    incomplete = (not isinstance(listed, list) or not all(isinstance(r, dict) for r in listed)
+                  or not isinstance(total, int) or isinstance(total, bool) or total > len(listed))
+    for run in listed if not incomplete else []:
         run_id = str(run.get("id"))
-        if run_id in known or run.get("created_at", "") < since:
+        if run.get("created_at", "") < since:
             continue
         if run.get("status") != "completed":
+            # Checked before the cache: a measured run that is being re-run is unfinished again.
             incomplete = True
+            continue
+        if run_id in known:
             continue
         if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
             incomplete = True
