@@ -69,6 +69,16 @@ on:
         required: false
         type: string
         default: ''
+      # --- gcloud (github#963, EPIC merglbot-core/platform#1722) ---
+      # GitHub-hosted ubuntu runners preinstall the Google Cloud SDK, and
+      # google-github-actions/auth writes the credentials it finds. Set false to
+      # skip the 20-40 s setup-gcloud step when no specific gcloud version or
+      # extra component is needed. Default true keeps today's behaviour.
+      install_gcloud:
+        description: 'Install gcloud via google-github-actions/setup-gcloud (false = use the runner-preinstalled SDK)'
+        type: boolean
+        default: true
+        required: false
     secrets:
       wif_provider:
         description: 'GCP Workload Identity Federation Provider'
@@ -524,6 +534,7 @@ jobs:
           service_account: ${{ secrets.wif_service_account }}
 
       - name: Set up Cloud SDK
+        if: ${{ inputs.install_gcloud }}
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
         with:
           install_components: beta
