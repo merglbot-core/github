@@ -92,6 +92,8 @@ class Basics(unittest.TestCase):
         self.assertTrue(ca.billing_retry_blocked({"retry_after": "2026-10-09T08:30:00Z"}, now))
         self.assertFalse(ca.billing_retry_blocked({"retry_after": "2026-10-09T07:59:00Z"}, now))
         self.assertFalse(ca.billing_retry_blocked({}, now))
+        self.assertFalse(ca.billing_retry_blocked({"retry_after": "not a time"}, now))
+        self.assertFalse(ca.billing_data_gap_due("2026-10-06T06:00:00", now))  # no timezone
         self.assertFalse(ca.billing_data_gap_due("2026-10-09T06:00:00Z", now))
         self.assertTrue(ca.billing_data_gap_due("2026-10-06T06:00:00Z", now))
 
@@ -166,7 +168,8 @@ class LiveCallerConfig(unittest.TestCase):
         self.assertFalse(self.run_check(FakeGH(routes(text)))["ok"])
 
     def test_extra_or_unpinned_hub_calls_fail(self):
-        for extra in (f"  second:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@{HUB_SHA}\n",
+        for extra in (f"  second:\n    uses: Merglbot-Core/GitHub/.github/workflows/pr-gate.yml@{HUB_SHA}\n",
+                      f"  second:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@{HUB_SHA}\n",
                       "  second:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@main\n"):
             self.assertFalse(self.run_check(FakeGH(routes(caller() + extra)))["ok"])
         self.assertFalse(self.run_check(FakeGH(routes(
@@ -175,6 +178,9 @@ class LiveCallerConfig(unittest.TestCase):
     def test_caller_must_run_on_pull_requests_to_main(self):
         for text in (caller().replace("on: pull_request", "on: workflow_dispatch"),
                      caller().replace("on: pull_request", "on:\n  pull_request:\n    branches: [release]"),
+                     caller().replace("on: pull_request", "on:\n  pull_request:\n    branches-ignore: ['**']"),
+                     caller().replace("on: pull_request", "on:\n  pull_request:\n    paths: [src/**]"),
+                     caller().replace("on: pull_request", "on:\n  pull_request:\n    types: [labeled]"),
                      caller("    if: false\n"),
                      caller("    if: ${{ false && github.event_name == 'pull_request' }}\n")):
             result = self.run_check(FakeGH(routes(text)))
@@ -229,6 +235,7 @@ class OwnerException(unittest.TestCase):
     def test_rows_and_one_note_per_decision(self):
         second = dict(self.ITEM, repo="p/acq")
         self.assertIn("zavřen bez merge", ca.exception_row(self.ITEM))
+        self.assertIn("zavřen bez merge", ca.exception_row({"owner_exception": self.ITEM["owner_exception"]}))
         notes = ca.exception_notes([self.ITEM, second], "895")
         self.assertEqual(notes.count("**Výjimka ownera**"), 1)
         self.assertIn("Při uzavření živě ověřeno", notes)

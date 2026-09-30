@@ -62,14 +62,21 @@ def verdict_note(verdict):
 
 
 def billing_retry_blocked(billing, now):
-    """Missing billing data is retried hourly instead of every tick."""
-    stamp = billing.get("retry_after")
-    return bool(stamp) and now < parse_utc(stamp)
+    """Missing billing data is retried hourly instead of every tick; a malformed stamp
+    never blocks the retry."""
+    try:
+        return bool(billing.get("retry_after")) and now < parse_utc(billing["retry_after"])
+    except (TypeError, ValueError):
+        return False
 
 
 def billing_data_gap_due(due_at, now):
-    """72 hours after the due time without usable data, one DATA_GAP comment is written."""
-    return bool(due_at) and now - parse_utc(due_at) >= DATA_GAP_AFTER
+    """72 hours after the due time without usable data, one DATA_GAP comment is written;
+    a malformed due time never triggers it."""
+    try:
+        return bool(due_at) and now - parse_utc(due_at) >= DATA_GAP_AFTER
+    except (TypeError, ValueError):
+        return False
 
 
 def data_gap_body(sub):
@@ -109,13 +116,17 @@ def parse_workflow(text):
 
 def hub_jobs(doc, hub_path=HUB_PR_GATE):
     """Every job whose own `uses:` calls the hub workflow, at any ref: [(job_id, ref, job)].
-    Callers count all of them, so an extra unpinned call cannot hide (V6 #969)."""
-    prefix = HUB + "/" + hub_path + "@"
+    Callers count all of them, so an extra unpinned call cannot hide; owner and repository
+    compare case-insensitively like GitHub does, the workflow path exactly (V6 #969)."""
     found = []
     for job_id, job in doc["jobs"].items():
         uses = job.get("uses") if isinstance(job, dict) else None
-        if isinstance(uses, str) and uses.strip().startswith(prefix):
-            found.append((job_id, uses.strip()[len(prefix):], job))
+        parts = uses.strip().split("/", 2) if isinstance(uses, str) else []
+        if len(parts) != 3 or "/".join(parts[:2]).lower() != HUB or "@" not in parts[2]:
+            continue
+        path, ref = parts[2].split("@", 1)
+        if path == hub_path:
+            found.append((job_id, ref, job))
     return found
 
 
@@ -129,11 +140,18 @@ def runs_on_pull_requests(doc, job):
     if not isinstance(triggers, dict) or "pull_request" not in triggers:
         return False
     spec = triggers.get("pull_request") or {}
-    branches = spec.get("branches") if isinstance(spec, dict) else None
-    ignored = spec.get("branches-ignore") if isinstance(spec, dict) else None
-    if branches is not None and not any(b in ("main", "*", "**") for b in branches or []):
+    if not isinstance(spec, dict):
         return False
-    if ignored and "main" in ignored:
+    # Any filter that could keep an ordinary PR to main from running is unresolved here
+    # and fails closed; only an explicit `branches` list naming main (or `*`/`**`) and
+    # activity types covering opened/synchronize/reopened are understood (V6 #969).
+    if set(spec) - {"branches", "types"}:
+        return False
+    branches = spec.get("branches")
+    if branches is not None and not (isinstance(branches, list) and any(b in ("main", "*", "**") for b in branches)):
+        return False
+    types = spec.get("types")
+    if types is not None and not (isinstance(types, list) and {"opened", "synchronize", "reopened"} <= set(types)):
         return False
     # Any job-level condition is unresolved here and could disable the gate (V6 #969).
     return "if" not in job
@@ -287,7 +305,7 @@ def _owner_exception_live_ok(gh_json, item):
 def exception_row(item):
     exception = item.get("owner_exception") or {}
     contexts = ", ".join(f"`{c}`" for c in exception.get("required_contexts") or [])
-    return (f"| {item['repo']} | Výjimka ownera: PR {exception.get('pr')} zavřen bez merge, "
+    return (f"| {item.get('repo', '?')} | Výjimka ownera: PR {exception.get('pr')} zavřen bez merge, "
             f"{contexts} zůstává povinný, úspora se nepočítá |")
 
 
