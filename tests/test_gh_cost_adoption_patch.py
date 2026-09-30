@@ -85,7 +85,7 @@ class Content(unittest.TestCase):
             self.assertIn(text, p888)
         for text in ("live_caller_config(gh_json, repo, workflow, state.get(\"prs\", {}).get(item.get(\"since_pr\"))", "PILOT_MIN_RUN_S = 60",
                      'item["incomplete_at"] = iso()', 'iso(a) <= r["created_at"] < iso(b)', "PILOT_CENSUS_MAX = 1000",
-                     "PILOT_SAMPLE_TARGET = 300", 'item.pop("partial_census", False)',
+                     "PILOT_SAMPLE_TARGET = 300", 'item.pop("partial_census", False)', "PILOT_CENSUS_VERSION = 2",
                      'item["verdict"] = "regression" if slower else "pass"', "fail_verdict",
                      "billing_retry_blocked", "closes_billing(verdict)"):
             self.assertIn(text, p910)
@@ -183,6 +183,7 @@ class PilotBehaviour(unittest.TestCase):
                 "job_seconds": lambda j: j.get("_s"), "item_since": lambda state, i: self.stamp(self.since),
                 "CALLS": {"n": 0}, "PILOT_WINDOW_DAYS": 14, "PILOT_MAX_RATIO": 1.2,
                 "PILOT_FAIL_TOLERANCE": 0.10, "PILOT_MIN_RUNS": 3, "PILOT_MIN_RUN_S": 60, "PILOT_CENSUS_MAX": 1000,
+                "PILOT_CENSUS_VERSION": 2,
             }
             exec(compile(source.replace(before, after, 1), "pilot_adopted_patched", "exec"), self.namespace)
             self.function = self.namespace["measure_arm64_pilot"]
@@ -230,6 +231,38 @@ class PilotBehaviour(unittest.TestCase):
         ok, item = self.measure(item)
         self.assertEqual((item["verdict"], item["pending_runs"]), ("pass", []))
         self.assertEqual(item["runs"][str(running)]["s"], 560)
+
+    def test_a_rerun_keeps_its_first_attempt_in_the_census(self):
+        # A slow first attempt that was re-run (the re-run is still going) stays in the sample and
+        # is measured by attempt 1: p95 on the label then exceeds 1.2x.
+        rerun = self.add(6, 5000, arm=True)
+        next(r for r in self.runs if r["id"] == rerun).update(run_attempt=2, status="in_progress")
+        ok, item = self.measure()
+        self.assertTrue(ok)
+        self.assertEqual(item["runs"][str(rerun)]["s"], 5000)
+        self.assertEqual((item["after"]["n"], item["verdict"]), (4, "regression"))
+
+    def test_census_state_of_another_version_is_listed_again(self):
+        ok, item = self.measure()
+        self.assertEqual(item["verdict"], "pass")
+        for entry in item["census"].values():
+            entry["v"], entry["runs"] = 1, {}
+        item.update(sample_rate_v=1, verdict=None)
+        item.pop("met_at")
+        self.calls.clear()
+        ok, item = self.measure(item)
+        self.assertEqual((item["verdict"], item["sample_rate_v"], item["after"]["n"]), ("pass", 2, 3))
+        self.assertTrue(any("/workflows/" in path for path in self.calls))
+
+    def test_runs_cached_by_the_adopted_code_are_measured_again(self):
+        # The adopted code cached a fast measurement for a run the new rules read as slow.
+        old = self.add(6, 5000, arm=True)
+        item = {"sub": 917, "repo": "o/r", "workflow": "w.yml", "job": self.JOB, "label": self.LABEL,
+                "runs": {str(old): {"created": "x", "labels": [self.LABEL], "s": 550, "concl": "success"}}}
+        ok, item = self.measure(item)
+        self.assertEqual(item["runs"][str(old)]["s"], 5000)
+        self.assertEqual(item["verdict"], "regression")
+        self.assertNotIn("incomplete_at", item)
 
     def test_every_page_of_a_busy_day_is_counted(self):
         # 130 slow arm64 runs on one day: they only fit on two pages of 100.

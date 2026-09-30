@@ -232,14 +232,19 @@ REPLACEMENTS_910 = [
     Windows: PILOT_WINDOW_DAYS before the merge (job off the label) and after it (job on the
     label), cut into UTC-day slices. Every slice is listed completely: every status, paginated,
     at most PILOT_CENSUS_MAX runs. A slice listed after its end is final and never listed again.
-    The measured runs are a uniform, deterministic sample of the first-attempt runs of both
-    windows: a run belongs to it when the first 8 hex digits of sha256(run id) fall below
-    `sample_rate`, fixed once from the complete before-window census so that about
-    PILOT_SAMPLE_TARGET runs per window are read (1.0 = every run). Each sampled run costs one
-    jobs read of its first attempt, taken only once that attempt has finished. A sampled run
-    whose first attempt or pilot job is still queued or running holds the verdict; a failed or partial read decides nothing. A census that needs
-    more calls than one tick allows, or a current slice whose pages moved while it was listed,
-    sets `partial_census`, and measure_dod continues it on the next tick (V6 #968, #970).
+    The population is every run created in the windows, re-runs included: a run is always
+    measured by its first attempt, so a re-run (often of a slow or failed attempt) neither
+    leaves the population nor replaces its first measurement. The measured runs are a uniform,
+    deterministic sample of that population: a run belongs to it when the first 8 hex digits of
+    sha256(run id) fall below `sample_rate`, fixed once from the complete before-window census
+    so that about PILOT_SAMPLE_TARGET runs per window are read (1.0 = every run). Each sampled
+    run costs one jobs read of its first attempt, taken only once that attempt has finished. A
+    sampled run whose first attempt or pilot job is still queued or running holds the verdict;
+    a failed or partial read decides nothing. A census that needs more calls than one tick
+    allows, or a current slice whose pages moved while it was listed, sets `partial_census`,
+    and measure_dod continues it on the next tick. Census entries, measurements and the sample
+    rate carry PILOT_CENSUS_VERSION; state written under another version (including the runs
+    cached by the adopted code) is listed, measured and fixed again (V6 #968, #970).
 
     Durations are job started_at -> completed_at, so the ci-pr-delay wait is excluded. Runs
     shorter than PILOT_MIN_RUN_S are gate outcomes (V6 rejection, nothing to test since
@@ -283,7 +288,7 @@ REPLACEMENTS_910 = [
                 complete = False
                 break
             entry = census.get(iso(a))
-            if not (isinstance(entry, dict) and entry.get("final")):
+            if not (isinstance(entry, dict) and entry.get("final") and entry.get("v") == PILOT_CENSUS_VERSION):
                 listed_at, runs, page = now(), {}, 1
                 while True:
                     if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
@@ -301,21 +306,25 @@ REPLACEMENTS_910 = [
                     page += 1
                 if len(runs) < total:
                     return partial()  # new runs moved the pages of a current slice: list it again
-                entry = {"final": listed_at >= b, "listed_at": iso(listed_at), "total": total,
-                         "runs": {rid: {"created": r["created_at"], "done": r.get("status") == "completed"}
+                # Re-runs stay in the population; their first attempt has finished when a later
+                # attempt exists.
+                entry = {"v": PILOT_CENSUS_VERSION, "final": listed_at >= b, "listed_at": iso(listed_at),
+                         "total": total,
+                         "runs": {rid: {"created": r["created_at"],
+                                        "done": r.get("status") == "completed" or (r.get("run_attempt") or 1) > 1}
                                   for rid, r in runs.items()
-                                  if r.get("run_attempt", 1) == 1 and r.get("created_at")
-                                  and iso(a) <= r["created_at"] < iso(b)}}
+                                  if r.get("created_at") and iso(a) <= r["created_at"] < iso(b)}}
                 census[iso(a)] = entry
             complete = complete and entry["final"]
             windows[side].extend(entry["runs"].items())
 
     rate = item.get("sample_rate")
-    if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not 0 < rate <= 1:
+    if (isinstance(rate, bool) or not isinstance(rate, (int, float)) or not 0 < rate <= 1
+            or item.get("sample_rate_v") != PILOT_CENSUS_VERSION):
         # The before window lies wholly in the past, so its census is complete here.
         population = len(windows["before"])
         rate = min(1.0, PILOT_SAMPLE_TARGET / population) if population else 1.0
-        item["sample_rate"] = rate
+        item["sample_rate"], item["sample_rate_v"] = rate, PILOT_CENSUS_VERSION
     chosen = {side: [(rid, meta) for rid, meta in rows
                      if int(hashlib.sha256(rid.encode()).hexdigest()[:8], 16) < rate * 0x100000000]
               for side, rows in windows.items()}
@@ -323,7 +332,7 @@ REPLACEMENTS_910 = [
     pending = []
     for side in ("before", "after"):
         for rid, meta in chosen[side]:
-            if rid in known:
+            if (known.get(rid) or {}).get("v") == PILOT_CENSUS_VERSION:
                 continue
             if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
                 return partial()
@@ -338,8 +347,8 @@ REPLACEMENTS_910 = [
                 # finished pilot job, so the run stays retryable and holds the verdict (V6 #970).
                 pending.append(rid)
                 continue
-            # The first attempt only (the population is first-attempt runs); a later re-run of the
-            # same run id must not replace its measurement.
+            # Always the first attempt: a re-run keeps its place in the population and is measured
+            # by the attempt that belongs to the window, never by a later one.
             listing = gh_json(f"repos/{repo}/actions/runs/{rid}/attempts/1/jobs?per_page=100")
             jobs = listing.get("jobs") if isinstance(listing, dict) else None
             total = listing.get("total_count") if isinstance(listing, dict) else None
@@ -350,13 +359,15 @@ REPLACEMENTS_910 = [
             finished = [j for j in matching if j.get("status") == "completed" and j.get("completed_at")]
             if finished:
                 j = finished[0]
-                known[rid] = {"created": meta["created"], "labels": j.get("labels") or [],
+                known[rid] = {"v": PILOT_CENSUS_VERSION, "created": meta["created"], "labels": j.get("labels") or [],
                               "s": job_seconds(j) or 0, "concl": j.get("conclusion")}
             elif matching:
                 pending.append(rid)  # the job is not finished yet: stays retryable and holds the verdict
             else:
                 # A finished run without the job (filtered out): remembered, never measured.
-                known[rid] = {"created": meta["created"], "labels": [], "s": 0, "concl": "absent"}
+                known[rid] = {"v": PILOT_CENSUS_VERSION, "created": meta["created"], "labels": [], "s": 0,
+                              "concl": "absent"}
+    item.pop("incomplete_at", None)  # every read of this sweep succeeded
 
     def stats(rows):
         rows = [r for r in rows if r["concl"] in ("success", "failure")]
@@ -366,10 +377,11 @@ REPLACEMENTS_910 = [
         return {"n": len(ok) + len(fails), "ok": len(ok), "fail": len(fails), "short": len(rows) - len(real),
                 "p50": percentile(ok, 0.5), "p95": percentile(ok, 0.95)}
 
-    before = stats([known[rid] for rid, _ in chosen["before"]
-                    if rid in known and label not in known[rid]["labels"]])
-    after = stats([known[rid] for rid, _ in chosen["after"]
-                   if rid in known and label in known[rid]["labels"]])
+    measured = {rid: row for rid, row in known.items() if row.get("v") == PILOT_CENSUS_VERSION}
+    before = stats([measured[rid] for rid, _ in chosen["before"]
+                    if rid in measured and label not in measured[rid]["labels"]])
+    after = stats([measured[rid] for rid, _ in chosen["after"]
+                   if rid in measured and label in measured[rid]["labels"]])
     item["before"], item["after"], item["pending_runs"] = before, after, sorted(pending)
     item["sample"] = {side: [len(chosen[side]), len(windows[side])] for side in windows}
     if moment < end or not complete or pending:
@@ -402,6 +414,8 @@ PILOT_MIN_RUN_S = 60
 PILOT_CENSUS_MAX = 1000
 # About this many runs per window are measured (one jobs read each); smaller windows are read whole.
 PILOT_SAMPLE_TARGET = 300
+# Bumped whenever the census population changes meaning; older census state is listed again.
+PILOT_CENSUS_VERSION = 2
 '''),
     # #913 (owner 30 Sep 2026): the low-traffic runner row needs the runner verified on main.
     ('''    # new label, green and under the limit; the label itself is proven by the file_state
