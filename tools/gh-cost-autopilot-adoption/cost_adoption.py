@@ -282,6 +282,10 @@ def _live_caller_config(gh_json, repo, workflow, pr_record=None, label=None):
                or not REQUIRED_INPUT_FORMS[name].match(passed[name].strip())]
     if invalid:
         return {"ok": False, "reason": f"required hub inputs missing or unsupported: {invalid}", "main_sha": main}
+    undeclared = sorted(name for name in passed if name not in declared)
+    if undeclared:  # GitHub rejects a call with inputs the workflow does not declare (V6 #969)
+        return {"ok": False, "reason": f"caller passes inputs the pinned hub does not declare: {undeclared}",
+                "main_sha": main}
     evidence = {"ok": True, "reason": "caller verified on main", "main_sha": main,
                 "hub_sha": hub_sha, "job": job_id, "workflow": path}
     if label:
@@ -350,7 +354,8 @@ def exception_notes(items, sub):
         seen.add(key)
         tail = ("Měření pokračuje; až doslovné kritérium (≥ 5 kvalifikovaných běhů) dojde, "
                 "doplním jeden komentář." if str(sub) == "892" else
-                "Při uzavření živě ověřeno: " + str((item.get("owner_exception_check") or {}).get("reason") or "") + ".")
+                ("Při uzavření živě ověřeno: " + str((item.get("owner_exception_check") or {}).get("reason")) + "."
+                 if (item.get("owner_exception_check") or {}).get("reason") else "Živé ověření bez zaznamenaného důvodu."))
         notes.append(f"\n\n**Výjimka ownera** ({exception.get('decided_at_prague', '')}): "
                      f"„{exception.get('text', '')}“. {exception.get('basis', '')} {tail}")
     return "".join(notes)
@@ -365,6 +370,8 @@ def live_children_done(gh_json, gh_graphql, epic_repo, epic, project_id, done_op
 
 
 def _live_children_done(gh_json, gh_graphql, epic_repo, epic, project_id, done_option):
+    if not all(isinstance(v, str) and v for v in (epic_repo, project_id, done_option)):
+        return False, "EPIC repository, Project or Done option missing"
     """Every live native sub-issue is closed and Done on the EPIC's Project. The Project is read
     from its own side, every page (standard v1.3.1: Issue.projectItems is only a same-org
     shortcut), and children are matched by repository and number. Returns (ok, reason)."""
@@ -401,11 +408,13 @@ def _live_children_done(gh_json, gh_graphql, epic_repo, epic, project_id, done_o
             content = (node or {}).get("content") or {}
             key = ((content.get("repository") or {}).get("nameWithOwner"), content.get("number"))
             status.setdefault(key, []).append(((node.get("fieldValueByName") or {}).get("optionId")))
-        info = page.get("pageInfo") or {}
-        if not info.get("hasNextPage"):
+        info = page.get("pageInfo")
+        if not isinstance(info, dict) or not isinstance(info.get("hasNextPage"), bool):
+            return False, "Project pagination unreadable"  # never read a missing flag as the last page
+        if not info["hasNextPage"]:
             break
         cursor = info.get("endCursor")
-        if not cursor:
+        if not isinstance(cursor, str) or not cursor:
             return False, "Project pagination broken"
     else:
         return False, "too many Project pages"

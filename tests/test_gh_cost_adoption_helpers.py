@@ -160,6 +160,11 @@ class LiveCallerConfig(unittest.TestCase):
             self.assertFalse(result["ok"], record)
             self.assertIn("rollout record", result["reason"])
 
+    def test_undeclared_inputs_fail(self):
+        result = self.run_check(FakeGH(routes(caller({"with": {"runs-onn": "ubuntu-slim"}}))))
+        self.assertFalse(result["ok"])
+        self.assertIn("runs-onn", result["reason"])
+
     def test_required_input_value_must_be_the_pr_number_expression(self):
         for value in (0, "0", "${{ github.run_id }}", None):
             text = caller({"with": {"pull-request-number": value}})
@@ -244,7 +249,7 @@ class LiveCallerConfig(unittest.TestCase):
         self.assertFalse(self.run_check(FakeGH(broken), pr_record={"expected_files": [3]})["ok"])
         self.assertFalse(ca.owner_exception_live_ok(FakeGH({}), {"owner_exception": {"pr": 5, "required_contexts": ["x"]}})[0])
         self.assertFalse(ca.billing_retry_blocked(None, ca.parse_utc("2026-10-09T08:00:00Z")))
-        self.assertIn("ověřeno", ca.exception_notes([{"owner_exception": {"text": "x"}, "owner_exception_check": {"reason": None}}], "895"))
+        self.assertIn("bez zaznamenaného", ca.exception_notes([{"owner_exception": {"text": "x"}, "owner_exception_check": {"reason": None}}], "895"))
 
     def test_rollout_files_must_match(self):
         record = {"expected_files": [".github/workflows/pr-gate.yml", ".github/workflows/gitleaks-weekly.yml"],
@@ -285,7 +290,8 @@ class OwnerException(unittest.TestCase):
         second = dict(self.ITEM, repo="p/acq")
         self.assertIn("zavřen bez merge", ca.exception_row(self.ITEM))
         self.assertIn("zavřen bez merge", ca.exception_row({"owner_exception": self.ITEM["owner_exception"]}))
-        notes = ca.exception_notes([self.ITEM, second], "895")
+        checked = dict(self.ITEM, owner_exception_check={"reason": "d/acq#170 zavřen bez merge"})
+        notes = ca.exception_notes([checked, second], "895")
         self.assertEqual(notes.count("**Výjimka ownera**"), 1)
         self.assertIn("Při uzavření živě ověřeno", notes)
         self.assertIn("Měření pokračuje", ca.exception_notes([self.ITEM], "892"))
@@ -327,6 +333,18 @@ class LiveChildren(unittest.TestCase):
         pages = [self.page([("x/y", 5, "done")])]
         self.assertTrue(self.check([self.row(5, repo="x/y")], pages)[0])
         self.assertFalse(self.check([self.row(5, repo="x/y")], [self.page([("o/g", 5, "done")])])[0])
+
+    def test_incomplete_pagination_or_missing_done_option_blocks(self):
+        broken = {"node": {"items": {"pageInfo": {}, "nodes": [{"content": {"number": 909, "repository": {"nameWithOwner": "o/g"}},
+                                                                   "fieldValueByName": {"optionId": "done"}}]}}}
+        self.assertFalse(self.check([self.row(909)], [broken])[0])
+        more = self.page([("o/g", 909, "done")], cursor=None)
+        more["node"]["items"]["pageInfo"] = {"hasNextPage": True, "endCursor": None}
+        self.assertFalse(self.check([self.row(909)], [more])[0])
+        routes = {"repos/o/g/issues/888/sub_issues?per_page=100&page=1": [self.row(909)]}
+        nostatus = lambda q: {"node": {"items": {"pageInfo": {"hasNextPage": False}, "nodes": [
+            {"content": {"number": 909, "repository": {"nameWithOwner": "o/g"}}, "fieldValueByName": None}]}}}
+        self.assertFalse(ca.live_children_done(FakeGH(routes), nostatus, "o/g", 888, self.PROJECT, None)[0])
 
     def test_second_sub_issue_page_is_read(self):
         first = [self.row(n) for n in range(1, 101)]
