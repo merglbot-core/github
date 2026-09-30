@@ -108,6 +108,237 @@ class Content(unittest.TestCase):
         ast.parse(source, feature_version=(3, 9))
 
 
+class LegacyLowTraffic(unittest.TestCase):
+    """A row the adopted code accepted as low traffic without the live check (V6 #970) is
+    measured again and never closes its sub-issue: the patched sweep and closeout fragments
+    run against such legacy state."""
+    LEGACY = {"sub": 889, "met_at": "2026-10-06T17:41:00Z", "low_traffic": True, "observed": 0}
+    FRESH = {"ok": True, "checked_at": "2026-10-06T23:00:00Z"}
+
+    def now(self):
+        import datetime as dt
+        return dt.datetime(2026, 10, 7, tzinfo=dt.timezone.utc)
+
+    def setUp(self):
+        # The patched fragments import cost_adoption lazily, as the installed autopilots do.
+        import sys
+        self.path = str(ROOT / "tools/gh-cost-autopilot-adoption")
+        sys.path.insert(0, self.path)
+
+    def tearDown(self):
+        import sys
+        sys.path.remove(self.path)
+
+    def run_fragment(self, before, wrapper, namespace):
+        after = next(a for b, a in pa.REPLACEMENTS_888 + pa.REPLACEMENTS_910 if b == before)
+        exec(compile(wrapper.replace("<FRAGMENT>", after), "fragment", "exec"), namespace)
+        return namespace
+
+    def fragment(self, text, replacements):
+        return next(b for b, _ in replacements if text in b)
+
+    def test_888_sweep_measures_a_legacy_row_again(self):
+        import datetime as dt
+        measured = []
+        state = {"dod": {"889|o/r": dict(self.LEGACY)}, "run_counting_at": "2000-01-01T00:00:00Z"}
+        ns = {"dt": dt, "now": lambda: dt.datetime(2026, 10, 7, tzinfo=dt.timezone.utc),
+              "parse": lambda v: dt.datetime.fromisoformat(v.replace("Z", "+00:00")) if v else None,
+              "iso": lambda m=None: "2026-10-07T00:00:00Z", "CALLS": {"n": 0}, "MAX_CALLS_PER_TICK": 60,
+              "RUN_COUNT_INTERVAL_HOURS": 6, "save_state": lambda s: None,
+              "MEASURES": {"job_runs": lambda s, i: measured.append(dict(i))},
+              "phase": lambda name, fn, *a: fn(*a)}
+        before = self.fragment("def measure_dod(state):", pa.REPLACEMENTS_888)
+        ns = self.run_fragment(before, "<FRAGMENT>", ns)
+        ns["measure_dod"](state)
+        row = state["dod"]["889|o/r"]
+        self.assertEqual(len(measured), 1)
+        self.assertNotIn("met_at", row)
+        self.assertTrue(row["low_traffic_invalidated"])
+
+    def test_888_closeout_holds_a_legacy_row(self):
+        before = self.fragment('        if not items or any(not i.get("met_at") and', pa.REPLACEMENTS_888)
+        wrapper = """def close(state, items, sub, economic_exception=None):
+    for _ in [0]:
+<FRAGMENT>        return "closed"
+    return "held"
+"""
+        ns = self.run_fragment(before, wrapper, {"owner_excepted": lambda i: False, "gh_json": None,
+                                                 "iso": lambda: "t", "now": self.now})
+        legacy = dict(self.LEGACY)
+        self.assertEqual(ns["close"]({"dod": {}}, [legacy], "889"), "held")
+        stale = dict(self.LEGACY, low_traffic_check={"ok": True, "checked_at": "2026-10-05T00:00:00Z"})
+        self.assertEqual(ns["close"]({"dod": {}}, [stale], "889"), "held")
+        self.assertEqual(ns["close"]({"dod": {}}, [dict(self.LEGACY, low_traffic_check=self.FRESH)], "889"), "closed")
+
+    def test_910_sweep_and_closeout_treat_a_legacy_row_as_unmet(self):
+        sweep = self.fragment('        if item.get("met_at") or (item.get("checked_at") or "") >= started:',
+                              pa.REPLACEMENTS_910)
+        wrapper = """def sweep(state, started):
+    seen = []
+    for item_key, item in state.items():
+<FRAGMENT>        seen.append(item_key)
+    return seen
+"""
+        ns = self.run_fragment(sweep, wrapper, {"now": self.now, "PILOT_CENSUS_VERSION": 2})
+        old_pilot = {"kind": "arm64_pilot", "met_at": "t", "verdict": "pass", "verdict_v": 1}
+        state = {"legacy": dict(self.LEGACY), "met": {"met_at": "t"}, "old_pilot": old_pilot,
+                 "pilot": {"kind": "arm64_pilot", "met_at": "t", "verdict": "pass", "verdict_v": 2}}
+        self.assertEqual(ns["sweep"](state, "2026-10-07"), ["legacy", "old_pilot"])
+        self.assertNotIn("verdict", old_pilot)
+        close = self.fragment('        if not items or any(not i.get("met_at") for i in items):', pa.REPLACEMENTS_910)
+        wrapper = """def close(items):
+    for _ in [0]:
+<FRAGMENT>        return "closed"
+    return "held"
+"""
+        ns = self.run_fragment(close, wrapper, {"now": self.now})
+        self.assertEqual(ns["close"]([dict(self.LEGACY)]), "held")
+        self.assertEqual(ns["close"]([dict(self.LEGACY, low_traffic_check=self.FRESH)]), "closed")
+
+    def test_the_pilot_report_needs_verdicts_of_the_current_census(self):
+        gate = self.fragment('    if not items or stamped(state, "pilot:917:report")', pa.REPLACEMENTS_910)
+        wrapper = """def gate(state, items):
+<FRAGMENT>    return "post"
+"""
+        ns = self.run_fragment(gate, wrapper, {"stamped": lambda state, key: False, "PILOT_CENSUS_VERSION": 2})
+        self.assertEqual(ns["gate"]({}, [{"verdict": "pass", "verdict_v": 2}]), "post")
+        self.assertFalse(ns["gate"]({}, [{"verdict": "pass"}]))
+        self.assertFalse(ns["gate"]({}, [{"verdict": "pass", "verdict_v": 1}]))
+
+
+class BillingGuards(unittest.TestCase):
+    """Billing: the usage export must cover the window, and a close is recorded only when confirmed."""
+
+    def setUp(self):
+        import sys
+        self.path = str(ROOT / "tools/gh-cost-autopilot-adoption")
+        sys.path.insert(0, self.path)
+        self.comments, self.saved = [], 0
+
+    def tearDown(self):
+        import sys
+        sys.path.remove(self.path)
+
+    def ns(self, **extra):
+        import datetime as dt
+        base = {"now": lambda: dt.datetime(2026, 10, 9, 8, tzinfo=dt.timezone.utc),
+                "iso": lambda m=None: (m or dt.datetime(2026, 10, 9, 8, tzinfo=dt.timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "log": lambda *_: None, "EPIC_REPO": "o/github", "BILLING_SUB": 896, "STATUS_DONE": "done",
+                "comment": lambda *a: self.comments.append(a) or True, "save_state": lambda s: None,
+                "billing_numbers_finite": lambda values: True}
+        base.update(extra)
+        return base
+
+    def test_usage_that_stops_before_the_window_end_is_retried(self):
+        for replacements in (pa.REPLACEMENTS_888, pa.REPLACEMENTS_910):
+            before = next(b for b, a in replacements if "billing_numbers_finite(value for" in b)
+            after = next(a for b, a in replacements if b == before)
+            wrapper = "def check(state, billing, usage, skus=None):\n" + after + "        return 'overflow'\n    return 'go'\n"
+            ns = self.ns()
+            exec(compile(wrapper, "billing_fragment", "exec"), ns)
+            billing = {"after_days": ["2026-10-06", "2026-10-07"], "due_at": "2026-10-09T06:00:00Z"}
+            self.assertFalse(ns["check"]({}, billing, {"o/r": {"2026-10-06": 5.0}}, {}))
+            self.assertIn("retry_after", billing)
+            self.assertEqual(ns["check"]({}, {"after_days": ["2026-10-07"]}, {"o/r": {"2026-10-08": 1.0}}, {}), "go")
+
+    def test_a_billing_close_is_recorded_only_when_confirmed(self):
+        for replacements in (pa.REPLACEMENTS_888, pa.REPLACEMENTS_910):
+            after = next(a for b, a in replacements if 'if verdict == "FAKT":' in b and "board_done_at" in b)
+            wrapper = "def close(state, verdict):\n    from cost_adoption import closes_billing\n" + after + "    return state\n"
+            for closed, board_ok, expect in ((False, True, False), (True, False, False), (True, True, True)):
+                issue = {"state": "open"}
+                def gh(*args, issue=issue, closed=closed):
+                    if closed:
+                        issue["state"] = "closed"
+                    return (0 if closed else 1, "", "")
+                ns = self.ns(DRY_RUN=False, gh=gh, gh_json=lambda path, issue=issue: dict(issue),
+                             board=lambda n, o, ok=board_ok: ok)
+                exec(compile(wrapper, "close_fragment", "exec"), ns)
+                state = ns["close"]({"subs": {}}, "PARTIAL")
+                self.assertEqual("board_done_at" in state["subs"].get("896", {}), expect, (closed, board_ok))
+
+
+class JobRunsCensus(unittest.TestCase):
+    """The patched job_runs measurement: low traffic is accepted only on a complete census."""
+
+    def setUp(self):
+        import datetime as dt
+        import sys
+        import types
+        self.dt = dt
+        self.since = "2026-09-22T17:41:00Z"
+        self.runs, self.jobs, self.total = [], {}, None
+        fake = types.ModuleType("cost_adoption")
+        fake.live_caller_config = lambda *a, **k: {"ok": True, "main_sha": "a" * 40, "hub_sha": "c" * 40}
+        self.saved = sys.modules.get("cost_adoption")
+        sys.modules["cost_adoption"] = fake
+
+    def tearDown(self):
+        import sys
+        if self.saved is None:
+            sys.modules.pop("cost_adoption", None)
+        else:
+            sys.modules["cost_adoption"] = self.saved
+
+    def gh_json(self, path):
+        import re
+        if "/workflows/" in path:
+            total = len(self.runs) if self.total is None else self.total
+            return {"total_count": total, "workflow_runs": list(self.runs)}
+        run_id = re.search(r"/runs/(\d+)/jobs", path).group(1)
+        return self.jobs.get(run_id)
+
+    def measure(self):
+        dt = self.dt
+        source = (ROOT / "tests/fixtures/gh_cost_adoption/job_runs_adopted.py.txt").read_text()
+        applied = 0
+        for before, after in pa.REPLACEMENTS_888:
+            if before in source:
+                source, applied = source.replace(before, after, 1), applied + 1
+        self.assertEqual(applied, 2)
+        ns = {"dt": dt, "gh_json": self.gh_json, "log": lambda *_: None, "CALLS": {"n": 0},
+              "MAX_CALLS_PER_TICK": 60, "DOD_MAX_SECONDS": 60, "DOD_RUNS": 5, "LOW_TRAFFIC_GRACE_DAYS": 14,
+              "merged_at": lambda state, key: self.since,
+              "now": lambda: dt.datetime(2026, 10, 7, tzinfo=dt.timezone.utc),
+              "iso": lambda m=None: "2026-10-07T00:00:00Z",
+              "parse": lambda v: dt.datetime.fromisoformat(v.replace("Z", "+00:00")),
+              "job_seconds": lambda j: 30}
+        exec(compile(source, "job_runs_patched", "exec"), ns)
+        item = {"sub": 889, "repo": "o/r", "since_pr": "o/r#1"}
+        ns["measure_job_runs"]({"prs": {"o/r#1": {"merged_at": self.since}}}, item)
+        return item
+
+    def add(self, status="completed", jobs=True):
+        run_id = str(100 + len(self.runs))
+        self.runs.append({"id": int(run_id), "status": status, "conclusion": "success",
+                          "created_at": "2026-09-25T10:00:00Z"})
+        if jobs:
+            self.jobs[run_id] = {"total_count": 1, "jobs": [{"started_at": "a", "completed_at": "b",
+                                                             "conclusion": "success"}]}
+        return run_id
+
+    def test_a_complete_quiet_census_is_accepted_with_the_live_check(self):
+        self.add()
+        item = self.measure()
+        self.assertEqual((item.get("low_traffic"), item.get("census_incomplete")), (True, False))
+
+    def test_an_unfinished_unread_or_unlisted_run_blocks_low_traffic(self):
+        for case in ("running", "unread", "partial_jobs", "unlisted"):
+            self.runs, self.jobs, self.total = [], {}, None
+            self.add()
+            if case == "running":
+                self.add(status="in_progress")
+            elif case == "unread":
+                self.add(jobs=False)
+            elif case == "partial_jobs":
+                self.jobs[self.add()]["total_count"] = 2
+            else:
+                self.total = 5
+            item = self.measure()
+            self.assertNotIn("met_at", item, case)
+            self.assertTrue(item["census_incomplete"], case)
+
+
 class PilotBehaviour(unittest.TestCase):
     """The patched #917 pilot measurement against a stub of the runs/jobs API (V6 #968, #970).
 
@@ -120,7 +351,7 @@ class PilotBehaviour(unittest.TestCase):
         self.dt = dt
         self.since = dt.datetime(2026, 10, 1, 10, tzinfo=dt.timezone.utc)
         self.now = self.since + dt.timedelta(days=20)
-        self.runs, self.jobs, self.calls = [], {}, []
+        self.runs, self.jobs, self.calls, self.extra_total = [], {}, [], 0
         self.consts = {"MAX_CALLS_PER_TICK": 10000, "PILOT_SAMPLE_TARGET": 400}
         # three x64 runs before the merge and three arm64 runs inside the window: ratio 1.1
         for n in range(3):
@@ -162,7 +393,7 @@ class PilotBehaviour(unittest.TestCase):
                            and params.get("status", r["status"]) == r["status"]),
                           key=lambda r: r["created_at"], reverse=True)
             size, page = int(params.get("per_page", 30)), int(params.get("page", 1))
-            return {"total_count": len(rows), "workflow_runs": rows[(page - 1) * size:page * size]}
+            return {"total_count": len(rows) + self.extra_total, "workflow_runs": rows[(page - 1) * size:page * size]}
         match = re.search(r"/runs/(\d+)/attempts/1/jobs$", route)
         if match:
             return self.jobs[int(match.group(1))]
@@ -263,6 +494,29 @@ class PilotBehaviour(unittest.TestCase):
         self.assertEqual(item["runs"][str(old)]["s"], 5000)
         self.assertEqual(item["verdict"], "regression")
         self.assertNotIn("incomplete_at", item)
+
+    def test_a_verdict_of_another_census_version_is_decided_again(self):
+        running = self.add(6, 560, arm=True, status="in_progress")
+        item = {"sub": 917, "repo": "o/r", "workflow": "w.yml", "job": self.JOB, "label": self.LABEL,
+                "verdict": "pass", "met_at": "2026-10-15T10:00:00Z", "fail_verdict": "ok"}
+        ok, item = self.measure(item)
+        self.assertEqual((item["verdict"], item["verdict_v"], item["pending_runs"]), (None, 2, [str(running)]))
+        self.assertNotIn("met_at", item)
+
+    def test_a_short_listing_of_a_past_day_is_a_data_gap_not_a_retry_every_tick(self):
+        self.extra_total = 1
+        ok, item = self.measure()
+        self.assertFalse(ok)
+        self.assertIn("census_gap", item)
+        self.assertNotIn("partial_census", item)
+        self.assertNotIn("verdict", item)
+
+    def test_timeouts_count_as_failures_and_short_failures_are_reported(self):
+        self.add(6, 900, arm=True, conclusion="timed_out")
+        self.add(7, 12, arm=True, conclusion="failure")
+        ok, item = self.measure()
+        self.assertEqual((item["after"]["fail"], item["after"]["short_fail"]), (1, 1))
+        self.assertEqual(item["fail_verdict"], "elevated")
 
     def test_every_page_of_a_busy_day_is_counted(self):
         # 130 slow arm64 runs on one day: they only fit on two pages of 100.

@@ -297,6 +297,59 @@ class OwnerException(unittest.TestCase):
         self.assertIn("Měření pokračuje", ca.exception_notes([self.ITEM], "892"))
 
 
+class LowTrafficAcceptance(unittest.TestCase):
+    def test_only_a_passed_live_check_verifies_a_low_traffic_row(self):
+        legacy = {"met_at": "t", "low_traffic": True, "observed": 0}
+        for row in (legacy, dict(legacy, low_traffic_check={"ok": False}), dict(legacy, low_traffic_check={"ok": "yes"}),
+                    dict(legacy, low_traffic_check="ok")):
+            self.assertTrue(ca.unverified_low_traffic(row), row)
+        for row in (dict(legacy, low_traffic_check={"ok": True}), {"met_at": "t"}, {}, None, "row"):
+            self.assertFalse(ca.unverified_low_traffic(row), row)
+
+    def test_invalidation_drops_only_an_unverified_acceptance(self):
+        legacy = {"met_at": "t", "low_traffic": True, "observed": 0, "runs": {"1": {}}}
+        self.assertTrue(ca.invalidate_unverified_low_traffic(legacy))
+        self.assertEqual(legacy, {"runs": {"1": {}}, "low_traffic_invalidated": True})
+        verified = {"met_at": "t", "low_traffic": True, "low_traffic_check": {"ok": True}}
+        self.assertFalse(ca.invalidate_unverified_low_traffic(verified))
+        self.assertEqual(verified["met_at"], "t")
+
+
+class LowTrafficFreshnessAndClose(unittest.TestCase):
+    NOW = dt.datetime(2026, 10, 7, tzinfo=dt.timezone.utc)
+
+    def test_a_check_older_than_the_ttl_or_without_a_time_is_not_fresh(self):
+        row = {"met_at": "t", "low_traffic": True}
+        fresh = dict(row, low_traffic_check={"ok": True, "checked_at": "2026-10-06T12:00:00Z"})
+        self.assertFalse(ca.unverified_low_traffic(fresh, self.NOW))
+        self.assertFalse(ca.unverified_low_traffic(fresh))
+        for check in ({"ok": True, "checked_at": "2026-10-05T23:00:00Z"}, {"ok": True}, {"ok": True, "checked_at": 5}):
+            self.assertTrue(ca.unverified_low_traffic(dict(row, low_traffic_check=check), self.NOW), check)
+        stale = dict(row, low_traffic_check={"ok": True, "checked_at": "2026-10-01T00:00:00Z"})
+        self.assertTrue(ca.invalidate_unverified_low_traffic(stale, self.NOW))
+        self.assertNotIn("met_at", stale)
+
+    def test_close_issue_done_needs_a_closed_readback_and_the_board(self):
+        def run(initial, close_code, closes, board_ok, reads=None):
+            issue = {"state": initial}
+            calls = []
+
+            def gh(*args):
+                calls.append(args)
+                if closes:
+                    issue["state"] = "closed"
+                return close_code, "", ""
+            gh_json = reads or (lambda path: dict(issue))
+            return ca.close_issue_done(gh, gh_json, lambda n, o: board_ok, "o/r", 896, "done"), calls
+        self.assertEqual(run("open", 0, True, True)[0], True)
+        self.assertEqual(run("closed", 0, False, True), (True, []))
+        self.assertFalse(run("open", 1, False, True)[0])
+        self.assertFalse(run("open", 0, False, True)[0])
+        self.assertFalse(run("open", 0, True, None)[0])
+        self.assertFalse(run("open", 0, True, True, reads=lambda path: None)[0])
+        self.assertFalse(run("open", 0, True, True, reads=lambda path: ["x"])[0])
+
+
 class LiveChildren(unittest.TestCase):
     PROJECT, DONE = "PVT_x", "done"
 

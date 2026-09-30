@@ -7,12 +7,53 @@ fails closed. The adopted inputs are the live files with sha256 4b78d530... (888
 """
 
 REPLACEMENTS_888 = [
+    # Owner rule 8 (V6 #970): the low-traffic branch needs the complete run census.
+    ('''    runs = gh_json(f"repos/{repo}/actions/workflows/{workflow}/runs"
+                   f"?event=pull_request&created=%3E%3D{since[:10]}&per_page=30")
+    if runs is None:
+        return False
+    known = item.setdefault("runs", {})
+    for run in runs.get("workflow_runs", []):
+        run_id = str(run.get("id"))
+        if run_id in known or run.get("status") != "completed" or run.get("created_at", "") < since:
+            continue
+        if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
+            break
+        jobs = (gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=20") or {}).get("jobs", [])
+''', '''    runs = gh_json(f"repos/{repo}/actions/workflows/{workflow}/runs"
+                   f"?event=pull_request&created=%3E%3D{since[:10]}&per_page=100")
+    if not isinstance(runs, dict):
+        return False
+    known = item.setdefault("runs", {})
+    listed = runs.get("workflow_runs") if isinstance(runs.get("workflow_runs"), list) else []
+    total = runs.get("total_count")
+    # The low-traffic branch below decides on the absence of bad runs, so it needs the complete
+    # census: every run listed, finished and read (owner rule 30 Sep 2026, V6 #970).
+    incomplete = not isinstance(total, int) or isinstance(total, bool) or total > len(listed)
+    for run in listed:
+        run_id = str(run.get("id"))
+        if run_id in known or run.get("created_at", "") < since:
+            continue
+        if run.get("status") != "completed":
+            incomplete = True
+            continue
+        if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
+            incomplete = True
+            break
+        listing = gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100")
+        jobs = listing.get("jobs") if isinstance(listing, dict) else None
+        count = listing.get("total_count") if isinstance(listing, dict) else None
+        if not isinstance(jobs, list) or not isinstance(count, int) or isinstance(count, bool) or count > len(jobs):
+            incomplete = True
+            continue
+'''),
     # Owner rule 8: a low-traffic row counts only with its caller verified live on main.
     ('''    over = [r for r in known.values() if r["job_s"] > DOD_MAX_SECONDS or r.get("jobs", 1) != 1]
     if not over and now() - parse(since) >= dt.timedelta(days=LOW_TRAFFIC_GRACE_DAYS):
         item.update(met_at=iso(), low_traffic=True, observed=len(known))
 ''', '''    over = [r for r in known.values() if r["job_s"] > DOD_MAX_SECONDS or r.get("jobs", 1) != 1]
-    if not over and now() - parse(since) >= dt.timedelta(days=LOW_TRAFFIC_GRACE_DAYS):
+    item["census_incomplete"] = incomplete
+    if not over and not incomplete and now() - parse(since) >= dt.timedelta(days=LOW_TRAFFIC_GRACE_DAYS):
         # Owner rule 30 Sep 2026: a low-traffic row counts only with its caller verified live on main.
         from cost_adoption import live_caller_config
         evidence = live_caller_config(gh_json, repo, workflow, state.get("prs", {}).get(item.get("since_pr")))
@@ -52,8 +93,11 @@ REPLACEMENTS_888 = [
             return False
         started = iso()
         state["dod_sweep_started_at"] = started
+    from cost_adoption import invalidate_unverified_low_traffic
     incomplete = False
     for item_key, item in state.get("dod", {}).items():
+        # A low-traffic acceptance without its live caller check does not count (V6 #970).
+        invalidate_unverified_low_traffic(item, now())
         if item.get("met_at") and (str(item.get("sub")) != "892" or item.get("literal_verified")):
             continue
         if (item.get("checked_at") or "") >= started:
@@ -76,8 +120,8 @@ REPLACEMENTS_888 = [
         if str(sub) == "892" and not all(i.get("literal_verified") or owner_excepted(i) for i in items):
             continue
         owner_exception = str(sub) == "892" and not all(i.get("literal_verified") for i in items)
-''', '''        from cost_adoption import exception_notes, exception_row, owner_exception_live_ok
-        pending = [i for i in items if not i.get("met_at")
+''', '''        from cost_adoption import exception_notes, exception_row, owner_exception_live_ok, unverified_low_traffic
+        pending = [i for i in items if (not i.get("met_at") or unverified_low_traffic(i, now()))
                    and not (economic_exception and i is state["dod"][economic_exception])]
         excepted = []
         if pending and all(owner_excepted(i) for i in pending):
@@ -135,7 +179,44 @@ REPLACEMENTS_888 = [
 ''', '''            f"Verdikt: **{verdict}**. {verdict_note(verdict)}\\n\\n"
 '''),
     ('''    if verdict == "FAKT":
-''', '''    if closes_billing(verdict):
+        if not DRY_RUN:
+            gh("issue", "close", str(BILLING_SUB), "-R", EPIC_REPO, "--reason", "completed")
+        board(BILLING_SUB, STATUS_DONE)
+        state["subs"].setdefault(str(BILLING_SUB), {})["board_done_at"] = iso()
+        save_state(state)
+''', '''    if closes_billing(verdict) and not DRY_RUN:
+        from cost_adoption import close_issue_done
+        # Recorded only when read back closed and Done; otherwise close_epic retries (V6 #970).
+        if close_issue_done(gh, gh_json, board, EPIC_REPO, BILLING_SUB, STATUS_DONE):
+            state["subs"].setdefault(str(BILLING_SUB), {})["board_done_at"] = iso()
+            save_state(state)
+'''),
+    # Billing: usage data must cover the window before a verdict (V6 #970).
+    ('''    if not billing_numbers_finite(value for row in usage.values() for value in row.values()):
+''', '''    # Billing lag leaves missing days at zero (V6 #970): the export must reach the window's end.
+    latest = max((day for row in usage.values() for day in row), default="")
+    if latest < billing["after_days"][-1]:
+        from cost_adoption import RETRY_AFTER, billing_data_gap_due, data_gap_body
+        log(f"billing usage reaches {latest or 'no day'}, window ends {billing['after_days'][-1]}; retrying in an hour")
+        if billing_data_gap_due(billing.get("due_at"), now()):
+            comment(EPIC_REPO, BILLING_SUB, data_gap_body(BILLING_SUB), state, "billing:data-gap")
+        billing["retry_after"] = iso(now() + RETRY_AFTER)
+        save_state(state)
+        return False
+    if not billing_numbers_finite(value for row in usage.values() for value in row.values()):
+'''),
+    ('''    if not comment(EPIC_REPO, EPIC, body, state, "epic:closed"):
+        return False
+    if not DRY_RUN:
+        gh("issue", "close", str(EPIC), "-R", EPIC_REPO, "--reason", "completed")
+    board(EPIC, STATUS_DONE)
+    state["closed_at"] = iso()
+''', '''    if not (stamped(state, "epic:closed") or comment(EPIC_REPO, EPIC, body, state, "epic:closed")):
+        return False
+    # closed_at ends every later tick, so it is written only after a confirmed close (V6 #970).
+    if DRY_RUN or not close_issue_done(gh, gh_json, board, EPIC_REPO, EPIC, STATUS_DONE):
+        return False
+    state["closed_at"] = iso()
 '''),
     # A live child outside the registry (#909) keeps the EPIC open; checked at most hourly.
     ('''    open_subs = [sub for sub, rec in state.get("subs", {}).items()
@@ -143,7 +224,16 @@ REPLACEMENTS_888 = [
     if open_subs:
         return False
     body = ("### EPIC uzavřen\\n\\nVšechny sub-issues mají DoD změřenou na provozu a akceptace "
-''', '''    open_subs = [sub for sub, rec in state.get("subs", {}).items()
+''', '''    from cost_adoption import close_issue_done, closes_billing
+    billing, record = state.get("billing") or {}, state.setdefault("subs", {}).setdefault(str(BILLING_SUB), {})
+    if (billing.get("posted_at") and closes_billing(billing.get("verdict")) and not record.get("board_done_at")
+            and not DRY_RUN):
+        # The billing verdict closed #BILLING_SUB but the close was not confirmed: retry it (V6 #970).
+        if not close_issue_done(gh, gh_json, board, EPIC_REPO, BILLING_SUB, STATUS_DONE):
+            return False
+        record["board_done_at"] = iso()
+        save_state(state)
+    open_subs = [sub for sub, rec in state.get("subs", {}).items()
                  if not rec.get("board_done_at") and not rec.get("closed_elsewhere")]
     if open_subs:
         return False
@@ -162,6 +252,29 @@ REPLACEMENTS_888 = [
 ]
 
 REPLACEMENTS_910 = [
+    # Billing close retry before the EPIC close (V6 #970).
+    ('''    if any(rec.get("technical_hold") for rec in state.get("subs", {}).values()):
+        return False
+    open_subs = [sub for sub, rec in state.get("subs", {}).items()
+''', '''    from cost_adoption import close_issue_done, closes_billing
+    billing, record = state.get("billing") or {}, state.setdefault("subs", {}).setdefault(str(BILLING_SUB), {})
+    if (billing.get("posted_at") and closes_billing(billing.get("verdict")) and not record.get("board_done_at")
+            and not DRY_RUN):
+        # The billing verdict closed #BILLING_SUB but the close was not confirmed: retry it (V6 #970).
+        if not close_issue_done(gh, gh_json, board, EPIC_REPO, BILLING_SUB, STATUS_DONE):
+            return False
+        record["board_done_at"] = iso()
+        save_state(state)
+    if any(rec.get("technical_hold") for rec in state.get("subs", {}).values()):
+        return False
+    open_subs = [sub for sub, rec in state.get("subs", {}).items()
+'''),
+    ('''    if not items or stamped(state, "pilot:917:report") or any(not i.get("verdict") for i in items):
+        return False
+''', '''    if (not items or stamped(state, "pilot:917:report") or any(not i.get("verdict") for i in items)
+            or any(i.get("verdict_v") != PILOT_CENSUS_VERSION for i in items)):
+        return False
+'''),
     # #917 (V6 #968, #970): the pilot census is complete per UTC day (every status, paginated),
     # the measured runs are a uniform deterministic sample, unfinished runs hold the verdict,
     # failed or partial reads decide nothing, and a census spans ticks. Gate outcomes shorter
@@ -262,6 +375,11 @@ REPLACEMENTS_910 = [
     moment = now()
     known = item.setdefault("runs", {})
     census = item.setdefault("census", {})
+    if item.get("verdict_v") != PILOT_CENSUS_VERSION:
+        # A verdict written under another census version (the adopted code) is decided again.
+        for key in ("verdict", "fail_verdict", "ratio_p50", "ratio_p95", "met_at"):
+            item.pop(key, None)
+        item["verdict_v"] = PILOT_CENSUS_VERSION
 
     def partial():
         # Out of calls for this tick: nothing is decided, measure_dod resumes on the next tick.
@@ -305,7 +423,12 @@ REPLACEMENTS_910 = [
                         break
                     page += 1
                 if len(runs) < total:
-                    return partial()  # new runs moved the pages of a current slice: list it again
+                    if listed_at < b:
+                        return partial()  # new runs moved the pages of a current slice: list it again
+                    # A past slice cannot gain runs; a short listing there is a data gap, retried
+                    # on the next sweep instead of holding every tick (V6 #970).
+                    item["census_gap"] = iso(a)
+                    return failed()
                 # Re-runs stay in the population; their first attempt has finished when a later
                 # attempt exists.
                 entry = {"v": PILOT_CENSUS_VERSION, "final": listed_at >= b, "listed_at": iso(listed_at),
@@ -370,11 +493,15 @@ REPLACEMENTS_910 = [
     item.pop("incomplete_at", None)  # every read of this sweep succeeded
 
     def stats(rows):
-        rows = [r for r in rows if r["concl"] in ("success", "failure")]
+        # A timed-out job is a failure; failures shorter than PILOT_MIN_RUN_S are reported apart
+        # (a V6 rejection and a fast arm64 breakage look alike by duration).
+        rows = [r for r in rows if r["concl"] in ("success", "failure", "timed_out")]
         real = [r for r in rows if r["s"] >= PILOT_MIN_RUN_S]
         ok = [r["s"] for r in real if r["concl"] == "success"]
-        fails = [r for r in real if r["concl"] == "failure"]
-        return {"n": len(ok) + len(fails), "ok": len(ok), "fail": len(fails), "short": len(rows) - len(real),
+        fails = [r for r in real if r["concl"] != "success"]
+        short = [r for r in rows if r["s"] < PILOT_MIN_RUN_S]
+        return {"n": len(ok) + len(fails), "ok": len(ok), "fail": len(fails), "short": len(short),
+                "short_fail": len([r for r in short if r["concl"] != "success"]),
                 "p50": percentile(ok, 0.5), "p95": percentile(ok, 0.95)}
 
     measured = {rid: row for rid, row in known.items() if row.get("v") == PILOT_CENSUS_VERSION}
@@ -417,6 +544,100 @@ PILOT_SAMPLE_TARGET = 300
 # Bumped whenever the census population changes meaning; older census state is listed again.
 PILOT_CENSUS_VERSION = 2
 '''),
+    # Owner rule 8 (V6 #970): 910 measure_job_runs gets the same census and live check as 888.
+    ('''    runs = gh_json(f"repos/{repo}/actions/workflows/{workflow}/runs"
+                   f"?event=pull_request&created=%3E%3D{since[:10]}&per_page=30")
+    if runs is None:
+        return False
+    known = item.setdefault("runs", {})
+    for run in runs.get("workflow_runs", []):
+        run_id = str(run.get("id"))
+        if run_id in known or run.get("status") != "completed" or run.get("created_at", "") < since:
+            continue
+        if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
+            break
+        jobs = (gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=20") or {}).get("jobs", [])
+''', '''    runs = gh_json(f"repos/{repo}/actions/workflows/{workflow}/runs"
+                   f"?event=pull_request&created=%3E%3D{since[:10]}&per_page=100")
+    if not isinstance(runs, dict):
+        return False
+    known = item.setdefault("runs", {})
+    listed = runs.get("workflow_runs") if isinstance(runs.get("workflow_runs"), list) else []
+    total = runs.get("total_count")
+    # The low-traffic branch below decides on the absence of bad runs, so it needs the complete
+    # census: every run listed, finished and read (owner rule 30 Sep 2026, V6 #970).
+    incomplete = not isinstance(total, int) or isinstance(total, bool) or total > len(listed)
+    for run in listed:
+        run_id = str(run.get("id"))
+        if run_id in known or run.get("created_at", "") < since:
+            continue
+        if run.get("status") != "completed":
+            incomplete = True
+            continue
+        if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
+            incomplete = True
+            break
+        listing = gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100")
+        jobs = listing.get("jobs") if isinstance(listing, dict) else None
+        count = listing.get("total_count") if isinstance(listing, dict) else None
+        if not isinstance(jobs, list) or not isinstance(count, int) or isinstance(count, bool) or count > len(jobs):
+            incomplete = True
+            continue
+'''),
+    ('''    over = [r for r in known.values() if r["job_s"] > DOD_MAX_SECONDS or r.get("jobs", 1) != 1]
+    if not over and now() - parse(since) >= dt.timedelta(days=LOW_TRAFFIC_GRACE_DAYS):
+        item.update(met_at=iso(), low_traffic=True, observed=len(known))
+''', '''    over = [r for r in known.values() if r["job_s"] > DOD_MAX_SECONDS or r.get("jobs", 1) != 1]
+    item["census_incomplete"] = incomplete
+    if not over and not incomplete and now() - parse(since) >= dt.timedelta(days=LOW_TRAFFIC_GRACE_DAYS):
+        # Owner rule 30 Sep 2026: a low-traffic row counts only with its caller verified live on main.
+        from cost_adoption import live_caller_config
+        evidence = live_caller_config(gh_json, repo, workflow, state.get("prs", {}).get(item.get("since_pr")))
+        item["low_traffic_check"] = dict(evidence, checked_at=iso())
+        if not evidence.get("ok"):
+            log(f"low-traffic acceptance withheld for #{item['sub']} {repo}: {evidence.get('reason')}")
+            return True
+        item.update(met_at=iso(), low_traffic=True, observed=len(known))
+'''),
+    ('''    runs = gh_json(f"repos/{repo}/actions/workflows/{workflow}/runs"
+                   f"?created=%3E%3D{since[:10]}&status=completed&per_page=30")
+    if runs is None:
+        return False
+    known = item.setdefault("runs", {})
+    for run in runs.get("workflow_runs", []):
+        run_id = str(run.get("id"))
+        if run_id in known or run.get("created_at", "") < since:
+            continue
+        if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
+            break
+        jobs = (gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=30") or {}).get("jobs", [])
+''', '''    runs = gh_json(f"repos/{repo}/actions/workflows/{workflow}/runs"
+                   f"?created=%3E%3D{since[:10]}&per_page=100")
+    if not isinstance(runs, dict):
+        return False
+    known = item.setdefault("runs", {})
+    listed = runs.get("workflow_runs") if isinstance(runs.get("workflow_runs"), list) else []
+    total = runs.get("total_count")
+    # The low-traffic branch below decides on the absence of bad runs, so it needs the complete
+    # census: every run listed, finished and read (owner rule 30 Sep 2026, V6 #970).
+    incomplete = not isinstance(total, int) or isinstance(total, bool) or total > len(listed)
+    for run in listed:
+        run_id = str(run.get("id"))
+        if run_id in known or run.get("created_at", "") < since:
+            continue
+        if run.get("status") != "completed":
+            incomplete = True
+            continue
+        if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
+            incomplete = True
+            break
+        listing = gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100")
+        jobs = listing.get("jobs") if isinstance(listing, dict) else None
+        count = listing.get("total_count") if isinstance(listing, dict) else None
+        if not isinstance(jobs, list) or not isinstance(count, int) or isinstance(count, bool) or count > len(jobs):
+            incomplete = True
+            continue
+'''),
     # #913 (owner 30 Sep 2026): the low-traffic runner row needs the runner verified on main.
     ('''    # new label, green and under the limit; the label itself is proven by the file_state
     # item of the same workflow on main.
@@ -428,7 +649,8 @@ PILOT_CENSUS_VERSION = 2
     # is verified live to run on the label, explicitly or through the pinned hub default.
     over = [r for r in known.values()
             if label not in r["labels"] or not r["ok"] or r["s"] > item.get("max_s", 300)]
-    if not over and now() - parse(since) >= dt.timedelta(days=LOW_TRAFFIC_GRACE_DAYS):
+    item["census_incomplete"] = incomplete
+    if not over and not incomplete and now() - parse(since) >= dt.timedelta(days=LOW_TRAFFIC_GRACE_DAYS):
         from cost_adoption import live_caller_config
         evidence = live_caller_config(gh_json, repo, workflow, state.get("prs", {}).get(item.get("since_pr")),
                                       label=label)
@@ -461,7 +683,8 @@ PILOT_CENSUS_VERSION = 2
                 f"p95 {b.get('p95', '-')} s, {b.get('fail', 0)}/{b.get('n', 0)} failů → `{item['label']}` "
                 f"p50 {a.get('p50', '-')} s ({item.get('ratio_p50', '-')}×), p95 {a.get('p95', '-')} s "
                 f"({item.get('ratio_p95', '-')}×), {a.get('fail', 0)}/{a.get('n', 0)} failů; krátké běhy "
-                f"mimo srovnání {b.get('short', 0)}/{a.get('short', 0)}; vzorek {sample(item, 'before')} → "
+                f"mimo srovnání {b.get('short', 0)}/{a.get('short', 0)} (z toho failů {b.get('short_fail', 0)}/"
+                f"{a.get('short_fail', 0)}); vzorek {sample(item, 'before')} → "
                 f"{sample(item, 'after')} běhů {mark}{fails} |")
 '''),
     ('''            + f"\\n\\nKritérium: úspěšné běhy jobu; p50 i p95 na `ubuntu-24.04-arm` ≤ {PILOT_MAX_RATIO}× "
@@ -487,6 +710,25 @@ PILOT_CENSUS_VERSION = 2
             + "Postup podle rozhodnutí ownera z 30. 9.: job nad 1,2× se vrátí na x64, ostatní zůstávají, "
               "infra `terraform-plan-pr.yml` job `plan` se převede na arm64 a týden se ověří. Autopilot "
               "issue nezavírá (technical_hold)."
+'''),
+    # A low-traffic acceptance without its live caller check does not count (V6 #970).
+    ('''        if item.get("met_at") or (item.get("checked_at") or "") >= started:
+            continue
+''', '''        from cost_adoption import invalidate_unverified_low_traffic
+        invalidate_unverified_low_traffic(item, now())
+        if (item.get("kind") == "arm64_pilot" and item.get("verdict_v") != PILOT_CENSUS_VERSION
+                and (item.get("met_at") or item.get("verdict"))):
+            # A pilot verdict written under another census version is measured again (V6 #970).
+            for key in ("met_at", "verdict", "fail_verdict", "ratio_p50", "ratio_p95"):
+                item.pop(key, None)
+        if item.get("met_at") or (item.get("checked_at") or "") >= started:
+            continue
+'''),
+    ('''        if not items or any(not i.get("met_at") for i in items):
+            continue
+''', '''        from cost_adoption import unverified_low_traffic
+        if not items or any(not i.get("met_at") or unverified_low_traffic(i, now()) for i in items):
+            continue
 '''),
     # #917: a pilot census that ran out of calls continues on the next tick, not 6 h later.
     ('''        phase(f"dod {item_key}", MEASURES[item.get("kind", "job_runs")], state, item)
@@ -530,8 +772,31 @@ PILOT_CENSUS_VERSION = 2
     ('''            f"Verdikt: **{verdict}**.\\n\\n"
 ''', '''            f"Verdikt: **{verdict}**. {verdict_note(verdict)}\\n\\n"
 '''),
+    ('''    if not billing_numbers_finite(value for group in (usage, skus) for row in group.values() for value in row.values()):
+''', '''    # Billing lag leaves missing days at zero (V6 #970): the export must reach the window's end.
+    latest = max((day for row in usage.values() for day in row), default="")
+    if latest < billing["after_days"][-1]:
+        from cost_adoption import RETRY_AFTER, billing_data_gap_due, data_gap_body
+        log(f"billing usage reaches {latest or 'no day'}, window ends {billing['after_days'][-1]}; retrying in an hour")
+        if billing_data_gap_due(billing.get("due_at"), now()):
+            comment(EPIC_REPO, BILLING_SUB, data_gap_body(BILLING_SUB), state, "billing:data-gap")
+        billing["retry_after"] = iso(now() + RETRY_AFTER)
+        save_state(state)
+        return False
+    if not billing_numbers_finite(value for group in (usage, skus) for row in group.values() for value in row.values()):
+'''),
     ('''    if verdict == "FAKT":
-''', '''    if closes_billing(verdict):
+        if not DRY_RUN:
+            gh("issue", "close", str(BILLING_SUB), "-R", EPIC_REPO, "--reason", "completed")
+        board(BILLING_SUB, STATUS_DONE)
+        state["subs"].setdefault(str(BILLING_SUB), {})["board_done_at"] = iso()
+        save_state(state)
+''', '''    if closes_billing(verdict) and not DRY_RUN:
+        from cost_adoption import close_issue_done
+        # Recorded only when read back closed and Done; otherwise close_epic retries (V6 #970).
+        if close_issue_done(gh, gh_json, board, EPIC_REPO, BILLING_SUB, STATUS_DONE):
+            state["subs"].setdefault(str(BILLING_SUB), {})["board_done_at"] = iso()
+            save_state(state)
 '''),
 ]
 

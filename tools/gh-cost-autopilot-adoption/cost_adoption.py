@@ -336,6 +336,63 @@ def _owner_exception_live_ok(gh_json, item):
     return True, f"{key} zavřen bez merge, povinné {', '.join(contexts)}"
 
 
+# A live caller check older than this no longer verifies a low-traffic row; the sweep measures
+# the row again and the closeout waits for a fresh check (V6 #970).
+LOW_TRAFFIC_CHECK_TTL = dt.timedelta(hours=24)
+
+
+def unverified_low_traffic(item, now=None):
+    """True for a row accepted as low traffic without a passed, fresh live caller check.
+
+    The adopted autopilots accepted such rows on run counts alone; under the owner rule of
+    30 Sep 2026 that acceptance does not count, so the row is measured again and never closes
+    a sub-issue until the live check has passed. With `now`, a check older than
+    LOW_TRAFFIC_CHECK_TTL (or without a readable timestamp) is not fresh (V6 #970)."""
+    if not isinstance(item, dict) or not item.get("low_traffic"):
+        return False
+    check = item.get("low_traffic_check")
+    if not (isinstance(check, dict) and check.get("ok") is True):
+        return True
+    if now is None:
+        return False
+    try:
+        checked = parse_utc(check.get("checked_at"))
+    except (TypeError, ValueError):
+        return True
+    return now - checked > LOW_TRAFFIC_CHECK_TTL
+
+
+def invalidate_unverified_low_traffic(item, now=None):
+    """Drop an unverified or stale low-traffic acceptance so the next measurement decides again."""
+    if not unverified_low_traffic(item, now):
+        return False
+    for key in ("met_at", "low_traffic", "observed"):
+        item.pop(key, None)
+    item["low_traffic_invalidated"] = True
+    return True
+
+
+def close_issue_done(gh, gh_json, board, repo, number, done_option):
+    """Close an issue as completed and set its board Status to Done.
+
+    True only when the issue is read back closed and the board mutation succeeded; any other
+    outcome leaves the caller's record untouched so the next tick retries (V6 #970)."""
+    try:
+        issue = gh_json(f"repos/{repo}/issues/{number}")
+        if not isinstance(issue, dict) or issue.get("state") not in ("open", "closed"):
+            return False
+        if issue["state"] == "open":
+            code, _, _ = gh("issue", "close", str(number), "-R", repo, "--reason", "completed")
+            if code != 0:
+                return False
+            issue = gh_json(f"repos/{repo}/issues/{number}")
+            if not isinstance(issue, dict) or issue.get("state") != "closed":
+                return False
+        return board(number, done_option) is True
+    except Exception:  # noqa: BLE001 - an unexpected shape must not look like a closed issue
+        return False
+
+
 def exception_row(item):
     exception = item.get("owner_exception") or {}
     contexts = ", ".join(f"`{c}`" for c in exception.get("required_contexts") or [])
