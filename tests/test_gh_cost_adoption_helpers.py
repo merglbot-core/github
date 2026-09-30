@@ -350,6 +350,42 @@ class LowTrafficFreshnessAndClose(unittest.TestCase):
         self.assertFalse(run("open", 0, True, True, reads=lambda path: ["x"])[0])
 
 
+class BillingCoverage(unittest.TestCase):
+    WINDOW = ["2026-10-06", "2026-10-07"]
+
+    def gh(self, listings):
+        return lambda path: listings.get(path.split("/actions/")[0][len("repos/"):])
+
+    def run_step(self, listings, usage, confirmed=None, budget=True):
+        confirmed = {} if confirmed is None else confirmed
+        return ca.billing_coverage_step(self.gh(listings), ["o/a", "o/b"], usage, self.WINDOW, confirmed,
+                                        lambda: budget), confirmed
+
+    def runs(self, *pairs, total=None):
+        rows = [{"created_at": f"{day}T12:00:00Z", "conclusion": c} for day, c in pairs]
+        return {"total_count": len(rows) if total is None else total, "workflow_runs": rows}
+
+    def test_each_repository_must_reach_its_own_last_billable_run(self):
+        listings = {"o/a": self.runs(("2026-10-07", "success"), ("2026-10-06", "failure")),
+                    "o/b": self.runs(("2026-10-07", "skipped"), ("2026-10-06", "timed_out"))}
+        (status, detail), confirmed = self.run_step(listings, {"o/x": {"2026-10-08": 1}, "o/a": {"2026-10-06": 1},
+                                                               "o/b": {"2026-10-06": 1}})
+        self.assertEqual((status, detail), ("lagging", ["o/a"]))
+        self.assertEqual(confirmed, {"o/b": "2026-10-06"})
+        (status, _), confirmed = self.run_step(listings, {"O/A": {"2026-10-08": 1}, "o/b": {"2026-10-06": 1}})
+        self.assertEqual((status, confirmed["o/a"]), ("ok", "2026-10-07"))
+
+    def test_no_billable_run_budget_errors_and_confirmed_repositories(self):
+        quiet = {"o/a": self.runs(), "o/b": self.runs(("2026-10-07", "cancelled"))}
+        self.assertEqual(self.run_step(quiet, {})[0], ("ok", None))
+        ambiguous = {"o/a": self.runs(("2026-10-07", "cancelled"), total=150), "o/b": self.runs()}
+        self.assertEqual(self.run_step(ambiguous, {})[0], ("error", "o/a"))
+        self.assertEqual(self.run_step({"o/b": self.runs()}, {})[0], ("error", "o/a"))
+        self.assertEqual(self.run_step(quiet, {}, budget=False)[0], ("budget", "o/a"))
+        done = {"o/a": "2026-10-07", "o/b": "no billable run"}
+        self.assertEqual(self.run_step({}, {}, confirmed=done, budget=False)[0], ("ok", None))
+
+
 class LiveChildren(unittest.TestCase):
     PROJECT, DONE = "PVT_x", "done"
 

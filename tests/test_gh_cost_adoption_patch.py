@@ -229,17 +229,43 @@ class BillingGuards(unittest.TestCase):
         base.update(extra)
         return base
 
-    def test_usage_that_stops_before_the_window_end_is_retried(self):
+    def test_billing_needs_the_export_to_cover_every_in_scope_repository(self):
+        runs = {"o/in": {"total_count": 1, "workflow_runs": [{"created_at": "2026-10-07T20:00:00Z",
+                                                              "conclusion": "success"}]},
+                "o/quiet": {"total_count": 0, "workflow_runs": []}}
         for replacements in (pa.REPLACEMENTS_888, pa.REPLACEMENTS_910):
             before = next(b for b, a in replacements if "billing_numbers_finite(value for" in b)
             after = next(a for b, a in replacements if b == before)
-            wrapper = "def check(state, billing, usage, skus=None):\n" + after + "        return 'overflow'\n    return 'go'\n"
-            ns = self.ns()
+            wrapper = ("def check(state, billing, usage, skus=None, repos=('o/in', 'o/quiet')):\n" + after
+                       + "        return 'overflow'\n    return 'go'\n")
+            calls = []
+
+            def gh_json(path):
+                calls.append(path)
+                return runs[path.split("/actions/")[0][len("repos/"):]]
+            ns = self.ns(gh_json=gh_json, CALLS={"n": 0}, MAX_CALLS_PER_TICK=60)
             exec(compile(wrapper, "billing_fragment", "exec"), ns)
-            billing = {"after_days": ["2026-10-06", "2026-10-07"], "due_at": "2026-10-09T06:00:00Z"}
-            self.assertFalse(ns["check"]({}, billing, {"o/r": {"2026-10-06": 5.0}}, {}))
+            window = ["2026-10-06", "2026-10-07"]
+            # the export stops before the window end
+            billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
+            self.assertFalse(ns["check"]({}, billing, {"o/in": {"2026-10-06": 5.0}}, {}))
             self.assertIn("retry_after", billing)
-            self.assertEqual(ns["check"]({}, {"after_days": ["2026-10-07"]}, {"o/r": {"2026-10-08": 1.0}}, {}), "go")
+            # an unrelated repository is fresh, the in-scope one stops before its last run
+            billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
+            stale = {"o/other": {"2026-10-08": 1.0}, "o/in": {"2026-10-06": 5.0}}
+            self.assertFalse(ns["check"]({}, billing, stale, {}))
+            self.assertIn("retry_after", billing)
+            self.assertNotIn("o/in", billing["coverage"])
+            # the in-scope export reaches its last run; a repository without runs has nothing to miss
+            billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
+            fresh = {"o/other": {"2026-10-08": 1.0}, "O/In": {"2026-10-07": 5.0}}
+            self.assertEqual(ns["check"]({}, billing, fresh, {}), "go")
+            self.assertEqual(billing["coverage"], {"o/in": "2026-10-07", "o/quiet": "no billable run"})
+            # out of calls: no verdict, no retry delay, the next tick continues
+            billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
+            ns["CALLS"]["n"] = 60
+            self.assertFalse(ns["check"]({}, billing, fresh, {}))
+            self.assertNotIn("retry_after", billing)
 
     def test_a_billing_close_is_recorded_only_when_confirmed(self):
         for replacements in (pa.REPLACEMENTS_888, pa.REPLACEMENTS_910):

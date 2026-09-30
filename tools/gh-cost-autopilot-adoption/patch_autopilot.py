@@ -193,11 +193,21 @@ REPLACEMENTS_888 = [
 '''),
     # Billing: usage data must cover the window before a verdict (V6 #970).
     ('''    if not billing_numbers_finite(value for row in usage.values() for value in row.values()):
-''', '''    # Billing lag leaves missing days at zero (V6 #970): the export must reach the window's end.
+''', '''    # Billing lag leaves missing days at zero (V6 #970). The export must reach the window's end,
+    # and for every in-scope repository the day of its own newest billable run of the window;
+    # confirmations persist in the state, so the check spreads over ticks.
+    from cost_adoption import RETRY_AFTER, billing_coverage_step, billing_data_gap_due, data_gap_body
     latest = max((day for row in usage.values() for day in row), default="")
-    if latest < billing["after_days"][-1]:
-        from cost_adoption import RETRY_AFTER, billing_data_gap_due, data_gap_body
-        log(f"billing usage reaches {latest or 'no day'}, window ends {billing['after_days'][-1]}; retrying in an hour")
+    status, detail = (("lagging", f"export ends {latest or 'before the window'}")
+                      if latest < billing["after_days"][-1] else
+                      billing_coverage_step(gh_json, repos, usage, billing["after_days"],
+                                            billing.setdefault("coverage", {}),
+                                            lambda: CALLS["n"] <= MAX_CALLS_PER_TICK - 3))
+    if status == "budget":
+        save_state(state)
+        return False
+    if status != "ok":
+        log(f"billing usage incomplete ({status}: {detail}); retrying in an hour")
         if billing_data_gap_due(billing.get("due_at"), now()):
             comment(EPIC_REPO, BILLING_SUB, data_gap_body(BILLING_SUB), state, "billing:data-gap")
         billing["retry_after"] = iso(now() + RETRY_AFTER)
@@ -773,11 +783,21 @@ PILOT_CENSUS_VERSION = 2
 ''', '''            f"Verdikt: **{verdict}**. {verdict_note(verdict)}\\n\\n"
 '''),
     ('''    if not billing_numbers_finite(value for group in (usage, skus) for row in group.values() for value in row.values()):
-''', '''    # Billing lag leaves missing days at zero (V6 #970): the export must reach the window's end.
+''', '''    # Billing lag leaves missing days at zero (V6 #970). The export must reach the window's end,
+    # and for every in-scope repository the day of its own newest billable run of the window;
+    # confirmations persist in the state, so the check spreads over ticks.
+    from cost_adoption import RETRY_AFTER, billing_coverage_step, billing_data_gap_due, data_gap_body
     latest = max((day for row in usage.values() for day in row), default="")
-    if latest < billing["after_days"][-1]:
-        from cost_adoption import RETRY_AFTER, billing_data_gap_due, data_gap_body
-        log(f"billing usage reaches {latest or 'no day'}, window ends {billing['after_days'][-1]}; retrying in an hour")
+    status, detail = (("lagging", f"export ends {latest or 'before the window'}")
+                      if latest < billing["after_days"][-1] else
+                      billing_coverage_step(gh_json, repos, usage, billing["after_days"],
+                                            billing.setdefault("coverage", {}),
+                                            lambda: CALLS["n"] <= MAX_CALLS_PER_TICK - 3))
+    if status == "budget":
+        save_state(state)
+        return False
+    if status != "ok":
+        log(f"billing usage incomplete ({status}: {detail}); retrying in an hour")
         if billing_data_gap_due(billing.get("due_at"), now()):
             comment(EPIC_REPO, BILLING_SUB, data_gap_body(BILLING_SUB), state, "billing:data-gap")
         billing["retry_after"] = iso(now() + RETRY_AFTER)
