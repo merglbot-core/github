@@ -54,8 +54,9 @@ def routes(caller_text, listing=None, mains=None, hub_text=None):
         [{"path": ".github/workflows/pr-gate.yml"}, {"path": ".github/workflows/ci.yml"}],
         f"repos/{REPO}/contents/.github/workflows/pr-gate.yml?ref={MAIN}": content(caller_text),
     }
-    if hub_text is not None:
-        base[f"repos/merglbot-core/github/contents/.github/workflows/pr-gate.yml?ref={HUB_SHA}"] = content(hub_text)
+    hub = hub_text if hub_text is not None else HUB_ALLOWLIST
+    if hub:
+        base[f"repos/merglbot-core/github/contents/.github/workflows/pr-gate.yml?ref={HUB_SHA}"] = content(hub)
     return base
 
 
@@ -149,7 +150,7 @@ class LiveCallerConfig(unittest.TestCase):
         ignoring = HUB_ALLOWLIST.replace("${{ inputs.runs-on == 'ubuntu-slim' && 'ubuntu-slim' || 'ubuntu-24.04' }}",
                                          "ubuntu-24.04")
         self.assertFalse(self.run_check(FakeGH(routes(caller(self.SLIM), hub_text=ignoring)), label="ubuntu-slim")["ok"])
-        self.assertFalse(self.run_check(FakeGH(routes(caller(self.SLIM))), label="ubuntu-slim")["ok"])
+        self.assertFalse(self.run_check(FakeGH(routes(caller(self.SLIM), hub_text="")), label="ubuntu-slim")["ok"])
 
     def test_another_jobs_runner_or_an_expression_does_not_count(self):
         other = caller() + "  lint:\n    runs-on: ubuntu-slim\n    steps:\n      - run: true\n"
@@ -174,10 +175,23 @@ class LiveCallerConfig(unittest.TestCase):
     def test_caller_must_run_on_pull_requests_to_main(self):
         for text in (caller().replace("on: pull_request", "on: workflow_dispatch"),
                      caller().replace("on: pull_request", "on:\n  pull_request:\n    branches: [release]"),
-                     caller("    if: false\n")):
+                     caller("    if: false\n"),
+                     caller("    if: ${{ false && github.event_name == 'pull_request' }}\n")):
             result = self.run_check(FakeGH(routes(text)))
             self.assertFalse(result["ok"])
             self.assertIn("pull requests", result["reason"])
+
+    def test_missing_pinned_hub_workflow_fails_without_a_label(self):
+        result = self.run_check(FakeGH(routes(caller(), hub_text="")))
+        self.assertFalse(result["ok"])
+        self.assertIn("pinned hub workflow", result["reason"])
+        self.assertTrue(self.run_check(FakeGH(routes(caller())))["ok"])
+
+    def test_unexpected_shapes_report_instead_of_raising(self):
+        broken = {f"repos/{REPO}/branches/main": {"commit": {"sha": MAIN}},
+                  f"repos/{REPO}/contents/.github/workflows?ref={MAIN}": [{"path": 1}]}
+        self.assertFalse(self.run_check(FakeGH(broken), pr_record={"expected_files": [3]})["ok"])
+        self.assertFalse(ca.owner_exception_live_ok(FakeGH({}), {"owner_exception": {"pr": 5, "required_contexts": ["x"]}})[0])
 
     def test_rollout_files_must_match(self):
         record = {"expected_files": [".github/workflows/pr-gate.yml", ".github/workflows/gitleaks-weekly.yml"],

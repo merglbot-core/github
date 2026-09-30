@@ -135,7 +135,8 @@ def runs_on_pull_requests(doc, job):
         return False
     if ignored and "main" in ignored:
         return False
-    return job.get("if") not in (False, "false", "${{ false }}")
+    # Any job-level condition is unresolved here and could disable the gate (V6 #969).
+    return "if" not in job
 
 
 def hub_runner(hub_text, value):
@@ -185,6 +186,14 @@ def hub_input_default(text, name):
 
 
 def live_caller_config(gh_json, repo, workflow, pr_record=None, label=None):
+    """Return-based contract: any unexpected input shape reports "not verified" (V6 #969)."""
+    try:
+        return _live_caller_config(gh_json, repo, workflow, pr_record, label)
+    except Exception as error:  # noqa: BLE001 - never raise into the autopilot sweep
+        return {"ok": False, "reason": f"verification error: {type(error).__name__}"}
+
+
+def _live_caller_config(gh_json, repo, workflow, pr_record=None, label=None):
     """Owner rule 8 (30 Sep 2026): verify a low-traffic row's caller live on main.
 
     Checks the workflow directory at the current main SHA (files the rollout PR added are
@@ -220,6 +229,12 @@ def live_caller_config(gh_json, repo, workflow, pr_record=None, label=None):
     job_id, hub_sha, job = calls[0]
     if not runs_on_pull_requests(doc, job):
         return {"ok": False, "reason": "caller does not run on pull requests to main", "main_sha": main}
+    # The pinned hub revision must exist and be a reusable workflow, runner check or not.
+    hub = _text(gh_json, HUB, HUB_PR_GATE, hub_sha)
+    hub_doc = parse_workflow(hub)[0] if hub else None
+    triggers = (hub_doc or {}).get("on", (hub_doc or {}).get(True)) if hub_doc else None
+    if not isinstance(triggers, dict) or "workflow_call" not in triggers:
+        return {"ok": False, "reason": "pinned hub workflow missing or not reusable", "main_sha": main}
     evidence = {"ok": True, "reason": "caller verified on main", "main_sha": main,
                 "hub_sha": hub_sha, "job": job_id, "workflow": path}
     if label:
@@ -227,9 +242,6 @@ def live_caller_config(gh_json, repo, workflow, pr_record=None, label=None):
         # and fails closed; without the input the pinned hub default applies. Either way the
         # pinned hub workflow decides the effective runner (V6 #969).
         inputs = job.get("with") if isinstance(job.get("with"), dict) else {}
-        hub = _text(gh_json, HUB, HUB_PR_GATE, hub_sha)
-        if hub is None:
-            return {"ok": False, "reason": "pinned hub workflow unreadable", "main_sha": main}
         if "runs-on" in inputs:
             value, source = inputs["runs-on"], "with.runs-on"
             if not isinstance(value, str) or "${{" in value:
@@ -247,6 +259,14 @@ def live_caller_config(gh_json, repo, workflow, pr_record=None, label=None):
 
 
 def owner_exception_live_ok(gh_json, item):
+    """Return-based contract: unexpected shapes are (False, reason), never an exception."""
+    try:
+        return _owner_exception_live_ok(gh_json, item)
+    except Exception as error:  # noqa: BLE001
+        return False, f"verification error: {type(error).__name__}"
+
+
+def _owner_exception_live_ok(gh_json, item):
     """#895 rows: the rollout PR stayed closed unmerged and the recorded gitleaks contexts are
     still required on main. Returns (ok, reason)."""
     exception = item.get("owner_exception") or {}
@@ -289,6 +309,14 @@ def exception_notes(items, sub):
 
 
 def live_children_done(gh_json, gh_graphql, epic_repo, epic, project_id, done_option):
+    """Return-based contract: unexpected shapes are (False, reason), never an exception."""
+    try:
+        return _live_children_done(gh_json, gh_graphql, epic_repo, epic, project_id, done_option)
+    except Exception as error:  # noqa: BLE001
+        return False, f"verification error: {type(error).__name__}"
+
+
+def _live_children_done(gh_json, gh_graphql, epic_repo, epic, project_id, done_option):
     """Every live native sub-issue is closed and Done on the EPIC's Project. The Project is read
     from its own side, every page (standard v1.3.1: Issue.projectItems is only a same-org
     shortcut), and children are matched by repository and number. Returns (ok, reason)."""
