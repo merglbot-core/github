@@ -7,6 +7,8 @@
 #       uses: merglbot-core/github/.github/workflows/ci-python.yml@<sha>  # vX.Y.Z
 #       with:
 #         python-version: '3.11'
+#         # optional (github#963): cache-dependency-path: '**/requirements*.txt'
+#         # optional (github#963): fetch-depth: 0   # only when tests read git history
 #
 # Purpose: Standardize Python CI (denatura-btf-data, future projects)
 # Category: CI
@@ -54,6 +56,27 @@ on:
         default: '.'
         required: false
 
+      # --- cache / checkout (github#963, EPIC merglbot-core/platform#1722) ---
+      cache-dependency-path:
+        description: >-
+          Glob(s) hashed into the pip cache key (setup-python cache-dependency-path,
+          one per line). Empty (default) keeps today's key
+          `<working-directory>/<requirements-file>`; set e.g. '**/requirements*.txt'
+          when the job installs from several requirements files, otherwise the
+          cache is restored stale after a change to a file the key does not see.
+        type: string
+        default: ''
+        required: false
+
+      fetch-depth:
+        description: >-
+          git fetch depth for actions/checkout. 1 (default, and the previous
+          implicit value) = no history; 0 = full history, only when the tests
+          read git history.
+        type: number
+        default: 1
+        required: false
+
 permissions:
   contents: read
 
@@ -72,13 +95,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: ${{ inputs.fetch-depth }}
       
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: ${{ inputs.python-version }}
           cache: 'pip'
-          cache-dependency-path: ${{ inputs.working-directory }}/${{ inputs.requirements-file }}
+          # Empty input = today's key; the `a && b || c` idiom is safe because a
+          # non-empty string is truthy in GitHub expressions.
+          cache-dependency-path: ${{ inputs.cache-dependency-path != '' && inputs.cache-dependency-path || format('{0}/{1}', inputs.working-directory, inputs.requirements-file) }}
       
       - name: Install dependencies
         working-directory: ${{ inputs.working-directory }}
