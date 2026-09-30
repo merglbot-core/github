@@ -84,7 +84,8 @@ class Content(unittest.TestCase):
                      'f"dod:{sub}:owner-exception"'):
             self.assertIn(text, p888)
         for text in ("live_caller_config(gh_json, repo, workflow, state.get(\"prs\", {}).get(item.get(\"since_pr\"))", "PILOT_MIN_RUN_S = 60",
-                     'item["incomplete_at"] = iso()', "lo <= r[\"created\"] < since", "since <= r[\"created\"] < hi",
+                     'item["incomplete_at"] = iso()', 'iso(a) <= r["created_at"] < iso(b)', "PILOT_CENSUS_MAX = 1000",
+                     "PILOT_SAMPLE_TARGET = 300", 'item.pop("partial_census", False)',
                      'item["verdict"] = "regression" if slower else "pass"', "fail_verdict",
                      "billing_retry_blocked", "closes_billing(verdict)"):
             self.assertIn(text, p910)
@@ -108,10 +109,10 @@ class Content(unittest.TestCase):
 
 
 class PilotBehaviour(unittest.TestCase):
-    """The patched #917 pilot measurement run against stubbed GitHub reads (V6 #968, #970).
+    """The patched #917 pilot measurement against a stub of the runs/jobs API (V6 #968, #970).
 
-    The fixture is the adopted function text; only the pilot anchors apply to it."""
-    SINCE = "2026-10-01T10:00:00Z"
+    The stub honours the `created` date-time range, `status`, `per_page` and `page` like the
+    API; the fixture is the adopted function text, which the whole-function anchor replaces."""
     JOB, LABEL = "Unit tests", "ubuntu-24.04-arm"
 
     def setUp(self):
@@ -119,17 +120,20 @@ class PilotBehaviour(unittest.TestCase):
         self.dt = dt
         self.since = dt.datetime(2026, 10, 1, 10, tzinfo=dt.timezone.utc)
         self.now = self.since + dt.timedelta(days=20)
-        self.runs, self.jobs = [], {}
+        self.runs, self.jobs, self.calls = [], {}, []
+        self.consts = {"MAX_CALLS_PER_TICK": 10000, "PILOT_SAMPLE_TARGET": 400}
         # three x64 runs before the merge and three arm64 runs inside the window: ratio 1.1
         for n in range(3):
             self.add(-3 - n, 500, arm=False)
             self.add(2 + n, 550, arm=True)
 
+    def stamp(self, moment):
+        return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
     def add(self, day, seconds, arm, conclusion="success", hours=0, job=True, status="completed"):
-        run_id = len(self.runs) + 1
+        run_id = 1000 + len(self.runs)
         created = self.since + self.dt.timedelta(days=day, hours=hours)
-        self.runs.append({"id": run_id, "run_attempt": 1, "status": "completed",
-                          "created_at": created.strftime("%Y-%m-%dT%H:%M:%SZ")})
+        self.runs.append({"id": run_id, "run_attempt": 1, "status": status, "created_at": self.stamp(created)})
         entries = [{"name": "lint", "status": "completed", "completed_at": "x", "conclusion": "success",
                     "labels": ["ubuntu-24.04"], "_s": 20}]
         if job:
@@ -139,34 +143,58 @@ class PilotBehaviour(unittest.TestCase):
         self.jobs[run_id] = {"total_count": len(entries), "jobs": entries}
         return run_id
 
+    def finish(self, run_id, seconds):
+        for run in self.runs:
+            if run["id"] == run_id:
+                run["status"] = "completed"
+        self.jobs[run_id]["jobs"][-1].update(status="completed", completed_at="x", _s=seconds)
+
     def gh_json(self, path):
         import re
-        match = re.search(r"/runs\?created=([0-9-]+)\.\.([0-9-]+)&", path)
+        import urllib.parse
+        self.namespace["CALLS"]["n"] += 1
+        self.calls.append(path)
+        route, _, query = path.partition("?")
+        params = dict(urllib.parse.parse_qsl(query))
+        if route.endswith("/runs") and "/workflows/" in route:
+            lo, hi = params["created"].split("..")
+            rows = sorted((r for r in self.runs if lo <= r["created_at"] <= hi
+                           and params.get("status", r["status"]) == r["status"]),
+                          key=lambda r: r["created_at"], reverse=True)
+            size, page = int(params.get("per_page", 30)), int(params.get("page", 1))
+            return {"total_count": len(rows), "workflow_runs": rows[(page - 1) * size:page * size]}
+        match = re.search(r"/runs/(\d+)/attempts/1/jobs$", route)
         if match:
-            lo, hi = match.groups()
-            return {"workflow_runs": [r for r in self.runs if lo <= r["created_at"][:10] <= hi]}
-        run_id = int(re.search(r"/runs/(\d+)/jobs", path).group(1))
-        return self.jobs[run_id]
+            return self.jobs[int(match.group(1))]
+        run_id = int(re.search(r"/runs/(\d+)$", route).group(1))
+        return next(r for r in self.runs if r["id"] == run_id)
 
-    def measure(self):
+    def measure(self, item=None, ticks=1):
         dt = self.dt
-        source = (ROOT / "tests/fixtures/gh_cost_adoption/pilot_adopted.py.txt").read_text()
-        applied = 0
-        for before, after in pa.REPLACEMENTS_910:
-            if before in source:
-                source, applied = source.replace(before, after, 1), applied + 1
-        self.assertEqual(applied, 5)
-        namespace = {
-            "dt": dt, "now": lambda: self.now, "gh_json": self.gh_json, "log": lambda *_: None,
-            "iso": lambda m=None: (m or self.now).astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "parse": lambda v: dt.datetime.fromisoformat(str(v).replace("Z", "+00:00")) if v else None,
-            "job_seconds": lambda j: j.get("_s"), "item_since": lambda state, item: self.SINCE,
-            "CALLS": {"n": 0}, "MAX_CALLS_PER_TICK": 1000, "PILOT_WINDOW_DAYS": 14, "PILOT_MAX_RATIO": 1.2,
-            "PILOT_FAIL_TOLERANCE": 0.10, "PILOT_MIN_RUNS": 3, "PILOT_SAMPLE": 30, "PILOT_MIN_RUN_S": 60,
-        }
-        exec(compile(source, "pilot_adopted_patched", "exec"), namespace)
-        item = {"sub": 917, "repo": "o/r", "workflow": "w.yml", "job": self.JOB, "label": self.LABEL}
-        return namespace["measure_arm64_pilot"]({}, item), item
+        if not hasattr(self, "function"):
+            source = (ROOT / "tests/fixtures/gh_cost_adoption/pilot_adopted.py.txt").read_text()
+            applied = [n for n, (before, _) in enumerate(pa.REPLACEMENTS_910) if before in source]
+            self.assertEqual(len(applied), 1)
+            before, after = pa.REPLACEMENTS_910[applied[0]]
+            self.namespace = {
+                "dt": dt, "now": lambda: self.now, "gh_json": self.gh_json, "log": lambda *_: None,
+                "iso": lambda m=None: (m or self.now).astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "parse": lambda v: dt.datetime.fromisoformat(str(v).replace("Z", "+00:00")) if v else None,
+                "job_seconds": lambda j: j.get("_s"), "item_since": lambda state, i: self.stamp(self.since),
+                "CALLS": {"n": 0}, "PILOT_WINDOW_DAYS": 14, "PILOT_MAX_RATIO": 1.2,
+                "PILOT_FAIL_TOLERANCE": 0.10, "PILOT_MIN_RUNS": 3, "PILOT_MIN_RUN_S": 60, "PILOT_CENSUS_MAX": 1000,
+            }
+            exec(compile(source.replace(before, after, 1), "pilot_adopted_patched", "exec"), self.namespace)
+            self.function = self.namespace["measure_arm64_pilot"]
+        self.namespace.update(self.consts)
+        item = item if item is not None else {"sub": 917, "repo": "o/r", "workflow": "w.yml",
+                                              "job": self.JOB, "label": self.LABEL}
+        for _ in range(ticks):
+            self.namespace["CALLS"]["n"] = 0
+            result = self.function({}, item)
+            if not item.pop("partial_census", False):
+                break
+        return result, item
 
     def test_bounded_windows_and_gate_outcomes(self):
         late = self.add(14, 5000, arm=True, hours=2)  # the window's last date, after its end time
@@ -175,22 +203,46 @@ class PilotBehaviour(unittest.TestCase):
         ok, item = self.measure()
         self.assertTrue(ok)
         self.assertEqual((item["verdict"], item["ratio_p50"], item["after"]["short"]), ("pass", 1.1, 1))
-        self.assertEqual(item["after"]["n"], 3)
-        self.assertIn(str(late), item["runs"])
+        self.assertEqual((item["after"]["n"], item["sample_rate"]), (3, 1.0))
+        self.assertNotIn(str(late), item["runs"])
         self.assertEqual(item["runs"][str(absent)]["concl"], "absent")
 
-    def test_an_unfinished_job_is_never_cached_and_holds_the_verdict(self):
+    def test_a_running_workflow_is_listed_and_holds_the_verdict(self):
         running = self.add(6, 9000, arm=True, status="in_progress")
         ok, item = self.measure()
+        self.assertFalse(any("status=" in path for path in self.calls))
         self.assertTrue(ok)
         self.assertIsNone(item["verdict"])
         self.assertEqual(item["pending_runs"], [str(running)])
         self.assertNotIn(str(running), item["runs"])
-        self.jobs[running]["jobs"][-1].update(status="completed", completed_at="x", _s=560)
-        ok, item = self.measure()
+        self.finish(running, 560)
+        ok, item = self.measure(item)
         self.assertEqual((item["verdict"], item["pending_runs"]), ("pass", []))
 
-    def test_a_failed_or_partial_jobs_read_decides_nothing(self):
+    def test_every_page_of_a_busy_day_is_counted(self):
+        # 130 slow arm64 runs on one day: they only fit on two pages of 100.
+        for n in range(130):
+            self.add(7, 900, arm=True, hours=n % 10)
+        ok, item = self.measure()
+        self.assertTrue(ok)
+        self.assertEqual((item["after"]["n"], item["verdict"]), (133, "regression"))
+        self.assertTrue(any("page=2" in path for path in self.calls))
+
+    def test_the_sample_is_uniform_deterministic_and_resumes_across_ticks(self):
+        for n in range(400):
+            self.add(-1 - n % 13, 500, arm=False, hours=n % 20)
+            self.add(1 + n % 13, 520, arm=True, hours=n % 20)
+        self.consts.update(PILOT_SAMPLE_TARGET=100, MAX_CALLS_PER_TICK=50)
+        ok, item = self.measure(ticks=100)
+        self.assertEqual(item["verdict"], "pass")
+        chosen, population = item["sample"]["before"]
+        self.assertEqual(population, 403)
+        self.assertLess(abs(chosen - 100), 30)
+        rate, runs = item["sample_rate"], dict(item["runs"])
+        ok, again = self.measure(dict(item, runs={}, census={}, verdict=None, sample_rate=None), ticks=100)
+        self.assertEqual((again["sample_rate"], sorted(again["runs"])), (rate, sorted(runs)))
+
+    def test_a_failed_or_partial_read_decides_nothing(self):
         broken = self.add(6, 550, arm=True)
         for listing in (None, {"jobs": []}, {"total_count": 101, "jobs": self.jobs[broken]["jobs"]}):
             self.jobs[broken] = listing
@@ -200,6 +252,15 @@ class PilotBehaviour(unittest.TestCase):
             self.assertNotIn("verdict", item)
             self.assertNotIn(str(broken), item["runs"])
 
+    def test_a_day_the_api_cannot_list_whole_decides_nothing(self):
+        for n in range(3):
+            self.add(8, 550, arm=True)
+        ok, item = self.measure()
+        self.assertEqual(item["verdict"], "pass")
+        self.namespace["PILOT_CENSUS_MAX"] = 2
+        ok, item = self.measure()
+        self.assertFalse(ok)
+        self.assertNotIn("verdict", item)
 
 if __name__ == "__main__":
     unittest.main()

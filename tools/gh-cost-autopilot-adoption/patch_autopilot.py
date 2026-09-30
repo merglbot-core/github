@@ -162,60 +162,241 @@ REPLACEMENTS_888 = [
 ]
 
 REPLACEMENTS_910 = [
-    # #917 (V6 #968, #970): both queries bounded; a failed or partial jobs read decides nothing;
-    # a run whose pilot job is not finished stays uncached and holds the verdict; a finished
-    # run without the job is remembered instead of re-queried every sweep.
-    ('''    start = parse(since) - dt.timedelta(days=PILOT_WINDOW_DAYS)
+    # #917 (V6 #968, #970): the pilot census is complete per UTC day (every status, paginated),
+    # the measured runs are a uniform deterministic sample, unfinished runs hold the verdict,
+    # failed or partial reads decide nothing, and a census spans ticks. Gate outcomes shorter
+    # than PILOT_MIN_RUN_S stay out of the comparison; the stop rule is about time.
+    ('''def measure_arm64_pilot(state, item):
+    """#917: the pilot job on the arm64 label shows no regression against its own x64 history.
+
+    before = first-attempt completed runs in the PILOT_WINDOW_DAYS before the merge whose job ran
+    off the label; after = runs since the merge whose job ran on the label. Durations (job
+    started_at -> completed_at, so the ci-pr-delay environment wait is excluded) are compared on
+    successful runs: p50 and p95 must stay <= PILOT_MAX_RATIO x. Failures (success vs failure
+    conclusions only) may not rise by more than PILOT_FAIL_TOLERANCE. The verdict is written only
+    after the window has elapsed; a regression is recorded, never silently discharged."""
+    repo, workflow, job, label = item["repo"], item["workflow"], item["job"], item["label"]
+    since = item_since(state, item)
+    if not since:
+        return False
+    start = parse(since) - dt.timedelta(days=PILOT_WINDOW_DAYS)
     known = item.setdefault("runs", {})
     for created in (f"{start.strftime('%Y-%m-%d')}..{since[:10]}", f"%3E%3D{since[:10]}"):
-''', '''    start = parse(since) - dt.timedelta(days=PILOT_WINDOW_DAYS)
-    end = parse(since) + dt.timedelta(days=PILOT_WINDOW_DAYS)
-    known = item.setdefault("runs", {})
-    pending = []
-    for created in (f"{start.strftime('%Y-%m-%d')}..{since[:10]}", f"{since[:10]}..{end.strftime('%Y-%m-%d')}"):
-'''),
-    ('''            jobs = (gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=30") or {}).get("jobs", [])
+        runs = gh_json(f"repos/{repo}/actions/workflows/{workflow}/runs"
+                       f"?created={created}&status=completed&per_page={PILOT_SAMPLE}")
+        if runs is None:
+            return False
+        for run in runs.get("workflow_runs", []):
+            run_id = str(run.get("id"))
+            if run_id in known or run.get("run_attempt", 1) != 1 or not run.get("created_at"):
+                continue
+            if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
+                # The next sweep continues from `known`; nothing is decided on a partial census.
+                return True
+            jobs = (gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=30") or {}).get("jobs", [])
             for j in jobs:
                 if (j.get("name") == job or (j.get("name") or "").endswith(" / " + job)) and j.get("completed_at"):
                     known[run_id] = {"created": run["created_at"], "labels": j.get("labels") or [],
                                      "s": job_seconds(j) or 0, "concl": j.get("conclusion")}
                     break
-''', '''            listing = gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100")
+
+    def stats(rows):
+        ok = [r["s"] for r in rows if r["concl"] == "success"]
+        fails = [r for r in rows if r["concl"] == "failure"]
+        return {"n": len(ok) + len(fails), "ok": len(ok), "fail": len(fails),
+                "p50": percentile(ok, 0.5), "p95": percentile(ok, 0.95)}
+
+    before = stats([r for r in known.values() if r["created"] < since and label not in r["labels"]])
+    after = stats([r for r in known.values() if r["created"] >= since and label in r["labels"]])
+    item["before"], item["after"] = before, after
+    if now() < parse(since) + dt.timedelta(days=PILOT_WINDOW_DAYS):
+        item["verdict"] = None
+        return True
+    if before["ok"] < PILOT_MIN_RUNS or after["ok"] < PILOT_MIN_RUNS:
+        item["verdict"] = "insufficient_data"
+        return True
+    fail_rate = lambda s: s["fail"] / s["n"] if s["n"] else 0.0  # noqa: E731
+    slower = after["p50"] > PILOT_MAX_RATIO * before["p50"] or after["p95"] > PILOT_MAX_RATIO * before["p95"]
+    flakier = fail_rate(after) > fail_rate(before) + PILOT_FAIL_TOLERANCE
+    item["verdict"] = "regression" if (slower or flakier) else "pass"
+    if item["verdict"] == "pass":
+        item["met_at"] = iso()
+        log(f"DoD met for #{item['sub']} {repo} {job}: arm64 p50 {after['p50']} s / p95 {after['p95']} s "
+            f"vs x64 p50 {before['p50']} s / p95 {before['p95']} s")
+    else:
+        log(f"#{item['sub']} {repo} {job}: arm64 pilot {item['verdict']}")
+    return True
+''', '''def measure_arm64_pilot(state, item):
+    """#917: the pilot job on the arm64 label shows no regression against its own x64 history.
+
+    Windows: PILOT_WINDOW_DAYS before the merge (job off the label) and after it (job on the
+    label), cut into UTC-day slices. Every slice is listed completely: every status, paginated,
+    at most PILOT_CENSUS_MAX runs. A slice listed after its end is final and never listed again.
+    The measured runs are a uniform, deterministic sample of the first-attempt runs of both
+    windows: a run belongs to it when the first 8 hex digits of sha256(run id) fall below
+    `sample_rate`, fixed once from the complete before-window census so that about
+    PILOT_SAMPLE_TARGET runs per window are read (1.0 = every run). Each sampled run costs one
+    jobs read of its first attempt. A sampled run whose pilot job (or run) is still queued or
+    running holds the verdict; a failed or partial read decides nothing. A census that needs
+    more calls than one tick allows, or a current slice whose pages moved while it was listed,
+    sets `partial_census`, and measure_dod continues it on the next tick (V6 #968, #970).
+
+    Durations are job started_at -> completed_at, so the ci-pr-delay wait is excluded. Runs
+    shorter than PILOT_MIN_RUN_S are gate outcomes (V6 rejection, nothing to test since
+    infra#3342) and are counted apart. Stop rule (owner, 30 Sep 2026): p50 and p95 on the label
+    at most PILOT_MAX_RATIO x the x64 history; failures are reported apart. The verdict is
+    written only after the window has elapsed and every sampled run has finished."""
+    import hashlib
+    repo, workflow, job, label = item["repo"], item["workflow"], item["job"], item["label"]
+    since = item_since(state, item)
+    if not since:
+        return False
+    merged = parse(since)
+    start = merged - dt.timedelta(days=PILOT_WINDOW_DAYS)
+    end = merged + dt.timedelta(days=PILOT_WINDOW_DAYS)
+    moment = now()
+    known = item.setdefault("runs", {})
+    census = item.setdefault("census", {})
+
+    def partial():
+        # Out of calls for this tick: nothing is decided, measure_dod resumes on the next tick.
+        item["partial_census"] = True
+        return True
+
+    def failed():
+        # A failed or partial read must not drop runs from the comparison: decide nothing now.
+        item["incomplete_at"] = iso()
+        return False
+
+    def slices(lo, hi):
+        edge = lo
+        while edge < hi:
+            midnight = dt.datetime(edge.year, edge.month, edge.day, tzinfo=dt.timezone.utc)
+            cut = min(midnight + dt.timedelta(days=1), hi)
+            yield edge, cut
+            edge = cut
+
+    windows, complete = {"before": [], "after": []}, True
+    for side, lo, hi in (("before", start, merged), ("after", merged, end)):
+        for a, b in slices(lo, hi):
+            if a >= moment:
+                complete = False
+                break
+            entry = census.get(iso(a))
+            if not (isinstance(entry, dict) and entry.get("final")):
+                listed_at, runs, page = now(), {}, 1
+                while True:
+                    if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
+                        return partial()
+                    listing = gh_json(f"repos/{repo}/actions/workflows/{workflow}/runs?created="
+                                      f"{iso(a)}..{iso(b - dt.timedelta(seconds=1))}&per_page=100&page={page}")
+                    batch = listing.get("workflow_runs") if isinstance(listing, dict) else None
+                    total = listing.get("total_count") if isinstance(listing, dict) else None
+                    if (not isinstance(batch, list) or not isinstance(total, int) or isinstance(total, bool)
+                            or total > PILOT_CENSUS_MAX):
+                        return failed()
+                    runs.update((str(r.get("id")), r) for r in batch)
+                    if not batch or page * 100 >= total:
+                        break
+                    page += 1
+                if len(runs) < total:
+                    return partial()  # new runs moved the pages of a current slice: list it again
+                entry = {"final": listed_at >= b, "listed_at": iso(listed_at), "total": total,
+                         "runs": {rid: {"created": r["created_at"], "done": r.get("status") == "completed"}
+                                  for rid, r in runs.items()
+                                  if r.get("run_attempt", 1) == 1 and r.get("created_at")
+                                  and iso(a) <= r["created_at"] < iso(b)}}
+                census[iso(a)] = entry
+            complete = complete and entry["final"]
+            windows[side].extend(entry["runs"].items())
+
+    rate = item.get("sample_rate")
+    if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not 0 < rate <= 1:
+        # The before window lies wholly in the past, so its census is complete here.
+        population = len(windows["before"])
+        rate = min(1.0, PILOT_SAMPLE_TARGET / population) if population else 1.0
+        item["sample_rate"] = rate
+    chosen = {side: [(rid, meta) for rid, meta in rows
+                     if int(hashlib.sha256(rid.encode()).hexdigest()[:8], 16) < rate * 0x100000000]
+              for side, rows in windows.items()}
+
+    pending = []
+    for side in ("before", "after"):
+        for rid, meta in chosen[side]:
+            if rid in known:
+                continue
+            if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
+                return partial()
+            run_done = meta["done"]
+            if not run_done:
+                fresh = gh_json(f"repos/{repo}/actions/runs/{rid}")
+                if not isinstance(fresh, dict):
+                    return failed()
+                run_done = fresh.get("status") == "completed" or (fresh.get("run_attempt") or 1) > 1
+            # The first attempt only (the population is first-attempt runs); a later re-run of the
+            # same run id must not replace its measurement.
+            listing = gh_json(f"repos/{repo}/actions/runs/{rid}/attempts/1/jobs?per_page=100")
             jobs = listing.get("jobs") if isinstance(listing, dict) else None
             total = listing.get("total_count") if isinstance(listing, dict) else None
             if (not isinstance(jobs, list) or not isinstance(total, int) or isinstance(total, bool)
                     or total > len(jobs)):
-                # A failed or partial read must not drop a run from the comparison: decide nothing now.
-                item["incomplete_at"] = iso()
-                return False
+                return failed()
             matching = [j for j in jobs if j.get("name") == job or (j.get("name") or "").endswith(" / " + job)]
             finished = [j for j in matching if j.get("status") == "completed" and j.get("completed_at")]
             if finished:
                 j = finished[0]
-                known[run_id] = {"created": run["created_at"], "labels": j.get("labels") or [],
-                                 "s": job_seconds(j) or 0, "concl": j.get("conclusion")}
-            elif matching or run.get("status") != "completed":
-                # The pilot job (or its run) is still queued or running: keep it retryable.
-                pending.append(run_id)
+                known[rid] = {"created": meta["created"], "labels": j.get("labels") or [],
+                              "s": job_seconds(j) or 0, "concl": j.get("conclusion")}
+            elif matching or not run_done:
+                pending.append(rid)  # still queued or running: stays retryable and holds the verdict
             else:
                 # A finished run without the job (filtered out): remembered, never measured.
-                known[run_id] = {"created": run["created_at"], "labels": [], "s": 0, "concl": "absent"}
-'''),
-    ('''    before = stats([r for r in known.values() if r["created"] < since and label not in r["labels"]])
-    after = stats([r for r in known.values() if r["created"] >= since and label in r["labels"]])
-''', '''    lo, hi = iso(start), iso(end)
-    before = stats([r for r in known.values() if lo <= r["created"] < since and label not in r["labels"]])
-    after = stats([r for r in known.values() if since <= r["created"] < hi and label in r["labels"]])
-    item["pending_runs"] = sorted(pending)
-    if pending:
-        # Evidence of these runs is still being produced: no verdict until they finish.
-        item["before"], item["after"], item["verdict"] = before, after, None
+                known[rid] = {"created": meta["created"], "labels": [], "s": 0, "concl": "absent"}
+
+    def stats(rows):
+        rows = [r for r in rows if r["concl"] in ("success", "failure")]
+        real = [r for r in rows if r["s"] >= PILOT_MIN_RUN_S]
+        ok = [r["s"] for r in real if r["concl"] == "success"]
+        fails = [r for r in real if r["concl"] == "failure"]
+        return {"n": len(ok) + len(fails), "ok": len(ok), "fail": len(fails), "short": len(rows) - len(real),
+                "p50": percentile(ok, 0.5), "p95": percentile(ok, 0.95)}
+
+    before = stats([known[rid] for rid, _ in chosen["before"]
+                    if rid in known and label not in known[rid]["labels"]])
+    after = stats([known[rid] for rid, _ in chosen["after"]
+                   if rid in known and label in known[rid]["labels"]])
+    item["before"], item["after"], item["pending_runs"] = before, after, sorted(pending)
+    item["sample"] = {side: [len(chosen[side]), len(windows[side])] for side in windows}
+    if moment < end or not complete or pending:
+        item["verdict"] = None
         return True
+    if before["ok"] < PILOT_MIN_RUNS or after["ok"] < PILOT_MIN_RUNS:
+        item["verdict"] = "insufficient_data"
+        return True
+    fail_rate = lambda s: s["fail"] / s["n"] if s["n"] else 0.0  # noqa: E731
+    slower = after["p50"] > PILOT_MAX_RATIO * before["p50"] or after["p95"] > PILOT_MAX_RATIO * before["p95"]
+    flakier = fail_rate(after) > fail_rate(before) + PILOT_FAIL_TOLERANCE
+    item["ratio_p50"] = round(after["p50"] / before["p50"], 3) if before["p50"] else None
+    item["ratio_p95"] = round(after["p95"] / before["p95"], 3) if before["p95"] else None
+    # Owner decision 30 Sep 2026: the stop rule is about time; failures are reported apart.
+    item["fail_verdict"] = "elevated" if flakier else "ok"
+    item["verdict"] = "regression" if slower else "pass"
+    if item["verdict"] == "pass":
+        item["met_at"] = iso()
+        log(f"DoD met for #{item['sub']} {repo} {job}: arm64 p50 {after['p50']} s / p95 {after['p95']} s "
+            f"vs x64 p50 {before['p50']} s / p95 {before['p95']} s")
+    else:
+        log(f"#{item['sub']} {repo} {job}: arm64 pilot {item['verdict']}")
+    return True
 '''),
     ('''PILOT_SAMPLE = 30
 ''', '''PILOT_SAMPLE = 30
 # Shorter pilot runs are gate outcomes (V6 rejection, nothing to test), see measure_arm64_pilot.
 PILOT_MIN_RUN_S = 60
+# The runs API lists at most 1 000 runs per filtered query; a UTC-day slice above it is not listable.
+PILOT_CENSUS_MAX = 1000
+# About this many runs per window are measured (one jobs read each); smaller windows are read whole.
+PILOT_SAMPLE_TARGET = 300
 '''),
     # #913 (owner 30 Sep 2026): the low-traffic runner row needs the runner verified on main.
     ('''    # new label, green and under the limit; the label itself is proven by the file_state
@@ -246,34 +427,6 @@ PILOT_MIN_RUN_S = 60
                 f"({check.get('runner_source', '')}) živě ověřen na main `{check.get('main_sha', '')[:8]}`)"
                 if item.get("low_traffic") else "")
 '''),
-    # #917: gate outcomes stay out of the architecture comparison; the stop rule is about time.
-    ('''    def stats(rows):
-        ok = [r["s"] for r in rows if r["concl"] == "success"]
-        fails = [r for r in rows if r["concl"] == "failure"]
-        return {"n": len(ok) + len(fails), "ok": len(ok), "fail": len(fails),
-                "p50": percentile(ok, 0.5), "p95": percentile(ok, 0.95)}
-''', '''    def stats(rows):
-        # Runs shorter than PILOT_MIN_RUN_S are gate outcomes, not suite runs: since infra#3342
-        # (29 Sep 2026) a head rejected by V6 fails in seconds and a suite with nothing to test
-        # is skipped. They are counted apart so they neither shorten p50/p95 nor raise the
-        # failure rate of the architecture comparison.
-        rows = [r for r in rows if r["concl"] in ("success", "failure")]
-        real = [r for r in rows if r["s"] >= PILOT_MIN_RUN_S]
-        ok = [r["s"] for r in real if r["concl"] == "success"]
-        fails = [r for r in real if r["concl"] == "failure"]
-        return {"n": len(ok) + len(fails), "ok": len(ok), "fail": len(fails),
-                "short": len(rows) - len(real),
-                "p50": percentile(ok, 0.5), "p95": percentile(ok, 0.95)}
-'''),
-    ('''    flakier = fail_rate(after) > fail_rate(before) + PILOT_FAIL_TOLERANCE
-    item["verdict"] = "regression" if (slower or flakier) else "pass"
-''', '''    flakier = fail_rate(after) > fail_rate(before) + PILOT_FAIL_TOLERANCE
-    item["ratio_p50"] = round(after["p50"] / before["p50"], 3) if before["p50"] else None
-    item["ratio_p95"] = round(after["p95"] / before["p95"], 3) if before["p95"] else None
-    # Owner decision 30 Sep 2026: the stop rule is about time; failures are reported apart.
-    item["fail_verdict"] = "elevated" if flakier else "ok"
-    item["verdict"] = "regression" if slower else "pass"
-'''),
     ('''        mark = {"pass": "✅", "regression": "❌", "insufficient_data": "⚠️ málo dat"}.get(item.get("verdict"), "⏳")
         return (f"| {item['repo']} | `{item['workflow']}` / {item['job']}: x64 p50 {b.get('p50', '-')} s, "
                 f"p95 {b.get('p95', '-')} s, {b.get('fail', 0)}/{b.get('n', 0)} failů → `{item['label']}` "
@@ -281,11 +434,16 @@ PILOT_MIN_RUN_S = 60
                 f"{mark} |")
 ''', '''        mark = {"pass": "✅", "regression": "❌", "insufficient_data": "⚠️ málo dat"}.get(item.get("verdict"), "⏳")
         fails = " · faily zvýšené" if item.get("fail_verdict") == "elevated" else ""
+
+        def sample(entry, side):
+            counts = (entry.get("sample") or {}).get(side) or ["-", "-"]
+            return f"{counts[0]}/{counts[1]}"
         return (f"| {item['repo']} | `{item['workflow']}` / {item['job']}: x64 p50 {b.get('p50', '-')} s, "
                 f"p95 {b.get('p95', '-')} s, {b.get('fail', 0)}/{b.get('n', 0)} failů → `{item['label']}` "
                 f"p50 {a.get('p50', '-')} s ({item.get('ratio_p50', '-')}×), p95 {a.get('p95', '-')} s "
                 f"({item.get('ratio_p95', '-')}×), {a.get('fail', 0)}/{a.get('n', 0)} failů; krátké běhy "
-                f"mimo srovnání {b.get('short', 0)}/{a.get('short', 0)} {mark}{fails} |")
+                f"mimo srovnání {b.get('short', 0)}/{a.get('short', 0)}; vzorek {sample(item, 'before')} → "
+                f"{sample(item, 'after')} běhů {mark}{fails} |")
 '''),
     ('''            + f"\\n\\nKritérium: úspěšné běhy jobu; p50 i p95 na `ubuntu-24.04-arm` ≤ {PILOT_MAX_RATIO}× "
               f"x64 historie {PILOT_WINDOW_DAYS} dní před merge (doba bez čekání ci-pr-delay); podíl "
@@ -301,14 +459,24 @@ PILOT_MIN_RUN_S = 60
               f"(doba bez čekání ci-pr-delay). Běhy kratší než {PILOT_MIN_RUN_S} s jsou výsledky brány "
               "(zamítnutí V6, nic k testování) a do srovnání nepatří. Faily se hlásí zvlášť: zvýšené jsou "
               f"při nárůstu o víc než {int(PILOT_FAIL_TOLERANCE * 100)} p. b. Okna jsou přesně {PILOT_WINDOW_DAYS} "
-              f"dní před a po merge; před merge nejnovějších nejvýš {PILOT_SAMPLE} běhů, po merge všechny "
-              f"běhy zachycené sweepy (nejvýš {PILOT_SAMPLE} na dotaz).\\n\\n"
+              f"dní před a po merge, běhy každého dne vypsané úplně; měří se rovnoměrný deterministický "
+              f"vzorek (hash ID běhu, cíl ~{PILOT_SAMPLE_TARGET} běhů na okno, menší okna celá) a běžící "
+              "běhy verdikt drží.\\n\\n"
             + ("**Časově pilot prošel u všech jobů.** "
                if passed else
                "**Časová regrese nebo málo dat** u označených jobů. ")
             + "Postup podle rozhodnutí ownera z 30. 9.: job nad 1,2× se vrátí na x64, ostatní zůstávají, "
               "infra `terraform-plan-pr.yml` job `plan` se převede na arm64 a týden se ověří. Autopilot "
               "issue nezavírá (technical_hold)."
+'''),
+    # #917: a pilot census that ran out of calls continues on the next tick, not 6 h later.
+    ('''        phase(f"dod {item_key}", MEASURES[item.get("kind", "job_runs")], state, item)
+        item["checked_at"] = iso()
+''', '''        phase(f"dod {item_key}", MEASURES[item.get("kind", "job_runs")], state, item)
+        if item.pop("partial_census", False):
+            incomplete = True
+            continue
+        item["checked_at"] = iso()
 '''),
     # tools/gh-cost-910-closeout anchors on the legacy f-string key; it must now fail closed.
     ('''        key = f"dod:{sub}"
