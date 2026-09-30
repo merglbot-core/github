@@ -261,9 +261,37 @@ jobs:
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
       
       - name: Sign container image
+        env:
+          IMAGE_REF: ${{ steps.build.outputs.full_image }}
+          IMAGE_ADOPTED: ${{ steps.build.outputs.adopted }}
         run: |
-          # Keyless signing with GitHub OIDC - cosign auto-detects ACTIONS_ID_TOKEN_REQUEST_URL
-          cosign sign --yes ${{ steps.build.outputs.full_image }}
+          set -euo pipefail
+          # BEGIN cosign-sign
+          # Keyless signing with GitHub OIDC; the Fulcio identity is this hub workflow
+          # file. An adopted image (github#909) may already be signed and re-signing can
+          # fail on an immutable repository, so verify it with that identity first:
+          # verified = keep, "no signatures found" = sign, anything else = fail.
+          if [ "$IMAGE_ADOPTED" = "true" ]; then
+            verify_rc=0
+            verify_out="$(cosign verify \
+              --certificate-identity-regexp '^https://github\.com/merglbot-core/github/\.github/workflows/reusable-deploy-cloud-run\.yml@' \
+              --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+              --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+              "$IMAGE_REF" 2>&1)" || verify_rc=$?
+            if [ "$verify_rc" -eq 0 ]; then
+              echo "::notice::Adopted ${IMAGE_REF} already carries a verified signature; not re-signing."
+              exit 0
+            fi
+            if [[ $verify_out =~ (no\ matching\ signatures|denied|unauthorized|DENIED|UNAUTHORIZED) ]] \
+              || ! [[ $verify_out =~ no\ signatures\ found ]]; then
+              printf '%s\n' "$verify_out" >&2
+              echo "::error::cosign verify of adopted ${IMAGE_REF} failed (exit ${verify_rc}); not signing blindly."
+              exit 1
+            fi
+            echo "Adopted ${IMAGE_REF} has no signature yet; signing it."
+          fi
+          cosign sign --yes "$IMAGE_REF"
+          # END cosign-sign
       
       - name: Deploy to Cloud Run
         id: deploy
