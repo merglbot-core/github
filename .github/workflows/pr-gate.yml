@@ -33,6 +33,18 @@
 #
 # Check name for branch protection: **`PR Gate`** (context `pr-gate / PR Gate`
 # when the caller names its job `pr-gate`).
+#
+# OPTIONAL STEPS (every one defaults to off, so existing callers are unchanged):
+#   gitleaks, markdown-danger-lint, pr-text-length (github#891/#895),
+#   workflow-lint = actionlint + zizmor over .github/workflows (github#961), and
+#   run-terraform-fmt (S3 of EPIC platform#1722). None of them changes the job
+#   name, the runner or the job permissions: workflow-lint writes findings to the
+#   log and the job summary instead of uploading SARIF, because a code-scanning
+#   upload needs `security-events: write` on this job and every caller would
+#   have to grant it first. `terraform validate` is deliberately NOT offered
+#   here: `terraform init` downloads and executes provider plugins chosen by
+#   PR-controlled files, and this job runs with `pull-requests: write`
+#   (V6 finding on github#966). Validate stays in the callers' own read-only jobs.
 # =============================================================================
 
 name: Reusable - PR Gate
@@ -142,6 +154,47 @@ on:
           back with `runs-on: ubuntu-24.04`.
         type: string
         default: 'ubuntu-slim'
+        required: false
+      # --- optional workflow lint (github#961, EPIC merglbot-core/platform#1722) ---
+      # actionlint + zizmor take ~3 s and cover script injection, permissions and
+      # trigger misuse, i.e. what the CodeQL default-setup `actions` language scans
+      # on every PR push (measured 30 Sep 2026: 5 repos had `actions` as their only
+      # CodeQL language, project-management-app alone ~2 040 min/month). Both
+      # binaries are installed into RUNNER_TEMP and pinned by release checksum like
+      # gitleaks above; zizmor runs `--offline`, so no token leaves the job. Findings
+      # fail the gate and are listed in the log and the job summary. There is no
+      # SARIF / code-scanning upload: it would need `security-events: write` on this
+      # job, which none of the current callers grants.
+      workflow-lint:
+        description: 'Run actionlint + zizmor (offline) over .github/workflows as a step of this job'
+        type: boolean
+        default: false
+        required: false
+      zizmor-min-severity:
+        description: 'zizmor --min-severity threshold: unknown, informational, low, medium or high'
+        type: string
+        default: 'medium'
+        required: false
+      # --- optional terraform fmt (S3 of EPIC merglbot-core/platform#1722) ---
+      # Lets callers fold their sub-minute `terraform fmt -check` workflow into
+      # this job (one billed minute instead of two). fmt is a pure formatter: it
+      # runs no `init`, downloads no provider and executes no PR-controlled code,
+      # so it is safe inside this `pull-requests: write` job. `terraform validate`
+      # is not offered here on purpose (see the header).
+      run-terraform-fmt:
+        description: 'Run `terraform fmt -check -recursive -diff` in terraform-directory'
+        type: boolean
+        default: false
+        required: false
+      terraform-directory:
+        description: 'Repo-relative directory for the terraform fmt step (absolute paths and `..` are rejected)'
+        type: string
+        default: '.'
+        required: false
+      terraform-version:
+        description: 'Terraform version for hashicorp/setup-terraform (exact version or constraint; callers should pin)'
+        type: string
+        default: 'latest'
         required: false
 
 permissions:
@@ -490,6 +543,85 @@ jobs:
           [ "${body_len}" -le "${MAX_BODY}" ] || { echo "::error::PR body too long (${body_len} > ${MAX_BODY})"; exit 1; }
           echo "PR text length OK"
 
+      # --- optional workflow lint: actionlint + zizmor (github#961) ------------
+      # Same install pattern as gitleaks: RUNNER_TEMP, no sudo, release checksum.
+      - name: Install actionlint and zizmor
+        if: ${{ !cancelled() && inputs['workflow-lint'] }}
+        env:
+          ACTIONLINT_VERSION: '1.7.12'
+          ACTIONLINT_SHA256: '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8'
+          ZIZMOR_VERSION: '1.30.1'
+          ZIZMOR_SHA256: 'e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a'
+        run: |
+          set -euo pipefail
+          dest="${RUNNER_TEMP}/workflow-lint-bin"
+          mkdir -p "$dest"
+          curl -fsSL -o "${RUNNER_TEMP}/actionlint.tgz" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  ${RUNNER_TEMP}/actionlint.tgz" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/actionlint.tgz" -C "$dest" actionlint
+          curl -fsSL -o "${RUNNER_TEMP}/zizmor.tgz" \
+            "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${ZIZMOR_SHA256}  ${RUNNER_TEMP}/zizmor.tgz" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/zizmor.tgz" -C "$dest" zizmor
+          chmod +x "$dest/actionlint" "$dest/zizmor"
+          echo "$dest" >> "$GITHUB_PATH"
+          "$dest/actionlint" -version
+          "$dest/zizmor" --version
+
+      - name: Workflow lint (actionlint + zizmor)
+        id: workflow_lint
+        if: ${{ !cancelled() && inputs['workflow-lint'] }}
+        shell: bash
+        env:
+          ZIZMOR_MIN_SEVERITY: ${{ inputs['zizmor-min-severity'] }}
+        run: |
+          set -uo pipefail
+          case "${ZIZMOR_MIN_SEVERITY}" in
+            unknown|informational|low|medium|high) ;;
+            *) echo "::error::zizmor-min-severity must be one of unknown, informational, low, medium, high"; exit 1 ;;
+          esac
+          rc=0
+          echo "::group::actionlint"
+          # actionlint lints .github/workflows/*.{yml,yaml} of the checked-out repo;
+          # ShellCheck and pyflakes are used only when present on the runner.
+          actionlint || rc=1
+          echo "::endgroup::"
+          echo "::group::zizmor"
+          zizmor --offline --no-progress --min-severity "${ZIZMOR_MIN_SEVERITY}" \
+            --format plain .github/workflows || rc=1
+          echo "::endgroup::"
+          {
+            echo "### Workflow lint (actionlint + zizmor)"
+            echo ""
+            if [ "${rc}" -eq 0 ]; then
+              echo "No findings (zizmor --min-severity ${ZIZMOR_MIN_SEVERITY})."
+            else
+              echo "**Findings** — see the *Workflow lint* step log (zizmor --min-severity ${ZIZMOR_MIN_SEVERITY})."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "${rc}"
+
+      # --- optional terraform fmt (S3, EPIC platform#1722) ---------------------
+      - name: Setup Terraform
+        if: ${{ !cancelled() && inputs['run-terraform-fmt'] }}
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e  # v4.0.1
+        with:
+          terraform_version: ${{ inputs['terraform-version'] }}
+          terraform_wrapper: false
+
+      - name: Terraform fmt
+        id: terraform_fmt
+        if: ${{ !cancelled() && inputs['run-terraform-fmt'] }}
+        env:
+          TF_DIR: ${{ inputs['terraform-directory'] }}
+        run: |
+          set -euo pipefail
+          case "${TF_DIR}" in
+            /*|*..*) echo "::error::terraform-directory must be a repo-relative path without '..'"; exit 1 ;;
+          esac
+          terraform -chdir="${TF_DIR}" fmt -check -recursive -diff
+
       - name: Check gate results
         if: ${{ !cancelled() }}
         env:
@@ -503,6 +635,8 @@ jobs:
           GITLEAKS: ${{ steps.gitleaks.outcome }}
           MARKDOWN_DANGER_LINT: ${{ steps.markdown_danger_lint.outcome }}
           PR_TEXT_LENGTH: ${{ steps.pr_text_length.outcome }}
+          WORKFLOW_LINT: ${{ steps.workflow_lint.outcome }}
+          TERRAFORM_FMT: ${{ steps.terraform_fmt.outcome }}
         run: |
           set -euo pipefail
           rc=0
@@ -518,7 +652,9 @@ jobs:
             "docs-governance:${DOCS_GOVERNANCE}" \
             "gitleaks:${GITLEAKS}" \
             "markdown-danger-lint:${MARKDOWN_DANGER_LINT}" \
-            "pr-text-length:${PR_TEXT_LENGTH}"; do
+            "pr-text-length:${PR_TEXT_LENGTH}" \
+            "workflow-lint:${WORKFLOW_LINT}" \
+            "terraform-fmt:${TERRAFORM_FMT}"; do
             name="${pair%%:*}"
             outcome="${pair#*:}"
             if [ "${outcome}" = "failure" ]; then

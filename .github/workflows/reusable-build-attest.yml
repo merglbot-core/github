@@ -523,6 +523,9 @@ jobs:
           workload_identity_provider: ${{ secrets.wif_provider }}
           service_account: ${{ secrets.wif_service_account }}
 
+      # No `install_gcloud` opt-out here (github#963): the attestation step below
+      # runs `gcloud beta container binauthz ...`, and the runner-preinstalled SDK
+      # is not guaranteed to carry the `beta` component. setup-gcloud always runs.
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
         with:
