@@ -13,6 +13,11 @@ import math
 import re
 
 HUB = "merglbot-core/github"
+# Values accepted for the pinned hub's required inputs; any other required input is
+# unresolved and fails closed (the hub rejects e.g. pull-request-number 0).
+REQUIRED_INPUT_FORMS = {
+    "pull-request-number": re.compile(r"^\$\{\{\s*github\.event\.pull_request\.number\s*\}\}$"),
+}
 HUB_PR_GATE = ".github/workflows/pr-gate.yml"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 DATA_GAP_AFTER = dt.timedelta(hours=72)
@@ -37,15 +42,23 @@ def parse_utc(value):
     return moment.astimezone(dt.timezone.utc)
 
 
+def _finite(value):
+    """A real int/float (never bool) that converts to a finite float, else None."""
+    if type(value) not in (int, float):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
+    return number if math.isfinite(number) else None
+
+
 def billing_verdict(saved_usd, model_usd):
     """Owner decision 30 Sep 2026: FAKT closes, PARTIAL closes, BEZ ÚSPORY stays open.
     A non-positive saving never closes, whatever the model; non-finite input is a data gap (V6 #969)."""
-    try:
-        finite = math.isfinite(saved_usd) and math.isfinite(model_usd)
-    except TypeError:
-        finite = False
-    if not finite:
-        return "DATA_GAP"
+    saved_usd, model_usd = _finite(saved_usd), _finite(model_usd)
+    if saved_usd is None or model_usd is None or model_usd <= 0:
+        return "DATA_GAP"  # booleans, overflow, NaN/inf or a non-positive model (V6 #969)
     if saved_usd <= 0:
         return "BEZ ÚSPORY"
     if saved_usd >= 0.8 * model_usd:
@@ -228,9 +241,13 @@ def _live_caller_config(gh_json, repo, workflow, pr_record=None, label=None):
     if not isinstance(listing, list):
         return {"ok": False, "reason": "workflow listing unreadable", "main_sha": main}
     names = {entry.get("path") for entry in listing if isinstance(entry, dict)}
-    record = pr_record or {}
-    expected = [p for p in record.get("expected_files") or [] if p.startswith(".github/workflows/")]
-    deleted = [p for p in record.get("deleted_files") or [] if p.startswith(".github/workflows/")]
+    # The rollout record is evidence: both lists must exist (possibly empty) (V6 #969).
+    record = pr_record if isinstance(pr_record, dict) else None
+    lists = [record.get(k) if record else None for k in ("expected_files", "deleted_files")]
+    if not all(isinstance(v, list) and all(isinstance(x, str) for x in v) for v in lists):
+        return {"ok": False, "reason": "rollout record unavailable or incomplete", "main_sha": main}
+    expected = [p for p in lists[0] if p.startswith(".github/workflows/")]
+    deleted = [p for p in lists[1] if p.startswith(".github/workflows/")]
     path = ".github/workflows/" + workflow
     missing = sorted(p for p in set(expected) | {path} if p not in names)
     present = sorted(p for p in deleted if p in names)
@@ -260,10 +277,11 @@ def _live_caller_config(gh_json, repo, workflow, pr_record=None, label=None):
     call = triggers.get("workflow_call") or {}
     declared = (call.get("inputs") or {}) if isinstance(call, dict) else {}
     passed = job.get("with") if isinstance(job.get("with"), dict) else {}
-    missing = sorted(name for name, spec in declared.items()
-                     if isinstance(spec, dict) and spec.get("required") is True and name not in passed)
-    if not isinstance(declared, dict) or missing:
-        return {"ok": False, "reason": f"caller omits required hub inputs {missing}", "main_sha": main}
+    required = sorted(name for name, spec in declared.items() if isinstance(spec, dict) and spec.get("required") is True)
+    invalid = [name for name in required if name not in REQUIRED_INPUT_FORMS or not isinstance(passed.get(name), str)
+               or not REQUIRED_INPUT_FORMS[name].match(passed[name].strip())]
+    if invalid:
+        return {"ok": False, "reason": f"required hub inputs missing or unsupported: {invalid}", "main_sha": main}
     evidence = {"ok": True, "reason": "caller verified on main", "main_sha": main,
                 "hub_sha": hub_sha, "job": job_id, "workflow": path}
     if label:
@@ -300,7 +318,8 @@ def _owner_exception_live_ok(gh_json, item):
     still required on main. Returns (ok, reason)."""
     exception = item.get("owner_exception") or {}
     key, contexts = exception.get("pr"), exception.get("required_contexts") or []
-    if not isinstance(key, str) or "#" not in key or not contexts:
+    if not isinstance(key, str) or "#" not in key or not contexts or not isinstance(contexts, list) \
+            or not all(isinstance(c, str) and c for c in contexts):
         return False, "exception lacks its PR or required contexts"
     repo, number = key.rsplit("#", 1)
     pr = gh_json(f"repos/{repo}/pulls/{number}")

@@ -99,10 +99,12 @@ class Basics(unittest.TestCase):
         self.assertEqual(ca.billing_verdict(319.99, 400), "PARTIAL")
         self.assertEqual(ca.billing_verdict(0, 400), "BEZ ÚSPORY")
         self.assertEqual(ca.billing_verdict(-5, 400), "BEZ ÚSPORY")
-        self.assertEqual(ca.billing_verdict(0, 0), "BEZ ÚSPORY")  # V6 #969
-        for value in (float("nan"), float("inf")):
+        self.assertEqual(ca.billing_verdict(0, 0), "DATA_GAP")  # a non-positive model never closes (V6 #969)
+        for value in (float("nan"), float("inf"), True, 10 ** 400, "400", None):
             self.assertEqual(ca.billing_verdict(value, 400), "DATA_GAP")
             self.assertFalse(ca.closes_billing(ca.billing_verdict(400, value)))
+        self.assertEqual(ca.billing_verdict(True, 1), "DATA_GAP")
+        self.assertEqual(ca.billing_verdict(5, 0), "DATA_GAP")
         self.assertTrue(ca.closes_billing("PARTIAL"))
         self.assertFalse(ca.closes_billing("BEZ ÚSPORY"))
         self.assertIn("30. 9. 2026", ca.verdict_note("PARTIAL"))
@@ -146,9 +148,27 @@ class Structure(unittest.TestCase):
 
 class LiveCallerConfig(unittest.TestCase):
     SLIM = {"with": {"runs-on": "ubuntu-slim"}}
+    RECORD = {"expected_files": [".github/workflows/pr-gate.yml"], "deleted_files": []}
 
     def run_check(self, gh, **kw):
+        kw.setdefault("pr_record", self.RECORD)
         return ca.live_caller_config(gh, REPO, "pr-gate.yml", **kw)
+
+    def test_rollout_record_is_required(self):
+        for record in (None, {}, {"expected_files": [".github/workflows/pr-gate.yml"]}, {"expected_files": "x", "deleted_files": []}):
+            result = self.run_check(FakeGH(routes(caller())), pr_record=record)
+            self.assertFalse(result["ok"], record)
+            self.assertIn("rollout record", result["reason"])
+
+    def test_required_input_value_must_be_the_pr_number_expression(self):
+        for value in (0, "0", "${{ github.run_id }}", None):
+            text = caller({"with": {"pull-request-number": value}})
+            result = self.run_check(FakeGH(routes(text)))
+            self.assertFalse(result["ok"], value)
+            self.assertIn("pull-request-number", result["reason"])
+        unknown = json.loads(HUB_ALLOWLIST)
+        unknown["on"]["workflow_call"]["inputs"]["token-name"] = {"required": True}
+        self.assertFalse(self.run_check(FakeGH(routes(caller(), hub_text=json.dumps(unknown))))["ok"])
 
     def test_explicit_runner_through_the_pinned_hub_mapping(self):
         gh = FakeGH(routes(caller(self.SLIM)))
@@ -258,6 +278,8 @@ class OwnerException(unittest.TestCase):
         self.assertFalse(ca.owner_exception_live_ok(self.gh(merged=True), self.ITEM)[0])
         self.assertFalse(ca.owner_exception_live_ok(self.gh(contexts=("ci",)), self.ITEM)[0])
         self.assertFalse(ca.owner_exception_live_ok(self.gh(), {"owner_exception": {"text": "x"}})[0])
+        bad = {"owner_exception": dict(self.ITEM["owner_exception"], required_contexts="gitleaks / Secret Scanning")}
+        self.assertFalse(ca.owner_exception_live_ok(self.gh(), bad)[0])
 
     def test_rows_and_one_note_per_decision(self):
         second = dict(self.ITEM, repo="p/acq")
