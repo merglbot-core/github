@@ -374,20 +374,38 @@ def invalidate_unverified_low_traffic(item, now=None):
 
 BILLABLE_CONCLUSIONS = ("success", "failure", "timed_out")
 UNFINISHED_STATUSES = ("queued", "in_progress", "requested", "waiting", "pending")
+# Usage of a day keeps growing while late jobs are exported. A repository's coverage is judged
+# only this long after its newest billable run finished; an operating assumption, deliberately
+# conservative against the 30 h between the window end and the billing due time.
+BILLING_SETTLE = dt.timedelta(hours=72)
 # Bumped whenever the meaning of a coverage confirmation changes; older ones are checked again.
-COVERAGE_VERSION = 2
+COVERAGE_VERSION = 3
 
 
-def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budget):
-    """Per in-scope repository, the billing export reaches the repository's own last billable run.
+def _run_billable(gh_json, repo, run):
+    """success/failure/timed_out bill; a cancelled run bills when one of its jobs started."""
+    if run.get("conclusion") in BILLABLE_CONCLUSIONS:
+        return True
+    if run.get("conclusion") != "cancelled":
+        return False
+    listing = gh_json(f"repos/{repo}/actions/runs/{run.get('id')}/jobs?filter=all&per_page=100")
+    jobs = listing.get("jobs") if isinstance(listing, dict) else None
+    if not isinstance(jobs, list) or not all(isinstance(j, dict) for j in jobs):
+        return None
+    return any(j.get("started_at") and j.get("conclusion") != "skipped" for j in jobs)
 
-    A missing usage day counts as zero only when the export is known to have passed it for that
-    repository: no run created in the after window is still queued or running, and its usage
-    includes a day on or after the creation day of its newest finished billable run (success,
-    failure or timed_out). A repository with no such run has no billable usage to miss. With
-    more runs than one page, every unfinished status is asked for directly. Confirmations carry
-    COVERAGE_VERSION, are recorded in `confirmed` (persisted by the caller) and are not read
-    again, so the check spreads over ticks (V6 #970).
+
+def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budget, now):
+    """Per in-scope repository, the billing export covers the repository's own billable runs.
+
+    Evidence per repository, never borrowed from another one: no run created in the after
+    window is still queued or running; its newest billable run (success, failure, timed_out, or
+    a cancelled run in which a job started) finished at least BILLING_SETTLE ago; and its usage
+    includes a day on or after that run's creation day. A repository with no billable run has
+    no usage to miss, so a quiet window never needs a charge row. With more runs than one page,
+    every unfinished status is asked for directly. Confirmations carry COVERAGE_VERSION, are
+    recorded in `confirmed` (persisted by the caller) and are not read again, so the check
+    spreads over ticks (V6 #970).
 
     Returns ("ok", None), ("budget", repo) when the tick ran out of calls, ("error", repo) for an
     unreadable or ambiguous listing, or ("pending"|"lagging", [repos]) to retry later."""
@@ -428,14 +446,29 @@ def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budg
         if unfinished:
             pending.append(repo)  # its usage is still being produced
             continue
-        days = [r.get("created_at", "")[:10] for r in listed if r.get("conclusion") in BILLABLE_CONCLUSIONS]
-        if not days:
+        newest = None
+        for run in sorted(listed, key=lambda r: r.get("created_at") or "", reverse=True):
+            if not has_budget():
+                return "budget", repo
+            billable = _run_billable(gh_json, repo, run)
+            if billable is None:
+                return "error", repo
+            if billable:
+                newest = run
+                break
+        if newest is None:
             if total > len(listed):
                 return "error", repo  # the newest page holds no billable run: cannot tell
             confirmed[repo] = {"v": COVERAGE_VERSION, "last": None}
             continue
-        last = max(days)
-        if any(day >= last for day in by_repo.get(repo.lower(), ())):
+        try:
+            finished = parse_utc(newest.get("updated_at") or newest.get("created_at"))
+        except ValueError:
+            return "error", repo
+        last = (newest.get("created_at") or "")[:10]
+        if now - finished < BILLING_SETTLE:
+            pending.append(repo)  # the day of its newest run may still be growing
+        elif any(day >= last for day in by_repo.get(repo.lower(), ())):
             confirmed[repo] = {"v": COVERAGE_VERSION, "last": last}
         else:
             lagging.append(repo)

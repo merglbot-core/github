@@ -30,9 +30,12 @@ REPLACEMENTS_888 = [
     # The low-traffic branch below decides on the absence of bad runs, so it needs the complete
     # census: a well-formed listing of every run, each finished and read (owner rule 30 Sep 2026,
     # V6 #970). A malformed listing is never read as an empty one.
-    incomplete = (not isinstance(listed, list) or not all(isinstance(r, dict) for r in listed)
-                  or not isinstance(total, int) or isinstance(total, bool) or total > len(listed))
-    for run in listed if not incomplete else []:
+    malformed = not isinstance(listed, list) or not all(isinstance(r, dict) for r in listed)
+    incomplete = (malformed or not isinstance(total, int) or isinstance(total, bool)
+                  or total > len(listed))
+    # A busy repository still accumulates evidence from the listed runs; only the low-traffic
+    # acceptance, which needs the whole census, stays blocked.
+    for run in [] if malformed else listed:
         run_id = str(run.get("id"))
         if run.get("created_at", "") < since:
             continue
@@ -198,16 +201,13 @@ REPLACEMENTS_888 = [
 '''),
     # Billing: usage data must cover the window before a verdict (V6 #970).
     ('''    if not billing_numbers_finite(value for row in usage.values() for value in row.values()):
-''', '''    # Billing lag leaves missing days at zero (V6 #970). The export must reach the window's end,
-    # and for every in-scope repository the day of its own newest billable run of the window;
-    # confirmations persist in the state, so the check spreads over ticks.
+''', '''    # Billing lag leaves missing days at zero (V6 #970). Every in-scope repository needs its own
+    # coverage evidence (see billing_coverage_step); confirmations persist in the state, so the
+    # check spreads over ticks.
     from cost_adoption import RETRY_AFTER, billing_coverage_step, billing_data_gap_due, data_gap_body
-    latest = max((day for row in usage.values() for day in row), default="")
-    status, detail = (("lagging", f"export ends {latest or 'before the window'}")
-                      if latest < billing["after_days"][-1] else
-                      billing_coverage_step(gh_json, repos, usage, billing["after_days"],
-                                            billing.setdefault("coverage", {}),
-                                            lambda: CALLS["n"] <= MAX_CALLS_PER_TICK - 3))
+    status, detail = billing_coverage_step(gh_json, repos, usage, billing["after_days"],
+                                           billing.setdefault("coverage", {}),
+                                           lambda: CALLS["n"] <= MAX_CALLS_PER_TICK - 3, now())
     if status == "budget":
         save_state(state)
         return False
@@ -582,9 +582,12 @@ PILOT_CENSUS_VERSION = 2
     # The low-traffic branch below decides on the absence of bad runs, so it needs the complete
     # census: a well-formed listing of every run, each finished and read (owner rule 30 Sep 2026,
     # V6 #970). A malformed listing is never read as an empty one.
-    incomplete = (not isinstance(listed, list) or not all(isinstance(r, dict) for r in listed)
-                  or not isinstance(total, int) or isinstance(total, bool) or total > len(listed))
-    for run in listed if not incomplete else []:
+    malformed = not isinstance(listed, list) or not all(isinstance(r, dict) for r in listed)
+    incomplete = (malformed or not isinstance(total, int) or isinstance(total, bool)
+                  or total > len(listed))
+    # A busy repository still accumulates evidence from the listed runs; only the low-traffic
+    # acceptance, which needs the whole census, stays blocked.
+    for run in [] if malformed else listed:
         run_id = str(run.get("id"))
         if run.get("created_at", "") < since:
             continue
@@ -641,9 +644,12 @@ PILOT_CENSUS_VERSION = 2
     # The low-traffic branch below decides on the absence of bad runs, so it needs the complete
     # census: a well-formed listing of every run, each finished and read (owner rule 30 Sep 2026,
     # V6 #970). A malformed listing is never read as an empty one.
-    incomplete = (not isinstance(listed, list) or not all(isinstance(r, dict) for r in listed)
-                  or not isinstance(total, int) or isinstance(total, bool) or total > len(listed))
-    for run in listed if not incomplete else []:
+    malformed = not isinstance(listed, list) or not all(isinstance(r, dict) for r in listed)
+    incomplete = (malformed or not isinstance(total, int) or isinstance(total, bool)
+                  or total > len(listed))
+    # A busy repository still accumulates evidence from the listed runs; only the low-traffic
+    # acceptance, which needs the whole census, stays blocked.
+    for run in [] if malformed else listed:
         run_id = str(run.get("id"))
         if run.get("created_at", "") < since:
             continue
@@ -798,16 +804,13 @@ PILOT_CENSUS_VERSION = 2
 ''', '''            f"Verdikt: **{verdict}**. {verdict_note(verdict)}\\n\\n"
 '''),
     ('''    if not billing_numbers_finite(value for group in (usage, skus) for row in group.values() for value in row.values()):
-''', '''    # Billing lag leaves missing days at zero (V6 #970). The export must reach the window's end,
-    # and for every in-scope repository the day of its own newest billable run of the window;
-    # confirmations persist in the state, so the check spreads over ticks.
+''', '''    # Billing lag leaves missing days at zero (V6 #970). Every in-scope repository needs its own
+    # coverage evidence (see billing_coverage_step); confirmations persist in the state, so the
+    # check spreads over ticks.
     from cost_adoption import RETRY_AFTER, billing_coverage_step, billing_data_gap_due, data_gap_body
-    latest = max((day for row in usage.values() for day in row), default="")
-    status, detail = (("lagging", f"export ends {latest or 'before the window'}")
-                      if latest < billing["after_days"][-1] else
-                      billing_coverage_step(gh_json, repos, usage, billing["after_days"],
-                                            billing.setdefault("coverage", {}),
-                                            lambda: CALLS["n"] <= MAX_CALLS_PER_TICK - 3))
+    status, detail = billing_coverage_step(gh_json, repos, usage, billing["after_days"],
+                                           billing.setdefault("coverage", {}),
+                                           lambda: CALLS["n"] <= MAX_CALLS_PER_TICK - 3, now())
     if status == "budget":
         save_state(state)
         return False

@@ -230,7 +230,8 @@ class BillingGuards(unittest.TestCase):
         return base
 
     def test_billing_needs_the_export_to_cover_every_in_scope_repository(self):
-        runs = {"o/in": {"total_count": 1, "workflow_runs": [{"created_at": "2026-10-07T20:00:00Z",
+        runs = {"o/in": {"total_count": 1, "workflow_runs": [{"id": 1, "created_at": "2026-10-07T20:00:00Z",
+                                                              "updated_at": "2026-10-07T20:05:00Z",
                                                               "status": "completed", "conclusion": "success"}]},
                 "o/quiet": {"total_count": 0, "workflow_runs": []}}
         for replacements in (pa.REPLACEMENTS_888, pa.REPLACEMENTS_910):
@@ -238,18 +239,12 @@ class BillingGuards(unittest.TestCase):
             after = next(a for b, a in replacements if b == before)
             wrapper = ("def check(state, billing, usage, skus=None, repos=('o/in', 'o/quiet')):\n" + after
                        + "        return 'overflow'\n    return 'go'\n")
-            calls = []
-
-            def gh_json(path):
-                calls.append(path)
-                return runs[path.split("/actions/")[0][len("repos/"):]]
-            ns = self.ns(gh_json=gh_json, CALLS={"n": 0}, MAX_CALLS_PER_TICK=60)
+            ns = self.ns(gh_json=lambda path: runs[path.split("/actions/")[0][len("repos/"):]],
+                         CALLS={"n": 0}, MAX_CALLS_PER_TICK=60)
+            import datetime as dt
+            ns["now"] = lambda: dt.datetime(2026, 10, 11, 8, tzinfo=dt.timezone.utc)
             exec(compile(wrapper, "billing_fragment", "exec"), ns)
             window = ["2026-10-06", "2026-10-07"]
-            # the export stops before the window end
-            billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
-            self.assertFalse(ns["check"]({}, billing, {"o/in": {"2026-10-06": 5.0}}, {}))
-            self.assertIn("retry_after", billing)
             # an unrelated repository is fresh, the in-scope one stops before its last run
             billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
             stale = {"o/other": {"2026-10-08": 1.0}, "o/in": {"2026-10-06": 5.0}}
@@ -258,10 +253,15 @@ class BillingGuards(unittest.TestCase):
             self.assertNotIn("o/in", billing["coverage"])
             # the in-scope export reaches its last run; a repository without runs has nothing to miss
             billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
-            fresh = {"o/other": {"2026-10-08": 1.0}, "O/In": {"2026-10-07": 5.0}}
+            fresh = {"O/In": {"2026-10-07": 5.0}}
             self.assertEqual(ns["check"]({}, billing, fresh, {}), "go")
-            self.assertEqual(billing["coverage"], {"o/in": {"v": 2, "last": "2026-10-07"},
-                                                   "o/quiet": {"v": 2, "last": None}})
+            self.assertEqual(billing["coverage"], {"o/in": {"v": 3, "last": "2026-10-07"},
+                                                   "o/quiet": {"v": 3, "last": None}})
+            # a quiet window with no charge row at all is complete as well
+            billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
+            ns["check"].__globals__["gh_json"] = lambda path: {"total_count": 0, "workflow_runs": []}
+            self.assertEqual(ns["check"]({}, billing, {}, {}), "go")
+            ns["check"].__globals__["gh_json"] = lambda path: runs[path.split("/actions/")[0][len("repos/"):]]
             # out of calls: no verdict, no retry delay, the next tick continues
             billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
             ns["CALLS"]["n"] = 60
@@ -385,6 +385,17 @@ class JobRunsCensus(unittest.TestCase):
                 item = self.measure(kind)
                 self.assertNotIn("met_at", item, (kind, case))
                 self.assertTrue(item["census_incomplete"], (kind, case))
+
+    def test_a_busy_repository_keeps_counting_listed_runs(self):
+        for kind, *_ in self.CASES:
+            self.reset()
+            for _ in range(6):
+                self.add()
+            self.listing = {"total_count": 250, "workflow_runs": list(self.runs)}
+            item = self.measure(kind)
+            # five or more good listed runs meet the literal DoD although the census is partial
+            self.assertEqual((bool(item.get("met_at")), item.get("low_traffic")), (True, None), kind)
+            self.assertEqual(len(item["runs"]), 6, kind)
 
     def test_a_measured_run_that_is_re_run_holds_low_traffic(self):
         for kind, *_ in self.CASES:
