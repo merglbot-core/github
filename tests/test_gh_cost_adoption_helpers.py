@@ -353,37 +353,66 @@ class LowTrafficFreshnessAndClose(unittest.TestCase):
 class BillingCoverage(unittest.TestCase):
     WINDOW = ["2026-10-06", "2026-10-07"]
 
-    def gh(self, listings):
-        return lambda path: listings.get(path.split("/actions/")[0][len("repos/"):])
+    def gh(self, listings, probes=None):
+        def read(path):
+            repo = path.split("/actions/")[0][len("repos/"):]
+            if "&status=" in path:
+                status = path.split("&status=")[1].split("&")[0]
+                return {"total_count": (probes or {}).get(repo, {}).get(status, 0), "workflow_runs": []}
+            return listings.get(repo)
+        return read
 
-    def run_step(self, listings, usage, confirmed=None, budget=True):
+    def run_step(self, listings, usage, confirmed=None, budget=True, probes=None):
         confirmed = {} if confirmed is None else confirmed
-        return ca.billing_coverage_step(self.gh(listings), ["o/a", "o/b"], usage, self.WINDOW, confirmed,
+        return ca.billing_coverage_step(self.gh(listings, probes), ["o/a", "o/b"], usage, self.WINDOW, confirmed,
                                         lambda: budget), confirmed
 
-    def runs(self, *pairs, total=None):
-        rows = [{"created_at": f"{day}T12:00:00Z", "conclusion": c} for day, c in pairs]
+    def runs(self, *rows, total=None):
+        rows = [{"created_at": f"{day}T12:00:00Z", "status": status, "conclusion": c} for day, status, c in rows]
         return {"total_count": len(rows) if total is None else total, "workflow_runs": rows}
 
     def test_each_repository_must_reach_its_own_last_billable_run(self):
-        listings = {"o/a": self.runs(("2026-10-07", "success"), ("2026-10-06", "failure")),
-                    "o/b": self.runs(("2026-10-07", "skipped"), ("2026-10-06", "timed_out"))}
+        listings = {"o/a": self.runs(("2026-10-07", "completed", "success"), ("2026-10-06", "completed", "failure")),
+                    "o/b": self.runs(("2026-10-07", "completed", "skipped"), ("2026-10-06", "completed", "timed_out"))}
         (status, detail), confirmed = self.run_step(listings, {"o/x": {"2026-10-08": 1}, "o/a": {"2026-10-06": 1},
                                                                "o/b": {"2026-10-06": 1}})
         self.assertEqual((status, detail), ("lagging", ["o/a"]))
-        self.assertEqual(confirmed, {"o/b": "2026-10-06"})
+        self.assertEqual(confirmed, {"o/b": {"v": 2, "last": "2026-10-06"}})
         (status, _), confirmed = self.run_step(listings, {"O/A": {"2026-10-08": 1}, "o/b": {"2026-10-06": 1}})
-        self.assertEqual((status, confirmed["o/a"]), ("ok", "2026-10-07"))
+        self.assertEqual((status, confirmed["o/a"]), ("ok", {"v": 2, "last": "2026-10-07"}))
 
-    def test_no_billable_run_budget_errors_and_confirmed_repositories(self):
-        quiet = {"o/a": self.runs(), "o/b": self.runs(("2026-10-07", "cancelled"))}
+    def test_a_running_run_holds_coverage_until_it_finished_and_its_usage_arrived(self):
+        confirmed = {}
+        quiet_b = self.runs()
+        running = {"o/a": self.runs(("2026-10-07", "in_progress", None), ("2026-10-06", "completed", "success")),
+                   "o/b": quiet_b}
+        usage = {"o/a": {"2026-10-06": 1}}
+        self.assertEqual(self.run_step(running, usage, confirmed)[0], ("pending", ["o/a"]))
+        self.assertNotIn("o/a", confirmed)
+        finished = {"o/a": self.runs(("2026-10-07", "completed", "success"), ("2026-10-06", "completed", "success")),
+                    "o/b": quiet_b}
+        self.assertEqual(self.run_step(finished, usage, confirmed)[0], ("lagging", ["o/a"]))
+        usage["o/a"]["2026-10-07"] = 2
+        self.assertEqual(self.run_step(finished, usage, confirmed)[0], ("ok", None))
+        self.assertEqual(confirmed["o/a"], {"v": 2, "last": "2026-10-07"})
+
+    def test_a_busy_repository_asks_every_unfinished_status(self):
+        busy = {"o/a": self.runs(("2026-10-07", "completed", "success"), total=500), "o/b": self.runs()}
+        usage = {"o/a": {"2026-10-07": 1}}
+        self.assertEqual(self.run_step(busy, usage, probes={"o/a": {"waiting": 1}})[0], ("pending", ["o/a"]))
+        self.assertEqual(self.run_step(busy, usage)[0], ("ok", None))
+
+    def test_no_billable_run_budget_errors_and_confirmation_versions(self):
+        quiet = {"o/a": self.runs(), "o/b": self.runs(("2026-10-07", "completed", "cancelled"))}
         self.assertEqual(self.run_step(quiet, {})[0], ("ok", None))
-        ambiguous = {"o/a": self.runs(("2026-10-07", "cancelled"), total=150), "o/b": self.runs()}
+        ambiguous = {"o/a": self.runs(("2026-10-07", "completed", "cancelled"), total=150), "o/b": self.runs()}
         self.assertEqual(self.run_step(ambiguous, {})[0], ("error", "o/a"))
         self.assertEqual(self.run_step({"o/b": self.runs()}, {})[0], ("error", "o/a"))
         self.assertEqual(self.run_step(quiet, {}, budget=False)[0], ("budget", "o/a"))
-        done = {"o/a": "2026-10-07", "o/b": "no billable run"}
+        done = {"o/a": {"v": 2, "last": "2026-10-07"}, "o/b": {"v": 2, "last": None}}
         self.assertEqual(self.run_step({}, {}, confirmed=done, budget=False)[0], ("ok", None))
+        old = {"o/a": "2026-10-07", "o/b": {"v": 1, "last": None}}
+        self.assertEqual(self.run_step({}, {}, confirmed=old, budget=False)[0], ("budget", "o/a"))
 
 
 class LiveChildren(unittest.TestCase):

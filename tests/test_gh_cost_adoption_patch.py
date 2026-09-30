@@ -231,7 +231,7 @@ class BillingGuards(unittest.TestCase):
 
     def test_billing_needs_the_export_to_cover_every_in_scope_repository(self):
         runs = {"o/in": {"total_count": 1, "workflow_runs": [{"created_at": "2026-10-07T20:00:00Z",
-                                                              "conclusion": "success"}]},
+                                                              "status": "completed", "conclusion": "success"}]},
                 "o/quiet": {"total_count": 0, "workflow_runs": []}}
         for replacements in (pa.REPLACEMENTS_888, pa.REPLACEMENTS_910):
             before = next(b for b, a in replacements if "billing_numbers_finite(value for" in b)
@@ -260,7 +260,8 @@ class BillingGuards(unittest.TestCase):
             billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
             fresh = {"o/other": {"2026-10-08": 1.0}, "O/In": {"2026-10-07": 5.0}}
             self.assertEqual(ns["check"]({}, billing, fresh, {}), "go")
-            self.assertEqual(billing["coverage"], {"o/in": "2026-10-07", "o/quiet": "no billable run"})
+            self.assertEqual(billing["coverage"], {"o/in": {"v": 2, "last": "2026-10-07"},
+                                                   "o/quiet": {"v": 2, "last": None}})
             # out of calls: no verdict, no retry delay, the next tick continues
             billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
             ns["CALLS"]["n"] = 60
