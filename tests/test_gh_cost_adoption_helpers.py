@@ -5,6 +5,12 @@ import importlib.util
 import pathlib
 import unittest
 
+try:
+    import yaml  # noqa: F401  (ships with the launchd Python the autopilots run on)
+    HAS_YAML = True
+except ImportError:
+    HAS_YAML = False
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     "cost_adoption", ROOT / "tools/gh-cost-autopilot-adoption/cost_adoption.py")
@@ -68,6 +74,7 @@ class Basics(unittest.TestCase):
         self.assertEqual(ca.billing_verdict(319.99, 400), "PARTIAL")
         self.assertEqual(ca.billing_verdict(0, 400), "BEZ ÚSPORY")
         self.assertEqual(ca.billing_verdict(-5, 400), "BEZ ÚSPORY")
+        self.assertEqual(ca.billing_verdict(0, 0), "BEZ ÚSPORY")  # V6 #969
         self.assertTrue(ca.closes_billing("PARTIAL"))
         self.assertFalse(ca.closes_billing("BEZ ÚSPORY"))
         self.assertIn("30. 9. 2026", ca.verdict_note("PARTIAL"))
@@ -80,19 +87,34 @@ class Basics(unittest.TestCase):
         self.assertFalse(ca.billing_data_gap_due("2026-10-09T06:00:00Z", now))
         self.assertTrue(ca.billing_data_gap_due("2026-10-06T06:00:00Z", now))
 
-    def test_hub_calls_ignore_comments_short_shas_and_branches(self):
-        text = (f"    uses: merglbot-core/github/.github/workflows/pr-gate.yml@{HUB_SHA}  # pinned\n"
-                f"#   uses: merglbot-core/github/.github/workflows/pr-gate.yml@{MAIN}\n"
-                "    uses: merglbot-core/github/.github/workflows/pr-gate.yml@main\n"
-                "    uses: merglbot-core/github/.github/workflows/pr-gate.yml@c17b925\n")
-        self.assertEqual(ca.hub_calls(text), [HUB_SHA])
-
-    def test_input_default_reads_only_the_named_block(self):
-        self.assertEqual(ca.input_default(HUB_DEFAULT_SLIM, "runs-on"), "ubuntu-slim")
-        self.assertEqual(ca.input_default(HUB_DEFAULT_SLIM, "mode"), "advisory")
-        self.assertIsNone(ca.input_default(HUB_DEFAULT_SLIM, "absent"))
 
 
+@unittest.skipUnless(HAS_YAML, "PyYAML not installed")
+class Structure(unittest.TestCase):
+    def test_only_job_level_pinned_calls_count(self):
+        text = (f"on: pull_request\nenv:\n  NOTE: |\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@{MAIN}\n"
+                "jobs:\n"
+                f"  gate:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@{HUB_SHA}  # pinned\n"
+                "  other:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: |\n"
+                f"          uses: merglbot-core/github/.github/workflows/pr-gate.yml@{MOVED}\n"
+                "  branch:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@main\n"
+                "  short:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@c17b925\n")
+        doc, reason = ca.parse_workflow(text)
+        self.assertEqual([(j, sha) for j, sha, _ in ca.hub_jobs(doc)], [("gate", HUB_SHA)], reason)
+
+    def test_hub_input_default(self):
+        self.assertEqual(ca.hub_input_default(HUB_DEFAULT_SLIM, "runs-on"), "ubuntu-slim")
+        self.assertEqual(ca.hub_input_default(HUB_DEFAULT_SLIM, "mode"), "advisory")
+        self.assertIsNone(ca.hub_input_default(HUB_DEFAULT_SLIM, "absent"))
+        expression = HUB_DEFAULT_SLIM.replace("default: ubuntu-slim", "default: ${{ vars.RUNNER }}")
+        self.assertIsNone(ca.hub_input_default(expression, "runs-on"))
+
+    def test_unparseable_or_jobless_workflow_fails(self):
+        self.assertIsNone(ca.parse_workflow("jobs: [unclosed")[0])
+        self.assertIsNone(ca.parse_workflow("name: x\n")[0])
+
+
+@unittest.skipUnless(HAS_YAML, "PyYAML not installed")
 class LiveCallerConfig(unittest.TestCase):
     def run_check(self, gh, **kw):
         return ca.live_caller_config(gh, REPO, "pr-gate.yml", **kw)
@@ -125,6 +147,23 @@ class LiveCallerConfig(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("gitleaks-weekly.yml", result["reason"])
         self.assertIn("security-gitleaks.yml", result["reason"])
+
+    def test_another_jobs_runner_or_an_expression_does_not_count(self):
+        other = caller() + "  lint:\n    runs-on: ubuntu-slim\n    steps:\n      - run: true\n"
+        result = self.run_check(FakeGH(routes(other, hub_text=HUB_DEFAULT_SLIM.replace("ubuntu-slim", "ubuntu-24.04"))),
+                                label="ubuntu-slim")
+        self.assertFalse(result["ok"])
+        self.assertIn("hub default", result["reason"])
+        expr = caller("    with:\n      runs-on: ${{ vars.RUNNER }}\n")
+        result = self.run_check(FakeGH(routes(expr)), label="ubuntu-slim")
+        self.assertFalse(result["ok"])
+        self.assertIn("not a literal", result["reason"])
+
+    def test_text_in_a_block_scalar_cannot_pose_as_the_call(self):
+        text = ("on: pull_request\nenv:\n  NOTE: |\n"
+                f"    uses: merglbot-core/github/.github/workflows/pr-gate.yml@{HUB_SHA}\n"
+                "jobs:\n  lint:\n    runs-on: ubuntu-slim\n    steps:\n      - run: true\n")
+        self.assertFalse(self.run_check(FakeGH(routes(text)))["ok"])
 
     def test_two_hub_calls_fail(self):
         text = caller() + f"  second:\n    uses: merglbot-core/github/.github/workflows/pr-gate.yml@{HUB_SHA}\n"
@@ -171,36 +210,44 @@ class OwnerException(unittest.TestCase):
 class LiveChildren(unittest.TestCase):
     PROJECT, DONE = "PVT_x", "done"
 
-    def check(self, rows, statuses, pages=None):
+    def check(self, rows, pages, extra=None):
         routes = {"repos/o/g/issues/888/sub_issues?per_page=100&page=1": rows}
-        routes.update(pages or {})
+        routes.update(extra or {})
+        answers = list(pages)
         def graphql(query):
-            if statuses is None:
-                return None
-            return {"repository": {f"i{n}": {"projectItems": {"nodes": nodes}} for n, nodes in statuses.items()}}
+            return answers.pop(0) if answers else None
         return ca.live_children_done(FakeGH(routes), graphql, "o/g", 888, self.PROJECT, self.DONE)
 
     def row(self, n, state="closed", repo="o/g"):
         return {"number": n, "state": state, "repository_url": f"https://api.github.com/repos/{repo}"}
 
-    def done(self, option="done"):
-        return [{"project": {"id": self.PROJECT}, "fieldValueByName": {"optionId": option}}]
+    def page(self, entries, cursor=None):
+        nodes = [{"content": {"number": n, "repository": {"nameWithOwner": repo}},
+                  "fieldValueByName": {"optionId": option}} for repo, n, option in entries]
+        return {"node": {"items": {"pageInfo": {"hasNextPage": bool(cursor), "endCursor": cursor}, "nodes": nodes}}}
 
-    def test_all_closed_and_done(self):
-        ok, reason = self.check([self.row(889), self.row(909)], {889: self.done(), 909: self.done()})
+    def test_all_closed_and_done_across_project_pages(self):
+        pages = [self.page([("o/g", 889, "done"), ("x/y", 5, "todo")], cursor="c1"),
+                 self.page([("o/g", 909, "done")])]
+        ok, reason = self.check([self.row(889), self.row(909)], pages)
         self.assertTrue(ok, reason)
 
-    def test_open_foreign_or_not_done_child_blocks(self):
-        self.assertFalse(self.check([self.row(909, state="open")], {909: self.done()})[0])
-        self.assertFalse(self.check([self.row(5, repo="x/y")], {5: self.done()})[0])
-        self.assertFalse(self.check([self.row(909)], {909: self.done("todo")})[0])
-        self.assertFalse(self.check([self.row(909)], None)[0])
+    def test_open_missing_duplicated_or_not_done_child_blocks(self):
+        self.assertFalse(self.check([self.row(909, state="open")], [self.page([("o/g", 909, "done")])])[0])
+        self.assertFalse(self.check([self.row(909)], [self.page([("o/g", 909, "todo")])])[0])
+        self.assertFalse(self.check([self.row(909)], [self.page([("o/g", 889, "done")])])[0])
+        self.assertFalse(self.check([self.row(909)], [self.page([("o/g", 909, "done"), ("o/g", 909, "done")])])[0])
+        self.assertFalse(self.check([self.row(909)], [None])[0])
 
-    def test_second_page_is_read(self):
+    def test_child_in_another_repository_is_matched_by_repository(self):
+        pages = [self.page([("x/y", 5, "done")])]
+        self.assertTrue(self.check([self.row(5, repo="x/y")], pages)[0])
+        self.assertFalse(self.check([self.row(5, repo="x/y")], [self.page([("o/g", 5, "done")])])[0])
+
+    def test_second_sub_issue_page_is_read(self):
         first = [self.row(n) for n in range(1, 101)]
-        pages = {"repos/o/g/issues/888/sub_issues?per_page=100&page=2": [self.row(909, state="open")]}
-        statuses = {n: self.done() for n in range(1, 101)}
-        self.assertFalse(self.check(first, statuses, pages)[0])
+        extra = {"repos/o/g/issues/888/sub_issues?per_page=100&page=2": [self.row(909, state="open")]}
+        self.assertFalse(self.check(first, [self.page([])], extra)[0])
 
 
 class Python39(unittest.TestCase):

@@ -8,6 +8,7 @@ match statements, no 3.11 UTC constant, and timestamps go through parse_utc().
 """
 import base64
 import datetime as dt
+import json
 import re
 
 HUB = "merglbot-core/github"
@@ -35,12 +36,13 @@ def parse_utc(value):
 
 
 def billing_verdict(saved_usd, model_usd):
-    """Owner decision 30 Sep 2026: FAKT closes, PARTIAL closes, BEZ ÚSPORY stays open."""
+    """Owner decision 30 Sep 2026: FAKT closes, PARTIAL closes, BEZ ÚSPORY stays open.
+    A non-positive saving never closes, whatever the model (V6 #969)."""
+    if saved_usd <= 0:
+        return "BEZ ÚSPORY"
     if saved_usd >= 0.8 * model_usd:
         return "FAKT"
-    if saved_usd > 0:
-        return "PARTIAL"
-    return "BEZ ÚSPORY"
+    return "PARTIAL"
 
 
 def closes_billing(verdict):
@@ -81,35 +83,48 @@ def _text(gh_json, repo, path, ref):
     return base64.b64decode(data["content"]).decode("utf-8", "replace")
 
 
-def hub_calls(text, hub_path=HUB_PR_GATE):
-    """Pinned `uses: merglbot-core/github/<hub_path>@<sha>` lines; commented lines never count."""
-    pattern = re.compile(r"(?m)^[ \t]*(?:-[ \t]+)?uses:[ \t]*['\"]?" + re.escape(HUB + "/" + hub_path)
-                         + r"@([0-9a-f]{40})['\"]?[ \t]*(?:#.*)?$")
-    return pattern.findall(text)
+def parse_workflow(text):
+    """Structured parse (PyYAML ships with the launchd Python). Text inside block scalars or
+    comments can therefore never pose as a job (V6 #969). Returns (doc, reason)."""
+    try:
+        import yaml
+    except ImportError:
+        return None, "PyYAML unavailable"
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return None, "workflow YAML unparseable"
+    if not isinstance(doc, dict) or not isinstance(doc.get("jobs"), dict):
+        return None, "workflow has no jobs mapping"
+    return doc, ""
 
 
-def runs_on_values(text):
-    """`runs-on:` values; in a caller that only calls a reusable workflow they sit under `with:`."""
-    return re.findall(r"(?m)^[ \t]+runs-on:[ \t]*['\"]?([A-Za-z0-9_.-]+)['\"]?[ \t]*(?:#.*)?$", text)
+def hub_jobs(doc, hub_path=HUB_PR_GATE):
+    """Jobs whose own `uses:` pins the hub workflow to a full SHA: [(job_id, sha, job)]."""
+    pattern = re.compile("^" + re.escape(HUB + "/" + hub_path) + r"@([0-9a-f]{40})$")
+    found = []
+    for job_id, job in doc["jobs"].items():
+        uses = job.get("uses") if isinstance(job, dict) else None
+        match = pattern.match(uses.strip()) if isinstance(uses, str) else None
+        if match:
+            found.append((job_id, match.group(1), job))
+    return found
 
 
-def input_default(text, name):
-    """Default of a workflow_call input, found by indentation (no YAML dependency)."""
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        match = re.match(r"^([ \t]*)" + re.escape(name) + r":[ \t]*$", line)
-        if not match:
-            continue
-        indent = len(match.group(1))
-        for follow in lines[index + 1:]:
-            if not follow.strip() or follow.lstrip().startswith("#"):
-                continue
-            if len(follow) - len(follow.lstrip()) <= indent:
-                break
-            default = re.match(r"^[ \t]+default:[ \t]*['\"]?([A-Za-z0-9_.-]+)['\"]?[ \t]*(?:#.*)?$", follow)
-            if default:
-                return default.group(1)
-    return None
+def hub_input_default(text, name):
+    """Default of a workflow_call input of the hub workflow; None when absent or an expression."""
+    try:
+        import yaml
+        doc = yaml.safe_load(text)
+    except Exception:  # noqa: BLE001 - missing PyYAML or bad YAML both mean "unknown"
+        return None
+    if not isinstance(doc, dict):
+        return None
+    triggers = doc.get("on", doc.get(True))  # YAML 1.1 reads a bare `on` key as True
+    call = (triggers or {}).get("workflow_call") if isinstance(triggers, dict) else None
+    spec = (((call or {}).get("inputs") or {}).get(name)) if isinstance(call, dict) else None
+    default = spec.get("default") if isinstance(spec, dict) else None
+    return default if isinstance(default, str) and "${{" not in default else None
 
 
 def live_caller_config(gh_json, repo, workflow, pr_record=None, label=None):
@@ -138,21 +153,27 @@ def live_caller_config(gh_json, repo, workflow, pr_record=None, label=None):
     text = _text(gh_json, repo, path, main)
     if text is None:
         return {"ok": False, "reason": "caller unreadable", "main_sha": main}
-    calls = hub_calls(text)
+    doc, reason = parse_workflow(text)
+    if doc is None:
+        return {"ok": False, "reason": reason, "main_sha": main}
+    calls = hub_jobs(doc)
     if len(calls) != 1:
-        return {"ok": False, "reason": f"expected one pinned hub PR Gate call, found {len(calls)}",
+        return {"ok": False, "reason": f"expected one job calling the pinned hub PR Gate, found {len(calls)}",
                 "main_sha": main}
+    job_id, hub_sha, job = calls[0]
     evidence = {"ok": True, "reason": "caller verified on main", "main_sha": main,
-                "hub_sha": calls[0], "workflow": path}
+                "hub_sha": hub_sha, "job": job_id, "workflow": path}
     if label:
-        explicit = sorted(set(runs_on_values(text)))
-        if len(explicit) > 1:
-            return {"ok": False, "reason": f"several runners {explicit}", "main_sha": main}
-        if explicit:
-            runner, source = explicit[0], "with.runs-on"
+        # Only the hub-calling job's own `with.runs-on` counts; an expression is unresolved
+        # and fails closed; without the input the pinned hub default applies (V6 #969).
+        inputs = job.get("with") if isinstance(job.get("with"), dict) else {}
+        if "runs-on" in inputs:
+            runner, source = inputs["runs-on"], "with.runs-on"
+            if not isinstance(runner, str) or "${{" in runner:
+                return {"ok": False, "reason": f"runs-on {runner!r} is not a literal label", "main_sha": main}
         else:
-            hub = _text(gh_json, HUB, HUB_PR_GATE, calls[0])
-            runner, source = (input_default(hub, "runs-on") if hub else None), "hub default"
+            hub = _text(gh_json, HUB, HUB_PR_GATE, hub_sha)
+            runner, source = (hub_input_default(hub, "runs-on") if hub else None), "hub default"
         if runner != label:
             return {"ok": False, "reason": f"effective runner {runner!r} ({source}) is not {label}",
                     "main_sha": main}
@@ -205,40 +226,51 @@ def exception_notes(items, sub):
 
 
 def live_children_done(gh_json, gh_graphql, epic_repo, epic, project_id, done_option):
-    """Every live native sub-issue is closed and Done on the EPIC's Project (read project-side
-    per child). Children outside epic_repo fail closed: a cross-org projectItems read returns
-    nothing without an error. Returns (ok, reason)."""
-    owner, name = epic_repo.split("/")
+    """Every live native sub-issue is closed and Done on the EPIC's Project. The Project is read
+    from its own side, every page (standard v1.3.1: Issue.projectItems is only a same-org
+    shortcut), and children are matched by repository and number. Returns (ok, reason)."""
     children = []
     for page in range(1, 11):
         rows = gh_json(f"repos/{epic_repo}/issues/{epic}/sub_issues?per_page=100&page={page}")
         if not isinstance(rows, list):
             return False, "sub-issues unreadable"
         for row in rows:
-            if not isinstance(row, dict) or not isinstance(row.get("number"), int):
+            match = re.search(r"/repos/([^/]+/[^/]+)$", str((row or {}).get("repository_url", "")))
+            if not isinstance(row, dict) or not isinstance(row.get("number"), int) or not match:
                 return False, "malformed sub-issue"
-            if not str(row.get("repository_url", "")).endswith("/repos/" + epic_repo):
-                return False, f"sub-issue #{row['number']} outside {epic_repo}"
             if row.get("state") != "closed":
-                return False, f"sub-issue #{row['number']} is open"
-            children.append(row["number"])
+                return False, f"sub-issue {match.group(1)}#{row['number']} is open"
+            children.append((match.group(1), row["number"]))
         if len(rows) < 100:
             break
     else:
         return False, "too many sub-issue pages"
     if not children:
         return False, "no sub-issues"
-    fields = " ".join(
-        f"i{n}: issue(number: {n}) {{ projectItems(first: 20) {{ nodes {{ project {{ id }} "
-        "fieldValueByName(name: \"Status\") { ... on ProjectV2ItemFieldSingleSelectValue { optionId } } } } }"
-        for n in children)
-    data = gh_graphql(f'query {{ repository(owner: "{owner}", name: "{name}") {{ {fields} }} }}')
-    repository = (data or {}).get("repository")
-    if not isinstance(repository, dict):
-        return False, "Project status unreadable"
-    for number in children:
-        nodes = (((repository.get(f"i{number}") or {}).get("projectItems") or {}).get("nodes")) or []
-        mine = [node for node in nodes if ((node or {}).get("project") or {}).get("id") == project_id]
-        if len(mine) != 1 or ((mine[0].get("fieldValueByName") or {}).get("optionId")) != done_option:
-            return False, f"sub-issue #{number} is not Done on the Project"
+    status, cursor = {}, None
+    for _ in range(20):
+        after = f", after: {json.dumps(cursor)}" if cursor else ""
+        data = gh_graphql(
+            f'query {{ node(id: {json.dumps(project_id)}) {{ ... on ProjectV2 {{ items(first: 100{after}) {{ '
+            "pageInfo { hasNextPage endCursor } nodes { content { ... on Issue { number "
+            "repository { nameWithOwner } } } fieldValueByName(name: \"Status\") { "
+            "... on ProjectV2ItemFieldSingleSelectValue { optionId } } } } } } }")
+        page = (((data or {}).get("node") or {}).get("items"))
+        if not isinstance(page, dict) or not isinstance(page.get("nodes"), list):
+            return False, "Project items unreadable"
+        for node in page["nodes"]:
+            content = (node or {}).get("content") or {}
+            key = ((content.get("repository") or {}).get("nameWithOwner"), content.get("number"))
+            status.setdefault(key, []).append(((node.get("fieldValueByName") or {}).get("optionId")))
+        info = page.get("pageInfo") or {}
+        if not info.get("hasNextPage"):
+            break
+        cursor = info.get("endCursor")
+        if not cursor:
+            return False, "Project pagination broken"
+    else:
+        return False, "too many Project pages"
+    for key in children:
+        if status.get(key) != [done_option]:
+            return False, f"sub-issue {key[0]}#{key[1]} is not Done exactly once on the Project"
     return True, f"{len(children)} sub-issues closed and Done"
