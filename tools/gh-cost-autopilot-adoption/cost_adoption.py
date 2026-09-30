@@ -256,6 +256,14 @@ def _live_caller_config(gh_json, repo, workflow, pr_record=None, label=None):
     triggers = (hub_doc or {}).get("on", (hub_doc or {}).get(True)) if hub_doc else None
     if not isinstance(triggers, dict) or "workflow_call" not in triggers:
         return {"ok": False, "reason": "pinned hub workflow missing or not reusable", "main_sha": main}
+    # Every input the pinned hub requires must be passed, or the call is invalid (V6 #969).
+    call = triggers.get("workflow_call") or {}
+    declared = (call.get("inputs") or {}) if isinstance(call, dict) else {}
+    passed = job.get("with") if isinstance(job.get("with"), dict) else {}
+    missing = sorted(name for name, spec in declared.items()
+                     if isinstance(spec, dict) and spec.get("required") is True and name not in passed)
+    if not isinstance(declared, dict) or missing:
+        return {"ok": False, "reason": f"caller omits required hub inputs {missing}", "main_sha": main}
     evidence = {"ok": True, "reason": "caller verified on main", "main_sha": main,
                 "hub_sha": hub_sha, "job": job_id, "workflow": path}
     if label:

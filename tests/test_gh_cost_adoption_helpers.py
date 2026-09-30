@@ -50,8 +50,13 @@ class FakeGH:
         return value
 
 
+PR_NUMBER = {"pull-request-number": "${{ github.event.pull_request.number }}"}
+
+
 def caller(job=None, on="pull_request", jobs=None, uses=PIN, env=None):
-    gate = dict({"uses": uses}, **(job or {}))
+    job = dict(job or {})
+    job["with"] = dict(PR_NUMBER, **job.get("with", {})) if "with" not in job or isinstance(job["with"], dict) else job["with"]
+    gate = dict({"uses": uses}, **job)
     doc = {"name": "PR Gate", "on": on, "jobs": dict({"pr-gate": gate}, **(jobs or {}))}
     if env:
         doc["env"] = env
@@ -60,7 +65,8 @@ def caller(job=None, on="pull_request", jobs=None, uses=PIN, env=None):
 
 def hub(runs_on, default="ubuntu-24.04"):
     return json.dumps({"on": {"workflow_call": {"inputs": {"runs-on": {"type": "string", "default": default},
-                                                           "mode": {"default": "advisory"}}}},
+                                                           "mode": {"default": "advisory"},
+                                                           "pull-request-number": {"type": "number", "required": True}}}},
                        "jobs": {"pr-gate": {"runs-on": runs_on}}})
 
 
@@ -198,6 +204,13 @@ class LiveCallerConfig(unittest.TestCase):
             self.assertIn("pull requests", result["reason"])
         self.assertTrue(self.run_check(FakeGH(routes(caller(on={"pull_request": {
             "branches": ["main"], "types": ["opened", "synchronize", "reopened"]}}))))["ok"])
+
+    def test_required_hub_inputs_must_be_passed(self):
+        text = json.dumps({"on": "pull_request", "jobs": {"pr-gate": {"uses": PIN, "with": {"runs-on": "ubuntu-slim"}}}})
+        result = self.run_check(FakeGH(routes(text)))
+        self.assertFalse(result["ok"])
+        self.assertIn("pull-request-number", result["reason"])
+        self.assertTrue(self.run_check(FakeGH(routes(caller(self.SLIM))), label="ubuntu-slim")["ok"])
 
     def test_missing_pinned_hub_workflow_fails_without_a_label(self):
         result = self.run_check(FakeGH(routes(caller(), hub_text="")))
