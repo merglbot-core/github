@@ -61,9 +61,8 @@ never open a PR. GHAS Secret Protection push protection is untouched either way.
 | `runs-on` | `ubuntu-slim` | `ubuntu-slim` (1 vCPU, 0.002 USD/min, 15-min job cap) or `ubuntu-24.04`; any other value falls back to `ubuntu-24.04` (github#913) |
 | `workflow-lint` | `false` | actionlint 1.7.12 + zizmor 1.30.1 (both pinned by release checksum, zizmor `--offline`) over `.github/workflows`; findings fail the gate and go to the log + job summary. No SARIF upload (it would need `security-events: write` on the job). Replaces the CodeQL default-setup `actions` language on repos with no other CodeQL language (github#961) |
 | `zizmor-min-severity` | `medium` | zizmor `--min-severity` threshold (`unknown`, `informational`, `low`, `medium`, `high`) |
-| `run-terraform-fmt` | `false` | `terraform fmt -check -recursive -diff` in `terraform-directory` (hashicorp/setup-terraform v4.0.1 pinned by SHA, wrapper off) |
-| `run-terraform-validate` | `false` | `terraform init -backend=false` + `terraform validate` in `terraform-directory`; no state or credentials |
-| `terraform-directory` | `.` | repo-relative directory for the terraform steps; absolute paths and `..` are rejected |
+| `run-terraform-fmt` | `false` | `terraform fmt -check -recursive -diff` in `terraform-directory` (hashicorp/setup-terraform v4.0.1 pinned by SHA, wrapper off). `terraform validate` is deliberately not offered: `init` executes PR-chosen provider plugins and this job holds `pull-requests: write`; keep validate in a read-only caller job |
+| `terraform-directory` | `.` | repo-relative directory for the terraform fmt step; absolute paths and `..` are rejected |
 | `terraform-version` | `latest` | passed to setup-terraform; callers should pin an exact version |
 
 `markdown-danger-lint` and `pr-text-length` read `github.event.pull_request.*`, so a caller that

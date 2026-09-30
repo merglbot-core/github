@@ -37,11 +37,14 @@
 # OPTIONAL STEPS (every one defaults to off, so existing callers are unchanged):
 #   gitleaks, markdown-danger-lint, pr-text-length (github#891/#895),
 #   workflow-lint = actionlint + zizmor over .github/workflows (github#961), and
-#   run-terraform-fmt / run-terraform-validate (S3 of EPIC platform#1722). None of
-#   them changes the job name, the runner or the job permissions: workflow-lint
-#   writes findings to the log and the job summary instead of uploading SARIF,
-#   because a code-scanning upload needs `security-events: write` on this job
-#   and every caller would have to grant it first.
+#   run-terraform-fmt (S3 of EPIC platform#1722). None of them changes the job
+#   name, the runner or the job permissions: workflow-lint writes findings to the
+#   log and the job summary instead of uploading SARIF, because a code-scanning
+#   upload needs `security-events: write` on this job and every caller would
+#   have to grant it first. `terraform validate` is deliberately NOT offered
+#   here: `terraform init` downloads and executes provider plugins chosen by
+#   PR-controlled files, and this job runs with `pull-requests: write`
+#   (V6 finding on github#966). Validate stays in the callers' own read-only jobs.
 # =============================================================================
 
 name: Reusable - PR Gate
@@ -172,22 +175,19 @@ on:
         type: string
         default: 'medium'
         required: false
-      # --- optional terraform fmt / validate (S3 of EPIC merglbot-core/platform#1722) ---
-      # Lets callers fold their sub-minute `terraform fmt` / `terraform validate`
-      # workflows into this job (one billed minute instead of two or three).
-      # `validate` runs `init -backend=false`, so no state or credentials are read.
+      # --- optional terraform fmt (S3 of EPIC merglbot-core/platform#1722) ---
+      # Lets callers fold their sub-minute `terraform fmt -check` workflow into
+      # this job (one billed minute instead of two). fmt is a pure formatter: it
+      # runs no `init`, downloads no provider and executes no PR-controlled code,
+      # so it is safe inside this `pull-requests: write` job. `terraform validate`
+      # is not offered here on purpose (see the header).
       run-terraform-fmt:
         description: 'Run `terraform fmt -check -recursive -diff` in terraform-directory'
         type: boolean
         default: false
         required: false
-      run-terraform-validate:
-        description: 'Run `terraform init -backend=false` + `terraform validate` in terraform-directory'
-        type: boolean
-        default: false
-        required: false
       terraform-directory:
-        description: 'Repo-relative directory for the terraform steps (absolute paths and `..` are rejected)'
+        description: 'Repo-relative directory for the terraform fmt step (absolute paths and `..` are rejected)'
         type: string
         default: '.'
         required: false
@@ -602,9 +602,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit "${rc}"
 
-      # --- optional terraform fmt / validate (S3, EPIC platform#1722) ----------
+      # --- optional terraform fmt (S3, EPIC platform#1722) ---------------------
       - name: Setup Terraform
-        if: ${{ !cancelled() && (inputs['run-terraform-fmt'] || inputs['run-terraform-validate']) }}
+        if: ${{ !cancelled() && inputs['run-terraform-fmt'] }}
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e  # v4.0.1
         with:
           terraform_version: ${{ inputs['terraform-version'] }}
@@ -622,19 +622,6 @@ jobs:
           esac
           terraform -chdir="${TF_DIR}" fmt -check -recursive -diff
 
-      - name: Terraform validate
-        id: terraform_validate
-        if: ${{ !cancelled() && inputs['run-terraform-validate'] }}
-        env:
-          TF_DIR: ${{ inputs['terraform-directory'] }}
-        run: |
-          set -euo pipefail
-          case "${TF_DIR}" in
-            /*|*..*) echo "::error::terraform-directory must be a repo-relative path without '..'"; exit 1 ;;
-          esac
-          terraform -chdir="${TF_DIR}" init -backend=false -input=false
-          terraform -chdir="${TF_DIR}" validate -no-color
-
       - name: Check gate results
         if: ${{ !cancelled() }}
         env:
@@ -650,7 +637,6 @@ jobs:
           PR_TEXT_LENGTH: ${{ steps.pr_text_length.outcome }}
           WORKFLOW_LINT: ${{ steps.workflow_lint.outcome }}
           TERRAFORM_FMT: ${{ steps.terraform_fmt.outcome }}
-          TERRAFORM_VALIDATE: ${{ steps.terraform_validate.outcome }}
         run: |
           set -euo pipefail
           rc=0
@@ -668,8 +654,7 @@ jobs:
             "markdown-danger-lint:${MARKDOWN_DANGER_LINT}" \
             "pr-text-length:${PR_TEXT_LENGTH}" \
             "workflow-lint:${WORKFLOW_LINT}" \
-            "terraform-fmt:${TERRAFORM_FMT}" \
-            "terraform-validate:${TERRAFORM_VALIDATE}"; do
+            "terraform-fmt:${TERRAFORM_FMT}"; do
             name="${pair%%:*}"
             outcome="${pair#*:}"
             if [ "${outcome}" = "failure" ]; then
