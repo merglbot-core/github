@@ -1,0 +1,76 @@
+--- 888/autopilot.py@f6fb6794 (after #944 install, 26 Sep 23:42)
++++ 888/autopilot.py@4b78d530 (local edit 28 Sep ~10:46, live)
+@@ -988,4 +988,11 @@
+         log(f"DoD met for #{item['sub']} {repo}: CodeQL ran on {events}")
+     return True
++
++
++def owner_excepted(item):
++    """#892: the owner accepted the delivered saving without the literal five-run count
++    (decision 28. 9. 2026). Measurement continues; only the closing criterion changes."""
++    exc = item.get("owner_exception")
++    return isinstance(exc, dict) and bool(exc.get("text")) and bool(exc.get("decided_at"))
+ 
+ 
+@@ -1074,5 +1081,11 @@
+     item["runs_after"], item["qualified_runs"], item["prs_after"] = all_pr_runs, good, prs
+     item["literal_verified"] = good >= 5 and all_pr_runs < prs
+-    item["met_at"] = iso() if item["literal_verified"] else None
++    if item["literal_verified"]:
++        item["met_at"] = iso()
++    elif owner_excepted(item):
++        # The owner exception keeps the item met; a later literal pass is reported once.
++        item["met_at"] = item.get("met_at") or item["owner_exception"]["decided_at"]
++    else:
++        item["met_at"] = None
+     return True
+ 
+@@ -1112,5 +1125,18 @@
+     for sub, record in state.get("subs", {}).items():
+         items = [i for i in state.get("dod", {}).values() if str(i.get("sub")) == str(sub)]
+-        if str(sub) == "892" and record.get("board_done_at") and not record.get("literal_closeout_at") and not all(i.get("literal_verified") for i in items):
++        if (str(sub) == "892" and record.get("board_done_at") and items
++                and any(owner_excepted(i) for i in items) and all(i.get("literal_verified") for i in items)
++                and not stamped(state, "dod:892:literal-late")):
++            body = ("### Doslovné kritérium dodatečně splněno\n\n| repo | měření |\n|---|---|\n"
++                    + "\n".join(dod_row(i) for i in items)
++                    + "\n\nVýjimka ownera z 28. 9. už není potřeba; issue zůstává zavřené.")
++            if DRY_RUN:
++                continue
++            if comment(EPIC_REPO, 892, body, state, "dod:892:literal-late"):
++                save_state(state)
++                log("#892 literal DoD met after the owner exception")
++                return True
++            continue
++        if str(sub) == "892" and record.get("board_done_at") and not record.get("literal_closeout_at") and not all(i.get("literal_verified") or owner_excepted(i) for i in items):
+             if DRY_RUN:
+                 continue
+@@ -1151,7 +1177,9 @@
+                             not (economic_exception and i is state["dod"][economic_exception]) for i in items):
+             continue
+-        if str(sub) == "892" and not all(i.get("literal_verified") for i in items):
++        if str(sub) == "892" and not all(i.get("literal_verified") or owner_excepted(i) for i in items):
+             continue
+-        title = "### Provozní DoD s ekonomickou výjimkou" if economic_exception else "### DoD změřeno na provozu"
++        owner_exception = str(sub) == "892" and not all(i.get("literal_verified") for i in items)
++        title = ("### Provozní DoD s výjimkou ownera" if owner_exception
++                 else "### Provozní DoD s ekonomickou výjimkou" if economic_exception else "### DoD změřeno na provozu")
+         body = (title + "\n\n| repo | měření |\n|---|---|\n"
+                 + "\n".join(("| merglbot-proteinaco/acquisition-analysis | Ekonomická výjimka: PR #184 zavřen bez merge; původní required security kontexty zachovány, úspora se nepočítá |"
+@@ -1160,8 +1188,14 @@
+                   f"(≥ {DOD_RUNS}, u rep s méně než 5 PR měsíčně ≥ {DOD_RUNS_LOW_TRAFFIC}); u CodeQL "
+                   "≥ 1 push na main a ≥ 1 týdenní běh. Účtovaná část DoD (minuty/den z billing API) "
+-                  f"se uzavírá v akceptaci #{BILLING_SUB}.\n\nZavírám a přepínám na Done.")
++                  f"se uzavírá v akceptaci #{BILLING_SUB}."
++                + ("".join(f"\n\n**Výjimka ownera** ({i['owner_exception']['decided_at_prague']}): "
++                           f"„{i['owner_exception']['text']}“. {i['owner_exception']['basis']} "
++                           "Měření pokračuje; až doslovné kritérium (≥ 5 kvalifikovaných běhů) dojde, "
++                           "doplním jeden komentář." for i in items if owner_excepted(i)) if owner_exception else "")
++                + "\n\nZavírám a přepínám na Done.")
+         if DRY_RUN:
+             continue
+-        comment_key = f"dod:{sub}:literal-v2" if str(sub) == "892" else f"dod:{sub}"
++        comment_key = ("dod:892:owner-exception" if owner_exception
++                       else f"dod:{sub}:literal-v2" if str(sub) == "892" else f"dod:{sub}")
+         if not (stamped(state, comment_key) or comment(EPIC_REPO, int(sub), body, state, comment_key)):
+             continue
