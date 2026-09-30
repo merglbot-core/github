@@ -379,40 +379,58 @@ UNFINISHED_STATUSES = ("queued", "in_progress", "requested", "waiting", "pending
 # conservative against the 30 h between the window end and the billing due time.
 BILLING_SETTLE = dt.timedelta(hours=72)
 # Bumped whenever the meaning of a coverage confirmation changes; older ones are checked again.
-COVERAGE_VERSION = 3
+COVERAGE_VERSION = 5
+
+
+def _job_ran(job):
+    """A job ran on a runner; started_at alone is also set for jobs cancelled while queued."""
+    return bool(job.get("runner_id") or job.get("steps")) and job.get("conclusion") != "skipped"
 
 
 def _run_billable(gh_json, repo, run):
-    """success/failure/timed_out bill; a cancelled run bills when one of its jobs started."""
+    """success/failure/timed_out bill; a cancelled run bills when one of its jobs ran."""
     if run.get("conclusion") in BILLABLE_CONCLUSIONS:
         return True
     if run.get("conclusion") != "cancelled":
         return False
     listing = gh_json(f"repos/{repo}/actions/runs/{run.get('id')}/jobs?filter=all&per_page=100")
     jobs = listing.get("jobs") if isinstance(listing, dict) else None
-    if not isinstance(jobs, list) or not all(isinstance(j, dict) for j in jobs):
+    total = listing.get("total_count") if isinstance(listing, dict) else None
+    if (not isinstance(jobs, list) or not all(isinstance(j, dict) for j in jobs)
+            or not isinstance(total, int) or isinstance(total, bool)):
         return None
-    return any(j.get("started_at") and j.get("conclusion") != "skipped" for j in jobs)
+    if any(_job_ran(j) for j in jobs):
+        return True
+    # No started job on this page: without the whole listing that proves nothing (V6 #970).
+    return None if total > len(jobs) else False
 
 
-def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budget, now):
+def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budget, now, billable=None):
     """Per in-scope repository, the billing export covers the repository's own billable runs.
 
     Evidence per repository, never borrowed from another one: no run created in the after
-    window is still queued or running; its newest billable run (success, failure, timed_out, or
-    a cancelled run in which a job started) finished at least BILLING_SETTLE ago; and its usage
-    includes a day on or after that run's creation day. A repository with no billable run has
-    no usage to miss, so a quiet window never needs a charge row. With more runs than one page,
-    every unfinished status is asked for directly. Confirmations carry COVERAGE_VERSION, are
-    recorded in `confirmed` (persisted by the caller) and are not read again, so the check
-    spreads over ticks (V6 #970).
+    window is still queued or running; BILLING_SETTLE has passed since the window's end and
+    since the latest finish of any of its listed runs; and its usage includes a day on or after
+    the creation day of its newest billable run (success, failure, timed_out, or a cancelled run
+    in which a job ran on a runner). A repository with no billable run has no usage to miss, so
+    a quiet window never needs a charge row. With more runs than one page, every unfinished
+    status is asked for directly. Confirmations carry COVERAGE_VERSION and the window, are
+    recorded in `confirmed` (persisted by the caller) and are re-validated against the current
+    usage on every call without API reads; a moved window or a vanished usage day discards them.
+    `billable` (persisted by the caller) caches the billability of a run attempt, so the check
+    progresses across ticks (V6 #970).
 
     Returns ("ok", None), ("budget", repo) when the tick ran out of calls, ("error", repo) for an
     unreadable or ambiguous listing, or ("pending"|"lagging", [repos]) to retry later."""
     lo, hi = after_days[0], after_days[-1]
+    window = [lo, hi]
+    billable = {} if billable is None else billable
     by_repo = {}
     for name, days in usage.items():
         by_repo.setdefault(str(name).lower(), set()).update(days)
+    window_end = parse_utc(f"{hi}T00:00:00Z") + dt.timedelta(days=1)
+    if now - window_end < BILLING_SETTLE:
+        return "pending", list(repos)  # the window's last days may still be growing
 
     def count(listing):
         total = listing.get("total_count") if isinstance(listing, dict) else None
@@ -421,8 +439,11 @@ def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budg
     pending, lagging = [], []
     for repo in repos:
         mark = confirmed.get(repo)
-        if isinstance(mark, dict) and mark.get("v") == COVERAGE_VERSION:
+        if (isinstance(mark, dict) and mark.get("v") == COVERAGE_VERSION and mark.get("window") == window
+                and (mark.get("last") is None
+                     or any(day >= mark["last"] for day in by_repo.get(repo.lower(), ())))):
             continue
+        confirmed.pop(repo, None)
         if not has_budget():
             return "budget", repo
         runs = gh_json(f"repos/{repo}/actions/runs?created={lo}..{hi}&per_page=100")
@@ -446,30 +467,35 @@ def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budg
         if unfinished:
             pending.append(repo)  # its usage is still being produced
             continue
+        try:
+            finished = max((parse_utc(r.get("updated_at") or r.get("created_at")) for r in listed),
+                           default=window_end)
+        except ValueError:
+            return "error", repo
+        if now - finished < BILLING_SETTLE:
+            pending.append(repo)  # a re-run finished recently: its day may still be growing
+            continue
         newest = None
         for run in sorted(listed, key=lambda r: r.get("created_at") or "", reverse=True):
-            if not has_budget():
-                return "budget", repo
-            billable = _run_billable(gh_json, repo, run)
-            if billable is None:
-                return "error", repo
-            if billable:
+            key = f"{repo}#{run.get('id')}#{run.get('run_attempt') or 1}"
+            if key not in billable:
+                if not has_budget():
+                    return "budget", repo
+                verdict = _run_billable(gh_json, repo, run)
+                if verdict is None:
+                    return "error", repo
+                billable[key] = verdict
+            if billable[key]:
                 newest = run
                 break
         if newest is None:
             if total > len(listed):
                 return "error", repo  # the newest page holds no billable run: cannot tell
-            confirmed[repo] = {"v": COVERAGE_VERSION, "last": None}
+            confirmed[repo] = {"v": COVERAGE_VERSION, "window": window, "last": None}
             continue
-        try:
-            finished = parse_utc(newest.get("updated_at") or newest.get("created_at"))
-        except ValueError:
-            return "error", repo
         last = (newest.get("created_at") or "")[:10]
-        if now - finished < BILLING_SETTLE:
-            pending.append(repo)  # the day of its newest run may still be growing
-        elif any(day >= last for day in by_repo.get(repo.lower(), ())):
-            confirmed[repo] = {"v": COVERAGE_VERSION, "last": last}
+        if any(day >= last for day in by_repo.get(repo.lower(), ())):
+            confirmed[repo] = {"v": COVERAGE_VERSION, "window": window, "last": last}
         else:
             lagging.append(repo)
     if pending:
@@ -480,7 +506,7 @@ def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budg
 def close_issue_done(gh, gh_json, board, repo, number, done_option):
     """Close an issue as completed and set its board Status to Done.
 
-    True only when the issue is read back closed and the board mutation succeeded; any other
+    True only when the issue is read back closed as completed and the board mutation succeeded; any other
     outcome leaves the caller's record untouched so the next tick retries (V6 #970)."""
     try:
         issue = gh_json(f"repos/{repo}/issues/{number}")
@@ -493,6 +519,8 @@ def close_issue_done(gh, gh_json, board, repo, number, done_option):
             issue = gh_json(f"repos/{repo}/issues/{number}")
             if not isinstance(issue, dict) or issue.get("state") != "closed":
                 return False
+        if issue.get("state_reason") != "completed":
+            return False  # closed as not planned (e.g. by the owner) is not a delivered close
         return board(number, done_option) is True
     except Exception:  # noqa: BLE001 - an unexpected shape must not look like a closed issue
         return False

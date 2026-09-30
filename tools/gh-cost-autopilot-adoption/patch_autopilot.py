@@ -43,8 +43,13 @@ REPLACEMENTS_888 = [
             # Checked before the cache: a measured run that is being re-run is unfinished again.
             incomplete = True
             continue
-        if run_id in known:
+        attempts = item.setdefault("attempts", {})
+        attempt = run.get("run_attempt") or 1
+        if run_id in known and attempts.get(run_id, 1) == attempt:
             continue
+        # A re-run that finished between sweeps is measured again from its current attempt.
+        known.pop(run_id, None)
+        attempts[run_id] = attempt
         if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
             incomplete = True
             break
@@ -207,7 +212,8 @@ REPLACEMENTS_888 = [
     from cost_adoption import RETRY_AFTER, billing_coverage_step, billing_data_gap_due, data_gap_body
     status, detail = billing_coverage_step(gh_json, repos, usage, billing["after_days"],
                                            billing.setdefault("coverage", {}),
-                                           lambda: CALLS["n"] <= MAX_CALLS_PER_TICK - 3, now())
+                                           lambda: CALLS["n"] <= MAX_CALLS_PER_TICK - 3, now(),
+                                           billing.setdefault("coverage_runs", {}))
     if status == "budget":
         save_state(state)
         return False
@@ -446,7 +452,9 @@ REPLACEMENTS_910 = [
                     return failed()
                 # Re-runs stay in the population; their first attempt has finished when a later
                 # attempt exists.
-                entry = {"v": PILOT_CENSUS_VERSION, "final": listed_at >= b, "listed_at": iso(listed_at),
+                # An hour's margin: a run created just before the slice end may be listed late.
+                entry = {"v": PILOT_CENSUS_VERSION, "final": listed_at >= b + dt.timedelta(hours=1),
+                         "listed_at": iso(listed_at),
                          "total": total,
                          "runs": {rid: {"created": r["created_at"],
                                         "done": r.get("status") == "completed" or (r.get("run_attempt") or 1) > 1}
@@ -595,8 +603,13 @@ PILOT_CENSUS_VERSION = 2
             # Checked before the cache: a measured run that is being re-run is unfinished again.
             incomplete = True
             continue
-        if run_id in known:
+        attempts = item.setdefault("attempts", {})
+        attempt = run.get("run_attempt") or 1
+        if run_id in known and attempts.get(run_id, 1) == attempt:
             continue
+        # A re-run that finished between sweeps is measured again from its current attempt.
+        known.pop(run_id, None)
+        attempts[run_id] = attempt
         if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
             incomplete = True
             break
@@ -657,8 +670,13 @@ PILOT_CENSUS_VERSION = 2
             # Checked before the cache: a measured run that is being re-run is unfinished again.
             incomplete = True
             continue
-        if run_id in known:
+        attempts = item.setdefault("attempts", {})
+        attempt = run.get("run_attempt") or 1
+        if run_id in known and attempts.get(run_id, 1) == attempt:
             continue
+        # A re-run that finished between sweeps is measured again from its current attempt.
+        known.pop(run_id, None)
+        attempts[run_id] = attempt
         if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
             incomplete = True
             break
@@ -810,7 +828,8 @@ PILOT_CENSUS_VERSION = 2
     from cost_adoption import RETRY_AFTER, billing_coverage_step, billing_data_gap_due, data_gap_body
     status, detail = billing_coverage_step(gh_json, repos, usage, billing["after_days"],
                                            billing.setdefault("coverage", {}),
-                                           lambda: CALLS["n"] <= MAX_CALLS_PER_TICK - 3, now())
+                                           lambda: CALLS["n"] <= MAX_CALLS_PER_TICK - 3, now(),
+                                           billing.setdefault("coverage_runs", {}))
     if status == "budget":
         save_state(state)
         return False

@@ -255,8 +255,9 @@ class BillingGuards(unittest.TestCase):
             billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
             fresh = {"O/In": {"2026-10-07": 5.0}}
             self.assertEqual(ns["check"]({}, billing, fresh, {}), "go")
-            self.assertEqual(billing["coverage"], {"o/in": {"v": 3, "last": "2026-10-07"},
-                                                   "o/quiet": {"v": 3, "last": None}})
+            mark = ["2026-10-06", "2026-10-07"]
+            self.assertEqual(billing["coverage"], {"o/in": {"v": 5, "window": mark, "last": "2026-10-07"},
+                                                   "o/quiet": {"v": 5, "window": mark, "last": None}})
             # a quiet window with no charge row at all is complete as well
             billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
             ns["check"].__globals__["gh_json"] = lambda path: {"total_count": 0, "workflow_runs": []}
@@ -276,7 +277,7 @@ class BillingGuards(unittest.TestCase):
                 issue = {"state": "open"}
                 def gh(*args, issue=issue, closed=closed):
                     if closed:
-                        issue["state"] = "closed"
+                        issue.update(state="closed", state_reason="completed")
                     return (0 if closed else 1, "", "")
                 ns = self.ns(DRY_RUN=False, gh=gh, gh_json=lambda path, issue=issue: dict(issue),
                              board=lambda n, o, ok=board_ok: ok)
@@ -396,6 +397,23 @@ class JobRunsCensus(unittest.TestCase):
             # five or more good listed runs meet the literal DoD although the census is partial
             self.assertEqual((bool(item.get("met_at")), item.get("low_traffic")), (True, None), kind)
             self.assertEqual(len(item["runs"]), 6, kind)
+
+    def test_a_re_run_finished_between_sweeps_is_measured_again(self):
+        for kind, *_ in self.CASES:
+            self.reset()
+            run_id = self.add()
+            item = self.measure(kind)
+            self.assertTrue(item.get("low_traffic"), kind)
+            item.pop("met_at")
+            item.pop("low_traffic")
+            # attempt 2 finished between sweeps, now failing and on another runner
+            self.runs[0].update(run_attempt=2, conclusion="failure")
+            self.jobs[run_id]["jobs"][0].update(conclusion="failure", labels=["ubuntu-24.04"])
+            self.jobs[run_id]["jobs"].append(dict(self.jobs[run_id]["jobs"][0], name="PR Gate / extra"))
+            self.jobs[run_id]["total_count"] = 2
+            item = self.measure(kind, item)
+            self.assertEqual(item["attempts"][run_id], 2, kind)
+            self.assertNotIn("met_at", item, kind)
 
     def test_a_measured_run_that_is_re_run_holds_low_traffic(self):
         for kind, *_ in self.CASES:
@@ -567,6 +585,12 @@ class PilotBehaviour(unittest.TestCase):
         self.assertEqual(item["runs"][str(old)]["s"], 5000)
         self.assertEqual(item["verdict"], "regression")
         self.assertNotIn("incomplete_at", item)
+
+    def test_a_day_listed_right_after_its_end_is_not_final(self):
+        self.now = self.since + self.dt.timedelta(days=2, hours=14, minutes=10)  # 10 min after a slice end
+        ok, item = self.measure()
+        just_ended = self.stamp(self.since.replace(hour=0) + self.dt.timedelta(days=2))
+        self.assertFalse(item["census"][just_ended]["final"])
 
     def test_a_verdict_of_another_census_version_is_decided_again(self):
         running = self.add(6, 560, arm=True, status="in_progress")
