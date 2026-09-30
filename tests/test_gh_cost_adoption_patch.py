@@ -47,6 +47,16 @@ class Mechanics(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "anchor drift"):
                     patch(source + first)
 
+    def test_patched_source_with_a_legacy_or_duplicated_block_is_refused(self):
+        for name, replacements, patch in self.CASES:
+            with self.subTest(name):
+                patched = patch(fixture(replacements))
+                before, after = replacements[1]
+                with self.assertRaisesRegex(ValueError, "legacy block"):
+                    patch(patched + before)
+                with self.assertRaisesRegex(ValueError, "duplicated patched block"):
+                    patch(patched + after)
+
     def test_partially_patched_source_is_refused(self):
         for name, replacements, patch in self.CASES:
             with self.subTest(name):
@@ -73,11 +83,24 @@ class Content(unittest.TestCase):
                      "closes_billing(verdict)", "live_children_done", "dod_sweep_started_at",
                      'f"dod:{sub}:owner-exception"'):
             self.assertIn(text, p888)
-        for text in ("live_caller_config(gh_json, repo, workflow, None, label=label)", "PILOT_MIN_RUN_S = 60",
+        for text in ("live_caller_config(gh_json, repo, workflow, state.get(\"prs\", {}).get(item.get(\"since_pr\"))", "PILOT_MIN_RUN_S = 60",
+                     'item["incomplete_at"] = iso()', "lo <= r[\"created\"] < since", "since <= r[\"created\"] < hi",
                      'item["verdict"] = "regression" if slower else "pass"', "fail_verdict",
                      "billing_retry_blocked", "closes_billing(verdict)"):
             self.assertIn(text, p910)
         self.assertNotIn('verdict = "FAKT" if saved_usd >= 0.8 * model else "DATA_GAP"', p888 + p910)
+
+    def test_every_cost_adoption_import_exists(self):
+        # The patched autopilots import these names lazily; a missing one would only fail at
+        # runtime inside a sweep (V6 #970). cost_adoption.py lands with #969.
+        import re
+        helpers = load("cost_adoption_contract", "tools/gh-cost-autopilot-adoption/cost_adoption.py")
+        names = set()
+        for _, after in pa.REPLACEMENTS_888 + pa.REPLACEMENTS_910:
+            for match in re.finditer(r"from cost_adoption import ([\w, ]+)", after):
+                names |= {name.strip() for name in match.group(1).split(",")}
+        self.assertTrue(names)
+        self.assertEqual(sorted(n for n in names if not hasattr(helpers, n)), [])
 
     def test_module_parses_as_python_3_9(self):
         source = (ROOT / "tools/gh-cost-autopilot-adoption/patch_autopilot.py").read_text()

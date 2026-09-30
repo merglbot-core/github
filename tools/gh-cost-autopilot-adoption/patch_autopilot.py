@@ -162,6 +162,41 @@ REPLACEMENTS_888 = [
 ]
 
 REPLACEMENTS_910 = [
+    # #917 (V6 #968): both queries bounded, a failed jobs read decides nothing, runs without
+    # the job are remembered instead of re-queried every sweep.
+    ('''    start = parse(since) - dt.timedelta(days=PILOT_WINDOW_DAYS)
+    known = item.setdefault("runs", {})
+    for created in (f"{start.strftime('%Y-%m-%d')}..{since[:10]}", f"%3E%3D{since[:10]}"):
+''', '''    start = parse(since) - dt.timedelta(days=PILOT_WINDOW_DAYS)
+    end = parse(since) + dt.timedelta(days=PILOT_WINDOW_DAYS)
+    known = item.setdefault("runs", {})
+    for created in (f"{start.strftime('%Y-%m-%d')}..{since[:10]}", f"{since[:10]}..{end.strftime('%Y-%m-%d')}"):
+'''),
+    ('''            jobs = (gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=30") or {}).get("jobs", [])
+            for j in jobs:
+                if (j.get("name") == job or (j.get("name") or "").endswith(" / " + job)) and j.get("completed_at"):
+                    known[run_id] = {"created": run["created_at"], "labels": j.get("labels") or [],
+                                     "s": job_seconds(j) or 0, "concl": j.get("conclusion")}
+                    break
+''', '''            listing = gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=30")
+            if not isinstance(listing, dict) or not isinstance(listing.get("jobs"), list):
+                # A failed read must not drop a run from the comparison: decide nothing now.
+                item["incomplete_at"] = iso()
+                return False
+            for j in listing["jobs"]:
+                if (j.get("name") == job or (j.get("name") or "").endswith(" / " + job)) and j.get("completed_at"):
+                    known[run_id] = {"created": run["created_at"], "labels": j.get("labels") or [],
+                                     "s": job_seconds(j) or 0, "concl": j.get("conclusion")}
+                    break
+            else:
+                known[run_id] = {"created": run["created_at"], "labels": [], "s": 0, "concl": "absent"}
+'''),
+    ('''    before = stats([r for r in known.values() if r["created"] < since and label not in r["labels"]])
+    after = stats([r for r in known.values() if r["created"] >= since and label in r["labels"]])
+''', '''    lo, hi = iso(start), iso(end)
+    before = stats([r for r in known.values() if lo <= r["created"] < since and label not in r["labels"]])
+    after = stats([r for r in known.values() if since <= r["created"] < hi and label in r["labels"]])
+'''),
     ('''PILOT_SAMPLE = 30
 ''', '''PILOT_SAMPLE = 30
 # Shorter pilot runs are gate outcomes (V6 rejection, nothing to test), see measure_arm64_pilot.
@@ -180,7 +215,8 @@ PILOT_MIN_RUN_S = 60
             if label not in r["labels"] or not r["ok"] or r["s"] > item.get("max_s", 300)]
     if not over and now() - parse(since) >= dt.timedelta(days=LOW_TRAFFIC_GRACE_DAYS):
         from cost_adoption import live_caller_config
-        evidence = live_caller_config(gh_json, repo, workflow, None, label=label)
+        evidence = live_caller_config(gh_json, repo, workflow, state.get("prs", {}).get(item.get("since_pr")),
+                                      label=label)
         item["low_traffic_check"] = dict(evidence, checked_at=iso())
         if not evidence.get("ok"):
             log(f"low-traffic acceptance withheld for #{item['sub']} {repo}: {evidence.get('reason')}")
@@ -206,6 +242,7 @@ PILOT_MIN_RUN_S = 60
         # (29 Sep 2026) a head rejected by V6 fails in seconds and a suite with nothing to test
         # is skipped. They are counted apart so they neither shorten p50/p95 nor raise the
         # failure rate of the architecture comparison.
+        rows = [r for r in rows if r["concl"] in ("success", "failure")]
         real = [r for r in rows if r["s"] >= PILOT_MIN_RUN_S]
         ok = [r["s"] for r in real if r["concl"] == "success"]
         fails = [r for r in real if r["concl"] == "failure"]
@@ -248,8 +285,9 @@ PILOT_MIN_RUN_S = 60
               f"na `ubuntu-24.04-arm` nejvýš {PILOT_MAX_RATIO}× x64 historie {PILOT_WINDOW_DAYS} dní před merge "
               f"(doba bez čekání ci-pr-delay). Běhy kratší než {PILOT_MIN_RUN_S} s jsou výsledky brány "
               "(zamítnutí V6, nic k testování) a do srovnání nepatří. Faily se hlásí zvlášť: zvýšené jsou "
-              f"při nárůstu o víc než {int(PILOT_FAIL_TOLERANCE * 100)} p. b. Vzorek nejvýš {PILOT_SAMPLE} "
-              "běhů na okno.\\n\\n"
+              f"při nárůstu o víc než {int(PILOT_FAIL_TOLERANCE * 100)} p. b. Okna jsou přesně {PILOT_WINDOW_DAYS} "
+              f"dní před a po merge; před merge nejnovějších nejvýš {PILOT_SAMPLE} běhů, po merge všechny "
+              f"běhy zachycené sweepy (nejvýš {PILOT_SAMPLE} na dotaz).\\n\\n"
             + ("**Časově pilot prošel u všech jobů.** "
                if passed else
                "**Časová regrese nebo málo dat** u označených jobů. ")
@@ -299,6 +337,13 @@ PILOT_MIN_RUN_S = 60
 def _apply(source, replacements, name):
     done = [after in source for _, after in replacements]
     if all(done):
+        # Fully patched: every patched block exactly once, and no legacy block left beside
+        # it (a `before` may legitimately occur inside the `after` texts, V6 #970).
+        for before, after in replacements:
+            if source.count(after) != 1:
+                raise ValueError(f"{name}: duplicated patched block: {after.splitlines()[0].strip()[:80]}")
+            if source.count(before) != sum(a.count(before) for _, a in replacements):
+                raise ValueError(f"{name}: legacy block beside the patched one: {before.splitlines()[0].strip()[:80]}")
         return source
     if any(done):
         raise ValueError(f"{name}: partially patched source; refusing")
