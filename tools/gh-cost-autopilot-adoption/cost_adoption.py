@@ -374,12 +374,14 @@ def invalidate_unverified_low_traffic(item, now=None):
 
 BILLABLE_CONCLUSIONS = ("success", "failure", "timed_out")
 UNFINISHED_STATUSES = ("queued", "in_progress", "requested", "waiting", "pending")
-# Usage of a day keeps growing while late jobs are exported. A repository's coverage is judged
-# only this long after its newest billable run finished; an operating assumption, deliberately
-# conservative against the 30 h between the window end and the billing due time.
+# Billing usage is dated by the day it was consumed, and a job on a GitHub-hosted runner runs
+# for at most 6 hours, so no usage dated inside a window is produced later than 6 h after the
+# window's end. After that, a window day can change only by export lag, which this bounds (an
+# operating assumption, deliberately conservative against the 30 h between the window end and
+# the billing due time). A re-run after the window bills on its own day, outside the window.
 BILLING_SETTLE = dt.timedelta(hours=72)
 # Bumped whenever the meaning of a coverage confirmation changes; older ones are checked again.
-COVERAGE_VERSION = 5
+COVERAGE_VERSION = 6
 
 
 def _job_ran(job):
@@ -408,17 +410,21 @@ def _run_billable(gh_json, repo, run):
 def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budget, now, billable=None):
     """Per in-scope repository, the billing export covers the repository's own billable runs.
 
-    Evidence per repository, never borrowed from another one: no run created in the after
-    window is still queued or running; BILLING_SETTLE has passed since the window's end and
-    since the latest finish of any of its listed runs; and its usage includes a day on or after
-    the creation day of its newest billable run (success, failure, timed_out, or a cancelled run
-    in which a job ran on a runner). A repository with no billable run has no usage to miss, so
-    a quiet window never needs a charge row. With more runs than one page, every unfinished
-    status is asked for directly. Confirmations carry COVERAGE_VERSION and the window, are
-    recorded in `confirmed` (persisted by the caller) and are re-validated against the current
-    usage on every call without API reads; a moved window or a vanished usage day discards them.
-    `billable` (persisted by the caller) caches the billability of a run attempt, so the check
-    progresses across ticks (V6 #970).
+    The window's sums use usage dated inside the window only. Such usage comes from executions
+    that ended at most 6 h after the window's end (see BILLING_SETTLE), so the whole check waits
+    until BILLING_SETTLE after the window's end, and after that a run of the window can neither
+    add window usage by finishing nor by being re-run: a later attempt bills on its own day,
+    outside the window. That is why a confirmation stays valid for its window. Per repository,
+    never borrowed from another one: no run created in the window is still queued or running
+    (fail-closed, although its future usage would fall outside the window), and the usage
+    includes a day on or after the creation day of its newest billable run (success, failure,
+    timed_out, or a cancelled run in which a job ran on a runner). A repository with no
+    billable run has no usage to miss, so a quiet window never needs a charge row. With more
+    runs than one page, every unfinished status is asked for directly. Confirmations carry
+    COVERAGE_VERSION and the window, are recorded in `confirmed` (persisted by the caller) and
+    are re-validated against the current usage on every call without API reads; a moved window
+    or a vanished usage day discards them. `billable` (persisted by the caller) caches the
+    billability of a run attempt, so the check progresses across ticks (V6 #970).
 
     Returns ("ok", None), ("budget", repo) when the tick ran out of calls, ("error", repo) for an
     unreadable or ambiguous listing, or ("pending"|"lagging", [repos]) to retry later."""
@@ -466,14 +472,6 @@ def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budg
             unfinished = any(r.get("status") != "completed" for r in listed)
         if unfinished:
             pending.append(repo)  # its usage is still being produced
-            continue
-        try:
-            finished = max((parse_utc(r.get("updated_at") or r.get("created_at")) for r in listed),
-                           default=window_end)
-        except ValueError:
-            return "error", repo
-        if now - finished < BILLING_SETTLE:
-            pending.append(repo)  # a re-run finished recently: its day may still be growing
             continue
         newest = None
         for run in sorted(listed, key=lambda r: r.get("created_at") or "", reverse=True):

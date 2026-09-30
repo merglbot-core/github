@@ -256,8 +256,8 @@ class BillingGuards(unittest.TestCase):
             fresh = {"O/In": {"2026-10-07": 5.0}}
             self.assertEqual(ns["check"]({}, billing, fresh, {}), "go")
             mark = ["2026-10-06", "2026-10-07"]
-            self.assertEqual(billing["coverage"], {"o/in": {"v": 5, "window": mark, "last": "2026-10-07"},
-                                                   "o/quiet": {"v": 5, "window": mark, "last": None}})
+            self.assertEqual(billing["coverage"], {"o/in": {"v": 6, "window": mark, "last": "2026-10-07"},
+                                                   "o/quiet": {"v": 6, "window": mark, "last": None}})
             # a quiet window with no charge row at all is complete as well
             billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
             ns["check"].__globals__["gh_json"] = lambda path: {"total_count": 0, "workflow_runs": []}
