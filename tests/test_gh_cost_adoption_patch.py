@@ -219,6 +219,18 @@ class PilotBehaviour(unittest.TestCase):
         ok, item = self.measure(item)
         self.assertEqual((item["verdict"], item["pending_runs"]), ("pass", []))
 
+    def test_a_finished_job_in_a_running_workflow_is_not_cached(self):
+        running = self.add(6, 560, arm=True)
+        next(r for r in self.runs if r["id"] == running)["status"] = "in_progress"
+        ok, item = self.measure()
+        self.assertEqual((item["verdict"], item["pending_runs"]), (None, [str(running)]))
+        self.assertNotIn(str(running), item["runs"])
+        self.assertFalse(any(f"/runs/{running}/attempts/" in path for path in self.calls))
+        self.finish(running, 560)
+        ok, item = self.measure(item)
+        self.assertEqual((item["verdict"], item["pending_runs"]), ("pass", []))
+        self.assertEqual(item["runs"][str(running)]["s"], 560)
+
     def test_every_page_of_a_busy_day_is_counted(self):
         # 130 slow arm64 runs on one day: they only fit on two pages of 100.
         for n in range(130):

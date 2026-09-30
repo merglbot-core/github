@@ -236,8 +236,8 @@ REPLACEMENTS_910 = [
     windows: a run belongs to it when the first 8 hex digits of sha256(run id) fall below
     `sample_rate`, fixed once from the complete before-window census so that about
     PILOT_SAMPLE_TARGET runs per window are read (1.0 = every run). Each sampled run costs one
-    jobs read of its first attempt. A sampled run whose pilot job (or run) is still queued or
-    running holds the verdict; a failed or partial read decides nothing. A census that needs
+    jobs read of its first attempt, taken only once that attempt has finished. A sampled run
+    whose first attempt or pilot job is still queued or running holds the verdict; a failed or partial read decides nothing. A census that needs
     more calls than one tick allows, or a current slice whose pages moved while it was listed,
     sets `partial_census`, and measure_dod continues it on the next tick (V6 #968, #970).
 
@@ -333,6 +333,11 @@ REPLACEMENTS_910 = [
                 if not isinstance(fresh, dict):
                     return failed()
                 run_done = fresh.get("status") == "completed" or (fresh.get("run_attempt") or 1) > 1
+            if not run_done:
+                # The first attempt is still queued or running: nothing of it is cached yet, even a
+                # finished pilot job, so the run stays retryable and holds the verdict (V6 #970).
+                pending.append(rid)
+                continue
             # The first attempt only (the population is first-attempt runs); a later re-run of the
             # same run id must not replace its measurement.
             listing = gh_json(f"repos/{repo}/actions/runs/{rid}/attempts/1/jobs?per_page=100")
@@ -347,8 +352,8 @@ REPLACEMENTS_910 = [
                 j = finished[0]
                 known[rid] = {"created": meta["created"], "labels": j.get("labels") or [],
                               "s": job_seconds(j) or 0, "concl": j.get("conclusion")}
-            elif matching or not run_done:
-                pending.append(rid)  # still queued or running: stays retryable and holds the verdict
+            elif matching:
+                pending.append(rid)  # the job is not finished yet: stays retryable and holds the verdict
             else:
                 # A finished run without the job (filtered out): remembered, never measured.
                 known[rid] = {"created": meta["created"], "labels": [], "s": 0, "concl": "absent"}
