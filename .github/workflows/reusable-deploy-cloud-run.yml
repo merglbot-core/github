@@ -57,7 +57,8 @@ on:
       # GitHub-hosted ubuntu runners preinstall the Google Cloud SDK, and
       # google-github-actions/auth writes the credentials it finds. Set false to
       # skip the 20-40 s setup-gcloud step when no specific gcloud version or
-      # extra component is needed. Default true keeps today's behaviour.
+      # extra component is needed (this workflow only runs GA `gcloud auth`,
+      # `gcloud run` and `gcloud artifacts` commands). Default true keeps today's behaviour.
       install_gcloud:
         description: 'Install gcloud via google-github-actions/setup-gcloud (false = use the runner-preinstalled SDK)'
         type: boolean
