@@ -199,6 +199,38 @@ class Provenance(Home):
         self.assertEqual((self.base / "autopilot.py").read_bytes(), pa.patch_888(FIXTURE).encode())
 
 
+class LockDiscipline(Home):
+    """V6 #974 round 2: dry runs never take the live lock; state checks run inside it."""
+
+    def test_a_dry_run_works_while_a_tick_holds_the_lock_and_leaves_it(self):
+        (self.base / "autopilot/lock").mkdir()
+        self.assertTrue(self.install(dry_run=True)["dry_run"])
+        self.assertTrue((self.base / "autopilot/lock").is_dir())
+        (self.base / "autopilot/lock").rmdir()
+        self.install()
+        (self.base / "autopilot/lock").mkdir()
+        state = self.digests()[1]
+        fetch = OwnerException.fetch(self)
+        self.assertTrue(self.ins.record_owner_exception(state, dry_run=True, fetch=fetch)["dry_run"])
+        self.assertTrue((self.base / "autopilot/lock").is_dir())
+        with self.assertRaises(FileExistsError):
+            self.ins.record_owner_exception(state, fetch=fetch)
+
+    def test_a_rollback_before_the_lock_is_seen_by_the_state_write(self):
+        self.install()
+        state, base = self.digests()[1], self.base
+        real = self.ins.Locked
+
+        class RollbackFirst(real):
+            def __enter__(self):
+                (base / "autopilot.py").write_text(FIXTURE)  # a rollback finished just before
+                return super().__enter__()
+        self.ins.Locked = RollbackFirst
+        with self.assertRaisesRegex(RuntimeError, "install the adopted code first"):
+            self.ins.record_owner_exception(state, fetch=OwnerException.fetch(self))
+        self.assertEqual(self.digests()[1], state)
+
+
 class TwoPhase(unittest.TestCase):
     def test_no_target_is_written_when_another_fails_validation(self):
         import sys

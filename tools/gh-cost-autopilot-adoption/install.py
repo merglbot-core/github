@@ -15,6 +15,7 @@ Verification is the next natural tick; never run a tick by hand.
 """
 import argparse
 import base64
+import contextlib
 import datetime as dt
 import hashlib
 import importlib.util
@@ -140,6 +141,16 @@ class Locked:
         self.lock.rmdir()
 
 
+def guard(base, dry_run):
+    """The autopilot's lock for a write; a dry run reads a snapshot and never touches the lock,
+    so it cannot keep a scheduled tick out (V6 #974)."""
+    if dry_run:
+        if HOLD.exists():
+            raise RuntimeError("OWNER_HOLD present")
+        return contextlib.nullcontext()
+    return Locked(base)
+
+
 def backup_dir(base, kind):
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     path = base / "backups" / f"{kind}-{stamp}"
@@ -177,7 +188,7 @@ def install_code(target, expected_code, expected_state, dry_run=False, source_sh
     base = spec["base"]
     patch = getattr(load(HERE / "patch_autopilot.py", "adoption_patch"), spec["patch"])
     helper_new = (HERE / "cost_adoption.py").read_bytes()
-    with Locked(base):
+    with guard(base, dry_run):
         code_path, state_path, helper_path = base / "autopilot.py", base / "state.json", base / "cost_adoption.py"
         old_code, old_state = code_path.read_bytes(), state_path.read_bytes()
         if digest(old_code) != expected_code or digest(old_state) != expected_state:
@@ -297,11 +308,12 @@ def code_installed(target):
         raise RuntimeError(f"install the adopted code first (install.py code): {error}")
 
 
-def rewrite_state(target, expected_state, change, kind, dry_run=False):
+def rewrite_state(target, expected_state, change, kind, dry_run=False, source_sha=None):
     """Apply `change(state)` under the lock; everything but the changed keys must stay equal."""
     base = TARGETS[target]["base"]
-    code_installed(target)
-    with Locked(base):
+    with guard(base, dry_run):
+        # Inside the lock: a rollback cannot slip in between this check and the write.
+        code_installed(target)
         path = base / "state.json"
         old = path.read_bytes()
         if digest(old) != expected_state:
@@ -317,7 +329,7 @@ def rewrite_state(target, expected_state, change, kind, dry_run=False):
         if before != state:
             raise RuntimeError("state change touched more than the declared keys")
         facts = {"target": target, "kind": kind, "state_before": digest(old), "state_after": digest(new),
-                 "touched": touched}
+                 "touched": touched, "source_main_sha": source_sha}
         if dry_run:
             return dict(facts, dry_run=True)
         if HOLD.exists():
@@ -332,7 +344,7 @@ def rewrite_state(target, expected_state, change, kind, dry_run=False):
         return dict(facts, backup=str(backup))
 
 
-def record_owner_exception(expected_state, dry_run=False, fetch=gh_api):
+def record_owner_exception(expected_state, dry_run=False, fetch=gh_api, source_sha=None):
     records = verify_decision(fetch)
 
     def change(state):
@@ -342,10 +354,10 @@ def record_owner_exception(expected_state, dry_run=False, fetch=gh_api):
                 raise RuntimeError(f"{key} already met or excepted")
             row["owner_exception"] = record
         return [f"dod:{key}" for key in records]
-    return rewrite_state("888", expected_state, change, "owner-exception-895", dry_run)
+    return rewrite_state("888", expected_state, change, "owner-exception-895", dry_run, source_sha)
 
 
-def release_hold(expected_state, dry_run=False, fetch=gh_api, graphql=gh_graphql):
+def release_hold(expected_state, dry_run=False, fetch=gh_api, graphql=gh_graphql, source_sha=None):
     issue, _ = fetch("repos/merglbot-core/github/issues/917")
     node = (graphql('query { node(id: "%s") { ... on ProjectV2Item { project { id } '
                     'fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue '
@@ -363,7 +375,7 @@ def release_hold(expected_state, dry_run=False, fetch=gh_api, graphql=gh_graphql
         record.update(technical_hold=False, board_done_at=now, hold_released_at=now,
                       hold_release_reason="#917 closed and Done after the owner-decided rollout (30 Sep 2026)")
         return ["subs:917"]
-    return rewrite_state("910", expected_state, change, "release-hold-917", dry_run)
+    return rewrite_state("910", expected_state, change, "release-hold-917", dry_run, source_sha)
 
 
 def rollback(target, backup):
@@ -430,9 +442,9 @@ def main():
             install_code(t, args[f"expected_code_{t}"], args[f"expected_state_{t}"], False, source)
             for t in TARGETS]
     elif args["command"] == "record-owner-exception":
-        result = record_owner_exception(args["expected_state_888"], args["dry_run"])
+        result = record_owner_exception(args["expected_state_888"], args["dry_run"], source_sha=source)
     elif args["command"] == "release-hold":
-        result = release_hold(args["expected_state_910"], args["dry_run"])
+        result = release_hold(args["expected_state_910"], args["dry_run"], source_sha=source)
     else:
         result = rollback(args["target"], args["backup"])
     print(json.dumps(result, ensure_ascii=False, indent=1, sort_keys=True))
