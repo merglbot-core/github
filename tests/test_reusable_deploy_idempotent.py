@@ -1,8 +1,9 @@
 """Idempotent image publication in the reusable Cloud Run deploy workflows (merglbot-core/github#909).
 
 The `# BEGIN/END image-publish` block must be byte-identical in both workflows; it is run with bash
-against a stub `docker`: tag present = adopt (no build/push), absent = build + push, anything else
-fails. Skipped only without bash >= 4.
+against a stub `docker` and a stub `adoptable` (defined per workflow): a present tag whose digest is
+adoptable = adopt that digest (no build/push), a present tag without provenance or an absent tag =
+build + push, anything else fails. Skipped only without bash >= 4.
 """
 
 from __future__ import annotations
@@ -108,10 +109,27 @@ class ImagePublishContractTests(unittest.TestCase):
         self.assertNotIn("cosign", wif)  # the WIF workflow does not sign
         self.assertEqual(2, legacy.count("image-ref: ${{ steps.build.outputs.full_image }}"))
 
+    def test_adoption_needs_provenance_defined_per_workflow(self) -> None:
+        """V6 on the #909 callers: the registry can be shared with other repos' deploy identities,
+        so a tag is adopted only with evidence of who pushed it. The signing workflow verifies its
+        own signature for this caller repository (cosign installed before the build); the WIF
+        workflow does not sign, so it never adopts."""
+        wif, legacy = (path.read_text(encoding="utf-8") for path in reversed(WORKFLOWS))
+        self.assertIn("          adoptable() { return 1; }\n", wif)
+        adoptable = legacy[legacy.index("          adoptable() {"):legacy.index("          # BEGIN image-publish")]
+        self.assertIn("--certificate-identity-regexp '" + IDENTITY + "'", adoptable)
+        self.assertIn("--certificate-oidc-issuer 'https://token.actions.githubusercontent.com'", adoptable)
+        self.assertIn('--certificate-github-workflow-repository "$GITHUB_REPOSITORY"', adoptable)
+        # an older signed digest of the same repository must not pass under this commit's tag
+        self.assertIn('--certificate-github-workflow-sha "$IMAGE_TAG"', adoptable)
+        self.assertIn("IMAGE_TAG: ${{ github.sha }}", legacy)
+        self.assertEqual(1, legacy.count("- name: Install Cosign"))
+        self.assertLess(legacy.index("- name: Install Cosign"), legacy.index("- name: Build and Push Docker image"))
+
 
 @unittest.skipUnless(BASH, "bash >= 4 is required to run the image-publish block")
 class ImagePublishProbeTests(unittest.TestCase):
-    def publish(self, mode: str) -> tuple[int, str, list[str]]:
+    def publish(self, mode: str, adoptable: str = "yes") -> tuple[int, str, list[str]]:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for name, body in (("docker", DOCKER_STUB.format(python=sys.executable, pushed=PUSHED,
@@ -120,10 +138,12 @@ class ImagePublishProbeTests(unittest.TestCase):
                 (root / name).write_text(body, encoding="utf-8")
                 (root / name).chmod(0o755)
             script = ("set -euo pipefail\nbuild_image() { docker build -t \"$1\" .; }\n"
+                      + 'adoptable() { printf "ADOPTABLE %s\\n" "$1"; [ "$ADOPTABLE" = yes ]; }\n'
                       + extract_block(WORKFLOWS[0])
                       + '\nprintf "RESULT %s %s\\n" "$IMAGE_REF" "$IMAGE_ADOPTED"\n')
             env = {"PATH": f"{root}{os.pathsep}{os.environ['PATH']}", "DOCKER_MODE": mode,
-                   "DOCKER_LOG": str(root / "log"), "IMAGE_BASE": BASE, "IMAGE_TAG": TAG}
+                   "DOCKER_LOG": str(root / "log"), "IMAGE_BASE": BASE, "IMAGE_TAG": TAG,
+                   "ADOPTABLE": adoptable}
             (root / "log").write_text("", encoding="utf-8")
             proc = subprocess.run([BASH, "-c", script], env=env, capture_output=True, text=True)
             calls = (root / "log").read_text(encoding="utf-8").split()
@@ -132,9 +152,23 @@ class ImagePublishProbeTests(unittest.TestCase):
     def test_present_tag_is_adopted_without_build_or_push(self) -> None:
         rc, out, calls = self.publish("present")
         self.assertEqual(0, rc, out)
+        self.assertIn(f"ADOPTABLE {BASE}@{LOCAL}", out)  # the digest is checked, never the tag
         self.assertIn(f"RESULT {BASE}@{LOCAL} true", out)
-        self.assertNotIn("build", calls)
-        self.assertNotIn("push", calls)
+        self.assertEqual(["pull", "image"], calls)
+
+    def test_present_tag_without_provenance_is_rebuilt_and_pushed(self) -> None:
+        rc, out, calls = self.publish("present", "no")
+        self.assertEqual(0, rc, out)
+        self.assertIn(f"RESULT {BASE}@{PUSHED} false", out)
+        self.assertEqual(["pull", "image", "build", "push"], calls)
+        self.assertIn("without verified provenance", out)
+
+    def test_present_tag_with_an_unresolvable_digest_fails_without_building(self) -> None:
+        rc, out, calls = self.publish("present+no-digest")
+        self.assertNotEqual(0, rc, out)
+        self.assertEqual(["pull", "image"], calls)
+        self.assertIn("could not resolve its digest", out)
+        self.assertNotIn("ADOPTABLE", out)
 
     def test_absent_tag_is_built_and_pushed(self) -> None:
         for mode in ("absent", "absent-containerd"):
@@ -161,13 +195,18 @@ class ImagePublishProbeTests(unittest.TestCase):
         self.assertIn(f"RESULT {BASE}@{LOCAL} true", out)
         self.assertIn("concurrent publication", out)
         self.assertEqual(["pull", "build", "push", "pull", "image"], calls)
+        rc, out, calls = self.publish("absent+push-fails+then-present", "no")
+        self.assertNotEqual(0, rc, out)
+        self.assertEqual(["pull", "build", "push", "pull", "image"], calls)
+        self.assertIn("without verified provenance, so it is not adopted", out)
+        self.assertNotIn("RESULT", out)
         rc, out, calls = self.publish("absent+push-fails")
         self.assertNotEqual(0, rc, out)
         self.assertEqual(["pull", "build", "push", "pull"], calls)
         self.assertIn("the tag does not exist", out)
 
     def test_push_failure_and_unresolvable_digest_fail(self) -> None:
-        for mode in ("absent+push-fails", "present+no-digest"):
+        for mode in ("absent+push-fails", "absent+no-push-digest+no-digest"):
             with self.subTest(mode):
                 rc, out, _ = self.publish(mode)
                 self.assertNotEqual(0, rc, out)
