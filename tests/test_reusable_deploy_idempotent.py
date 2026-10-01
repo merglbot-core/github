@@ -27,6 +27,8 @@ LOCAL, PUSHED = "sha256:" + "b" * 64, "sha256:" + "c" * 64
 DOCKER_STUB = """#!{python}
 import os, sys
 args = sys.argv[1:]
+with open(os.environ["DOCKER_LOG"], encoding="utf-8") as log:
+    earlier = log.read().split()
 with open(os.environ["DOCKER_LOG"], "a", encoding="utf-8") as log:
     log.write(args[0] + "\\n")
 mode, ref = os.environ["DOCKER_MODE"], os.environ["IMAGE_BASE"] + ":" + os.environ["IMAGE_TAG"]
@@ -39,7 +41,8 @@ pull = {{
     "masked": (1, f"manifest for {{ref}} not found: unauthorized: authentication required"),
 }}
 if args[0] == "pull":
-    rc, out = pull[mode.split("+")[0]]
+    # then-present: a concurrent deploy published the tag after this run's first probe
+    rc, out = pull["present" if "then-present" in mode and "push" in earlier else mode.split("+")[0]]
     print(out, file=sys.stderr if rc else sys.stdout)
     sys.exit(rc)
 if args[0] == "push":
@@ -151,6 +154,17 @@ class ImagePublishProbeTests(unittest.TestCase):
                 self.assertNotEqual(0, rc, out)
                 self.assertEqual(["pull"], calls)
                 self.assertIn("not guessing", out)
+
+    def test_a_tag_published_concurrently_is_adopted_after_the_failed_push(self) -> None:
+        rc, out, calls = self.publish("absent+push-fails+then-present")
+        self.assertEqual(0, rc, out)
+        self.assertIn(f"RESULT {BASE}@{LOCAL} true", out)
+        self.assertIn("concurrent publication", out)
+        self.assertEqual(["pull", "build", "push", "pull", "image"], calls)
+        rc, out, calls = self.publish("absent+push-fails")
+        self.assertNotEqual(0, rc, out)
+        self.assertEqual(["pull", "build", "push", "pull"], calls)
+        self.assertIn("the tag does not exist", out)
 
     def test_push_failure_and_unresolvable_digest_fail(self) -> None:
         for mode in ("absent+push-fails", "present+no-digest"):

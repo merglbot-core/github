@@ -169,10 +169,21 @@ jobs:
             push_out="$(docker push "$ref" 2>&1)" || push_rc=$?
             printf '%s\n' "$push_out"
             if [ "$push_rc" -ne 0 ]; then
-              echo "::error::docker push ${ref} failed (exit ${push_rc})."
-              exit 1
+              # A concurrent deploy of the same commit may have published the tag between the
+              # probe and this push (an immutable repository then refuses the push): probe the
+              # exact tag once more and adopt it only when it exists now; anything else fails.
+              reprobe_rc=0
+              reprobe_out="$(docker pull --quiet "$ref" 2>&1)" || reprobe_rc=$?
+              if [ "$reprobe_rc" -ne 0 ]; then
+                printf '%s\n' "$reprobe_out" >&2
+                echo "::error::docker push ${ref} failed (exit ${push_rc}) and the tag does not exist."
+                exit 1
+              fi
+              IMAGE_ADOPTED=true
+              echo "::notice::docker push ${ref} failed, but the tag exists now (concurrent publication); adopting it."
+            elif [[ $push_out =~ digest:\ (sha256:[0-9a-f]{64}) ]]; then
+              IMAGE_DIGEST="${BASH_REMATCH[1]}"
             fi
-            if [[ $push_out =~ digest:\ (sha256:[0-9a-f]{64}) ]]; then IMAGE_DIGEST="${BASH_REMATCH[1]}"; fi
           else
             printf '%s\n' "$probe_out" >&2
             echo "::error::Unexpected result probing ${ref} (exit ${probe_rc}); not guessing whether the tag exists."
