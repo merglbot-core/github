@@ -2,64 +2,40 @@
 
 The launchd autopilots `~/.merglbot/gh-cost/autopilot.py` (#888) and
 `~/.merglbot/gh-cost-910/autopilot.py` (#910) were changed three times without a
-reviewed PR by their owning session. This package puts that running code under
-review, adds the behaviour the owner decided on 30 Sep 2026, and installs it with
-the same lock/backup/readback contract as `gh-cost-910-closeout` and `gh-cost-922-window`.
+reviewed PR by their owning session. This package replaced that code with reviewed code,
+added the behaviour the owner decided on 30 Sep 2026, and installed it with the same
+lock/backup/readback contract as `gh-cost-910-closeout` and `gh-cost-922-window`.
 
-## 0. Status and known defects of the adopted code
-
-This package documents code that is **running today**; it does not install anything by itself.
+## 0. Status
 
 | Part | State |
 |---|---|
-| Adopted diffs (this directory) | review object; the live files equal their post-images |
+| Record of the unreviewed edits | provenance comments github#888 (5922472926) and github#910 (5922473236), see section 1 |
 | `cost_adoption.py` helpers | merged in #969 (`bc2bd71`) |
 | `patch_autopilot.py` | merged in #970 (`95ac7d2`) |
-| `install.py` (`code`, `record-owner-exception`, `release-hold`, `rollback`) | pending, separate PR after the patch |
+| `install.py` (`code`, `record-owner-exception`, `release-hold`, `rollback`) | merged in #974 (`8cfec93`) |
+| Installation | 1 Oct 2026 02:43 Prague from main `8cfec93`: 888 `4b78d530` → `26e774f6`, 910 `08477d87` → `8997ac43`, helper `8db5ede8`; #895 owner exception recorded 02:44 |
 
-Sections 2 and 3 describe the behaviour and install contract the patch and installer deliver;
-until the installer runs, the live autopilots execute the adopted post-images unchanged.
+The unreviewed code ran until that installation. Its known defects, all corrected by #970:
+in #910 a failed jobs request was read as an empty list and the #917 pilot census was capped
+at 30 completed runs and unbounded after the merge; in both autopilots a low-traffic row was
+accepted on run counts alone. The `owner_excepted()` rows of #892 were read field by field;
+the only live row carried all fields, and the patch reads them with defaults.
 
-**Known defects in `910_20260928_pilot.diff` (live `08477d87`), fixed by the patch, not here:**
+## 1. Unreviewed edits replaced by this package (provenance only)
 
-1. A failed jobs request becomes an empty jobs list, so the run is silently skipped and a
-   pilot verdict can pass on incomplete data. The patch marks the row incomplete
-   (`incomplete_at`), returns without measuring and retries on the next tick.
-2. The post-merge runs query has no upper bound and the cached runs are split only by
-   `since`, so runs after the 14-day window can change the result. It also lists only
-   completed runs, at most 30 per query, while infra has about 1 700 runs per window.
-   The patch lists every UTC day of both windows completely (all statuses, paginated,
-   bounded by exact timestamps), measures a uniform deterministic sample of about 300 runs
-   per window, and holds the verdict while a sampled run is still running.
+The diffs are kept as issue comments, not in this repository, so no defective code is part
+of the reviewed tree. Each reproduces its post-image byte for byte from the backed-up
+pre-image (`patch -o`).
 
-The report is due after 7 Oct 2026 23:05 Prague time; the installer must run before then
-(target 6 Oct 17:00), otherwise the #910 autopilot is paused before that tick.
+| Diff (sha256) | Pre-image (installed by) | Post-image | What changed | Record |
+|---|---|---|---|---|
+| `910_20260926_env_wait.diff` (`602a8554…`) | `7ff576da` (#938) | `51260863` | `measure_env_wait` skips documented runs and PRs whose base is not main (#912) | github#910 comment 5922473236 |
+| `910_20260928_pilot.diff` (`5057f961…`) | `8538a0ed` (#943) | `08477d87` | low-traffic grace in `measure_runner_label` (#913); DoD kind `arm64_pilot` and one-time `report_pilot` (#917); `technical_hold` skips any sub | github#910 comment 5922473236 |
+| `888_20260928_owner_exception.diff` (`42f71961…`) | `f6fb6794` (#944) | `4b78d530` | owner exception for #892 (keeps `met_at`, late literal comment) | github#888 comment 5922472926 |
 
-**Other review notes on the adopted code:**
-- `owner_excepted()` rows are read field by field in the #892 closeout text. The only live
-  row (`892|merglbot-core/merglbot-admin`) carries all five fields (`basis`, `decided_at`,
-  `decided_at_prague`, `source`, `text`); #892 closed on 28 Sep 2026. The patch replaces the
-  direct indexing with `exception_notes()`, which reads every field with a default.
-- The low-traffic grace in `measure_runner_label` (and `measure_job_runs`) accepts zero
-  observations on run counts alone and on an incomplete run census. The patch requires a
-  complete census and a passed live caller check (`live_caller_config`) no older than 24 h,
-  and it measures again any row the adopted code accepted without one. The live state had no
-  such row on 1 Oct 2026.
-- Runs without the pilot job are re-queried on later ticks. The patch records a finished run
-  without the job as absent; a run whose job is still queued or running stays retryable and
-  holds the verdict. A census that needs more calls than one tick continues on the next tick.
-
-## 1. Adopted local edits (review object: `adopted/*.diff`)
-
-| Diff | Pre-image (installed by) | Post-image | What changed |
-|---|---|---|---|
-| `910_20260926_env_wait.diff` | `7ff576da` (#938) | `51260863` | `measure_env_wait` skips documented runs and PRs whose base is not main (#912) |
-| `910_20260928_pilot.diff` | `8538a0ed` (#943) | `08477d87` (live) | low-traffic grace in `measure_runner_label` (#913); DoD kind `arm64_pilot` and one-time `report_pilot` (#917); `technical_hold` skips any sub |
-| `888_20260928_owner_exception.diff` | `f6fb6794` (#944) | `4b78d530` (live) | owner exception for #892 (keeps `met_at`, late literal comment) |
-
-Wave-3 installs #941/#942 were applied on top of `51260863`; both live files are the
-post-images above. Each diff reproduces its post-image byte for byte from the backed-up
-pre-image (`patch -o`), which the installer re-checks locally before writing.
+Wave-3 installs #941/#942 were applied on top of `51260863`. `08477d87` and `4b78d530` are
+the adopted images `install.py` accepts as pre-images.
 
 ## 2. New behaviour (owner decisions of 30 Sep 2026)
 
@@ -89,32 +65,39 @@ pre-image (`patch -o`), which the installer re-checks locally before writing.
 - **888 `close_epic`:** also requires every live native sub-issue closed and Done on
   Project 64 (so #909 keeps #888 open), checked at most hourly.
 - **Old one-shot installers fail closed:** `gh-cost-910-closeout` anchors on the legacy
-  `f"dod:{sub}"` key. The adopted code still contains it; the patch replaces it with
-  `"dod:" + str(sub)`, so that installer no longer matches after installation. The
-  installer re-runs every older `tools/gh-cost-*/patch_autopilot.py` in memory and aborts if
-  one would rewrite code.
+  `f"dod:{sub}"` key, which the patch replaces with `"dod:" + str(sub)`. The installer
+  verifies every patcher listed in `OLDER_TOOLS` against protected main, re-runs each in
+  memory and aborts if one would rewrite code; any unlisted `tools/gh-cost-*` patcher stops
+  it.
 
 `cost_adoption.py` holds the helpers and is installed next to both autopilots.
 `patch_autopilot.py` holds exact-string anchors that must match once; a fully patched
 source is returned unchanged.
 
-## 3. Install
+## 3. Install, record, release, roll back
 
-Only from the protected, substantively V6-reviewed main commit, after `--dry-run`, with
-freshly read SHA-256 digests. Checks OWNER_HOLD, takes both existing `autopilot/lock`
-directories, backs up to `backups/adoption-<UTC>/` with a manifest, writes atomically and
-reads back. Verification is the next natural tick; never run a tick manually.
+Writes run only when the installer, patch, helpers, decision record and the listed older
+patchers equal protected main byte for byte; dry runs skip only this package's own files.
+Each write takes the autopilot's `autopilot/lock`, checks OWNER_HOLD, uses freshly read
+SHA-256 digests, backs up with a manifest and reads back; `code` leaves
+`adoption-receipt.json` next to the autopilot. Verification is the next natural tick; never
+run a tick manually.
 
 ```bash
 python3 tools/gh-cost-autopilot-adoption/install.py code --dry-run \
   --expected-code-888 <sha256> --expected-state-888 <sha256> \
   --expected-code-910 <sha256> --expected-state-910 <sha256>
 python3 tools/gh-cost-autopilot-adoption/install.py record-owner-exception --dry-run \
-  --comment-url https://github.com/merglbot-core/github/issues/895#issuecomment-5917584272 \
   --expected-state-888 <sha256>
+python3 tools/gh-cost-autopilot-adoption/install.py release-hold --dry-run \
+  --expected-state-910 <sha256>
+python3 tools/gh-cost-autopilot-adoption/install.py rollback --target 888 \
+  --backup ~/.merglbot/gh-cost/backups/adoption-<UTC>
 ```
 
-`release-hold` (after #917 is closed and Done) and `rollback` (only to the adopted image)
-are documented in `install.py --help`.
+`record-owner-exception` compares the live decision comment github#895 (5917584272) with
+`decisions/895.cs.md`. `release-hold` needs #917 closed as completed and Done on Project 66.
+`rollback` restores the adopted image only while both live files are the backup's
+after-images.
 
 Refs merglbot-core/github#888, #895, #910, #913, #917
