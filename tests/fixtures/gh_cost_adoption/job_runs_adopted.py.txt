@@ -1,0 +1,43 @@
+# Adopted #888 autopilot text (live sha256 4b78d530...): measure_job_runs() verbatim, the
+# pre-image the anchored patch rewrites. Test fixture only; never imported.
+
+def measure_job_runs(state, item):
+    """Natural pull-request runs of one workflow after the merge: one job, <= 60 s, green."""
+    repo = item["repo"]
+    since = merged_at(state, item["since_pr"])
+    if not since:
+        return False
+    workflow = item.get("workflow", "pr-gate.yml")
+    runs = gh_json(f"repos/{repo}/actions/workflows/{workflow}/runs"
+                   f"?event=pull_request&created=%3E%3D{since[:10]}&per_page=30")
+    if runs is None:
+        return False
+    known = item.setdefault("runs", {})
+    for run in runs.get("workflow_runs", []):
+        run_id = str(run.get("id"))
+        if run_id in known or run.get("status") != "completed" or run.get("created_at", "") < since:
+            continue
+        if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
+            break
+        jobs = (gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=20") or {}).get("jobs", [])
+        timed = [j for j in jobs if j.get("started_at") and j.get("completed_at")
+                 and j.get("conclusion") != "skipped"]
+        if not timed:
+            continue
+        known[run_id] = {"created": run.get("created_at"), "jobs": len(timed),
+                         "job_s": max(job_seconds(j) or 0 for j in timed),
+                         "ok": run.get("conclusion") == "success"}
+    good = [r for r in known.values() if r["ok"] and r["job_s"] <= DOD_MAX_SECONDS and r.get("jobs", 1) == 1]
+    item["good"] = len(good)
+    if len(good) >= item.get("threshold", DOD_RUNS):
+        item["met_at"] = iso()
+        log(f"DoD met for #{item['sub']} {repo}: {len(good)} runs <= {DOD_MAX_SECONDS}s in one job")
+        return True
+    # The cost criterion is the job shape; a run the gate FAILED on a real finding is the
+    # gate working, not a cost regression, so only duration and job count disqualify here.
+    over = [r for r in known.values() if r["job_s"] > DOD_MAX_SECONDS or r.get("jobs", 1) != 1]
+    if not over and now() - parse(since) >= dt.timedelta(days=LOW_TRAFFIC_GRACE_DAYS):
+        item.update(met_at=iso(), low_traffic=True, observed=len(known))
+        log(f"DoD met for #{item['sub']} {repo} on low traffic: {len(known)} run(s) in "
+            f"{LOW_TRAFFIC_GRACE_DAYS} days, none over {DOD_MAX_SECONDS}s or split")
+    return True

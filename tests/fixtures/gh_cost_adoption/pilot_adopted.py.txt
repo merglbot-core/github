@@ -1,0 +1,75 @@
+# Adopted #910 autopilot text (live sha256 08477d87...): percentile() and measure_arm64_pilot()
+# verbatim, the pre-image the anchored patch rewrites. Test fixture only; never imported.
+
+def percentile(values, q):
+    """Linear-interpolated percentile of a non-empty list, rounded to whole seconds."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    k = (len(ordered) - 1) * q
+    f = int(k)
+    c = min(f + 1, len(ordered) - 1)
+    return round(ordered[f] + (ordered[c] - ordered[f]) * (k - f))
+
+
+
+def measure_arm64_pilot(state, item):
+    """#917: the pilot job on the arm64 label shows no regression against its own x64 history.
+
+    before = first-attempt completed runs in the PILOT_WINDOW_DAYS before the merge whose job ran
+    off the label; after = runs since the merge whose job ran on the label. Durations (job
+    started_at -> completed_at, so the ci-pr-delay environment wait is excluded) are compared on
+    successful runs: p50 and p95 must stay <= PILOT_MAX_RATIO x. Failures (success vs failure
+    conclusions only) may not rise by more than PILOT_FAIL_TOLERANCE. The verdict is written only
+    after the window has elapsed; a regression is recorded, never silently discharged."""
+    repo, workflow, job, label = item["repo"], item["workflow"], item["job"], item["label"]
+    since = item_since(state, item)
+    if not since:
+        return False
+    start = parse(since) - dt.timedelta(days=PILOT_WINDOW_DAYS)
+    known = item.setdefault("runs", {})
+    for created in (f"{start.strftime('%Y-%m-%d')}..{since[:10]}", f"%3E%3D{since[:10]}"):
+        runs = gh_json(f"repos/{repo}/actions/workflows/{workflow}/runs"
+                       f"?created={created}&status=completed&per_page={PILOT_SAMPLE}")
+        if runs is None:
+            return False
+        for run in runs.get("workflow_runs", []):
+            run_id = str(run.get("id"))
+            if run_id in known or run.get("run_attempt", 1) != 1 or not run.get("created_at"):
+                continue
+            if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
+                # The next sweep continues from `known`; nothing is decided on a partial census.
+                return True
+            jobs = (gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=30") or {}).get("jobs", [])
+            for j in jobs:
+                if (j.get("name") == job or (j.get("name") or "").endswith(" / " + job)) and j.get("completed_at"):
+                    known[run_id] = {"created": run["created_at"], "labels": j.get("labels") or [],
+                                     "s": job_seconds(j) or 0, "concl": j.get("conclusion")}
+                    break
+
+    def stats(rows):
+        ok = [r["s"] for r in rows if r["concl"] == "success"]
+        fails = [r for r in rows if r["concl"] == "failure"]
+        return {"n": len(ok) + len(fails), "ok": len(ok), "fail": len(fails),
+                "p50": percentile(ok, 0.5), "p95": percentile(ok, 0.95)}
+
+    before = stats([r for r in known.values() if r["created"] < since and label not in r["labels"]])
+    after = stats([r for r in known.values() if r["created"] >= since and label in r["labels"]])
+    item["before"], item["after"] = before, after
+    if now() < parse(since) + dt.timedelta(days=PILOT_WINDOW_DAYS):
+        item["verdict"] = None
+        return True
+    if before["ok"] < PILOT_MIN_RUNS or after["ok"] < PILOT_MIN_RUNS:
+        item["verdict"] = "insufficient_data"
+        return True
+    fail_rate = lambda s: s["fail"] / s["n"] if s["n"] else 0.0  # noqa: E731
+    slower = after["p50"] > PILOT_MAX_RATIO * before["p50"] or after["p95"] > PILOT_MAX_RATIO * before["p95"]
+    flakier = fail_rate(after) > fail_rate(before) + PILOT_FAIL_TOLERANCE
+    item["verdict"] = "regression" if (slower or flakier) else "pass"
+    if item["verdict"] == "pass":
+        item["met_at"] = iso()
+        log(f"DoD met for #{item['sub']} {repo} {job}: arm64 p50 {after['p50']} s / p95 {after['p95']} s "
+            f"vs x64 p50 {before['p50']} s / p95 {before['p95']} s")
+    else:
+        log(f"#{item['sub']} {repo} {job}: arm64 pilot {item['verdict']}")
+    return True
