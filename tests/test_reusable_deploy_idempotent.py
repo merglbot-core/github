@@ -120,6 +120,9 @@ class ImagePublishContractTests(unittest.TestCase):
         self.assertIn("--certificate-identity-regexp '" + IDENTITY + "'", adoptable)
         self.assertIn("--certificate-oidc-issuer 'https://token.actions.githubusercontent.com'", adoptable)
         self.assertIn('--certificate-github-workflow-repository "$GITHUB_REPOSITORY"', adoptable)
+        # an older signed digest of the same repository must not pass under this commit's tag
+        self.assertIn('--certificate-github-workflow-sha "$IMAGE_TAG"', adoptable)
+        self.assertIn("IMAGE_TAG: ${{ github.sha }}", legacy)
         self.assertEqual(1, legacy.count("- name: Install Cosign"))
         self.assertLess(legacy.index("- name: Install Cosign"), legacy.index("- name: Build and Push Docker image"))
 
@@ -154,13 +157,18 @@ class ImagePublishProbeTests(unittest.TestCase):
         self.assertEqual(["pull", "image"], calls)
 
     def test_present_tag_without_provenance_is_rebuilt_and_pushed(self) -> None:
-        for mode, adoptable in (("present", "no"), ("present+no-digest", "yes")):
-            with self.subTest(mode=mode, adoptable=adoptable):
-                rc, out, calls = self.publish(mode, adoptable)
-                self.assertEqual(0, rc, out)
-                self.assertIn(f"RESULT {BASE}@{PUSHED} false", out)
-                self.assertEqual(["pull", "image", "build", "push"], calls)
-                self.assertIn("without verified provenance", out)
+        rc, out, calls = self.publish("present", "no")
+        self.assertEqual(0, rc, out)
+        self.assertIn(f"RESULT {BASE}@{PUSHED} false", out)
+        self.assertEqual(["pull", "image", "build", "push"], calls)
+        self.assertIn("without verified provenance", out)
+
+    def test_present_tag_with_an_unresolvable_digest_fails_without_building(self) -> None:
+        rc, out, calls = self.publish("present+no-digest")
+        self.assertNotEqual(0, rc, out)
+        self.assertEqual(["pull", "image"], calls)
+        self.assertIn("could not resolve its digest", out)
+        self.assertNotIn("ADOPTABLE", out)
 
     def test_absent_tag_is_built_and_pushed(self) -> None:
         for mode in ("absent", "absent-containerd"):

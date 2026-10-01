@@ -153,13 +153,16 @@ jobs:
               -f "$INPUT_DOCKERFILE" .
           }
           # Provenance (github#909): an existing tag is adopted only when its digest carries
-          # a signature this hub workflow made for this caller repository (the identity the
-          # "Sign container image" step verifies); any other tag is rebuilt and pushed.
+          # a signature this hub workflow made for this caller repository in a run of this
+          # very commit (the tag is github.sha, the certificate records the run's commit),
+          # so neither another repo nor an older signed digest of this repo can be adopted
+          # under this tag; any other tag is rebuilt and pushed.
           adoptable() {
             cosign verify \
               --certificate-identity-regexp '^https://github\.com/merglbot-core/github/\.github/workflows/reusable-deploy-cloud-run\.yml@' \
               --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
               --certificate-github-workflow-repository "$GITHUB_REPOSITORY" \
+              --certificate-github-workflow-sha "$IMAGE_TAG" \
               "$1" >/dev/null 2>&1
           }
           # BEGIN image-publish
@@ -181,7 +184,13 @@ jobs:
           probe_rc=0
           probe_out="$(docker pull --quiet "$ref" 2>&1)" || probe_rc=$?
           existing=""
-          if [ "$probe_rc" -eq 0 ]; then existing="$(pulled_digest)"; fi
+          if [ "$probe_rc" -eq 0 ]; then
+            existing="$(pulled_digest)"
+            if [ -z "$existing" ]; then
+              echo "::error::Pulled ${ref} but could not resolve its digest in this repository; not guessing."
+              exit 1
+            fi
+          fi
           if [ -n "$existing" ] && adoptable "${IMAGE_BASE}@${existing}"; then
             IMAGE_ADOPTED=true
             IMAGE_DIGEST="$existing"

@@ -294,7 +294,13 @@ jobs:
           probe_rc=0
           probe_out="$(docker pull --quiet "$ref" 2>&1)" || probe_rc=$?
           existing=""
-          if [ "$probe_rc" -eq 0 ]; then existing="$(pulled_digest)"; fi
+          if [ "$probe_rc" -eq 0 ]; then
+            existing="$(pulled_digest)"
+            if [ -z "$existing" ]; then
+              echo "::error::Pulled ${ref} but could not resolve its digest in this repository; not guessing."
+              exit 1
+            fi
+          fi
           if [ -n "$existing" ] && adoptable "${IMAGE_BASE}@${existing}"; then
             IMAGE_ADOPTED=true
             IMAGE_DIGEST="$existing"
