@@ -18,6 +18,7 @@ Every consumer **must** follow [Rulebook v2](https://github.com/merglbot-public/
 | `.github/workflows/ent-dependabot-autonomous-closeout.yml` | Reusable Dependabot scan/classify/close/merge engine with current-head Merglbot review gate, optional third-party review-bot advisory signal, exact-head squash merge, and post-merge receipts. | `workflow_call` or manual `workflow_dispatch`. Inputs: `mode`, `repo_scope`, `single_repo`, `max_parallel_repos`, `max_prs_per_repo`, `allow_policy_alignment`, `comment_report`, `tracking_issue`. | `dry-run` performs no writes. `apply` may close irrelevant Dependabot PRs, align review gates with snapshots/rollback, and merge only after every current-head gate is green. | Writes weekly artifacts and optional tracking issue comment. Does not deploy, run Terraform apply, mutate secrets, or bypass branch protection. |
 | `.github/workflows/markdown-danger-lint.yml` | Lints Markdown PRs to block dangerous git push guidance (force-pushing all branches) and formatting issues. | `pull_request` (opened/edited/synchronize). | No inputs; auto-detects changed `.md` files. | No secrets. Status name `lint`. |
 | `.github/workflows/quarterly-security-audit.yml` | Quarterly security checklist with optional auto fix / issue creation. | Cron (Jan/Apr/Jul/Oct 15th 09:00 UTC) + manual dispatch (`full_scan`, `create_issues`, `auto_fix`). | Runs shell/Python scripts defined in repo to audit org repos. Document findings in issues automatically. | Uses WIF to reach GCP / GitHub APIs (`id-token: write`). |
+| `.github/workflows/reusable-deploy-runtime-changes.yml` | Deploy runtime-changes guard: decides whether a Cloud Run deploy run ships runtime changes by diffing the last successfully deployed commit against `deploy-sha` (github#909). | `workflow_call` as the first job of a deploy workflow; see the section below. | Inputs: `deploy-sha` (required), `workflow-file`, `deploy-job-regex`, `deny-extra`, `force-runtime-extra`, `runs-on`; outputs `runtime`, `reason`, `base-sha`. Every uncertainty is `runtime=true`. | No secrets. Caller job grants `actions: read` + `contents: read`. |
 
 ### Required Status Checks (`[build, test, codeql]`)
 
@@ -54,7 +55,7 @@ never open a PR. GHAS Secret Protection push protection is untouched either way.
 | `gitleaks` | `false` | gitleaks 8.18.4 (pinned by release checksum) over the working tree, `--no-git --redact`; findings fail the gate and are listed redacted in the job summary |
 | `gitleaks-config-path` | `''` | repo-relative gitleaks config; absolute paths and `..` are rejected |
 | `gitleaks-upload-report` | `false` | uploads the redacted JSON report as a 7-day artifact |
-| `markdown-danger-lint` | `false` | fails when changed Markdown documents `git push --force --all` (verbatim from `markdown-danger-lint.yml`) |
+| `markdown-danger-lint` | `false` | fails when changed Markdown recommends force-pushing all branches at once (the pattern lives in `markdown-danger-lint.yml`; lines saying never or do not are allowed) |
 | `pr-text-length` | `false` | PR title/body length limits, dependabot waived (verbatim from `length-check.yml`) |
 | `pr-text-max-title` | `100` | title limit in characters |
 | `pr-text-max-body` | `4000` | body limit in bytes |
@@ -112,4 +113,58 @@ jobs:
     uses: merglbot-core/github/.github/workflows/reusable-docs-governance.yml@<pinned-sha>
     with:
       mode: advisory
+```
+
+## reusable-deploy-runtime-changes.yml
+
+Deploy runtime-changes guard (github#909). It replaces the inline `runtime-changes` job of the Cloud
+Run deploy callers, whose per-repo allowlists drifted from the Dockerfile `COPY` sets, whose
+`echo "$CHANGED" | grep -q` could SIGPIPE into a silent skip, and whose `HEAD^` base missed the
+commits of replaced pending runs and multi-commit pushes. The job diffs the **last successfully
+deployed commit** of the calling workflow against `deploy-sha` and skips only when every changed
+path is deny-listed. The logic is `scripts/deploy-guard/runtime_changes.sh`, sparse-checked-out
+from the hub commit the caller pinned (`job.workflow_sha`, as `pr-gate.yml` does for
+docs-governance).
+
+| `reason` | `runtime` | when (first match wins) |
+|---|---|---|
+| `manual`, `rerun` | true | `workflow_dispatch`, or `run_attempt > 1` |
+| `fail-open:no-base` | true | none of the 10 newest completed `main` runs (current run excluded) has every job matching `deploy-job-regex` concluded `success`; or any API/jq error |
+| `fail-open:marker-mismatch` | true | that run is a `push`/`workflow_dispatch` run (base = its `head_sha`) whose title carries a ` @ <40 hex>` marker that differs from `head_sha` |
+| `fail-open:legacy-marker` | true | that run has another event (`workflow_run`), where the base is the run-name marker, and has no marker |
+| `already-deployed` | false | base == `deploy-sha` |
+| `fail-open:base-missing` | true | base commit is not in the clone |
+| `stale-trigger` | false | `deploy-sha` is an ancestor of base (production is never rolled back) |
+| `fail-open:diverged`, `fail-open:empty-diff` | true | base is not an ancestor of `deploy-sha`; or the diff is empty |
+| `runtime:<path>` | true | first path that is force-runtime or not deny-listed |
+| `non-runtime-only` | false | every path is deny-listed; a `::notice::` NO-DEPLOY line is emitted |
+
+Deny-list (anchored bash ERE; add more with `deny-extra`, one per line): `^\.github/`, `^docs/`,
+`^[^/]+\.md$`, `^(tests?|e2e|__tests__|playwright|cypress)/`,
+`^\.(gitignore|gitattributes|editorconfig|pre-commit-config\.yaml)$`,
+`^(LICENSE|LICENCE|COPYING|NOTICE)(\.(md|txt|rst))?$`, `^CODEOWNERS$`,
+`^\.(vscode|devcontainer|claude|codex|cursor)/`. Force-runtime (add more with
+`force-runtime-extra`): the calling workflow file and `^\.github/actions/`. Malformed inputs, an
+invalid regex or any unexpected error fail open (`fail-open:*`). `dry-run`/`base-override` exist
+only for `deploy-guard-selftest.yml`.
+
+Caller contract: a `run-name` ending in ` @ <deployed sha>`, job permissions `actions: read` +
+`contents: read`, and downstream jobs gated on `!cancelled() && … runtime != 'false'`, so a guard
+job that fails for infrastructure reasons still deploys. `deploy-job-regex` must match the API
+names of the deploying jobs (`deploy`, `deploy (<matrix>)`, `deploy / build-and-deploy`).
+
+```yaml
+run-name: Deploy my-service @ ${{ github.event.workflow_run.head_sha || github.sha }}
+jobs:
+  runtime-changes:
+    uses: merglbot-core/github/.github/workflows/reusable-deploy-runtime-changes.yml@<pinned-sha>
+    permissions:
+      actions: read
+      contents: read
+    with:
+      # The same SHA the run-name records and the deploy uses (workflow_run: the triggering head).
+      deploy-sha: ${{ github.event.workflow_run.head_sha || github.sha }}
+  deploy:
+    needs: [runtime-changes]
+    if: ${{ !cancelled() && needs.runtime-changes.outputs.runtime != 'false' }}
 ```
