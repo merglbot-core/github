@@ -271,21 +271,42 @@ jobs:
           set -euo pipefail
           IMAGE_BASE="${ARTIFACT_LOCATION}-docker.pkg.dev/${ARTIFACT_PROJECT_ID}/${ARTIFACT_REPOSITORY}/${INPUT_IMAGE_NAME}"
           build_image() { docker build -t "$1" -f "$INPUT_DOCKERFILE" .; }
+          # Provenance (github#909): this workflow does not sign its images, so an existing
+          # tag carries no evidence of who pushed it and is never adopted; it is rebuilt and
+          # pushed (an immutable repository refuses that, as before github#909).
+          adoptable() { return 1; }
           # BEGIN image-publish
-          # Idempotent (github#909): the tag is the commit SHA, so an existing tag is
-          # adopted, never rebuilt or re-pushed (immutable repos reject a re-push).
+          # Idempotent (github#909): the tag is the commit SHA, so an existing tag whose
+          # digest passes `adoptable` (defined per workflow above) is adopted, never rebuilt
+          # or re-pushed (immutable repos reject a re-push). The registry repository can be
+          # shared with other repos' deploy identities, so a tag without that evidence is
+          # rebuilt from this commit and pushed like an absent one: an immutable repository
+          # refuses that push, a mutable one takes this build. Only the verified digest is used.
           ref="${IMAGE_BASE}:${IMAGE_TAG}"
           IMAGE_DIGEST=""
+          pulled_digest() {  # digest of the locally pulled ${ref} in this repository, or empty
+            local line digests
+            digests="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$ref")" || return 0
+            while IFS= read -r line; do
+              if [[ $line == "${IMAGE_BASE}@sha256:"* ]]; then printf '%s\n' "${line#"${IMAGE_BASE}@"}"; return 0; fi
+            done <<< "$digests"
+          }
           probe_rc=0
           probe_out="$(docker pull --quiet "$ref" 2>&1)" || probe_rc=$?
-          if [ "$probe_rc" -eq 0 ]; then
+          existing=""
+          if [ "$probe_rc" -eq 0 ]; then existing="$(pulled_digest)"; fi
+          if [ -n "$existing" ] && adoptable "${IMAGE_BASE}@${existing}"; then
             IMAGE_ADOPTED=true
-            echo "::notice::Image tag ${ref} already exists; adopting it (no rebuild, no push)."
-          elif [[ $probe_out =~ (denied|unauthorized|forbidden|toomanyrequests) ]]; then
+            IMAGE_DIGEST="$existing"
+            echo "::notice::Image tag ${ref} already exists with verified provenance; adopting ${existing} (no rebuild, no push)."
+          elif [ "$probe_rc" -ne 0 ] && [[ $probe_out =~ (denied|unauthorized|forbidden|toomanyrequests) ]]; then
             printf '%s\n' "$probe_out" >&2
             echo "::error::Probing ${ref} was refused; not guessing whether the tag exists."
             exit 1
-          elif [[ $probe_out =~ (manifest\ unknown|MANIFEST_UNKNOWN|manifest\ for\ [^[:space:]]+\ not\ found|failed\ to\ resolve\ reference\ .*:\ not\ found) ]]; then
+          elif [ "$probe_rc" -eq 0 ] || [[ $probe_out =~ (manifest\ unknown|MANIFEST_UNKNOWN|manifest\ for\ [^[:space:]]+\ not\ found|failed\ to\ resolve\ reference\ .*:\ not\ found) ]]; then
+            if [ "$probe_rc" -eq 0 ]; then
+              echo "::notice::Image tag ${ref} exists without verified provenance; rebuilding it from this commit and pushing."
+            fi
             IMAGE_ADOPTED=false
             build_image "$ref"
             push_rc=0
@@ -294,7 +315,8 @@ jobs:
             if [ "$push_rc" -ne 0 ]; then
               # A concurrent deploy of the same commit may have published the tag between the
               # probe and this push (an immutable repository then refuses the push): probe the
-              # exact tag once more and adopt it only when it exists now; anything else fails.
+              # exact tag once more and adopt it only when it exists now with verified
+              # provenance; anything else fails.
               reprobe_rc=0
               reprobe_out="$(docker pull --quiet "$ref" 2>&1)" || reprobe_rc=$?
               if [ "$reprobe_rc" -ne 0 ]; then
@@ -302,8 +324,14 @@ jobs:
                 echo "::error::docker push ${ref} failed (exit ${push_rc}) and the tag does not exist."
                 exit 1
               fi
+              existing="$(pulled_digest)"
+              if [ -z "$existing" ] || ! adoptable "${IMAGE_BASE}@${existing}"; then
+                echo "::error::docker push ${ref} failed (exit ${push_rc}); the tag exists without verified provenance, so it is not adopted."
+                exit 1
+              fi
               IMAGE_ADOPTED=true
-              echo "::notice::docker push ${ref} failed, but the tag exists now (concurrent publication); adopting it."
+              IMAGE_DIGEST="$existing"
+              echo "::notice::docker push ${ref} failed, but the tag exists now with verified provenance (concurrent publication); adopting ${existing}."
             elif [[ $push_out =~ digest:\ (sha256:[0-9a-f]{64}) ]]; then
               IMAGE_DIGEST="${BASH_REMATCH[1]}"
             fi
