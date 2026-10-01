@@ -11,6 +11,7 @@ Every consumer **must** follow [Rulebook v2](https://github.com/merglbot-public/
 | `.github/workflows/ci-python-delay-candidate.yml` | Dedicated opt-in Python CI for the bounded ten-minute PR test-delay pilot; the established `ci-python.yml` remains unchanged. | `workflow_call`, pinned to an exact commit by a pilot caller. Only same-repo PRs to `main` on their first attempt use `ci-pr-delay` when the caller passes `ci-delay-candidate: true` and sets `CI_DELAY_ENABLED=true`; all other runs use `ci-immediate`. | Requires clean caller environments: `ci-pr-delay` admits PR merge refs, while `ci-immediate` admits every caller ref routed there, including `main` and PR merge refs. The timer is configured only on `ci-pr-delay`. Preserves Python tests and the `Python CI` job name, records checkout head/base and the selected environment in one aggregate acceptance marker, and uses `deployment: false`. | No secrets or cloud login. `contents: read`; the caller's existing required check remains mandatory. |
 | `.github/workflows/reusable-build-attest.yml` | Builds a local linux/amd64 image, reclaims the selected builder's local BuildKit cache while retaining the tagged scan image, runs fail-closed Trivy before any registry write, then publishes an isolated candidate with SBOM/provenance and promotes release tags only after local/published config-digest parity. | `workflow_call`; callers must pin an exact commit SHA. `scan=false` remains an explicit opt-out, while the default is fail-closed scanning. | Candidate tags are unique to the workflow run. A failed scan creates no Artifact Registry version; a parity failure leaves only the quarantined candidate and never moves branch/SHA/latest tags. | WIF resource names are passed through `wif_provider` and `wif_service_account`; Binary Authorization signing runs only when both `attest` and `push` are enabled. |
 | `.github/workflows/reusable-deploy-cloud-run.yml` | Builds, pushes, scans (Trivy HIGH/CRITICAL), signs (keyless Cosign via GitHub OIDC), and deploys a container to Cloud Run via WIF. | `workflow_call` from service repos once CI checks pass. | Inputs: `service`, `region`, `project_id`, `service_account`, `environment`, `dockerfile`, `env_vars`, `secrets`. For cross-project secrets the workflow uses recovery-safe ordering: base rollout first, then fresh YAML export + alias reconcile, never stale YAML replay before the target image/env rollout. Publishes a minimal deployment job summary and only caller-visible outputs produced by workflow-owned steps: `deployment_mode`, plus optional alias-only coordination outputs such as alias names or counts when a same-org caller needs them. All other coordination stays internal to the reusable workflow, and full Secret Manager resource paths must never leave the workflow via outputs or summaries. Also uploads a CycloneDX SBOM artifact (365-day retention; attached to private-tag releases by default). Supports private GitHub Packages during Docker build only through the built-in BuildKit secret mount pattern (`id=node_auth_token`) backed by `github.token`; this is not a generic build-arg/build-secret interface. | Secrets: `GCP_WIF_PROVIDER`, `GCP_WIF_SERVICE_ACCOUNT`, `GAR_LOCATION`. Current caller permissions remain `contents: write`, `id-token: write`, `security-events: write`, `actions: read` because GitHub validates nested job permissions before the tag-only `publish_release_sbom` guard is evaluated; add `packages: read` when the Docker build resolves private GitHub Packages through the built-in secret-mount path. A future split into separate read-only deploy and release-SBOM entrypoints can lower normal deploy callers back to `contents: read`. |
+| `.github/workflows/reusable-deploy-cloud-run-wif.yml` | Builds (or adopts), scans (Trivy) and deploys a container to Cloud Run by digest via WIF. | `workflow_call`, pinned by merged commit SHA. | Image publication here and in `reusable-deploy-cloud-run.yml` is idempotent (github#909): the `:<github.sha>` tag is probed with `docker pull`; present = adopt that image (no rebuild, no push), absent (`manifest unknown` / `not found`) = build + push, any other probe error fails the job. Both paths resolve a `sha256` digest without pipes and scan + deploy by digest, so re-deploying a commit on an immutable-tag Artifact Registry repo no longer fails before the Cloud Run update. The build step exposes `adopted`. `reusable-deploy-cloud-run.yml` first runs `cosign verify` on an adopted image (keyless identity = that hub workflow file, GitHub OIDC issuer, same caller repository): verified = not re-signed, `no signatures found` = signed, any other result fails. | Secrets `WIF_PROVIDER`, `WIF_SERVICE_ACCOUNT`, `GCP_PROJECT_ID` (or the matching inputs). |
 | `.github/workflows/automated-release.yml` | Semantic-release automation for repos on `main`. | Triggered on push to `main` (excluding docs) and manual `workflow_dispatch` with optional version. | Auto-determines version unless `inputs.version` supplied. Publishes changelog + release notes and emits explicit `release_outcome` values: `release_created`, `release_already_exists`, `release_skipped_no_version`. | Requires default `GITHUB_TOKEN` write access; Slack notification is sent only for `release_created`. |
 | `.github/workflows/cost-monitoring.yml` | Daily FinOps report + optional issue creation. | Scheduled daily cron + manual dispatch (`month`, `dry_run`). | Runs Python tooling to read billing exports and summarise costs. Set `inputs.dry_run=true` for validation. | Uses WIF (permissions `id-token: write`). Requires project-level secret manager access configured in the workflow. |
 | `.github/workflows/forecast-d1-readiness.yml` | Manual-only Forecast D‑1 readiness diagnostic for final tables (inventory-driven). The scheduled lane was retired after the recurring report moved to the Codex thread. | Manual dispatch only (`patch_date_local`, `dry_run`, `send_success_rate`, `send_test_slack_messages`); `dry_run=true` by default. Scheduled D‑1/D‑2 checks, the dedicated real-readiness lanes, the daily 30d Slack success-rate message, and scheduled artifact production are retired. | Manual runs retain the main D‑1/D‑2 and per-channel diagnostic artifacts. `send_success_rate=true` enables the 30d diagnostic; `send_test_slack_messages=true` generates synthetic previews for the isolated scopes (no BigQuery; requires `dry_run=false`). | Uses WIF (`vars.GCP_WIF_PROVIDER`, `vars.GCP_WIF_SERVICE_ACCOUNT`). Slack via `secrets.SLACK_WEBHOOK_URL` (optional; skips if missing). |
@@ -18,6 +19,7 @@ Every consumer **must** follow [Rulebook v2](https://github.com/merglbot-public/
 | `.github/workflows/ent-dependabot-autonomous-closeout.yml` | Reusable Dependabot scan/classify/close/merge engine with current-head Merglbot review gate, optional third-party review-bot advisory signal, exact-head squash merge, and post-merge receipts. | `workflow_call` or manual `workflow_dispatch`. Inputs: `mode`, `repo_scope`, `single_repo`, `max_parallel_repos`, `max_prs_per_repo`, `allow_policy_alignment`, `comment_report`, `tracking_issue`. | `dry-run` performs no writes. `apply` may close irrelevant Dependabot PRs, align review gates with snapshots/rollback, and merge only after every current-head gate is green. | Writes weekly artifacts and optional tracking issue comment. Does not deploy, run Terraform apply, mutate secrets, or bypass branch protection. |
 | `.github/workflows/markdown-danger-lint.yml` | Lints Markdown PRs to block dangerous git push guidance (force-pushing all branches) and formatting issues. | `pull_request` (opened/edited/synchronize). | No inputs; auto-detects changed `.md` files. | No secrets. Status name `lint`. |
 | `.github/workflows/quarterly-security-audit.yml` | Quarterly security checklist with optional auto fix / issue creation. | Cron (Jan/Apr/Jul/Oct 15th 09:00 UTC) + manual dispatch (`full_scan`, `create_issues`, `auto_fix`). | Runs shell/Python scripts defined in repo to audit org repos. Document findings in issues automatically. | Uses WIF to reach GCP / GitHub APIs (`id-token: write`). |
+| `.github/workflows/reusable-deploy-runtime-changes.yml` | Deploy runtime-changes guard: decides whether a Cloud Run deploy run ships runtime changes by diffing the last successfully deployed commit against `deploy-sha` (github#909). | `workflow_call` as the first job of a deploy workflow; see the section below. | Inputs: `deploy-sha` (required), `workflow-file`, `deploy-job-regex`, `deny-extra`, `force-runtime-extra`, `runs-on`; outputs `runtime`, `reason`, `base-sha`. Every uncertainty is `runtime=true`. | No secrets. Caller job grants `actions: read` + `contents: read`. |
 
 ### Required Status Checks (`[build, test, codeql]`)
 
@@ -54,7 +56,7 @@ never open a PR. GHAS Secret Protection push protection is untouched either way.
 | `gitleaks` | `false` | gitleaks 8.18.4 (pinned by release checksum) over the working tree, `--no-git --redact`; findings fail the gate and are listed redacted in the job summary |
 | `gitleaks-config-path` | `''` | repo-relative gitleaks config; absolute paths and `..` are rejected |
 | `gitleaks-upload-report` | `false` | uploads the redacted JSON report as a 7-day artifact |
-| `markdown-danger-lint` | `false` | fails when changed Markdown documents `git push --force --all` (verbatim from `markdown-danger-lint.yml`) |
+| `markdown-danger-lint` | `false` | fails when changed Markdown recommends force-pushing all branches at once (the pattern lives in `markdown-danger-lint.yml`; lines saying never or do not are allowed) |
 | `pr-text-length` | `false` | PR title/body length limits, dependabot waived (verbatim from `length-check.yml`) |
 | `pr-text-max-title` | `100` | title limit in characters |
 | `pr-text-max-body` | `4000` | body limit in bytes |
@@ -112,4 +114,58 @@ jobs:
     uses: merglbot-core/github/.github/workflows/reusable-docs-governance.yml@<pinned-sha>
     with:
       mode: advisory
+```
+
+## reusable-deploy-runtime-changes.yml
+
+Deploy runtime-changes guard (github#909). It replaces the inline `runtime-changes` job of the Cloud
+Run deploy callers, whose per-repo allowlists drifted from the Dockerfile `COPY` sets, whose
+`echo "$CHANGED" | grep -q` could SIGPIPE into a silent skip, and whose `HEAD^` base missed the
+commits of replaced pending runs and multi-commit pushes. The job diffs the **last successfully
+deployed commit** of the calling workflow against `deploy-sha` and skips only when every changed
+path is deny-listed. The logic is `scripts/deploy-guard/runtime_changes.sh`, sparse-checked-out
+from the hub commit the caller pinned (`job.workflow_sha`, as `pr-gate.yml` does for
+docs-governance).
+
+| `reason` | `runtime` | when (first match wins) |
+|---|---|---|
+| `manual`, `rerun` | true | `workflow_dispatch`, or `run_attempt > 1` |
+| `fail-open:no-base` | true | none of the 10 newest completed `main` runs (current run excluded) has every job matching `deploy-job-regex` concluded `success`; or any API/jq error |
+| `fail-open:marker-mismatch` | true | that run is a `push`/`workflow_dispatch` run (base = its `head_sha`) whose title carries a ` @ <40 hex>` marker that differs from `head_sha` |
+| `fail-open:legacy-marker` | true | that run has another event (`workflow_run`), where the base is the run-name marker, and has no marker |
+| `already-deployed` | false | base == `deploy-sha` |
+| `fail-open:base-missing` | true | base commit is not in the clone |
+| `stale-trigger` | false | `deploy-sha` is an ancestor of base (production is never rolled back) |
+| `fail-open:diverged`, `fail-open:empty-diff` | true | base is not an ancestor of `deploy-sha`; or the diff is empty |
+| `runtime:<path>` | true | first path that is force-runtime or not deny-listed |
+| `non-runtime-only` | false | every path is deny-listed; a `::notice::` NO-DEPLOY line is emitted |
+
+Deny-list (anchored bash ERE; add more with `deny-extra`, one per line): `^\.github/`, `^docs/`,
+`^[^/]+\.md$`, `^(tests?|e2e|__tests__|playwright|cypress)/`,
+`^\.(gitignore|gitattributes|editorconfig|pre-commit-config\.yaml)$`,
+`^(LICENSE|LICENCE|COPYING|NOTICE)(\.(md|txt|rst))?$`, `^CODEOWNERS$`,
+`^\.(vscode|devcontainer|claude|codex|cursor)/`. Force-runtime (add more with
+`force-runtime-extra`): the calling workflow file and `^\.github/actions/`. Malformed inputs, an
+invalid regex or any unexpected error fail open (`fail-open:*`). `dry-run`/`base-override` exist
+only for `deploy-guard-selftest.yml`.
+
+Caller contract: a `run-name` ending in ` @ <deployed sha>`, job permissions `actions: read` +
+`contents: read`, and downstream jobs gated on `!cancelled() && … runtime != 'false'`, so a guard
+job that fails for infrastructure reasons still deploys. `deploy-job-regex` must match the API
+names of the deploying jobs (`deploy`, `deploy (<matrix>)`, `deploy / build-and-deploy`).
+
+```yaml
+run-name: Deploy my-service @ ${{ github.event.workflow_run.head_sha || github.sha }}
+jobs:
+  runtime-changes:
+    uses: merglbot-core/github/.github/workflows/reusable-deploy-runtime-changes.yml@<pinned-sha>
+    permissions:
+      actions: read
+      contents: read
+    with:
+      # The same SHA the run-name records and the deploy uses (workflow_run: the triggering head).
+      deploy-sha: ${{ github.event.workflow_run.head_sha || github.sha }}
+  deploy:
+    needs: [runtime-changes]
+    if: ${{ !cancelled() && needs.runtime-changes.outputs.runtime != 'false' }}
 ```

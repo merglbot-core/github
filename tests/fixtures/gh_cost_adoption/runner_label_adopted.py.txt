@@ -1,0 +1,45 @@
+# Adopted #910 autopilot text (live sha256 08477d87...): measure_runner_label() verbatim, the
+# pre-image the anchored patch rewrites. Test fixture only; never imported.
+
+def measure_runner_label(state, item):
+    """#913/#917: natural runs of the job land on the new runner label, green, under the limit."""
+    repo, workflow, job, label = item["repo"], item["workflow"], item["job"], item["label"]
+    since = item_since(state, item)
+    if not since:
+        return False
+    runs = gh_json(f"repos/{repo}/actions/workflows/{workflow}/runs"
+                   f"?created=%3E%3D{since[:10]}&status=completed&per_page=30")
+    if runs is None:
+        return False
+    known = item.setdefault("runs", {})
+    for run in runs.get("workflow_runs", []):
+        run_id = str(run.get("id"))
+        if run_id in known or run.get("created_at", "") < since:
+            continue
+        if CALLS["n"] > MAX_CALLS_PER_TICK - 3:
+            break
+        jobs = (gh_json(f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=30") or {}).get("jobs", [])
+        for j in jobs:
+            if (j.get("name") == job or (j.get("name") or "").endswith(" / " + job)) and j.get("completed_at"):
+                known[run_id] = {"labels": j.get("labels") or [], "s": job_seconds(j) or 0,
+                                 "ok": j.get("conclusion") == "success"}
+                break
+    on_label = [r for r in known.values() if label in r["labels"]]
+    good = [r for r in on_label if r["ok"] and r["s"] <= item.get("max_s", 300)]
+    item["good"], item["on_label"] = len(good), len(on_label)
+    if len(good) >= item.get("threshold", DOD_RUNS):
+        item["met_at"] = iso()
+        log(f"DoD met for #{item['sub']} {repo}: {len(good)} green runs on {label}")
+        return True
+    # A repository with almost no runs of the job (mcp-server: 0 runs in the first 14 days
+    # after the merge) would hold the sub-issue open forever on a count. After the grace
+    # period the DoD accepts what was observed, provided every observed run landed on the
+    # new label, green and under the limit; the label itself is proven by the file_state
+    # item of the same workflow on main.
+    over = [r for r in known.values()
+            if label not in r["labels"] or not r["ok"] or r["s"] > item.get("max_s", 300)]
+    if not over and now() - parse(since) >= dt.timedelta(days=LOW_TRAFFIC_GRACE_DAYS):
+        item.update(met_at=iso(), low_traffic=True, observed=len(known))
+        log(f"DoD met for #{item['sub']} {repo} on low traffic: {len(known)} run(s) of {job} in "
+            f"{LOW_TRAFFIC_GRACE_DAYS} days, all on {label}, green, under the limit")
+    return True
