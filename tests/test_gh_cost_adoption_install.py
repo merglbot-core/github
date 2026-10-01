@@ -59,7 +59,7 @@ class Home(unittest.TestCase):
 
     def install(self, dry_run=False):
         code, state = self.digests()
-        return self.ins.install_code("888", code, state, dry_run)
+        return self.ins.install_code("888", code, state, dry_run, siblings_verified=True)
 
 
 class Code(Home):
@@ -86,23 +86,23 @@ class Code(Home):
     def test_refusals(self):
         code, state = self.digests()
         with self.assertRaisesRegex(RuntimeError, "fresh digests"):
-            self.ins.install_code("888", "0" * 64, state)
+            self.ins.install_code("888", "0" * 64, state, siblings_verified=True)
         self.ins.TARGETS["888"]["adopted"] = "f" * 64
         with self.assertRaisesRegex(RuntimeError, "unreviewed pre-image"):
-            self.ins.install_code("888", code, state)
+            self.ins.install_code("888", code, state, siblings_verified=True)
         self.ins.TARGETS["888"]["adopted"] = sha(FIXTURE.encode())
         self.ins.HOLD.write_text("hold")
         with self.assertRaisesRegex(RuntimeError, "OWNER_HOLD"):
-            self.ins.install_code("888", code, state)
+            self.ins.install_code("888", code, state, siblings_verified=True)
         self.ins.HOLD.unlink()
         (self.base / "autopilot/lock").mkdir()
         with self.assertRaises(FileExistsError):
-            self.ins.install_code("888", code, state)
+            self.ins.install_code("888", code, state, siblings_verified=True)
         (self.base / "autopilot/lock").rmdir()
         self.write_state({"dod": {}, "subs": {}})
         code, state = self.digests()
         with self.assertRaisesRegex(RuntimeError, "adopted edits"):
-            self.ins.install_code("888", code, state)
+            self.ins.install_code("888", code, state, siblings_verified=True)
 
     def test_rollback_only_from_the_installed_image(self):
         result = self.install()
@@ -118,22 +118,31 @@ class SourceMatchesMain(unittest.TestCase):
     def setUp(self):
         self.ins = load("adoption_install_source", TOOL / "install.py")
 
-    def fetch(self, changed=None, sha="a" * 40, remaining=4000):
+    def fetch(self, changed=None, sha="a" * 40, remaining=4000, seen=None):
         import base64
 
         def read(path):
             if path.endswith("/branches/main"):
                 return {"commit": {"sha": sha}}, remaining
-            name = path.split("tools/gh-cost-autopilot-adoption/")[1].split("?")[0]
-            data = (TOOL / name).read_bytes() if name != changed else b"changed"
+            name = path.split("contents/tools/")[1].split("?")[0]
+            if seen is not None:
+                seen.append(name)
+            data = (TOOL.parent / name).read_bytes() if name != changed else b"changed"
             return {"encoding": "base64", "content": base64.b64encode(data).decode()}, remaining
         return read
 
-    def test_every_source_file_must_equal_main(self):
-        self.assertEqual(self.ins.source_matches_main(self.fetch()), "a" * 40)
-        for name in self.ins.SOURCE_FILES:
+    def test_every_executed_or_read_file_must_equal_main(self):
+        own = [f"{TOOL.name}/{n}" for n in self.ins.SOURCE_FILES]
+        siblings = [f"{tool}/{n}" for tool, names in self.ins.OLDER_TOOLS.items() for n in names]
+        seen = []
+        self.assertEqual(self.ins.source_matches_main(self.fetch(seen=seen)), "a" * 40)
+        self.assertEqual(sorted(seen), sorted(own + siblings))
+        for name in own + siblings:
             with self.assertRaisesRegex(RuntimeError, "differs from main"):
                 self.ins.source_matches_main(self.fetch(changed=name))
+        seen = []
+        self.ins.source_matches_main(self.fetch(seen=seen), include_self=False)
+        self.assertEqual(sorted(seen), sorted(siblings))
         with self.assertRaisesRegex(RuntimeError, "unreadable"):
             self.ins.source_matches_main(self.fetch(sha="short"))
         with self.assertRaisesRegex(RuntimeError, "reserve"):
@@ -149,7 +158,7 @@ class Provenance(Home):
         (self.base / "autopilot.py").write_text(tampered)
         code, state = self.digests()
         with self.assertRaisesRegex(RuntimeError, "not the reviewed installation"):
-            self.ins.install_code("888", code, state)
+            self.ins.install_code("888", code, state, siblings_verified=True)
         with self.assertRaisesRegex(RuntimeError, "install the adopted code first"):
             self.ins.code_installed("888")
 
@@ -187,7 +196,7 @@ class Provenance(Home):
         import sys
         result = self.install()
         calls = []
-        self.ins.source_matches_main = lambda: calls.append("main") or (_ for _ in ()).throw(
+        self.ins.source_matches_main = lambda include_self=True: calls.append("main") or (_ for _ in ()).throw(
             RuntimeError("differs from main"))
         saved, sys.argv = sys.argv, ["install.py", "rollback", "--target", "888", "--backup", result["backup"]]
         try:
@@ -231,18 +240,50 @@ class LockDiscipline(Home):
         self.assertEqual(self.digests()[1], state)
 
 
+class OlderPatchers(Home):
+    def test_only_verified_listed_patchers_run(self):
+        with self.assertRaisesRegex(RuntimeError, "not verified"):
+            self.ins.older_patchers("888", "x")
+        extra = TOOL.parent / "gh-cost-zz-unlisted"
+        extra.mkdir()
+        try:
+            (extra / "patch_autopilot.py").write_text("def patch(source):\n    raise SystemExit('ran')\n")
+            with self.assertRaisesRegex(RuntimeError, "unexpected or missing older patchers"):
+                self.ins.older_patchers("888", "x", siblings_verified=True)
+        finally:
+            (extra / "patch_autopilot.py").unlink()
+            extra.rmdir()
+
+    def test_a_failed_rollback_restores_the_installed_files(self):
+        result = self.install()
+        before = {n: (self.base / n).read_bytes() for n in ("autopilot.py", "cost_adoption.py", self.ins.RECEIPT)}
+        real, calls = self.ins.atomic, []
+
+        def flaky(path, data):
+            calls.append(path.name)
+            real(path, data)
+            if len(calls) == 1:  # the adopted code is already back when the transition breaks
+                raise OSError("disk full")
+        self.ins.atomic = flaky
+        with self.assertRaises(OSError):
+            self.ins.rollback("888", result["backup"])
+        self.ins.atomic = real
+        self.assertEqual({n: (self.base / n).read_bytes() for n in before}, before)
+        self.assertEqual(self.ins.rollback("888", result["backup"])["restored"], sha(FIXTURE.encode()))
+
+
 class TwoPhase(unittest.TestCase):
     def test_no_target_is_written_when_another_fails_validation(self):
         import sys
         ins = load("adoption_install_two_phase", TOOL / "install.py")
         calls = []
 
-        def fake(target, code, state, dry_run=False, source=None):
+        def fake(target, code, state, dry_run=False, source=None, siblings_verified=False):
             calls.append((target, dry_run))
             if target == "910" and dry_run:
                 raise RuntimeError("910 refuses")
             return {"target": target}
-        ins.install_code, ins.source_matches_main = fake, lambda: "a" * 40
+        ins.install_code, ins.source_matches_main = fake, lambda include_self=True: "a" * 40
         argv = ["install.py", "code"] + [f"--expected-{k}-{t}=x" for t in ("888", "910") for k in ("code", "state")]
         saved, sys.argv = sys.argv, argv
         try:
@@ -306,7 +347,7 @@ class ReleaseHold(Home):
         self.write_state(STATE_910)
         self.ins.TARGETS["910"] = {"base": self.base, "patch": "patch_910", "adopted": sha(FIXTURE_910.encode())}
         code, state = self.digests()
-        self.ins.install_code("910", code, state)
+        self.ins.install_code("910", code, state, siblings_verified=True)
 
     def graphql(self, option):
         return lambda query: {"node": {"project": {"id": self.ins.PROJECT_66},

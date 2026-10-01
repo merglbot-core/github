@@ -49,6 +49,17 @@ PROJECT_66, ITEM_917, DONE_66 = "PVT_kwDODhoOm84Bkd8e", "PVTI_lADODhoOm84Bkd8ezg
 RESERVE = 2000 + 40
 MAIN_REPO = "merglbot-core/github"
 SOURCE_FILES = ("install.py", "patch_autopilot.py", "cost_adoption.py", "decisions/895.cs.md")
+# The one-shot installers whose patchers are replayed against the patched code, and every file
+# they load or read. Nothing else is executed; any other tools/gh-cost-*/patch_autopilot.py
+# aborts the run (V6 #974).
+OLDER_TOOLS = {
+    "gh-cost-888-acceptance": ("patch_autopilot.py", "install.py"),
+    "gh-cost-888-numerics": ("patch_autopilot.py", "install.py"),
+    "gh-cost-910-closeout": ("patch_autopilot.py", "install.py"),
+    "gh-cost-922-numerics": ("patch_autopilot.py", "install.py", "runtime.py"),
+    "gh-cost-922-window": ("patch_autopilot.py", "install.py", "runtime.py"),
+    "gh-cost-acceptance": ("patch_autopilot.py", "install.py"),
+}
 
 
 def digest(data):
@@ -101,29 +112,35 @@ def py39_ok(sources):
     return True
 
 
-def older_patchers(target, new_code):
+def older_patchers(target, new_code, siblings_verified=False):
     """Every older patcher aimed at this autopilot must refuse (raise) or leave the adopted code
-    unchanged. A tool's aim is the BASE of its install.py; a tool without one counts for both."""
+    unchanged. Only OLDER_TOOLS run, and only after source_matches_main() verified their files
+    (`siblings_verified`); any other tools/gh-cost-*/patch_autopilot.py aborts. A tool's aim is
+    the BASE of its install.py; a tool without one counts for both."""
+    if siblings_verified is not True:
+        raise RuntimeError("older patchers not verified against the protected main branch")
+    found = {path.parent.name for path in HERE.parent.glob("gh-cost-*/patch_autopilot.py")} - {HERE.name}
+    if found != set(OLDER_TOOLS):
+        raise RuntimeError(f"unexpected or missing older patchers: {sorted(found ^ set(OLDER_TOOLS))}")
     mine = TARGETS[target]["base"].name
     report = {}
-    for path in sorted(HERE.parent.glob("gh-cost-*/patch_autopilot.py")):
-        if path.parent == HERE:
-            continue
+    for name in sorted(OLDER_TOOLS):
+        path = HERE.parent / name / "patch_autopilot.py"
         installer = path.parent / "install.py"
         aim = re.search(r'BASE\s*=\s*Path\.home\(\)\s*/\s*"\.merglbot/([\w.-]+)"',
                         installer.read_text()) if installer.exists() else None
         if aim and aim.group(1) != mine:
-            report[path.parent.name] = "aims at " + aim.group(1)
+            report[name] = "aims at " + aim.group(1)
             continue
-        module = load(path, "older_" + path.parent.name.replace("-", "_"))
+        module = load(path, "older_" + name.replace("-", "_"))
         try:
             out = module.patch(new_code)
         except Exception as error:  # noqa: BLE001 - any refusal is the wanted outcome
-            report[path.parent.name] = "refused: " + type(error).__name__
+            report[name] = "refused: " + type(error).__name__
             continue
         if out != new_code:
-            raise RuntimeError(f"{path.parent.name} would rewrite the adopted code; aborting")
-        report[path.parent.name] = "no-op"
+            raise RuntimeError(f"{name} would rewrite the adopted code; aborting")
+        report[name] = "no-op"
     return report
 
 
@@ -183,7 +200,7 @@ def verify_installed(target):
     return receipt
 
 
-def install_code(target, expected_code, expected_state, dry_run=False, source_sha=None):
+def install_code(target, expected_code, expected_state, dry_run=False, source_sha=None, siblings_verified=False):
     spec = TARGETS[target]
     base = spec["base"]
     patch = getattr(load(HERE / "patch_autopilot.py", "adoption_patch"), spec["patch"])
@@ -205,7 +222,8 @@ def install_code(target, expected_code, expected_state, dry_run=False, source_sh
         facts = {"target": target, "code_before": digest(old_code), "code_after": digest(new_code),
                  "state": digest(old_state), "cost_adoption_after": digest(helper_new),
                  "cost_adoption_before": digest(helper_path.read_bytes()) if helper_path.exists() else None,
-                 "older_patchers": older_patchers(target, new_code.decode()), "python39": "compiled",
+                 "older_patchers": older_patchers(target, new_code.decode(), siblings_verified),
+                 "python39": "compiled",
                  "source_main_sha": source_sha}
         if dry_run:
             return dict(facts, dry_run=True)
@@ -238,20 +256,23 @@ def install_code(target, expected_code, expected_state, dry_run=False, source_sh
         return dict(facts, backup=str(backup))
 
 
-def source_matches_main(fetch=gh_api):
-    """Return the live main SHA when every SOURCE_FILES entry equals it byte for byte."""
+def source_matches_main(fetch=gh_api, include_self=True):
+    """Return the live main SHA when every file this run executes or reads equals it byte for
+    byte: the older patchers always, this package's own files for writes (`include_self`)."""
     branch, remaining = fetch(f"repos/{MAIN_REPO}/branches/main")
     if remaining is not None and remaining < RESERVE:
         raise RuntimeError("GitHub core budget below the shared reserve")
     sha = ((branch or {}).get("commit") or {}).get("sha") if isinstance(branch, dict) else None
     if not isinstance(sha, str) or len(sha) != 40:
         raise RuntimeError("main branch unreadable")
-    for name in SOURCE_FILES:
-        data, _ = fetch(f"repos/{MAIN_REPO}/contents/tools/gh-cost-autopilot-adoption/{name}?ref={sha}")
+    paths = [f"{HERE.name}/{name}" for name in SOURCE_FILES] if include_self else []
+    paths += [f"{tool}/{name}" for tool, names in OLDER_TOOLS.items() for name in names]
+    for path in paths:
+        data, _ = fetch(f"repos/{MAIN_REPO}/contents/tools/{path}?ref={sha}")
         published = (base64.b64decode(data.get("content", "")) if isinstance(data, dict)
                      and data.get("encoding") == "base64" else None)
-        if published != (HERE / name).read_bytes():
-            raise RuntimeError(f"{name} differs from main {sha[:8]}: install only from the protected main branch")
+        if published != (HERE.parent / path).read_bytes():
+            raise RuntimeError(f"{path} differs from main {sha[:8]}: run only from the protected main branch")
     return sha
 
 
@@ -399,16 +420,26 @@ def rollback(target, backup):
             raise RuntimeError("newer code or helper exists; rollback refused")
         if HOLD.exists():
             raise RuntimeError("OWNER_HOLD appeared")
-        atomic(code_path, code_bytes)
-        if helper_bytes is None:
-            helper_path.unlink()
-        else:
-            atomic(helper_path, helper_bytes)
-        if (base / RECEIPT).exists():
-            (base / RECEIPT).unlink()
-        if digest(code_path.read_bytes()) != manifest["code_before"] or \
-                (helper_path.read_bytes() if helper_path.exists() else None) != helper_bytes:
-            raise RuntimeError("rollback readback mismatch")
+        live_code, receipt_path = code_path.read_bytes(), base / RECEIPT
+        live_receipt = receipt_path.read_bytes() if receipt_path.exists() else None
+        try:
+            atomic(code_path, code_bytes)
+            if helper_bytes is None:
+                helper_path.unlink()
+            else:
+                atomic(helper_path, helper_bytes)
+            if receipt_path.exists():
+                receipt_path.unlink()
+            if digest(code_path.read_bytes()) != manifest["code_before"] or \
+                    (helper_path.read_bytes() if helper_path.exists() else None) != helper_bytes:
+                raise RuntimeError("rollback readback mismatch")
+        except Exception:
+            # Never leave a mixed transition: the installed files and receipt come back whole.
+            atomic(code_path, live_code)
+            atomic(helper_path, live_helper)
+            if live_receipt is not None:
+                atomic(receipt_path, live_receipt)
+            raise
     return {"target": target, "restored": manifest["code_before"]}
 
 
@@ -431,15 +462,17 @@ def main():
     back.add_argument("--backup", required=True)
     args = vars(parser.parse_args())
     # Writes (rollback included) only from the protected main branch; a dry run may try a
-    # review branch.
-    source = None if args.get("dry_run") else source_matches_main()
+    # review branch, but the older patchers it executes are always verified against main.
+    source = source_matches_main(include_self=not args.get("dry_run"))
+    if args.get("dry_run"):
+        source = None
     if args["command"] == "code":
         # Both targets are validated before either is written, so a predictable refusal on the
         # second never leaves the first installed alone; each write re-validates its digests.
-        checked = [install_code(t, args[f"expected_code_{t}"], args[f"expected_state_{t}"], True, source)
+        checked = [install_code(t, args[f"expected_code_{t}"], args[f"expected_state_{t}"], True, source, True)
                    for t in TARGETS]
         result = checked if args["dry_run"] else [
-            install_code(t, args[f"expected_code_{t}"], args[f"expected_state_{t}"], False, source)
+            install_code(t, args[f"expected_code_{t}"], args[f"expected_state_{t}"], False, source, True)
             for t in TARGETS]
     elif args["command"] == "record-owner-exception":
         result = record_owner_exception(args["expected_state_888"], args["dry_run"], source_sha=source)
