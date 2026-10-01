@@ -195,6 +195,19 @@ class CosignSignTests(unittest.TestCase):
             calls = (root / "log").read_text(encoding="utf-8").splitlines()
             return proc.returncode, proc.stdout + proc.stderr, calls
 
+    def test_identity_matches_the_measured_signing_certificate(self) -> None:
+        # Values read on 1 Oct 2026 from the sigstore bundle of
+        # merglbot-artifacts/platform/project-management-app-preview@sha256:4319bf7d...
+        # (signed by run 36731604131 through this reusable workflow).
+        san = ("https://github.com/merglbot-core/github/.github/workflows/reusable-deploy-cloud-run.yml"
+               "@0fe369bd992376ef24dcbbf2451a6058ca11b75f")
+        caller = "https://github.com/merglbot-core/project-management-app/.github/workflows/deploy-cloudrun.yml@refs/heads/main"
+        self.assertRegex(san, IDENTITY)
+        self.assertNotRegex(caller, IDENTITY)
+        block = extract_block(WORKFLOWS[0], "cosign-sign")
+        self.assertIn("--certificate-identity-regexp '" + IDENTITY + "'", block)
+        self.assertIn('--certificate-github-workflow-repository "$GITHUB_REPOSITORY"', block)
+
     def test_adopted_and_already_signed_is_not_resigned(self) -> None:
         rc, out, calls = self.sign("verified", "true")
         self.assertEqual(0, rc, out)

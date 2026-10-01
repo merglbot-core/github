@@ -282,6 +282,9 @@ jobs:
           # file. An adopted image (github#909) may already be signed and re-signing can
           # fail on an immutable repository, so verify it with that identity first:
           # verified = keep, "no signatures found" = sign, anything else = fail.
+          # Measured 1 Oct 2026 on a real signature (project-management-app run 36731604131):
+          # the certificate SAN is this file at the pinned hub ref, the workflow-repository
+          # extension (1.3.6.1.4.1.57264.1.5) is the caller repository = GITHUB_REPOSITORY.
           if [ "$IMAGE_ADOPTED" = "true" ]; then
             verify_rc=0
             verify_out="$(cosign verify \
