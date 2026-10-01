@@ -353,6 +353,26 @@ class ReleaseHold(Home):
         return lambda query: {"node": {"project": {"id": self.ins.PROJECT_66},
                                        "fieldValueByName": {"optionId": option}}}
 
+    def test_install_release_rollback_reinstall(self):
+        done = ({"state": "closed", "state_reason": "completed"}, 4000)
+        released = self.ins.release_hold(self.digests()[1], fetch=lambda p: done,
+                                         graphql=self.graphql(self.ins.DONE_66))
+        receipt = json.loads((self.base / self.ins.RECEIPT).read_text())
+        self.ins.rollback("910", receipt["backup"])
+        self.assertEqual((self.base / "autopilot.py").read_text(), FIXTURE_910)
+        code, state = self.digests()
+        result = self.ins.install_code("910", code, state, siblings_verified=True)
+        self.assertEqual(result["code_after"], receipt["code_after"])
+        self.assertTrue(released["backup"])
+        # a hold cleared by hand, without the release record, is still refused
+        state_json = json.loads((self.base / "state.json").read_text())
+        state_json["subs"]["917"] = {"technical_hold": False}
+        self.write_state(state_json)
+        self.ins.rollback("910", json.loads((self.base / self.ins.RECEIPT).read_text())["backup"])
+        code, state = self.digests()
+        with self.assertRaisesRegex(RuntimeError, "state lacks the adopted edits"):
+            self.ins.install_code("910", code, state, siblings_verified=True)
+
     def test_needs_closed_and_done(self):
         state = self.digests()[1]
         with self.assertRaisesRegex(RuntimeError, "not closed as completed and Done"):

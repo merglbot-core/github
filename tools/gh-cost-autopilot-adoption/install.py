@@ -283,7 +283,13 @@ def check_state(target, state):
         ok = bool((dod.get("892|merglbot-core/merglbot-admin") or {}).get("owner_exception"))
     else:
         pilots = [i for i in dod.values() if i.get("kind") == "arm64_pilot"]
-        ok = (len(pilots) == 5 and (subs.get("917") or {}).get("technical_hold") is True
+        hold = subs.get("917") or {}
+        # The #917 hold is either still set or was released by `release-hold` (which records
+        # when and why), so install -> release-hold -> rollback -> reinstall stays possible.
+        hold_ok = hold.get("technical_hold") is True or (
+            hold.get("technical_hold") is False and bool(hold.get("hold_released_at"))
+            and bool(hold.get("hold_release_reason")) and bool(hold.get("board_done_at")))
+        ok = (len(pilots) == 5 and hold_ok
               and bool((dod.get("912|merglbot-core/forecast-engine") or {}).get("ignored_run_ids"))
               and not (subs.get("921") or {}).get("technical_hold"))
     if not ok:
