@@ -32,7 +32,8 @@ FIXTURE_910 = ("SOURCE = r'''\n" + "".join(f"# segment {n}\n{before}\n" for n, (
 STATE_888 = {"dod": {"892|merglbot-core/merglbot-admin": {"owner_exception": {"text": "x"}, "met_at": "t"},
                      "895|merglbot-denatura/acquisition-analysis": {"sub": 895},
                      "895|merglbot-proteinaco/acquisition-analysis": {"sub": 895},
-                     "889|o/r": {"sub": 889}},
+                     "889|o/r": {"sub": 889},
+                     "889|merglbot-proteinaco/acquisition-analysis": {"sub": 889}},
              "subs": {"895": {}}, "prs": {}}
 STATE_910 = {"dod": dict({"912|merglbot-core/forecast-engine": {"ignored_run_ids": {"1": "x"}}},
                          **{f"917|o/r{n}": {"kind": "arm64_pilot"} for n in range(5)}),
@@ -336,6 +337,50 @@ class OwnerException(Home):
             self.ins.record_owner_exception(state, fetch=self.fetch(body="changed"))
         with self.assertRaisesRegex(RuntimeError, "PR merged/open"):
             self.ins.record_owner_exception(state, fetch=self.fetch(merged=True))
+
+    def fetch_889(self, body=None, issue=889, contexts=("dependency-review", "gitleaks"), merged=False):
+        body = body if body is not None else (TOOL / "decisions/889.cs.md").read_text()
+        answers = {
+            "repos/merglbot-core/github/issues/comments/5929963203": {
+                "body": body, "created_at": "2026-10-01T11:03:00Z",
+                "issue_url": f"https://api.github.com/repos/merglbot-core/github/issues/{issue}"},
+            "repos/merglbot-proteinaco/acquisition-analysis/pulls/184": {"state": "closed", "merged": merged},
+            "repos/merglbot-proteinaco/acquisition-analysis/branches/main/protection/required_status_checks":
+                {"checks": [{"context": c} for c in contexts]},
+        }
+        return lambda path: (answers[path], 4000)
+
+    def test_the_889_decision_writes_exactly_its_row(self):
+        """Owner decision of 1 Oct 2026 ("výjimka #889 ano"): the #889 row that stands on the same
+        dropped PR #184 as #895; dependency-review and gitleaks must stay required."""
+        before = json.loads((self.base / "state.json").read_text())
+        result = self.ins.record_owner_exception(self.digests()[1], fetch=self.fetch_889(), decision="889")
+        after = json.loads((self.base / "state.json").read_text())
+        rows = [k for k in after["dod"] if after["dod"][k] != before["dod"][k]]
+        self.assertEqual(["889|merglbot-proteinaco/acquisition-analysis"], rows)
+        record = after["dod"][rows[0]]["owner_exception"]
+        self.assertEqual((record["text"], record["pr"], record["required_contexts"], record["decided_at_prague"]),
+                         ("výjimka #889 ano", "merglbot-proteinaco/acquisition-analysis#184",
+                          ["dependency-review", "gitleaks"], "1. 10. 2026"))
+        self.assertEqual(self.ins.DECISION_889, record["source"])
+        self.assertEqual("owner-exception-889", result["kind"])
+        with self.assertRaisesRegex(RuntimeError, "already met or excepted"):
+            self.ins.record_owner_exception(self.digests()[1], fetch=self.fetch_889(), decision="889")
+
+    def test_the_889_decision_is_verified_live(self):
+        state = self.digests()[1]
+        for fetch, message in ((self.fetch_889(body="changed"), "reviewed #889 record"),
+                               (self.fetch_889(issue=895), "reviewed #889 record"),
+                               (self.fetch_889(merged=True), "PR merged/open"),
+                               (self.fetch_889(contexts=("gitleaks",)), "PR merged/open")):
+            with self.subTest(message=message), self.assertRaisesRegex(RuntimeError, message):
+                self.ins.record_owner_exception(state, fetch=fetch, decision="889")
+        self.assertEqual(state, self.digests()[1])  # nothing written
+
+    def test_the_decision_defaults_to_895_and_is_a_source_file(self):
+        self.assertIn("decisions/889.cs.md", self.ins.SOURCE_FILES)
+        self.assertEqual({"895", "889"}, set(self.ins.DECISIONS))
+        self.assertIs(self.ins.ROWS_895, self.ins.DECISIONS["895"]["rows"])
 
 
 class ReleaseHold(Home):

@@ -43,6 +43,11 @@ the adopted images `install.py` accepts as pre-images.
   Denatura #170, Proteinaco #184) count once live-verified: PR closed unmerged and the
   recorded gitleaks contexts still required on main. Decision record: github#895 comment
   5917584272; its body is `decisions/895.cs.md`.
+- **#889 owner exception (888, decision of 1 Oct 2026):** the `acquisition-analysis` Proteinaco
+  row stands on the same dropped PR #184; it counts once live-verified (PR closed unmerged,
+  `dependency-review` and `gitleaks` still required). Decision record: github#889 comment
+  5929963203; its body is `decisions/889.cs.md`. Written with `record-owner-exception
+  --decision 889`.
 - **Low-traffic rule (888/910 `measure_job_runs`, 910 `measure_runner_label`):** after 14
   days with no disqualifying run in a complete census (every run listed, finished and read,
   measured by its current attempt), a row counts only when the caller is verified live on main
@@ -95,8 +100,9 @@ python3 tools/gh-cost-autopilot-adoption/install.py rollback --target 888 \
   --backup ~/.merglbot/gh-cost/backups/adoption-<UTC>
 ```
 
-`record-owner-exception` compares the live decision comment github#895 (5917584272) with
-`decisions/895.cs.md`. `release-hold` needs #917 closed as completed and Done on Project 66.
+`record-owner-exception` compares the live decision comment with its record: github#895
+(5917584272) with `decisions/895.cs.md` (default), or with `--decision 889` github#889
+(5929963203) with `decisions/889.cs.md`. `release-hold` needs #917 closed as completed and Done on Project 66.
 `rollback` restores the adopted image only while both live files are the backup's
 after-images.
 

@@ -1,7 +1,8 @@
 """Install the reviewed #888/#910 autopilot adoption (owner plan of 30 Sep 2026).
 
   code                    patch both autopilots and place cost_adoption.py next to them
-  record-owner-exception  write the #895 owner exception onto its two DoD rows (888)
+  record-owner-exception  write an owner exception onto its DoD rows (888): --decision 895
+                          (two rows, default) or 889 (one row)
   release-hold            release #917's technical_hold once it is closed and Done (910)
   rollback                restore a backup, only while the live files are its after-image
 
@@ -45,10 +46,26 @@ ROWS_895 = {
     "895|merglbot-proteinaco/acquisition-analysis": ("merglbot-proteinaco/acquisition-analysis#184",
                                                      ["gitleaks"]),
 }
+DECISION_889 = "https://github.com/merglbot-core/github/issues/889#issuecomment-5929963203"
+ROWS_889 = {
+    "889|merglbot-proteinaco/acquisition-analysis": ("merglbot-proteinaco/acquisition-analysis#184",
+                                                     ["dependency-review", "gitleaks"]),
+}
+# One entry per owner decision: its comment (body = decisions/<id>.cs.md), rows and record text.
+DECISIONS = {
+    "895": {"url": DECISION_895, "rows": ROWS_895, "text": "Výjimka jako #892",
+            "basis": ("PR zavřen bez merge 23. 9. po nálezech review; gitleaks zůstává samostatný "
+                      "povinný check; neuskutečněná úspora zhruba 1 USD/měs. se nepočítá.")},
+    "889": {"url": DECISION_889, "rows": ROWS_889, "text": "výjimka #889 ano",
+            "basis": ("PR #184 zavřen bez merge 23. 9. po nálezech review; repo nemá PR Gate, "
+                      "dependency-review i gitleaks zůstávají samostatné povinné checky; neuskutečněná "
+                      "úspora zhruba 0,3 USD/měs. se nepočítá.")},
+}
 PROJECT_66, ITEM_917, DONE_66 = "PVT_kwDODhoOm84Bkd8e", "PVTI_lADODhoOm84Bkd8ezg8ZjTM", "98236657"
 RESERVE = 2000 + 40
 MAIN_REPO = "merglbot-core/github"
-SOURCE_FILES = ("install.py", "patch_autopilot.py", "cost_adoption.py", "decisions/895.cs.md")
+SOURCE_FILES = ("install.py", "patch_autopilot.py", "cost_adoption.py", "decisions/895.cs.md",
+                "decisions/889.cs.md")
 # The one-shot installers whose patchers are replayed against the patched code, and every file
 # they load or read. Nothing else is executed; any other tools/gh-cost-*/patch_autopilot.py
 # aborts the run (V6 #974).
@@ -296,34 +313,34 @@ def check_state(target, state):
         raise RuntimeError(f"{target}: state lacks the adopted edits")
 
 
-def verify_decision(fetch=gh_api):
-    """Before any lock: the decision comment is on #895 with the reviewed body, the PRs stayed
-    closed unmerged and the gitleaks contexts are still required. Returns the exception records."""
-    comment_id = DECISION_895.rsplit("-", 1)[1]
+def verify_decision(fetch=gh_api, decision="895"):
+    """Before any lock: the decision comment is on its issue with the reviewed body, the PRs
+    stayed closed unmerged and the recorded contexts are still required. Returns the records."""
+    spec = DECISIONS[decision]
+    comment_id = spec["url"].rsplit("-", 1)[1]
     comment, remaining = fetch(f"repos/merglbot-core/github/issues/comments/{comment_id}")
     if remaining is not None and remaining < RESERVE:
         raise RuntimeError("shared core reserve unavailable")
     body = comment.get("body", "").replace("\r\n", "\n").strip()
-    expected = (HERE / "decisions/895.cs.md").read_text().strip()
-    if not str(comment.get("issue_url", "")).endswith("/repos/merglbot-core/github/issues/895") or body != expected:
-        raise RuntimeError("decision comment is not the reviewed #895 record")
+    expected = (HERE / f"decisions/{decision}.cs.md").read_text().strip()
+    if not str(comment.get("issue_url", "")).endswith(f"/repos/merglbot-core/github/issues/{decision}") \
+            or body != expected:
+        raise RuntimeError(f"decision comment is not the reviewed #{decision} record")
     decided = dt.datetime.fromisoformat(comment["created_at"].replace("Z", "+00:00"))
     prague = decided.astimezone(zoneinfo.ZoneInfo("Europe/Prague"))
     records = {}
-    for key, (pr_key, contexts) in ROWS_895.items():
+    for key, (pr_key, contexts) in spec["rows"].items():
         repo, number = pr_key.rsplit("#", 1)
         pr, _ = fetch(f"repos/{repo}/pulls/{number}")
         checks, _ = fetch(f"repos/{repo}/branches/main/protection/required_status_checks")
         required = {c.get("context") for c in checks.get("checks") or []}
         if pr.get("state") != "closed" or pr.get("merged") is not False or not set(contexts) <= required:
-            raise RuntimeError(f"{pr_key}: PR merged/open or gitleaks context no longer required")
+            raise RuntimeError(f"{pr_key}: PR merged/open or a recorded context no longer required")
         records[key] = {
-            "text": "Výjimka jako #892", "decided_at": comment["created_at"],
+            "text": spec["text"], "decided_at": comment["created_at"],
             "decided_at_prague": f"{prague.day}. {prague.month}. {prague.year}",
-            "source": DECISION_895, "body_sha256": digest(body.encode()),
-            "basis": ("PR zavřen bez merge 23. 9. po nálezech review; gitleaks zůstává samostatný "
-                      "povinný check; neuskutečněná úspora zhruba 1 USD/měs. se nepočítá."),
-            "pr": pr_key, "required_contexts": contexts}
+            "source": spec["url"], "body_sha256": digest(body.encode()),
+            "basis": spec["basis"], "pr": pr_key, "required_contexts": contexts}
     return records
 
 
@@ -371,8 +388,8 @@ def rewrite_state(target, expected_state, change, kind, dry_run=False, source_sh
         return dict(facts, backup=str(backup))
 
 
-def record_owner_exception(expected_state, dry_run=False, fetch=gh_api, source_sha=None):
-    records = verify_decision(fetch)
+def record_owner_exception(expected_state, dry_run=False, fetch=gh_api, source_sha=None, decision="895"):
+    records = verify_decision(fetch, decision)
 
     def change(state):
         for key, record in records.items():
@@ -381,7 +398,7 @@ def record_owner_exception(expected_state, dry_run=False, fetch=gh_api, source_s
                 raise RuntimeError(f"{key} already met or excepted")
             row["owner_exception"] = record
         return [f"dod:{key}" for key in records]
-    return rewrite_state("888", expected_state, change, "owner-exception-895", dry_run, source_sha)
+    return rewrite_state("888", expected_state, change, f"owner-exception-{decision}", dry_run, source_sha)
 
 
 def release_hold(expected_state, dry_run=False, fetch=gh_api, graphql=gh_graphql, source_sha=None):
@@ -459,6 +476,7 @@ def main():
     code.add_argument("--dry-run", action="store_true")
     owner = sub.add_parser("record-owner-exception")
     owner.add_argument("--expected-state-888", required=True)
+    owner.add_argument("--decision", choices=sorted(DECISIONS), default="895")
     owner.add_argument("--dry-run", action="store_true")
     hold = sub.add_parser("release-hold")
     hold.add_argument("--expected-state-910", required=True)
@@ -481,7 +499,8 @@ def main():
             install_code(t, args[f"expected_code_{t}"], args[f"expected_state_{t}"], False, source, True)
             for t in TARGETS]
     elif args["command"] == "record-owner-exception":
-        result = record_owner_exception(args["expected_state_888"], args["dry_run"], source_sha=source)
+        result = record_owner_exception(args["expected_state_888"], args["dry_run"], source_sha=source,
+                                        decision=args["decision"])
     elif args["command"] == "release-hold":
         result = release_hold(args["expected_state_910"], args["dry_run"], source_sha=source)
     else:
