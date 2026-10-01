@@ -336,6 +336,197 @@ def _owner_exception_live_ok(gh_json, item):
     return True, f"{key} zavřen bez merge, povinné {', '.join(contexts)}"
 
 
+# A live caller check older than this no longer verifies a low-traffic row; the sweep measures
+# the row again and the closeout waits for a fresh check (V6 #970).
+LOW_TRAFFIC_CHECK_TTL = dt.timedelta(hours=24)
+
+
+def unverified_low_traffic(item, now=None):
+    """True for a row accepted as low traffic without a passed, fresh live caller check.
+
+    The adopted autopilots accepted such rows on run counts alone; under the owner rule of
+    30 Sep 2026 that acceptance does not count, so the row is measured again and never closes
+    a sub-issue until the live check has passed. With `now`, a check older than
+    LOW_TRAFFIC_CHECK_TTL (or without a readable timestamp) is not fresh (V6 #970)."""
+    if not isinstance(item, dict) or not item.get("low_traffic"):
+        return False
+    check = item.get("low_traffic_check")
+    if not (isinstance(check, dict) and check.get("ok") is True):
+        return True
+    if now is None:
+        return False
+    try:
+        checked = parse_utc(check.get("checked_at"))
+    except (TypeError, ValueError):
+        return True
+    return now - checked > LOW_TRAFFIC_CHECK_TTL
+
+
+def invalidate_unverified_low_traffic(item, now=None):
+    """Drop an unverified or stale low-traffic acceptance so the next measurement decides again."""
+    if not unverified_low_traffic(item, now):
+        return False
+    for key in ("met_at", "low_traffic", "observed"):
+        item.pop(key, None)
+    item["low_traffic_invalidated"] = True
+    return True
+
+
+BILLABLE_CONCLUSIONS = ("success", "failure", "timed_out")
+UNFINISHED_STATUSES = ("queued", "in_progress", "requested", "waiting", "pending")
+# Billing usage is dated by the day it was consumed, and a job on a GitHub-hosted runner runs
+# for at most 6 hours, so no usage dated inside a window is produced later than 6 h after the
+# window's end. After that, a window day can change only by export lag, which this bounds (an
+# operating assumption, deliberately conservative against the 30 h between the window end and
+# the billing due time). A re-run after the window bills on its own day, outside the window.
+BILLING_SETTLE = dt.timedelta(hours=72)
+# Bumped whenever the meaning of a coverage confirmation changes; older ones are checked again.
+COVERAGE_VERSION = 7
+
+
+def _job_ran(job):
+    """A job ran on a runner; started_at alone is also set for jobs cancelled while queued."""
+    return bool(job.get("runner_id") or job.get("steps")) and job.get("conclusion") != "skipped"
+
+
+def _run_billable(gh_json, repo, run):
+    """success/failure/timed_out bill; a cancelled run bills when one of its jobs ran."""
+    if run.get("conclusion") in BILLABLE_CONCLUSIONS:
+        return True
+    if run.get("conclusion") != "cancelled":
+        return False
+    listing = gh_json(f"repos/{repo}/actions/runs/{run.get('id')}/jobs?filter=all&per_page=100")
+    jobs = listing.get("jobs") if isinstance(listing, dict) else None
+    total = listing.get("total_count") if isinstance(listing, dict) else None
+    if (not isinstance(jobs, list) or not all(isinstance(j, dict) for j in jobs)
+            or not isinstance(total, int) or isinstance(total, bool)):
+        return None
+    if any(_job_ran(j) for j in jobs):
+        return True
+    # No started job on this page: without the whole listing that proves nothing (V6 #970).
+    return None if total > len(jobs) else False
+
+
+def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budget, now, billable=None):
+    """Per in-scope repository, the billing export covers the repository's own billable runs.
+
+    The window's sums use usage dated inside the window only. Such usage comes from executions
+    that ended at most 6 h after the window's end (see BILLING_SETTLE), so the whole check waits
+    until BILLING_SETTLE after the window's end, and after that a run of the window can neither
+    add window usage by finishing nor by being re-run: a later attempt bills on its own day,
+    outside the window. That is why a confirmation stays valid for its window. GitHub exposes no
+    per-repository completeness marker, so a partially exported day is bounded by that time
+    only. Per repository, never borrowed from another one: no run created in the window is
+    still queued or running (fail-closed, although its future usage would fall outside the
+    window), and its usage has a row dated inside the window on or after the creation day of
+    its newest billable run (success, failure, timed_out, or a cancelled run in which a job ran
+    on a runner); usage dated outside the window never counts as evidence. A repository with no
+    billable run has no usage to miss, so a quiet window never needs a charge row. With more
+    runs than one page, every unfinished status is asked for directly. Confirmations carry
+    COVERAGE_VERSION and the window, are recorded in `confirmed` (persisted by the caller) and
+    are re-validated against the current usage on every call without API reads; a moved window
+    or a vanished usage day discards them. `billable` (persisted by the caller) caches the
+    billability of a run attempt, so the check progresses across ticks (V6 #970).
+
+    Returns ("ok", None), ("budget", repo) when the tick ran out of calls, ("error", repo) for an
+    unreadable or ambiguous listing, or ("pending"|"lagging", [repos]) to retry later."""
+    lo, hi = after_days[0], after_days[-1]
+    window = [lo, hi]
+    billable = {} if billable is None else billable
+    by_repo = {}
+    for name, days in usage.items():
+        # Only rows dated inside the window are evidence for the window's sums.
+        by_repo.setdefault(str(name).lower(), set()).update(d for d in days if lo <= d <= hi)
+    window_end = parse_utc(f"{hi}T00:00:00Z") + dt.timedelta(days=1)
+    if now - window_end < BILLING_SETTLE:
+        return "pending", list(repos)  # the window's last days may still be growing
+
+    def count(listing):
+        total = listing.get("total_count") if isinstance(listing, dict) else None
+        return None if isinstance(total, bool) or not isinstance(total, int) else total
+
+    pending, lagging = [], []
+    for repo in repos:
+        mark = confirmed.get(repo)
+        if (isinstance(mark, dict) and mark.get("v") == COVERAGE_VERSION and mark.get("window") == window
+                and (mark.get("last") is None
+                     or any(day >= mark["last"] for day in by_repo.get(repo.lower(), ())))):
+            continue
+        confirmed.pop(repo, None)
+        if not has_budget():
+            return "budget", repo
+        runs = gh_json(f"repos/{repo}/actions/runs?created={lo}..{hi}&per_page=100")
+        listed = runs.get("workflow_runs") if isinstance(runs, dict) else None
+        total = count(runs)
+        if not isinstance(listed, list) or total is None or not all(isinstance(r, dict) for r in listed):
+            return "error", repo
+        if total > len(listed):
+            unfinished = False
+            for status in UNFINISHED_STATUSES:
+                if not has_budget():
+                    return "budget", repo
+                probe = count(gh_json(f"repos/{repo}/actions/runs?created={lo}..{hi}&status={status}&per_page=1"))
+                if probe is None:
+                    return "error", repo
+                if probe:
+                    unfinished = True
+                    break
+        else:
+            unfinished = any(r.get("status") != "completed" for r in listed)
+        if unfinished:
+            pending.append(repo)  # its usage is still being produced
+            continue
+        newest = None
+        for run in sorted(listed, key=lambda r: r.get("created_at") or "", reverse=True):
+            key = f"{repo}#{run.get('id')}#{run.get('run_attempt') or 1}"
+            if key not in billable:
+                if not has_budget():
+                    return "budget", repo
+                verdict = _run_billable(gh_json, repo, run)
+                if verdict is None:
+                    return "error", repo
+                billable[key] = verdict
+            if billable[key]:
+                newest = run
+                break
+        if newest is None:
+            if total > len(listed):
+                return "error", repo  # the newest page holds no billable run: cannot tell
+            confirmed[repo] = {"v": COVERAGE_VERSION, "window": window, "last": None}
+            continue
+        last = (newest.get("created_at") or "")[:10]
+        if any(day >= last for day in by_repo.get(repo.lower(), ())):
+            confirmed[repo] = {"v": COVERAGE_VERSION, "window": window, "last": last}
+        else:
+            lagging.append(repo)
+    if pending:
+        return "pending", pending + lagging
+    return ("lagging", lagging) if lagging else ("ok", None)
+
+
+def close_issue_done(gh, gh_json, board, repo, number, done_option):
+    """Close an issue as completed and set its board Status to Done.
+
+    True only when the issue is read back closed as completed and the board mutation succeeded; any other
+    outcome leaves the caller's record untouched so the next tick retries (V6 #970)."""
+    try:
+        issue = gh_json(f"repos/{repo}/issues/{number}")
+        if not isinstance(issue, dict) or issue.get("state") not in ("open", "closed"):
+            return False
+        if issue["state"] == "open":
+            code, _, _ = gh("issue", "close", str(number), "-R", repo, "--reason", "completed")
+            if code != 0:
+                return False
+            issue = gh_json(f"repos/{repo}/issues/{number}")
+            if not isinstance(issue, dict) or issue.get("state") != "closed":
+                return False
+        if issue.get("state_reason") != "completed":
+            return False  # closed as not planned (e.g. by the owner) is not a delivered close
+        return board(number, done_option) is True
+    except Exception:  # noqa: BLE001 - an unexpected shape must not look like a closed issue
+        return False
+
+
 def exception_row(item):
     exception = item.get("owner_exception") or {}
     contexts = ", ".join(f"`{c}`" for c in exception.get("required_contexts") or [])
