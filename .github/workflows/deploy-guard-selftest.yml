@@ -1,6 +1,9 @@
 # Self-test for reusable-deploy-runtime-changes.yml (merglbot-core/github#909):
 # runs the real guard, in dry-run mode (no API call, base from base-override),
 # on both hosted runner labels the callers use, then asserts the decisions.
+# The diff base is the merge base of the PR head and its base branch, so the
+# guard always classifies paths (a PR that is behind main would otherwise only
+# reach fail-open:diverged and test nothing).
 name: deploy-guard-selftest
 
 on:
@@ -10,6 +13,7 @@ on:
       - '.github/workflows/deploy-guard-selftest.yml'
       - 'scripts/deploy-guard/**'
       - 'tests/test_deploy_runtime_changes.py'
+      - 'tests/test_deploy_runtime_changes_workflow.py'
 
 permissions: {}
 
@@ -18,25 +22,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  merge-base:
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.mb.outputs.sha }}
+    steps:
+      - name: Check out the PR head with history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Merge base of the PR head and its base branch
+        id: mb
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          sha="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+          if ! [[ $sha =~ ^[0-9a-f]{40}$ ]]; then echo "::error::no merge base"; exit 1; fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
   diff-2404:
+    needs: merge-base
     permissions:
       actions: read
       contents: read
     uses: ./.github/workflows/reusable-deploy-runtime-changes.yml
     with:
       deploy-sha: ${{ github.event.pull_request.head.sha }}
-      base-override: ${{ github.event.pull_request.base.sha }}
+      base-override: ${{ needs.merge-base.outputs.sha }}
       dry-run: true
       runs-on: ubuntu-24.04
 
   diff-slim:
+    needs: merge-base
     permissions:
       actions: read
       contents: read
     uses: ./.github/workflows/reusable-deploy-runtime-changes.yml
     with:
       deploy-sha: ${{ github.event.pull_request.head.sha }}
-      base-override: ${{ github.event.pull_request.base.sha }}
+      base-override: ${{ needs.merge-base.outputs.sha }}
       dry-run: true
       runs-on: ubuntu-slim
 
@@ -52,7 +84,7 @@ jobs:
       runs-on: ubuntu-slim
 
   assert:
-    needs: [diff-2404, diff-slim, noop-slim]
+    needs: [merge-base, diff-2404, diff-slim, noop-slim]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-slim
     timeout-minutes: 5
@@ -69,26 +101,31 @@ jobs:
           B_BASE: ${{ needs.diff-slim.outputs.base-sha }}
           C_RUNTIME: ${{ needs.noop-slim.outputs.runtime }}
           C_REASON: ${{ needs.noop-slim.outputs.reason }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          MERGE_BASE: ${{ needs.merge-base.outputs.sha }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
           fail=0
-          check_diff() { # both runners must reach a real diff decision, never an error
+          # A re-run (attempt > 1) makes the guard decide `rerun` before any diff: accept exactly
+          # that for a job that ran in this attempt; every other decision is checked as usual.
+          rerun() { [[ $RUN_ATTEMPT != 1 && $1 == true && $2 == rerun ]]; }
+          check_diff() { # both runners must classify the PR's paths against its merge base
             local name="$1" runtime="$2" reason="$3" base="$4"
             echo "${name}: runtime=${runtime} reason=${reason} base=${base}"
-            if [[ $runtime != true && $runtime != false ]]; then echo "::error::${name}: no decision"; fail=1; fi
-            if [[ $reason == fail-open:error* || $reason == fail-open:missing-tool* || -z $reason ]]; then
-              echo "::error::${name}: guard errored (${reason})"; fail=1
+            if rerun "$runtime" "$reason"; then return 0; fi
+            if [[ ! ( ($runtime == true && $reason == runtime:?*) || ($runtime == false && $reason == non-runtime-only) ) ]]; then
+              echo "::error::${name}: expected a path classification, got runtime=${runtime} reason=${reason}"; fail=1
             fi
-            if [[ $base != "$PR_BASE" ]]; then echo "::error::${name}: base-sha not propagated"; fail=1; fi
+            if [[ $base != "$MERGE_BASE" ]]; then echo "::error::${name}: base-sha not propagated"; fail=1; fi
           }
           check_diff diff-2404 "$A_RUNTIME" "$A_REASON" "$A_BASE"
           check_diff diff-slim "$B_RUNTIME" "$B_REASON" "$B_BASE"
-          if [[ $A_RUNTIME != "$B_RUNTIME" || $A_REASON != "$B_REASON" ]]; then
+          if ! rerun "$A_RUNTIME" "$A_REASON" && ! rerun "$B_RUNTIME" "$B_REASON" \
+              && [[ $A_RUNTIME != "$B_RUNTIME" || $A_REASON != "$B_REASON" ]]; then
             echo "::error::runners disagree"; fail=1
           fi
           echo "noop-slim: runtime=${C_RUNTIME} reason=${C_REASON}"
-          if [[ $C_RUNTIME != false || $C_REASON != already-deployed ]]; then
+          if ! rerun "$C_RUNTIME" "$C_REASON" && [[ $C_RUNTIME != false || $C_REASON != already-deployed ]]; then
             echo "::error::noop-slim: expected runtime=false already-deployed"; fail=1
           fi
           exit "$fail"

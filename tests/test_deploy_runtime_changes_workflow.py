@@ -42,7 +42,7 @@ class GuardWorkflowContractTests(unittest.TestCase):
         self.assertEqual(2, text.count("persist-credentials: false"))
         self.assertNotRegex(text, r"(?m)^\s+(contents|actions|id-token): write")
         scripts = run_scripts(text) + run_scripts(SELFTEST.read_text(encoding="utf-8"))
-        self.assertEqual(3, len(scripts))  # hub ref, decide, assert
+        self.assertEqual(4, len(scripts))  # hub ref, decide, merge base, assert
         for match in scripts:
             self.assertNotIn("${{", "".join(match[1:]))
 
@@ -55,6 +55,19 @@ class GuardWorkflowContractTests(unittest.TestCase):
         self.assertEqual(3, text.count("dry-run: true"))
         self.assertIn("runs-on: ubuntu-24.04", text)
         self.assertIn("runs-on: ubuntu-slim", text)
+        self.assertIn("'tests/test_deploy_runtime_changes_workflow.py'", text)
+
+    def test_selftest_requires_a_path_classification_against_the_merge_base(self) -> None:
+        # V6 on #973: a PR behind main made the base diverge and the self-test accepted
+        # fail-open:diverged, so no path was ever classified.
+        text = SELFTEST.read_text(encoding="utf-8")
+        self.assertIn('git merge-base "$BASE_SHA" "$HEAD_SHA"', text)
+        self.assertEqual(2, text.count("base-override: ${{ needs.merge-base.outputs.sha }}"))
+        self.assertNotIn("base-override: ${{ github.event.pull_request.base.sha }}", text)
+        self.assertIn("$reason == runtime:?*", text)
+        self.assertIn("$reason == non-runtime-only", text)
+        self.assertNotIn("fail-open:error*", text)
+        self.assertIn("rerun() { [[ $RUN_ATTEMPT != 1 && $1 == true && $2 == rerun ]]; }", text)
 
 
 if __name__ == "__main__":
