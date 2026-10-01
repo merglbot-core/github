@@ -256,8 +256,8 @@ class BillingGuards(unittest.TestCase):
             fresh = {"O/In": {"2026-10-07": 5.0}}
             self.assertEqual(ns["check"]({}, billing, fresh, {}), "go")
             mark = ["2026-10-06", "2026-10-07"]
-            self.assertEqual(billing["coverage"], {"o/in": {"v": 6, "window": mark, "last": "2026-10-07"},
-                                                   "o/quiet": {"v": 6, "window": mark, "last": None}})
+            self.assertEqual(billing["coverage"], {"o/in": {"v": 7, "window": mark, "last": "2026-10-07"},
+                                                   "o/quiet": {"v": 7, "window": mark, "last": None}})
             # a quiet window with no charge row at all is complete as well
             billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
             ns["check"].__globals__["gh_json"] = lambda path: {"total_count": 0, "workflow_runs": []}
@@ -415,6 +415,18 @@ class JobRunsCensus(unittest.TestCase):
             self.assertEqual(item["attempts"][run_id], 2, kind)
             self.assertNotIn("met_at", item, kind)
 
+    def test_a_re_running_cached_success_does_not_count_towards_the_threshold(self):
+        for kind, *_ in self.CASES:
+            self.reset()
+            ids = [self.add() for _ in range(5)]
+            item = self.measure(kind)
+            self.assertTrue(item.get("met_at"), kind)  # five good runs meet the threshold
+            item.pop("met_at")
+            self.runs[0]["status"] = "in_progress"  # one of them is re-run now
+            item = self.measure(kind, item)
+            self.assertNotIn(ids[0], item["runs"], kind)
+            self.assertNotIn("met_at", item, kind)
+
     def test_a_measured_run_that_is_re_run_holds_low_traffic(self):
         for kind, *_ in self.CASES:
             self.reset()
@@ -425,7 +437,7 @@ class JobRunsCensus(unittest.TestCase):
             item.pop("low_traffic")
             self.runs[0]["status"] = "in_progress"
             item = self.measure(kind, item)
-            self.assertIn(run_id, item["runs"])
+            self.assertNotIn(run_id, item["runs"])  # withdrawn until the new attempt is measured
             self.assertNotIn("met_at", item, kind)
             self.assertTrue(item["census_incomplete"], kind)
 

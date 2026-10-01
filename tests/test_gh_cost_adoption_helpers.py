@@ -396,9 +396,16 @@ class BillingCoverage(unittest.TestCase):
         (status, detail), confirmed = self.run_step(listings, {"o/x": {"2026-10-08": 1}, "o/a": {"2026-10-06": 1},
                                                                "o/b": {"2026-10-06": 1}})
         self.assertEqual((status, detail), ("lagging", ["o/a"]))
-        self.assertEqual(confirmed, {"o/b": {"v": 6, "window": self.MARK, "last": "2026-10-06"}})
-        (status, _), confirmed = self.run_step(listings, {"O/A": {"2026-10-08": 1}, "o/b": {"2026-10-06": 1}})
-        self.assertEqual((status, confirmed["o/a"]), ("ok", {"v": 6, "window": self.MARK, "last": "2026-10-07"}))
+        self.assertEqual(confirmed, {"o/b": {"v": 7, "window": self.MARK, "last": "2026-10-06"}})
+        (status, _), confirmed = self.run_step(listings, {"O/A": {"2026-10-07": 1}, "o/b": {"2026-10-06": 1}})
+        self.assertEqual((status, confirmed["o/a"]), ("ok", {"v": 7, "window": self.MARK, "last": "2026-10-07"}))
+
+    def test_usage_dated_outside_the_window_is_no_evidence(self):
+        listings = {"o/a": self.runs(("2026-10-07", "completed", "success")), "o/b": self.runs()}
+        (status, detail), confirmed = self.run_step(listings, {"o/a": {"2026-10-08": 9, "2026-10-05": 9}})
+        self.assertEqual((status, detail, "o/a" in confirmed), ("lagging", ["o/a"], False))
+        done = {"o/a": {"v": 7, "window": self.MARK, "last": "2026-10-07"}, "o/b": {"v": 7, "window": self.MARK, "last": None}}
+        self.assertEqual(self.run_step({}, {"o/a": {"2026-10-08": 1}}, confirmed=done, budget=False)[0], ("budget", "o/a"))
 
     def test_the_window_and_every_listed_run_must_have_settled(self):
         # o/a's only run settled on 9 Oct, but the window (ends 8 Oct 00:00Z) settles on 11 Oct
@@ -459,10 +466,10 @@ class BillingCoverage(unittest.TestCase):
         self.assertEqual(self.run_step(finished, usage, confirmed)[0], ("lagging", ["o/a"]))
         usage["o/a"]["2026-10-07"] = 2
         self.assertEqual(self.run_step(finished, usage, confirmed)[0], ("ok", None))
-        self.assertEqual(confirmed["o/a"], {"v": 6, "window": self.MARK, "last": "2026-10-07"})
+        self.assertEqual(confirmed["o/a"], {"v": 7, "window": self.MARK, "last": "2026-10-07"})
 
     def test_a_confirmation_is_revalidated_against_the_window_and_the_current_usage(self):
-        done = {"o/a": {"v": 6, "window": self.MARK, "last": "2026-10-07"}, "o/b": {"v": 6, "window": self.MARK, "last": None}}
+        done = {"o/a": {"v": 7, "window": self.MARK, "last": "2026-10-07"}, "o/b": {"v": 7, "window": self.MARK, "last": None}}
         self.assertEqual(self.run_step({}, {"o/a": {"2026-10-07": 1}}, confirmed=dict(done), budget=False)[0], ("ok", None))
         # the usage day behind the confirmation is gone from the current fetch
         self.assertEqual(self.run_step({}, {}, confirmed=dict(done), budget=False)[0], ("budget", "o/a"))
@@ -481,15 +488,15 @@ class BillingCoverage(unittest.TestCase):
     def test_a_quiet_window_needs_no_charge_row(self):
         quiet = {"o/a": self.runs(), "o/b": self.runs(("2026-10-07", "completed", "skipped"))}
         (status, _), confirmed = self.run_step(quiet, {})
-        self.assertEqual((status, confirmed), ("ok", {"o/a": {"v": 6, "window": self.MARK, "last": None},
-                                                      "o/b": {"v": 6, "window": self.MARK, "last": None}}))
+        self.assertEqual((status, confirmed), ("ok", {"o/a": {"v": 7, "window": self.MARK, "last": None},
+                                                      "o/b": {"v": 7, "window": self.MARK, "last": None}}))
 
     def test_budget_errors_and_confirmation_versions(self):
         ambiguous = {"o/a": self.runs(("2026-10-07", "completed", "skipped"), total=150), "o/b": self.runs()}
         self.assertEqual(self.run_step(ambiguous, {})[0], ("error", "o/a"))
         self.assertEqual(self.run_step({"o/b": self.runs()}, {})[0], ("error", "o/a"))
         self.assertEqual(self.run_step({"o/a": self.runs(), "o/b": self.runs()}, {}, budget=False)[0], ("budget", "o/a"))
-        old = {"o/a": {"v": 5, "window": self.MARK, "last": None}, "o/b": "2026-10-07"}
+        old = {"o/a": {"v": 6, "window": self.MARK, "last": None}, "o/b": "2026-10-07"}
         self.assertEqual(self.run_step({}, {}, confirmed=old, budget=False)[0], ("budget", "o/a"))
 
 

@@ -40,7 +40,9 @@ REPLACEMENTS_888 = [
         if run.get("created_at", "") < since:
             continue
         if run.get("status") != "completed":
-            # Checked before the cache: a measured run that is being re-run is unfinished again.
+            # Checked before the cache: a measured run that is being re-run is unfinished again,
+            # and its earlier result is withdrawn until the new attempt is measured.
+            known.pop(run_id, None)
             incomplete = True
             continue
         attempts = item.setdefault("attempts", {})
@@ -600,7 +602,9 @@ PILOT_CENSUS_VERSION = 2
         if run.get("created_at", "") < since:
             continue
         if run.get("status") != "completed":
-            # Checked before the cache: a measured run that is being re-run is unfinished again.
+            # Checked before the cache: a measured run that is being re-run is unfinished again,
+            # and its earlier result is withdrawn until the new attempt is measured.
+            known.pop(run_id, None)
             incomplete = True
             continue
         attempts = item.setdefault("attempts", {})
@@ -667,7 +671,9 @@ PILOT_CENSUS_VERSION = 2
         if run.get("created_at", "") < since:
             continue
         if run.get("status") != "completed":
-            # Checked before the cache: a measured run that is being re-run is unfinished again.
+            # Checked before the cache: a measured run that is being re-run is unfinished again,
+            # and its earlier result is withdrawn until the new attempt is measured.
+            known.pop(run_id, None)
             incomplete = True
             continue
         attempts = item.setdefault("attempts", {})

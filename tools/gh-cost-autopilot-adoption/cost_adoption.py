@@ -381,7 +381,7 @@ UNFINISHED_STATUSES = ("queued", "in_progress", "requested", "waiting", "pending
 # the billing due time). A re-run after the window bills on its own day, outside the window.
 BILLING_SETTLE = dt.timedelta(hours=72)
 # Bumped whenever the meaning of a coverage confirmation changes; older ones are checked again.
-COVERAGE_VERSION = 6
+COVERAGE_VERSION = 7
 
 
 def _job_ran(job):
@@ -414,11 +414,13 @@ def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budg
     that ended at most 6 h after the window's end (see BILLING_SETTLE), so the whole check waits
     until BILLING_SETTLE after the window's end, and after that a run of the window can neither
     add window usage by finishing nor by being re-run: a later attempt bills on its own day,
-    outside the window. That is why a confirmation stays valid for its window. Per repository,
-    never borrowed from another one: no run created in the window is still queued or running
-    (fail-closed, although its future usage would fall outside the window), and the usage
-    includes a day on or after the creation day of its newest billable run (success, failure,
-    timed_out, or a cancelled run in which a job ran on a runner). A repository with no
+    outside the window. That is why a confirmation stays valid for its window. GitHub exposes no
+    per-repository completeness marker, so a partially exported day is bounded by that time
+    only. Per repository, never borrowed from another one: no run created in the window is
+    still queued or running (fail-closed, although its future usage would fall outside the
+    window), and its usage has a row dated inside the window on or after the creation day of
+    its newest billable run (success, failure, timed_out, or a cancelled run in which a job ran
+    on a runner); usage dated outside the window never counts as evidence. A repository with no
     billable run has no usage to miss, so a quiet window never needs a charge row. With more
     runs than one page, every unfinished status is asked for directly. Confirmations carry
     COVERAGE_VERSION and the window, are recorded in `confirmed` (persisted by the caller) and
@@ -433,7 +435,8 @@ def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budg
     billable = {} if billable is None else billable
     by_repo = {}
     for name, days in usage.items():
-        by_repo.setdefault(str(name).lower(), set()).update(days)
+        # Only rows dated inside the window are evidence for the window's sums.
+        by_repo.setdefault(str(name).lower(), set()).update(d for d in days if lo <= d <= hi)
     window_end = parse_utc(f"{hi}T00:00:00Z") + dt.timedelta(days=1)
     if now - window_end < BILLING_SETTLE:
         return "pending", list(repos)  # the window's last days may still be growing
