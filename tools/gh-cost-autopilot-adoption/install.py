@@ -5,11 +5,13 @@
   release-hold            release #917's technical_hold once it is closed and Done (910)
   rollback                restore a backup, only while the live files are its after-image
 
-Every write: the installer, patch, helpers and decision record equal the protected main
-branch byte for byte (contents API at the live main SHA, recorded in the manifest), OWNER_HOLD
-(checked twice), the autopilot's own mkdir lock, exact fresh SHA-256 of code and state, backup
-with manifest, atomic write and readback. `--dry-run` skips the main comparison so a review
-branch can be tried. Verification is the next natural tick; never run a tick by hand.
+Every write (rollback included): the installer, patch, helpers and decision record equal the
+protected main branch byte for byte (contents API at the live main SHA, recorded in the
+manifest), OWNER_HOLD (checked twice), the autopilot's own mkdir lock, exact fresh SHA-256 of
+code and state, backup with manifest, atomic write and readback. `code` leaves an installation
+receipt; "installed" means the live code is exactly patch(the adopted backup) and the helper
+is the reviewed one. `--dry-run` skips the main comparison so a review branch can be tried.
+Verification is the next natural tick; never run a tick by hand.
 """
 import argparse
 import base64
@@ -145,6 +147,31 @@ def backup_dir(base, kind):
     return path
 
 
+RECEIPT = "adoption-receipt.json"
+
+
+def verify_installed(target):
+    """The live files are exactly the reviewed installation: patch(adopted backup) and the
+    reviewed helper, as recorded in the installation receipt. Raises otherwise; returns it."""
+    spec = TARGETS[target]
+    base = spec["base"]
+    try:
+        receipt = json.loads((base / RECEIPT).read_text())
+        backup = pathlib.Path(receipt["backup"])
+        adopted = (backup / "autopilot.py").read_bytes()
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise RuntimeError(f"{target}: no verifiable installation receipt ({type(error).__name__})")
+    patch = getattr(load(HERE / "patch_autopilot.py", "adoption_patch"), spec["patch"])
+    live, helper = (base / "autopilot.py").read_bytes(), (base / "cost_adoption.py").read_bytes()
+    expected = patch(adopted.decode()).encode()
+    if (digest(adopted) != spec["adopted"] or receipt.get("code_before") != spec["adopted"]
+            or digest(expected) != receipt.get("code_after") or live != expected
+            or helper != (HERE / "cost_adoption.py").read_bytes()
+            or digest(helper) != receipt.get("cost_adoption_after")):
+        raise RuntimeError(f"{target}: live code or helper is not the reviewed installation")
+    return receipt
+
+
 def install_code(target, expected_code, expected_state, dry_run=False, source_sha=None):
     spec = TARGETS[target]
     base = spec["base"]
@@ -157,6 +184,7 @@ def install_code(target, expected_code, expected_state, dry_run=False, source_sh
             raise RuntimeError("source or state changed; read fresh digests")
         new_code = patch(old_code.decode()).encode()
         if new_code == old_code and helper_path.exists() and helper_path.read_bytes() == helper_new:
+            verify_installed(target)  # patched blocks alone do not prove the reviewed image
             return {"target": target, "noop": True, "code": digest(old_code)}
         if digest(old_code) != spec["adopted"]:
             raise RuntimeError("unreviewed pre-image: live code is not the adopted image")
@@ -184,12 +212,17 @@ def install_code(target, expected_code, expected_state, dry_run=False, source_sh
             if digest(code_path.read_bytes()) != facts["code_after"] \
                     or digest(helper_path.read_bytes()) != facts["cost_adoption_after"]:
                 raise RuntimeError("installation readback mismatch")
+            atomic(base / RECEIPT, (json.dumps(dict(facts, backup=str(backup)), indent=1) + "\n").encode())
+            verify_installed(target)
         except Exception:
             atomic(code_path, old_code)
             if old_helper is None:
-                helper_path.unlink()
+                if helper_path.exists():
+                    helper_path.unlink()
             else:
                 atomic(helper_path, old_helper)
+            if (base / RECEIPT).exists():
+                (base / RECEIPT).unlink()
             raise
         return dict(facts, backup=str(backup))
 
@@ -257,12 +290,11 @@ def verify_decision(fetch=gh_api):
 
 
 def code_installed(target):
-    """The live autopilot is the fully patched image (state records come after the code)."""
-    spec = TARGETS[target]
-    patch = getattr(load(HERE / "patch_autopilot.py", "adoption_patch"), spec["patch"])
-    code = (spec["base"] / "autopilot.py").read_text()
-    if digest(code.encode()) == spec["adopted"] or patch(code) != code:
-        raise RuntimeError(f"{target}: install the adopted code first (install.py code)")
+    """State records come after the code: the live files must be the verified installation."""
+    try:
+        verify_installed(target)
+    except RuntimeError as error:
+        raise RuntimeError(f"install the adopted code first (install.py code): {error}")
 
 
 def rewrite_state(target, expected_state, change, kind, dry_run=False):
@@ -335,18 +367,35 @@ def release_hold(expected_state, dry_run=False, fetch=gh_api, graphql=gh_graphql
 
 
 def rollback(target, backup):
-    base, backup = TARGETS[target]["base"], pathlib.Path(backup)
+    """Restore the adopted image, only while both live files are this backup's after-images and
+    the backup bytes match its manifest; everything is validated before anything is written."""
+    spec = TARGETS[target]
+    base, backup = spec["base"], pathlib.Path(backup)
     manifest = json.loads((backup / "manifest.json").read_text())
+    code_bytes = (backup / "autopilot.py").read_bytes()
+    helper_backup = backup / "cost_adoption.py"
+    helper_bytes = helper_backup.read_bytes() if helper_backup.exists() else None
+    if (manifest.get("target") != target or digest(code_bytes) != manifest.get("code_before")
+            or manifest.get("code_before") != spec["adopted"]
+            or (None if helper_bytes is None else digest(helper_bytes)) != manifest.get("cost_adoption_before")):
+        raise RuntimeError("backup does not match its manifest; rollback refused")
     with Locked(base):
         code_path, helper_path = base / "autopilot.py", base / "cost_adoption.py"
-        if digest(code_path.read_bytes()) != manifest["code_after"]:
-            raise RuntimeError("newer code exists; rollback refused")
-        atomic(code_path, (backup / "autopilot.py").read_bytes())
-        if (backup / "cost_adoption.py").exists():
-            atomic(helper_path, (backup / "cost_adoption.py").read_bytes())
-        elif helper_path.exists():
+        live_helper = helper_path.read_bytes() if helper_path.exists() else None
+        if (digest(code_path.read_bytes()) != manifest.get("code_after")
+                or live_helper is None or digest(live_helper) != manifest.get("cost_adoption_after")):
+            raise RuntimeError("newer code or helper exists; rollback refused")
+        if HOLD.exists():
+            raise RuntimeError("OWNER_HOLD appeared")
+        atomic(code_path, code_bytes)
+        if helper_bytes is None:
             helper_path.unlink()
-        if digest(code_path.read_bytes()) != manifest["code_before"]:
+        else:
+            atomic(helper_path, helper_bytes)
+        if (base / RECEIPT).exists():
+            (base / RECEIPT).unlink()
+        if digest(code_path.read_bytes()) != manifest["code_before"] or \
+                (helper_path.read_bytes() if helper_path.exists() else None) != helper_bytes:
             raise RuntimeError("rollback readback mismatch")
     return {"target": target, "restored": manifest["code_before"]}
 
@@ -369,8 +418,9 @@ def main():
     back.add_argument("--target", choices=sorted(TARGETS), required=True)
     back.add_argument("--backup", required=True)
     args = vars(parser.parse_args())
-    # Writes only from the protected main branch; a dry run may try a review branch.
-    source = None if args.get("dry_run") or args["command"] == "rollback" else source_matches_main()
+    # Writes (rollback included) only from the protected main branch; a dry run may try a
+    # review branch.
+    source = None if args.get("dry_run") else source_matches_main()
     if args["command"] == "code":
         # Both targets are validated before either is written, so a predictable refusal on the
         # second never leaves the first installed alone; each write re-validates its digests.

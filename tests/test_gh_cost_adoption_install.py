@@ -34,7 +34,8 @@ STATE_888 = {"dod": {"892|merglbot-core/merglbot-admin": {"owner_exception": {"t
                      "895|merglbot-proteinaco/acquisition-analysis": {"sub": 895},
                      "889|o/r": {"sub": 889}},
              "subs": {"895": {}}, "prs": {}}
-STATE_910 = {"dod": {"912|merglbot-core/forecast-engine": {"ignored_run_ids": {"1": "x"}}},
+STATE_910 = {"dod": dict({"912|merglbot-core/forecast-engine": {"ignored_run_ids": {"1": "x"}}},
+                         **{f"917|o/r{n}": {"kind": "arm64_pilot"} for n in range(5)}),
              "subs": {"917": {"technical_hold": True}, "921": {"technical_hold": False}}}
 
 
@@ -139,6 +140,65 @@ class SourceMatchesMain(unittest.TestCase):
             self.ins.source_matches_main(self.fetch(remaining=10))
 
 
+class Provenance(Home):
+    """V6 #974: "installed" is the receipt-verified image, rollback validates before writing."""
+
+    def test_patched_blocks_with_other_changes_are_not_installed(self):
+        self.install()
+        tampered = (self.base / "autopilot.py").read_text() + "# an edit outside every anchor\n"
+        (self.base / "autopilot.py").write_text(tampered)
+        code, state = self.digests()
+        with self.assertRaisesRegex(RuntimeError, "not the reviewed installation"):
+            self.ins.install_code("888", code, state)
+        with self.assertRaisesRegex(RuntimeError, "install the adopted code first"):
+            self.ins.code_installed("888")
+
+    def test_a_changed_helper_is_not_installed_and_blocks_rollback(self):
+        result = self.install()
+        (self.base / "cost_adoption.py").write_text("# newer helper\n")
+        with self.assertRaisesRegex(RuntimeError, "install the adopted code first"):
+            self.ins.code_installed("888")
+        with self.assertRaisesRegex(RuntimeError, "newer code or helper"):
+            self.ins.rollback("888", result["backup"])
+        self.assertEqual((self.base / "cost_adoption.py").read_text(), "# newer helper\n")
+
+    def test_a_corrupt_or_foreign_backup_is_refused_before_any_write(self):
+        result = self.install()
+        backup = pathlib.Path(result["backup"])
+        live = (self.base / "autopilot.py").read_bytes()
+        (backup / "autopilot.py").write_text("corrupt\n")
+        with self.assertRaisesRegex(RuntimeError, "does not match its manifest"):
+            self.ins.rollback("888", result["backup"])
+        self.assertEqual((self.base / "autopilot.py").read_bytes(), live)
+        (backup / "autopilot.py").write_text(FIXTURE)
+        (backup / "cost_adoption.py").write_text("unexpected\n")
+        with self.assertRaisesRegex(RuntimeError, "does not match its manifest"):
+            self.ins.rollback("888", result["backup"])
+        (backup / "cost_adoption.py").unlink()
+        manifest = (backup / "manifest.json").read_text()
+        (backup / "manifest.json").write_text(manifest.replace('"target": "888"', '"target": "910"'))
+        with self.assertRaisesRegex(RuntimeError, "does not match its manifest"):
+            self.ins.rollback("888", result["backup"])
+        (backup / "manifest.json").write_text(manifest)
+        self.assertEqual(self.ins.rollback("888", result["backup"])["restored"], sha(FIXTURE.encode()))
+        self.assertFalse((self.base / self.ins.RECEIPT).exists())
+
+    def test_rollback_needs_the_protected_main_source(self):
+        import sys
+        result = self.install()
+        calls = []
+        self.ins.source_matches_main = lambda: calls.append("main") or (_ for _ in ()).throw(
+            RuntimeError("differs from main"))
+        saved, sys.argv = sys.argv, ["install.py", "rollback", "--target", "888", "--backup", result["backup"]]
+        try:
+            with self.assertRaisesRegex(RuntimeError, "differs from main"):
+                self.ins.main()
+        finally:
+            sys.argv = saved
+        self.assertEqual(calls, ["main"])
+        self.assertEqual((self.base / "autopilot.py").read_bytes(), pa.patch_888(FIXTURE).encode())
+
+
 class TwoPhase(unittest.TestCase):
     def test_no_target_is_written_when_another_fails_validation(self):
         import sys
@@ -208,10 +268,13 @@ class OwnerException(Home):
 class ReleaseHold(Home):
     def setUp(self):
         super().setUp()
-        self.ins.TARGETS["910"] = {"base": self.base, "patch": "patch_910", "adopted": "x"}
+        self.base = self.tmp / "gh-cost-910"
+        (self.base / "autopilot").mkdir(parents=True)
+        (self.base / "autopilot.py").write_text(FIXTURE_910)
         self.write_state(STATE_910)
-        # a fully patched 910 image: patch_910 of its own anchors' after-texts is a no-op
-        (self.base / "autopilot.py").write_text(pa.patch_910(FIXTURE_910))
+        self.ins.TARGETS["910"] = {"base": self.base, "patch": "patch_910", "adopted": sha(FIXTURE_910.encode())}
+        code, state = self.digests()
+        self.ins.install_code("910", code, state)
 
     def graphql(self, option):
         return lambda query: {"node": {"project": {"id": self.ins.PROJECT_66},
