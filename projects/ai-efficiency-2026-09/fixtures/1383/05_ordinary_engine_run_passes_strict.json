@@ -1,0 +1,8 @@
+{
+  "why": "With neither the synthesis marker nor a carried engine row the receipt is an ordinary engine-run approval and passes even the strict consumer.",
+  "summary": "## Merglbot PR Assistant local-primary\n<!-- MERGLBOT_PR_ASSISTANT_V6: true -->\n<!-- MERGLBOT_REVIEW_RECEIPT_SCHEMA_VERSION: 1 -->\n<!-- MERGLBOT_REVIEW_SOURCE: merglbot-core/infra#3277 -->\n<!-- MERGLBOT_REVIEW_HEAD_SHA: 47fb84f11557e0617335e0bbd0c2c4c5e66074fa -->\n<!-- MERGLBOT_REVIEW_RUN_ID: local-primary:lpwleasef28fa998553e49cba8a5fec7d9d4afe5 -->\n<!-- MERGLBOT_RUN_ID: pr-assistant-v6:local-primary:lpwleasef28fa998553e49cba8a5fec7d9d4afe5 -->\n<!-- MERGLBOT_RECEIPT_SURFACE: check_run_summary -->\n<!-- MERGLBOT_MARKER_STATUS: parseable_receipt -->\n<!-- MERGLBOT_REVIEW_STATUS: success -->\n<!-- MERGLBOT_REVIEW_VERDICT: approved_for_closeout -->\n<!-- MERGLBOT_PROVIDER_DEGRADED: false -->\n<!-- MERGLBOT_PROVIDER_DEGRADED_REASON: none -->\n<!-- MERGLBOT_REVIEW_MODE: standard -->\n<!-- MERGLBOT_ACTIONABLE_FINDINGS_COUNT: 0 -->\n<!-- MERGLBOT_AUTONOMOUS_NEXT_ACTION: safe_to_merge -->\n<!-- MERGLBOT_LOCAL_PRIMARY_ENGINE_EVIDENCE: codex:pass,claude:pass -->\n<!-- MERGLBOT_LOCAL_PRIMARY_ENGINE_MODELS: codex:gpt-6-sol,claude:claude-opus-5-5 -->",
+  "head_sha": "47fb84f11557e0617335e0bbd0c2c4c5e66074fa",
+  "conclusion": "success",
+  "require_verified_engine_run": true,
+  "expected_blockers": []
+}
