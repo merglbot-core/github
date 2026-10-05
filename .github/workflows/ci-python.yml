@@ -77,6 +77,15 @@ on:
         default: 1
         required: false
 
+      timeout-minutes:
+        description: >-
+          Job timeout in minutes. 30 (default) is the previous fixed limit; raise
+          it only for a suite measured to run near it on the hosted runner (a run
+          cancelled by the timeout is no verdict and is rerun at full cost).
+        type: number
+        default: 30
+        required: false
+
 permissions:
   contents: read
 
@@ -88,7 +97,7 @@ jobs:
   ci:
     name: Python CI
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     
     steps:
       - name: Checkout code
