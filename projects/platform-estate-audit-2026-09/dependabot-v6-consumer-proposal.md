@@ -29,6 +29,8 @@ allowlist-excluded PRs, `..._DRY_RUN` for a successful dry run, and
 with no remaining work reports `..._COMPLETE`. The distinction changes
 reporting only, not merge authority, review requirements or workflow exit policy.
 
-Landing dependency: this follow-up is based on github#953's reviewed head and
-must land after its verified merge, or be included in a separately reviewed
-repair round. It is not evidence that #953 or this change is running.
+This successor includes the unmerged github#953 proposal and its reporting
+repair on the current main. It requires its own exact-head review and legitimate
+review-machinery activation authority; it does not depend on merging the stale
+original draft first. Neither the preserved draft approval nor local tests prove
+that this successor is running.
