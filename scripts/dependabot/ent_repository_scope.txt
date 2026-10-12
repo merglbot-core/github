@@ -23,12 +23,14 @@ merglbot-core/fleet-deck
 merglbot-core/forecast-engine
 merglbot-core/github-security-auditor
 merglbot-core/infra
+merglbot-core/marketing-measurement
 merglbot-core/mcp-server
 merglbot-core/merglbot-admin
 merglbot-core/monitoring
 merglbot-core/platform
 merglbot-core/pricing-elasticity-engine
 merglbot-core/project-management-app
+merglbot-core/repo-template
 merglbot-core/tf-modules-
 merglbot-core/v6-showcase
 merglbot-denatura/.github
@@ -39,6 +41,7 @@ merglbot-denatura/marketing_actions_detector
 merglbot-extractors/.github
 merglbot-extractors/abra-flexi-extractor
 merglbot-extractors/ads-campaign-builder
+merglbot-extractors/autodoplnky-forecast-exporter
 merglbot-extractors/bing-ads-extractor
 merglbot-extractors/cerano-forecast-exporter
 merglbot-extractors/currency-rates-extractor
