@@ -8,6 +8,14 @@ on:
         required: false
         type: string
         default: '["javascript"]'
+      paths-ignore:
+        description: >-
+          Optional JSON array of glob strings excluded from analysis (CodeQL `paths-ignore`),
+          e.g. '["**/*.test.cjs","**/__tests__/**"]'. Applies to interpreted languages
+          (JavaScript/TypeScript, Python, Ruby); compiled languages ignore it. Default: no exclusion.
+        required: false
+        type: string
+        default: '[]'
     secrets:
       CODEQL_TOKEN:
         description: 'Optional run-scoped token forwarded by the caller (defaults to auto GITHUB_TOKEN)'
@@ -35,11 +43,42 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
+    # Builds an inline CodeQL config from the optional `paths-ignore` input. The input reaches the
+    # script only through the environment (never interpolated into shell), is validated as a JSON
+    # array of single-line strings, and each entry is emitted as a JSON-quoted YAML scalar. An
+    # empty array emits an empty config, so callers that do not set the input are unchanged.
+    - name: Build CodeQL config
+      id: codeql-config
+      env:
+        PATHS_IGNORE: ${{ inputs.paths-ignore }}
+      run: |
+        python3 - <<'PY' >> "$GITHUB_OUTPUT"
+        import json, os, sys
+        raw = (os.environ.get("PATHS_IGNORE") or "").strip() or "[]"
+        try:
+            paths = json.loads(raw)
+        except ValueError:
+            sys.exit("paths-ignore must be a JSON array of strings")
+        if not isinstance(paths, list) or not all(
+            isinstance(p, str) and p.strip() and "\n" not in p and "\r" not in p for p in paths
+        ):
+            sys.exit("paths-ignore must be a JSON array of non-empty single-line strings")
+        if not paths:
+            print("config=")
+        else:
+            print("config<<CODEQL_CONFIG_EOF")
+            print("paths-ignore:")
+            for p in paths:
+                print("  - " + json.dumps(p))
+            print("CODEQL_CONFIG_EOF")
+        PY
+
     - name: Initialize CodeQL
       uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
       with:
         languages: ${{ matrix.language }}
         token: ${{ env.CODEQL_AUTH_TOKEN }}
+        config: ${{ steps.codeql-config.outputs.config }}
 
     - name: Autobuild
       uses: github/codeql-action/autobuild@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4.38.2
