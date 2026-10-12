@@ -123,3 +123,61 @@ def test_collect_gcp_fails_on_configured_currency_mismatch(monkeypatch):
 
     with pytest.raises(gcp_monitor.CostDataError, match="currency mismatch"):
         gcp_monitor.collect_gcp(config, "2026-08")
+
+
+def test_collect_gcp_never_returns_raw_billing_account_id(monkeypatch):
+    monkeypatch.setattr(gcp_monitor.bigquery, "Client", Mock(return_value=object()))
+    monkeypatch.setattr(
+        gcp_monitor,
+        "query_month_costs_by_service",
+        Mock(
+            return_value=[
+                {
+                    "project_id": "project-a",
+                    "currency": "CZK",
+                    "services": [],
+                    "total_cost": 1.0,
+                    "total_credits": 0.0,
+                    "total_net": 1.0,
+                }
+            ]
+        ),
+    )
+    list_budgets = Mock(return_value=[])
+    monkeypatch.setattr(gcp_monitor, "list_budgets", list_budgets)
+    raw_id = "0A1B2C-3D4E5F-6A7B8C"
+    config = {
+        "billing_export": {"project_id": "billing-project", "currency": "CZK"},
+        "billing_account_id": raw_id,
+        "projects": {"core": ["project-a"]},
+    }
+
+    result = gcp_monitor.collect_gcp(config, "2026-08")
+
+    # The raw ID is still used for the budget lookup, but never persisted in the payload.
+    list_budgets.assert_called_once_with(raw_id)
+    assert result["billing_account"] == gcp_monitor.BILLING_ACCOUNT_MASK
+    assert raw_id not in repr(result)
+
+
+@pytest.mark.parametrize("value", [None, "", "XXXX-XXXX-XXXX"])
+def test_mask_billing_account_unset_or_placeholder_is_none(value):
+    assert gcp_monitor._mask_billing_account(value) is None
+
+
+def test_list_budgets_drops_the_billing_account_from_budget_names(monkeypatch):
+    raw_id = "012345-6789AB-CDEF01"
+    budget = SimpleNamespace(
+        name=f"billingAccounts/{raw_id}/budgets/b-123",
+        display_name="Monthly",
+        amount=SimpleNamespace(specified_amount=None),
+        budget_filter=SimpleNamespace(projects=[], services=[]),
+    )
+    client = Mock()
+    client.list_budgets.return_value = [budget]
+    monkeypatch.setattr(gcp_monitor, "BudgetServiceClient", Mock(return_value=client))
+
+    budgets = gcp_monitor.list_budgets(raw_id)
+
+    assert budgets[0]["name"] == "b-123"
+    assert raw_id not in repr(budgets)

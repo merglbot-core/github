@@ -137,6 +137,14 @@ def query_month_costs_by_service(
     return results
 
 
+def _budget_id(resource_name: Optional[str]) -> Optional[str]:
+    """Return the trailing budget id of a budget resource name, without its billing account."""
+
+    if not resource_name:
+        return None
+    return resource_name.rsplit("/", 1)[-1]
+
+
 def list_budgets(billing_account_id: str) -> List[Dict[str, Any]]:
     """List optional billing-account budgets without affecting cost evidence."""
 
@@ -153,7 +161,9 @@ def list_budgets(billing_account_id: str) -> List[Dict[str, Any]]:
                 currency = specified.currency_code or None
             budgets.append(
                 {
-                    "name": budget.name,
+                    # budget.name is billingAccounts/<ID>/budgets/<id>; keep only the budget id
+                    # so the billing account ID never reaches reports or notifications.
+                    "name": _budget_id(budget.name),
                     "display_name": budget.display_name,
                     "amount": amount,
                     "currency": currency,
@@ -178,6 +188,22 @@ def _get_all_projects_recursively(config_node: Any) -> List[str]:
         for value in config_node.values():
             projects.extend(_get_all_projects_recursively(value))
     return projects
+
+
+BILLING_ACCOUNT_PLACEHOLDER = "XXXX-XXXX-XXXX"
+BILLING_ACCOUNT_MASK = "****-****-****"
+
+
+def _mask_billing_account(billing_account_id: Optional[str]) -> Optional[str]:
+    """Return a non-identifying marker for the billing account used in reports.
+
+    The raw billing account ID must never reach the persisted CSV/Markdown/JSON
+    reports or notifications; reports only need to know whether one was set.
+    """
+
+    if not billing_account_id or billing_account_id == BILLING_ACCOUNT_PLACEHOLDER:
+        return None
+    return BILLING_ACCOUNT_MASK
 
 
 def collect_gcp(config: Dict[str, Any], month: Optional[str] = None) -> Dict[str, Any]:
@@ -209,7 +235,7 @@ def collect_gcp(config: Dict[str, Any], month: Optional[str] = None) -> Dict[str
         raise CostDataError(f"Billing export currency mismatch: configured {expected_currency}, observed {observed}")
 
     budgets = []
-    if billing_account_id and billing_account_id != "XXXX-XXXX-XXXX":
+    if billing_account_id and billing_account_id != BILLING_ACCOUNT_PLACEHOLDER:
         budgets = list_budgets(billing_account_id)
 
     categorized_costs: Dict[str, Any] = {}
@@ -236,7 +262,7 @@ def collect_gcp(config: Dict[str, Any], month: Optional[str] = None) -> Dict[str
 
     return {
         "month": current_month,
-        "billing_account": billing_account_id,
+        "billing_account": _mask_billing_account(billing_account_id),
         "currency": expected_currency,
         "projects_monitored": len(all_projects),
         "project_costs": project_costs,
