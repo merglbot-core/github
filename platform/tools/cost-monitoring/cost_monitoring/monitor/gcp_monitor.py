@@ -137,6 +137,14 @@ def query_month_costs_by_service(
     return results
 
 
+def _budget_id(resource_name: Optional[str]) -> Optional[str]:
+    """Return the trailing budget id of a budget resource name, without its billing account."""
+
+    if not resource_name:
+        return None
+    return resource_name.rsplit("/", 1)[-1]
+
+
 def list_budgets(billing_account_id: str) -> List[Dict[str, Any]]:
     """List optional billing-account budgets without affecting cost evidence."""
 
@@ -153,7 +161,9 @@ def list_budgets(billing_account_id: str) -> List[Dict[str, Any]]:
                 currency = specified.currency_code or None
             budgets.append(
                 {
-                    "name": budget.name,
+                    # budget.name is billingAccounts/<ID>/budgets/<id>; keep only the budget id
+                    # so the billing account ID never reaches reports or notifications.
+                    "name": _budget_id(budget.name),
                     "display_name": budget.display_name,
                     "amount": amount,
                     "currency": currency,

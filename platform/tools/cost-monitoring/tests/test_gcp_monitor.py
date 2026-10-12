@@ -163,3 +163,21 @@ def test_collect_gcp_never_returns_raw_billing_account_id(monkeypatch):
 @pytest.mark.parametrize("value", [None, "", "XXXX-XXXX-XXXX"])
 def test_mask_billing_account_unset_or_placeholder_is_none(value):
     assert gcp_monitor._mask_billing_account(value) is None
+
+
+def test_list_budgets_drops_the_billing_account_from_budget_names(monkeypatch):
+    raw_id = "012345-6789AB-CDEF01"
+    budget = SimpleNamespace(
+        name=f"billingAccounts/{raw_id}/budgets/b-123",
+        display_name="Monthly",
+        amount=SimpleNamespace(specified_amount=None),
+        budget_filter=SimpleNamespace(projects=[], services=[]),
+    )
+    client = Mock()
+    client.list_budgets.return_value = [budget]
+    monkeypatch.setattr(gcp_monitor, "BudgetServiceClient", Mock(return_value=client))
+
+    budgets = gcp_monitor.list_budgets(raw_id)
+
+    assert budgets[0]["name"] == "b-123"
+    assert raw_id not in repr(budgets)
