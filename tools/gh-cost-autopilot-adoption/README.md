@@ -111,3 +111,11 @@ A missing baseline export is not a measured zero. A verified quiet window may be
 zero. The patch accepts the previous complete adoption image and remains
 idempotent; mixed or duplicated images fail closed. Source delivery does not
 install this change or validate any historical financial verdict.
+
+The installer supports one pinned predecessor upgrade for each autopilot. It
+validates the previous code and helper hashes, the original adopted backup and
+the previous installation receipt before writing. The new backup preserves that
+receipt, and verification traces back to the original adopted source. Rollback
+restores the predecessor code, helper and receipt without rewriting `state.json`.
+Changed helpers, receipt chains or rollback backups fail closed. This does not
+authorize installation or release an owner hold.
