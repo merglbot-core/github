@@ -568,3 +568,55 @@ class Python39(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BillingComparisonCoverage(unittest.TestCase):
+    def setUp(self):
+        self.billing = {"before_days": ["2026-09-01", "2026-09-02"],
+                        "after_days": ["2026-10-01", "2026-10-02"]}
+        self.now = dt.datetime(2026, 10, 10, tzinfo=dt.timezone.utc)
+        self.calls = []
+        self.quiet = False
+
+    def gh(self, path):
+        self.calls.append(path)
+        if self.quiet:
+            return {"total_count": 0, "workflow_runs": []}
+        day = "2026-09-02" if "2026-09-01" in path else "2026-10-02"
+        return {"total_count": 1, "workflow_runs": [
+            {"id": 1 if day.startswith("2026-09") else 2, "run_attempt": 1,
+             "created_at": day + "T12:00:00Z", "status": "completed", "conclusion": "success"}]}
+
+    def check(self, usage, budget=lambda: True):
+        return ca.billing_comparison_coverage(self.gh, ["o/r"], usage,
+                                              self.billing, budget, self.now)
+
+    def test_missing_billable_baseline_does_not_become_zero(self):
+        status, detail = self.check({"o/r": {"2026-10-02": 1}})
+        self.assertEqual(status, "lagging")
+        self.assertEqual(detail["window"], "before")
+        self.assertNotIn("o/r", self.billing["baseline_coverage"])
+
+    def test_both_windows_required_and_progress_survives_budget(self):
+        usage = {"o/r": {"2026-09-02": 2, "2026-10-02": 1}}
+        budget = iter((True, True, False))
+        self.assertEqual(self.check(usage, lambda: next(budget))[0], "budget")
+        self.assertIn("o/r", self.billing["baseline_coverage"])
+        self.assertEqual(self.check(usage), ("ok", None))
+        self.assertEqual(len(self.calls), 2)
+        self.assertNotEqual(self.billing["baseline_coverage"]["o/r"]["window"],
+                            self.billing["coverage"]["o/r"]["window"])
+        self.assertEqual(self.check({"o/r": {"2026-09-02": 2}})[0], "lagging")
+
+    def test_verified_quiet_baseline_may_be_zero(self):
+        self.quiet = True
+        self.assertEqual(self.check({}), ("ok", None))
+        self.assertEqual(len(self.calls), 2)
+
+    def test_moved_baseline_is_rechecked(self):
+        self.quiet = True
+        self.assertEqual(self.check({}), ("ok", None))
+        self.billing["before_days"] = ["2026-08-01", "2026-08-02"]
+        self.assertEqual(self.check({}), ("ok", None))
+        self.assertEqual(len(self.calls), 3)
+        self.assertIn("2026-08-01", self.calls[-1])
