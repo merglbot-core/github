@@ -233,7 +233,6 @@ def verify_installed(target):
     base = spec["base"]
     try:
         receipt = json.loads((base / RECEIPT).read_text())
-        backup = pathlib.Path(receipt["backup"])
         adopted = adopted_image(target, receipt)
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise RuntimeError(f"{target}: no verifiable installation receipt ({type(error).__name__})")

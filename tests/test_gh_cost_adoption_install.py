@@ -388,10 +388,6 @@ class ReleaseHold(Home):
         self.assertTrue(record["board_done_at"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class PinnedUpgrade(Home):
     def setUp(self):
         super().setUp()
@@ -485,3 +481,7 @@ class PinnedUpgrade(Home):
         self.assertEqual((base / 'autopilot.py').read_bytes(), old_code)
         self.assertEqual((base / self.ins.RECEIPT).read_bytes(), receipt)
         self.assertEqual((base / 'state.json').read_bytes(), state)
+
+
+if __name__ == "__main__":
+    unittest.main()
