@@ -456,3 +456,32 @@ class PinnedUpgrade(Home):
         self.assertEqual((self.base / 'autopilot.py').read_bytes(), self.old_code)
         self.assertEqual((self.base / 'cost_adoption.py').read_bytes(), self.old_helper)
         self.assertEqual((self.base / self.ins.RECEIPT).read_bytes(), self.receipt)
+
+    def test_910_upgrade_and_rollback_preserve_technical_holds(self):
+        base = self.tmp / 'gh-cost-910'
+        (base / 'autopilot').mkdir(parents=True)
+        original = base / 'original'
+        original.mkdir()
+        (original / 'autopilot.py').write_text(FIXTURE_910)
+        old_code = pa.patch_910(FIXTURE_910).replace(
+            pa.CURRENT_BILLING_COVERAGE, pa.LEGACY_BILLING_COVERAGE).encode()
+        old_helper = b'# predecessor helper\n'
+        state = json.dumps(STATE_910).encode()
+        (base / 'autopilot.py').write_bytes(old_code)
+        (base / 'cost_adoption.py').write_bytes(old_helper)
+        (base / 'state.json').write_bytes(state)
+        receipt = json.dumps({'target': '910', 'backup': str(original),
+                              'code_before': sha(FIXTURE_910.encode()),
+                              'code_after': sha(old_code),
+                              'cost_adoption_after': sha(old_helper)}).encode()
+        (base / self.ins.RECEIPT).write_bytes(receipt)
+        self.ins.TARGETS['910'] = {'base': base, 'patch': 'patch_910',
+                                   'adopted': sha(FIXTURE_910.encode())}
+        self.ins.PREVIOUS_CODE['910'] = sha(old_code)
+        result = self.ins.install_code('910', sha(old_code), sha(state), siblings_verified=True)
+        self.ins.verify_installed('910')
+        self.assertEqual((base / 'state.json').read_bytes(), state)
+        self.ins.rollback('910', result['backup'])
+        self.assertEqual((base / 'autopilot.py').read_bytes(), old_code)
+        self.assertEqual((base / self.ins.RECEIPT).read_bytes(), receipt)
+        self.assertEqual((base / 'state.json').read_bytes(), state)
