@@ -101,3 +101,13 @@ python3 tools/gh-cost-autopilot-adoption/install.py rollback --target 888 \
 after-images.
 
 Refs merglbot-core/github#888, #895, #910, #913, #917
+
+## Baseline coverage correction (#922)
+
+Financial verdicts require coverage of both the baseline and comparison windows.
+Baseline confirmations use `baseline_coverage`; the existing `coverage` remains
+the comparison window. Both share the tick API budget and run-attempt cache.
+A missing baseline export is not a measured zero. A verified quiet window may be
+zero. The patch accepts the previous complete adoption image and remains
+idempotent; mixed or duplicated images fail closed. Source delivery does not
+install this change or validate any historical financial verdict.

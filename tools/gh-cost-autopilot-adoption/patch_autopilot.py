@@ -211,11 +211,10 @@ REPLACEMENTS_888 = [
 ''', '''    # Billing lag leaves missing days at zero (V6 #970). Every in-scope repository needs its own
     # coverage evidence (see billing_coverage_step); confirmations persist in the state, so the
     # check spreads over ticks.
-    from cost_adoption import RETRY_AFTER, billing_coverage_step, billing_data_gap_due, data_gap_body
-    status, detail = billing_coverage_step(gh_json, repos, usage, billing["after_days"],
-                                           billing.setdefault("coverage", {}),
-                                           lambda: CALLS["n"] <= MAX_CALLS_PER_TICK - 3, now(),
-                                           billing.setdefault("coverage_runs", {}))
+    from cost_adoption import RETRY_AFTER, billing_comparison_coverage, billing_data_gap_due, data_gap_body
+    status, detail = billing_comparison_coverage(
+        gh_json, repos, usage, billing,
+        lambda: CALLS["n"] <= MAX_CALLS_PER_TICK - 3, now())
     if status == "budget":
         save_state(state)
         return False
@@ -831,11 +830,10 @@ PILOT_CENSUS_VERSION = 2
 ''', '''    # Billing lag leaves missing days at zero (V6 #970). Every in-scope repository needs its own
     # coverage evidence (see billing_coverage_step); confirmations persist in the state, so the
     # check spreads over ticks.
-    from cost_adoption import RETRY_AFTER, billing_coverage_step, billing_data_gap_due, data_gap_body
-    status, detail = billing_coverage_step(gh_json, repos, usage, billing["after_days"],
-                                           billing.setdefault("coverage", {}),
-                                           lambda: CALLS["n"] <= MAX_CALLS_PER_TICK - 3, now(),
-                                           billing.setdefault("coverage_runs", {}))
+    from cost_adoption import RETRY_AFTER, billing_comparison_coverage, billing_data_gap_due, data_gap_body
+    status, detail = billing_comparison_coverage(
+        gh_json, repos, usage, billing,
+        lambda: CALLS["n"] <= MAX_CALLS_PER_TICK - 3, now())
     if status == "budget":
         save_state(state)
         return False
@@ -864,7 +862,16 @@ PILOT_CENSUS_VERSION = 2
 ]
 
 
+LEGACY_BILLING_COVERAGE = '    from cost_adoption import RETRY_AFTER, billing_coverage_step, billing_data_gap_due, data_gap_body\n    status, detail = billing_coverage_step(gh_json, repos, usage, billing["after_days"],\n                                           billing.setdefault("coverage", {}),\n                                           lambda: CALLS["n"] <= MAX_CALLS_PER_TICK - 3, now(),\n                                           billing.setdefault("coverage_runs", {}))'
+CURRENT_BILLING_COVERAGE = '    from cost_adoption import RETRY_AFTER, billing_comparison_coverage, billing_data_gap_due, data_gap_body\n    status, detail = billing_comparison_coverage(\n        gh_json, repos, usage, billing,\n        lambda: CALLS["n"] <= MAX_CALLS_PER_TICK - 3, now())'
+
 def _apply(source, replacements, name):
+    # Upgrade the previous complete adoption image, then validate every anchor below.
+    # A mixed or duplicated image still fails the same full-image checks.
+    if LEGACY_BILLING_COVERAGE in source:
+        if source.count(LEGACY_BILLING_COVERAGE) != 1 or CURRENT_BILLING_COVERAGE in source:
+            raise ValueError(f"{name}: ambiguous billing coverage upgrade")
+        source = source.replace(LEGACY_BILLING_COVERAGE, CURRENT_BILLING_COVERAGE)
     done = [after in source for _, after in replacements]
     if all(done):
         # Fully patched: every patched block exactly once, and no legacy block left beside

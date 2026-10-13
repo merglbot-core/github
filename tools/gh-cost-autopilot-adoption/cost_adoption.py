@@ -504,6 +504,20 @@ def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budg
     return ("lagging", lagging) if lagging else ("ok", None)
 
 
+def billing_comparison_coverage(gh_json, repos, usage, billing, has_budget, now):
+    """Require both windows; retain independent, window-bound progress across ticks."""
+    for side, key in (("before", "baseline_coverage"), ("after", "coverage")):
+        days = billing.get(side + "_days")
+        if not isinstance(days, list) or not days:
+            return "error", side + ": missing window"
+        status, detail = billing_coverage_step(
+            gh_json, repos, usage, days, billing.setdefault(key, {}), has_budget, now,
+            billing.setdefault("coverage_runs", {}))
+        if status != "ok":
+            return status, {"window": side, "detail": detail}
+    return "ok", None
+
+
 def close_issue_done(gh, gh_json, board, repo, number, done_option):
     """Close an issue as completed and set its board Status to Done.
 

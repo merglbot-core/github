@@ -246,25 +246,25 @@ class BillingGuards(unittest.TestCase):
             exec(compile(wrapper, "billing_fragment", "exec"), ns)
             window = ["2026-10-06", "2026-10-07"]
             # an unrelated repository is fresh, the in-scope one stops before its last run
-            billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
+            billing = {"before_days": window, "after_days": window, "due_at": "2026-10-09T06:00:00Z"}
             stale = {"o/other": {"2026-10-08": 1.0}, "o/in": {"2026-10-06": 5.0}}
             self.assertFalse(ns["check"]({}, billing, stale, {}))
             self.assertIn("retry_after", billing)
-            self.assertNotIn("o/in", billing["coverage"])
+            self.assertNotIn("o/in", billing["baseline_coverage"])
             # the in-scope export reaches its last run; a repository without runs has nothing to miss
-            billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
+            billing = {"before_days": window, "after_days": window, "due_at": "2026-10-09T06:00:00Z"}
             fresh = {"O/In": {"2026-10-07": 5.0}}
             self.assertEqual(ns["check"]({}, billing, fresh, {}), "go")
             mark = ["2026-10-06", "2026-10-07"]
             self.assertEqual(billing["coverage"], {"o/in": {"v": 7, "window": mark, "last": "2026-10-07"},
                                                    "o/quiet": {"v": 7, "window": mark, "last": None}})
             # a quiet window with no charge row at all is complete as well
-            billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
+            billing = {"before_days": window, "after_days": window, "due_at": "2026-10-09T06:00:00Z"}
             ns["check"].__globals__["gh_json"] = lambda path: {"total_count": 0, "workflow_runs": []}
             self.assertEqual(ns["check"]({}, billing, {}, {}), "go")
             ns["check"].__globals__["gh_json"] = lambda path: runs[path.split("/actions/")[0][len("repos/"):]]
             # out of calls: no verdict, no retry delay, the next tick continues
-            billing = {"after_days": window, "due_at": "2026-10-09T06:00:00Z"}
+            billing = {"before_days": window, "after_days": window, "due_at": "2026-10-09T06:00:00Z"}
             ns["CALLS"]["n"] = 60
             self.assertFalse(ns["check"]({}, billing, fresh, {}))
             self.assertNotIn("retry_after", billing)
@@ -673,3 +673,16 @@ class PilotBehaviour(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BillingCoverageUpgrade(unittest.TestCase):
+    def test_previous_complete_adoption_upgrades_and_is_idempotent(self):
+        for replacements, patch in ((pa.REPLACEMENTS_888, pa.patch_888),
+                                    (pa.REPLACEMENTS_910, pa.patch_910)):
+            current = patch(fixture(replacements))
+            previous = current.replace(pa.CURRENT_BILLING_COVERAGE, pa.LEGACY_BILLING_COVERAGE)
+            self.assertNotEqual(previous, current)
+            self.assertEqual(patch(previous), current)
+            self.assertEqual(patch(current), current)
+            with self.assertRaises(ValueError):
+                patch(previous + pa.LEGACY_BILLING_COVERAGE)
