@@ -178,6 +178,54 @@ def backup_dir(base, kind):
 RECEIPT = "adoption-receipt.json"
 
 
+PREVIOUS_CODE = {
+    "888": "26e774f6e07e00eb0043cb051054fad3514c47685576998156dd5bd567d03de5",
+    "910": "8997ac43592019d55958ec96b9b8b3df3994e4fbbb9bf8bedacd3d0bd185f9d5",
+}
+PREVIOUS_HELPER = "8db5ede8ddd9ceacf3ca6c20a933e45964db990e5740e02b62ba7ea940fdbe04"
+
+
+def adopted_image(target, receipt):
+    """Resolve either the original install or one pinned predecessor upgrade."""
+    spec = TARGETS[target]
+    backup = pathlib.Path(receipt["backup"])
+    before = (backup / "autopilot.py").read_bytes()
+    if digest(before) != receipt.get("code_before"):
+        raise RuntimeError("backup pre-image mismatch")
+    if digest(before) == spec["adopted"]:
+        return before
+    if digest(before) != PREVIOUS_CODE.get(target):
+        raise RuntimeError("unreviewed pre-image")
+    raw = (backup / "previous-receipt.json").read_bytes()
+    if digest(raw) != receipt.get("previous_receipt_sha256"):
+        raise RuntimeError("predecessor receipt mismatch")
+    previous = json.loads(raw)
+    old_helper = (backup / "cost_adoption.py").read_bytes()
+    original = (pathlib.Path(previous["backup"]) / "autopilot.py").read_bytes()
+    if (previous.get("target") != target or previous.get("code_before") != spec["adopted"]
+            or digest(original) != spec["adopted"]
+            or previous.get("code_after") != PREVIOUS_CODE[target]
+            or digest(old_helper) != PREVIOUS_HELPER
+            or previous.get("cost_adoption_after") != PREVIOUS_HELPER):
+        raise RuntimeError("unverified predecessor installation")
+    return original
+
+
+def predecessor_receipt(target, code, helper):
+    """Validate the pinned running predecessor without accepting arbitrary anchor matches."""
+    spec = TARGETS[target]
+    if digest(code) != PREVIOUS_CODE.get(target) or digest(helper) != PREVIOUS_HELPER:
+        raise RuntimeError("unreviewed pre-image: code or helper is not the pinned predecessor")
+    raw = (spec["base"] / RECEIPT).read_bytes()
+    receipt = json.loads(raw)
+    original = adopted_image(target, receipt)
+    if (receipt.get("target") != target or digest(original) != spec["adopted"]
+            or receipt.get("code_after") != digest(code)
+            or receipt.get("cost_adoption_after") != digest(helper)):
+        raise RuntimeError("unverified predecessor receipt")
+    return raw
+
+
 def verify_installed(target):
     """The live files are exactly the reviewed installation: patch(adopted backup) and the
     reviewed helper, as recorded in the installation receipt. Raises otherwise; returns it."""
@@ -186,13 +234,13 @@ def verify_installed(target):
     try:
         receipt = json.loads((base / RECEIPT).read_text())
         backup = pathlib.Path(receipt["backup"])
-        adopted = (backup / "autopilot.py").read_bytes()
+        adopted = adopted_image(target, receipt)
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise RuntimeError(f"{target}: no verifiable installation receipt ({type(error).__name__})")
     patch = getattr(load(HERE / "patch_autopilot.py", "adoption_patch"), spec["patch"])
     live, helper = (base / "autopilot.py").read_bytes(), (base / "cost_adoption.py").read_bytes()
     expected = patch(adopted.decode()).encode()
-    if (digest(adopted) != spec["adopted"] or receipt.get("code_before") != spec["adopted"]
+    if (digest(adopted) != spec["adopted"]
             or digest(expected) != receipt.get("code_after") or live != expected
             or helper != (HERE / "cost_adoption.py").read_bytes()
             or digest(helper) != receipt.get("cost_adoption_after")):
@@ -214,8 +262,10 @@ def install_code(target, expected_code, expected_state, dry_run=False, source_sh
         if new_code == old_code and helper_path.exists() and helper_path.read_bytes() == helper_new:
             verify_installed(target)  # patched blocks alone do not prove the reviewed image
             return {"target": target, "noop": True, "code": digest(old_code)}
+        previous_receipt = None
         if digest(old_code) != spec["adopted"]:
-            raise RuntimeError("unreviewed pre-image: live code is not the adopted image")
+            previous_receipt = predecessor_receipt(
+                target, old_code, helper_path.read_bytes() if helper_path.exists() else b"")
         check_state(target, json.loads(old_state))
         compile(new_code, str(code_path), "exec")
         py39_ok({"autopilot.py": new_code.decode(), "cost_adoption.py": helper_new.decode()})
@@ -225,12 +275,16 @@ def install_code(target, expected_code, expected_state, dry_run=False, source_sh
                  "older_patchers": older_patchers(target, new_code.decode(), siblings_verified),
                  "python39": "compiled",
                  "source_main_sha": source_sha}
+        if previous_receipt is not None:
+            facts["previous_receipt_sha256"] = digest(previous_receipt)
         if dry_run:
             return dict(facts, dry_run=True)
         if HOLD.exists():
             raise RuntimeError("OWNER_HOLD appeared")
         backup = backup_dir(base, "adoption")
         atomic(backup / "autopilot.py", old_code)
+        if previous_receipt is not None:
+            atomic(backup / "previous-receipt.json", previous_receipt)
         if helper_path.exists():
             atomic(backup / "cost_adoption.py", helper_path.read_bytes())
         atomic(backup / "manifest.json", (json.dumps(facts, indent=1) + "\n").encode())
@@ -250,7 +304,9 @@ def install_code(target, expected_code, expected_state, dry_run=False, source_sh
                     helper_path.unlink()
             else:
                 atomic(helper_path, old_helper)
-            if (base / RECEIPT).exists():
+            if previous_receipt is not None:
+                atomic(base / RECEIPT, previous_receipt)
+            elif (base / RECEIPT).exists():
                 (base / RECEIPT).unlink()
             raise
         return dict(facts, backup=str(backup))
@@ -415,9 +471,11 @@ def rollback(target, backup):
     helper_backup = backup / "cost_adoption.py"
     helper_bytes = helper_backup.read_bytes() if helper_backup.exists() else None
     if (manifest.get("target") != target or digest(code_bytes) != manifest.get("code_before")
-            or manifest.get("code_before") != spec["adopted"]
             or (None if helper_bytes is None else digest(helper_bytes)) != manifest.get("cost_adoption_before")):
         raise RuntimeError("backup does not match its manifest; rollback refused")
+    adopted_image(target, dict(manifest, backup=str(backup)))
+    previous_receipt = ((backup / "previous-receipt.json").read_bytes()
+                        if manifest.get("previous_receipt_sha256") else None)
     with Locked(base):
         code_path, helper_path = base / "autopilot.py", base / "cost_adoption.py"
         live_helper = helper_path.read_bytes() if helper_path.exists() else None
@@ -434,7 +492,9 @@ def rollback(target, backup):
                 helper_path.unlink()
             else:
                 atomic(helper_path, helper_bytes)
-            if receipt_path.exists():
+            if previous_receipt is not None:
+                atomic(receipt_path, previous_receipt)
+            elif receipt_path.exists():
                 receipt_path.unlink()
             if digest(code_path.read_bytes()) != manifest["code_before"] or \
                     (helper_path.read_bytes() if helper_path.exists() else None) != helper_bytes:
