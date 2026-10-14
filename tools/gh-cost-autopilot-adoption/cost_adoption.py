@@ -407,6 +407,35 @@ def _run_billable(gh_json, repo, run):
     return None if total > len(jobs) else False
 
 
+def _never_started(gh_json, repo, run):
+    """A run that still reads as unfinished but has no job in any attempt.
+
+    GitHub can keep such a run `queued` indefinitely: six runs created on 13 Sep 2026 still
+    read `queued` a month later, while cancel answers "completed", force-cancel 409 and delete
+    403 (github#922). Without a job nothing ran on a runner, so the run produced no usage, and
+    whatever it might still start bills on its own later day, outside the window. Only a
+    readable listing whose total_count is 0 releases a run; anything else keeps it pending."""
+    listing = gh_json(f"repos/{repo}/actions/runs/{run.get('id')}/jobs?filter=all&per_page=1")
+    total = listing.get("total_count") if isinstance(listing, dict) else None
+    return isinstance(total, int) and not isinstance(total, bool) and total == 0
+
+
+def _unfinished_holds(gh_json, repo, runs, cache, has_budget):
+    """True when one of `runs` (listed as unfinished) may still produce usage, "budget" when the
+    tick ran out of calls. A never-started verdict is cached per run attempt: such a run cannot
+    add window usage later, so the verdict cannot go stale."""
+    for run in runs:
+        key = f"{repo}#{run.get('id')}#{run.get('run_attempt') or 1}#never-started"
+        if cache.get(key) is True:
+            continue
+        if not has_budget():
+            return "budget"
+        if not _never_started(gh_json, repo, run):
+            return True
+        cache[key] = True
+    return False
+
+
 def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budget, now, billable=None):
     """Per in-scope repository, the billing export covers the repository's own billable runs.
 
@@ -416,17 +445,18 @@ def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budg
     add window usage by finishing nor by being re-run: a later attempt bills on its own day,
     outside the window. That is why a confirmation stays valid for its window. GitHub exposes no
     per-repository completeness marker, so a partially exported day is bounded by that time
-    only. Per repository, never borrowed from another one: no run created in the window is
-    still queued or running (fail-closed, although its future usage would fall outside the
-    window), and its usage has a row dated inside the window on or after the creation day of
-    its newest billable run (success, failure, timed_out, or a cancelled run in which a job ran
-    on a runner); usage dated outside the window never counts as evidence. A repository with no
-    billable run has no usage to miss, so a quiet window never needs a charge row. With more
-    runs than one page, every unfinished status is asked for directly. Confirmations carry
-    COVERAGE_VERSION and the window, are recorded in `confirmed` (persisted by the caller) and
-    are re-validated against the current usage on every call without API reads; a moved window
-    or a vanished usage day discards them. `billable` (persisted by the caller) caches the
-    billability of a run attempt, so the check progresses across ticks (V6 #970).
+    only. Per repository, never borrowed from another one: no run created in the window is still
+    queued or running (fail-closed, although its future usage would fall outside the window)
+    unless it has no job in any attempt (`_never_started`), and its usage has a row dated inside
+    the window on or after the creation day of its newest billable run (success, failure,
+    timed_out, or a cancelled run in which a job ran on a runner); usage dated outside the
+    window never counts as evidence. A repository with no billable run has no usage to miss, so
+    a quiet window never needs a charge row. With more runs than one page, every unfinished
+    status is asked for directly. Confirmations carry COVERAGE_VERSION and the window, are
+    recorded in `confirmed` (persisted by the caller) and are re-validated against the current
+    usage on every call without API reads; a moved window or a vanished usage day discards them.
+    `billable` (persisted by the caller) caches the billability of a run attempt, so the check
+    progresses across ticks (V6 #970).
 
     Returns ("ok", None), ("budget", repo) when the tick ran out of calls, ("error", repo) for an
     unreadable or ambiguous listing, or ("pending"|"lagging", [repos]) to retry later."""
@@ -465,14 +495,26 @@ def billing_coverage_step(gh_json, repos, usage, after_days, confirmed, has_budg
             for status in UNFINISHED_STATUSES:
                 if not has_budget():
                     return "budget", repo
-                probe = count(gh_json(f"repos/{repo}/actions/runs?created={lo}..{hi}&status={status}&per_page=1"))
+                stuck = gh_json(f"repos/{repo}/actions/runs?created={lo}..{hi}&status={status}&per_page=100")
+                probe = count(stuck)
                 if probe is None:
                     return "error", repo
                 if probe:
-                    unfinished = True
-                    break
+                    rows = stuck.get("workflow_runs")
+                    if (not isinstance(rows, list) or len(rows) < probe
+                            or not all(isinstance(r, dict) for r in rows)):
+                        unfinished = True  # not every such run can be inspected: keep pending
+                        break
+                    unfinished = _unfinished_holds(gh_json, repo, rows, billable, has_budget)
+                    if unfinished == "budget":
+                        return "budget", repo
+                    if unfinished:
+                        break
         else:
-            unfinished = any(r.get("status") != "completed" for r in listed)
+            unfinished = _unfinished_holds(gh_json, repo, [r for r in listed if r.get("status") != "completed"],
+                                           billable, has_budget)
+            if unfinished == "budget":
+                return "budget", repo
         if unfinished:
             pending.append(repo)  # its usage is still being produced
             continue

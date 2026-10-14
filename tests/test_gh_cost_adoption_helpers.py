@@ -370,7 +370,10 @@ class BillingCoverage(unittest.TestCase):
                 return (jobs or {}).get(path.split("/runs/")[1].split("/")[0])
             if "&status=" in path:
                 status = path.split("&status=")[1].split("&")[0]
-                return {"total_count": (probes or {}).get(repo, {}).get(status, 0), "workflow_runs": []}
+                found = (probes or {}).get(repo, {}).get(status, 0)
+                if isinstance(found, list):  # the unfinished runs themselves
+                    return {"total_count": len(found), "workflow_runs": found}
+                return {"total_count": found, "workflow_runs": []}
             return listings.get(repo)
         return read
 
@@ -498,6 +501,52 @@ class BillingCoverage(unittest.TestCase):
         self.assertEqual(self.run_step({"o/a": self.runs(), "o/b": self.runs()}, {}, budget=False)[0], ("budget", "o/a"))
         old = {"o/a": {"v": 6, "window": self.MARK, "last": None}, "o/b": "2026-10-07"}
         self.assertEqual(self.run_step({}, {}, confirmed=old, budget=False)[0], ("budget", "o/a"))
+
+
+    NO_JOB = {"total_count": 0, "jobs": []}
+
+    def test_a_run_without_any_job_never_holds_coverage(self):
+        # github#922: runs read `queued` for a month with no job; cancel, force-cancel and
+        # delete all refuse. Nothing ran on a runner, so nothing can still land in the window.
+        listings = {"o/a": self.runs(("2026-10-07", "queued", None), ("2026-10-06", "completed", "success")),
+                    "o/b": self.runs()}
+        usage = {"o/a": {"2026-10-06": 1}}
+        cache = {}
+        (status, _), confirmed = self.run_step(listings, usage, jobs={"0": self.NO_JOB}, billable=cache)
+        self.assertEqual((status, confirmed["o/a"]["last"]), ("ok", "2026-10-06"))
+        self.assertIs(cache["o/a#0#1#never-started"], True)
+        # the verdict is cached per run attempt, so a later tick spends no call on it
+        calls = []
+        self.assertEqual(self.run_step(listings, usage, jobs={}, billable=cache, calls=calls)[0][0], "ok")
+        self.assertFalse(any("/runs/0/jobs" in path for path in calls))
+
+    def test_an_unfinished_run_with_a_job_or_an_unreadable_listing_still_holds(self):
+        listings = {"o/a": self.runs(("2026-10-07", "queued", None), ("2026-10-06", "completed", "success")),
+                    "o/b": self.runs()}
+        usage = {"o/a": {"2026-10-06": 1}}
+        for jobs in ({"0": {"total_count": 1, "jobs": [self.QUEUED]}}, {}, {"0": {"jobs": []}},
+                     {"0": {"total_count": True, "jobs": []}}, {"0": ["x"]}):
+            cache = {}
+            self.assertEqual(self.run_step(listings, usage, jobs=jobs, billable=cache)[0], ("pending", ["o/a"]))
+            self.assertEqual(cache, {})  # nothing marked never-started
+
+    def test_a_busy_repository_releases_only_inspected_never_started_runs(self):
+        busy = {"o/a": self.runs(("2026-10-07", "completed", "success"), total=500), "o/b": self.runs()}
+        usage = {"o/a": {"2026-10-07": 1}}
+        ghost = [{"id": 41, "status": "queued", "run_attempt": 1}]
+        self.assertEqual(self.run_step(busy, usage, probes={"o/a": {"queued": ghost}},
+                                       jobs={"41": self.NO_JOB})[0], ("ok", None))
+        self.assertEqual(self.run_step(busy, usage, probes={"o/a": {"queued": ghost}},
+                                       jobs={"41": {"total_count": 2, "jobs": []}})[0], ("pending", ["o/a"]))
+        # more unfinished runs than the page shows: they cannot all be inspected, keep pending
+        self.assertEqual(self.run_step(busy, usage, probes={"o/a": {"queued": 3}})[0], ("pending", ["o/a"]))
+
+    def test_inspecting_an_unfinished_run_respects_the_tick_budget(self):
+        listings = {"o/a": self.runs(("2026-10-07", "queued", None)), "o/b": self.runs()}
+        calls = iter([True, False])
+        result = ca.billing_coverage_step(self.gh(listings, jobs={"0": self.NO_JOB}), ["o/a", "o/b"], {},
+                                          self.WINDOW, {}, lambda: next(calls, False), self.NOW, {})
+        self.assertEqual(result, ("budget", "o/a"))
 
 
 class LiveChildren(unittest.TestCase):
