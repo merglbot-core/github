@@ -397,8 +397,7 @@ class PinnedUpgrade(Home):
         code = pa.patch_888(FIXTURE).replace(pa.CURRENT_BILLING_COVERAGE,
                                           pa.LEGACY_BILLING_COVERAGE).encode()
         helper = b'# predecessor helper\n'
-        self.ins.PREVIOUS_CODE = {'888': sha(code)}
-        self.ins.PREVIOUS_HELPER = sha(helper)
+        self.ins.PREDECESSORS = {'888': ((sha(code), sha(helper)),)}
         (self.base / 'autopilot.py').write_bytes(code)
         (self.base / 'cost_adoption.py').write_bytes(helper)
         self.receipt = json.dumps({'target': '888', 'backup': str(original),
@@ -473,7 +472,7 @@ class PinnedUpgrade(Home):
         (base / self.ins.RECEIPT).write_bytes(receipt)
         self.ins.TARGETS['910'] = {'base': base, 'patch': 'patch_910',
                                    'adopted': sha(FIXTURE_910.encode())}
-        self.ins.PREVIOUS_CODE['910'] = sha(old_code)
+        self.ins.PREDECESSORS['910'] = ((sha(old_code), sha(old_helper)),)
         result = self.ins.install_code('910', sha(old_code), sha(state), siblings_verified=True)
         self.ins.verify_installed('910')
         self.assertEqual((base / 'state.json').read_bytes(), state)
@@ -481,6 +480,81 @@ class PinnedUpgrade(Home):
         self.assertEqual((base / 'autopilot.py').read_bytes(), old_code)
         self.assertEqual((base / self.ins.RECEIPT).read_bytes(), receipt)
         self.assertEqual((base / 'state.json').read_bytes(), state)
+
+
+class ChainedUpgrade(Home):
+    """A second reviewed upgrade over a first one (github#922, 14 Oct 2026): link 1 was installed
+    over link 0, which was installed over the adopted image."""
+
+    def setUp(self):
+        super().setUp()
+        self.link0 = pa.patch_888(FIXTURE).replace(pa.CURRENT_BILLING_COVERAGE,
+                                                   pa.LEGACY_BILLING_COVERAGE).encode()
+        self.link1 = pa.patch_888(FIXTURE).encode()
+        self.helper0, self.helper1 = b'# helper of link 0\n', b'# helper of link 1\n'
+        self.ins.PREDECESSORS = {'888': ((sha(self.link0), sha(self.helper0)),
+                                         (sha(self.link1), sha(self.helper1)))}
+        original = self.base / 'original'
+        original.mkdir()
+        (original / 'autopilot.py').write_text(FIXTURE)
+        self.receipt0 = json.dumps({'target': '888', 'backup': str(original),
+                                    'code_before': sha(FIXTURE.encode()), 'code_after': sha(self.link0),
+                                    'cost_adoption_after': sha(self.helper0)}).encode()
+        first = self.base / 'first'
+        first.mkdir()
+        (first / 'autopilot.py').write_bytes(self.link0)
+        (first / 'cost_adoption.py').write_bytes(self.helper0)
+        (first / 'previous-receipt.json').write_bytes(self.receipt0)
+        self.receipt1 = json.dumps({'target': '888', 'backup': str(first),
+                                    'code_before': sha(self.link0), 'code_after': sha(self.link1),
+                                    'cost_adoption_after': sha(self.helper1),
+                                    'previous_receipt_sha256': sha(self.receipt0)}).encode()
+        (self.base / 'autopilot.py').write_bytes(self.link1)
+        (self.base / 'cost_adoption.py').write_bytes(self.helper1)
+        (self.base / self.ins.RECEIPT).write_bytes(self.receipt1)
+
+    def test_helper_only_upgrade_over_two_links_and_rollback(self):
+        state = (self.base / 'state.json').read_bytes()
+        result = self.install()
+        self.assertEqual((result['code_before'], result['code_after']), (sha(self.link1), sha(self.link1)))
+        self.ins.verify_installed('888')
+        self.assertTrue(self.install()['noop'])
+        self.ins.rollback('888', result['backup'])
+        self.assertEqual((self.base / 'autopilot.py').read_bytes(), self.link1)
+        self.assertEqual((self.base / 'cost_adoption.py').read_bytes(), self.helper1)
+        self.assertEqual((self.base / self.ins.RECEIPT).read_bytes(), self.receipt1)
+        self.assertEqual((self.base / 'state.json').read_bytes(), state)
+
+    def test_a_link_whose_receipt_skips_its_predecessor_is_refused(self):
+        forged = json.loads(self.receipt0)
+        forged['code_after'] = sha(self.link1)  # claims link 1 came straight from the adopted image
+        raw = json.dumps(forged).encode()
+        (self.base / 'first' / 'previous-receipt.json').write_bytes(raw)
+        data = json.loads(self.receipt1)
+        data['previous_receipt_sha256'] = sha(raw)
+        (self.base / self.ins.RECEIPT).write_text(json.dumps(data))
+        with self.assertRaisesRegex(RuntimeError, 'unverified predecessor installation'):
+            self.install()
+        self.assertEqual((self.base / 'cost_adoption.py').read_bytes(), self.helper1)
+
+    def test_a_tampered_inner_backup_or_unpinned_helper_is_refused(self):
+        (self.base / 'first' / 'cost_adoption.py').write_bytes(b'changed')
+        with self.assertRaisesRegex(RuntimeError, 'unverified predecessor installation'):
+            self.install()
+        (self.base / 'first' / 'cost_adoption.py').write_bytes(self.helper0)
+        (self.base / 'cost_adoption.py').write_bytes(self.helper0)  # link 1 code with link 0 helper
+        with self.assertRaisesRegex(RuntimeError, 'unreviewed pre-image'):
+            self.install()
+        self.assertEqual((self.base / 'autopilot.py').read_bytes(), self.link1)
+
+    def test_the_pinned_chain_matches_the_live_installations(self):
+        real = load("adoption_install_pins", TOOL / "install.py")
+        for target in ("888", "910"):
+            codes = [code for code, _ in real.PREDECESSORS[target]]
+            self.assertEqual(len(set(codes)), len(codes))
+            self.assertNotIn(real.TARGETS[target]["adopted"], codes)
+        self.assertEqual({helper for chain in real.PREDECESSORS.values() for _, helper in chain},
+                         {real.HELPER_20261001, real.HELPER_20261014})
 
 
 if __name__ == "__main__":

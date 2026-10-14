@@ -119,3 +119,21 @@ receipt, and verification traces back to the original adopted source. Rollback
 restores the predecessor code, helper and receipt without rewriting `state.json`.
 Changed helpers, receipt chains or rollback backups fail closed. This does not
 authorize installation or release an owner hold.
+
+## Never-started runs and a chained upgrade (#922, 14 Oct 2026)
+
+Six runs created on 13 Sep 2026 inside the #922 baseline window still read `queued` with no
+job in any attempt. GitHub refuses to remove them: cancel answers "completed", force-cancel 409
+and delete 403. A run with no job never ran on a runner, so it produced no usage, and anything
+it might still start bills on its own later day, outside the window. The coverage check
+therefore releases an unfinished run only when a readable jobs listing (`filter=all`) reports
+`total_count` 0; an unreadable listing or any job keeps the run pending, as before. The verdict
+is cached per run attempt in `coverage_runs`. Confirmations made under the stricter rule stay
+valid, so `COVERAGE_VERSION` is unchanged.
+
+The installer now accepts a chain of pinned predecessors per autopilot (`PREDECESSORS`): the
+1 Oct installation (main `8cfec93`) and the 14 Oct baseline-coverage upgrade (main `29176f3`).
+Every link's receipt must name the previous link, or the adopted image for the first, as its
+pre-image, carry that link's helper in its backup and resolve recursively to the adopted
+source. This upgrade changes only `cost_adoption.py`; both autopilots keep their code
+(`patch_888`/`patch_910` are no-ops on it), and rollback restores the 14 Oct helper and receipt.

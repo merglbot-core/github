@@ -178,15 +178,30 @@ def backup_dir(base, kind):
 RECEIPT = "adoption-receipt.json"
 
 
-PREVIOUS_CODE = {
-    "888": "26e774f6e07e00eb0043cb051054fad3514c47685576998156dd5bd567d03de5",
-    "910": "8997ac43592019d55958ec96b9b8b3df3994e4fbbb9bf8bedacd3d0bd185f9d5",
+HELPER_20261001 = "8db5ede8ddd9ceacf3ca6c20a933e45964db990e5740e02b62ba7ea940fdbe04"
+HELPER_20261014 = "836f33b64f9018c6c5d1dcf2ed9097b308599fc6dd0286db7ecf356ac3acdcda"
+# Reviewed installations a later reviewed upgrade may replace, oldest first, as (autopilot code,
+# helper). Link n was installed over link n-1 (link 0 over the adopted image), and its receipt
+# says so, so every chain resolves back to the adopted source: 1 Oct 2026 (main 8cfec93) and
+# 14 Oct 2026 (main 29176f3, #997/#998).
+PREDECESSORS = {
+    "888": (("26e774f6e07e00eb0043cb051054fad3514c47685576998156dd5bd567d03de5", HELPER_20261001),
+            ("46e7776de013ef0d14ea625b31da08f27ace50a36340b2904500799ab541722f", HELPER_20261014)),
+    "910": (("8997ac43592019d55958ec96b9b8b3df3994e4fbbb9bf8bedacd3d0bd185f9d5", HELPER_20261001),
+            ("45e9f23f3de96af6203a37bd73e7c069dc143a981622ea387d8a9d852121bb90", HELPER_20261014)),
 }
-PREVIOUS_HELPER = "8db5ede8ddd9ceacf3ca6c20a933e45964db990e5740e02b62ba7ea940fdbe04"
 
 
-def adopted_image(target, receipt):
-    """Resolve either the original install or one pinned predecessor upgrade."""
+def pinned_link(target, code_digest):
+    """(index, helper digest) of a pinned predecessor's code, or (None, None)."""
+    for index, (code, helper) in enumerate(PREDECESSORS.get(target, ())):
+        if code == code_digest:
+            return index, helper
+    return None, None
+
+
+def adopted_image(target, receipt, depth=0):
+    """Resolve the original install or a chain of pinned predecessor upgrades back to it."""
     spec = TARGETS[target]
     backup = pathlib.Path(receipt["backup"])
     before = (backup / "autopilot.py").read_bytes()
@@ -194,28 +209,33 @@ def adopted_image(target, receipt):
         raise RuntimeError("backup pre-image mismatch")
     if digest(before) == spec["adopted"]:
         return before
-    if digest(before) != PREVIOUS_CODE.get(target):
+    chain = PREDECESSORS.get(target, ())
+    index, helper = pinned_link(target, digest(before))
+    if index is None or depth >= len(chain):
         raise RuntimeError("unreviewed pre-image")
     raw = (backup / "previous-receipt.json").read_bytes()
     if digest(raw) != receipt.get("previous_receipt_sha256"):
         raise RuntimeError("predecessor receipt mismatch")
     previous = json.loads(raw)
     old_helper = (backup / "cost_adoption.py").read_bytes()
-    original = (pathlib.Path(previous["backup"]) / "autopilot.py").read_bytes()
-    if (previous.get("target") != target or previous.get("code_before") != spec["adopted"]
-            or digest(original) != spec["adopted"]
-            or previous.get("code_after") != PREVIOUS_CODE[target]
-            or digest(old_helper) != PREVIOUS_HELPER
-            or previous.get("cost_adoption_after") != PREVIOUS_HELPER):
+    earlier = spec["adopted"] if index == 0 else chain[index - 1][0]
+    if (previous.get("target") != target or previous.get("code_before") != earlier
+            or previous.get("code_after") != chain[index][0]
+            or digest(old_helper) != helper
+            or previous.get("cost_adoption_after") != helper):
+        raise RuntimeError("unverified predecessor installation")
+    original = adopted_image(target, previous, depth + 1)
+    if digest(original) != spec["adopted"]:
         raise RuntimeError("unverified predecessor installation")
     return original
 
 
 def predecessor_receipt(target, code, helper):
-    """Validate the pinned running predecessor without accepting arbitrary anchor matches."""
+    """Validate a pinned running predecessor without accepting arbitrary anchor matches."""
     spec = TARGETS[target]
-    if digest(code) != PREVIOUS_CODE.get(target) or digest(helper) != PREVIOUS_HELPER:
-        raise RuntimeError("unreviewed pre-image: code or helper is not the pinned predecessor")
+    index, pinned_helper = pinned_link(target, digest(code))
+    if index is None or digest(helper) != pinned_helper:
+        raise RuntimeError("unreviewed pre-image: code or helper is not a pinned predecessor")
     raw = (spec["base"] / RECEIPT).read_bytes()
     receipt = json.loads(raw)
     original = adopted_image(target, receipt)
