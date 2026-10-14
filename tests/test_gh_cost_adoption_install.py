@@ -488,8 +488,8 @@ class ChainedUpgrade(Home):
 
     def setUp(self):
         super().setUp()
-        self.link0 = pa.patch_888(FIXTURE).replace(pa.CURRENT_BILLING_COVERAGE,
-                                                   pa.LEGACY_BILLING_COVERAGE).encode()
+        # Link 0 lives only in the inner backup and is checked by digest, so plain bytes suffice.
+        self.link0 = b'# autopilot code of link 0\n'
         self.link1 = pa.patch_888(FIXTURE).encode()
         self.helper0, self.helper1 = b'# helper of link 0\n', b'# helper of link 1\n'
         self.ins.PREDECESSORS = {'888': ((sha(self.link0), sha(self.helper0)),
