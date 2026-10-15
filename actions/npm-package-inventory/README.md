@@ -1,7 +1,7 @@
 # Project 39 npm package inventory
 
 Read-only input collection for the unresolved nonpersonal npm route. This action
-bundles the collector and functional tests from reviewed platform#2300; exact
+bundles the collector and functional tests from reviewed platform#2300 and its origin fix platform#2301; exact
 source hashes and its immutable source commit are recorded in UPSTREAM.json.
 It does not fetch code from the private platform repository at runtime.
 
@@ -41,6 +41,10 @@ identity, actual compressed bytes and SHA-512 against lock and registry metadata
 It rechecks the catalogue after downloads. Unknown private packages and
 incomplete captures fail explicitly. A concurrent change not observed by these
 reads remains outside this nontransactional snapshot's guarantees.
+
+Registry classification uses the actual parsed, percent-decoded and IDNA
+normalized hostname; malformed HTTP origins fail explicitly. The separate exact
+archive-origin check is unchanged.
 
 Registry and scope-registry flags are fixed to npm.pkg.github.com; native npm
 retains responsibility for transport and trusted caller configuration. Scripts

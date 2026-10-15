@@ -116,6 +116,37 @@ class PackageInventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(InventoryGap, "^unmapped_private_package$"):
             locked_versions(self.lock, (NAME,))
 
+    def test_registry_classification_uses_actual_normalized_hostname(self):
+        for url in ("https://registry.npmjs.org/npm.pkg.github.com/archive.tgz",
+                    "https://npm.pkg.github.com.example.invalid/archive.tgz"):
+            with self.subTest(public=url):
+                lock = copy.deepcopy(self.lock)
+                lock["packages"]["node_modules/public-package"] = {"resolved": url}
+                self.assertEqual(set(locked_versions(lock, (NAME,))), {NAME})
+        for url in ("https://NPM.PKG.GITHUB.COM/download/package",
+                    "https://npm.pkg.github.com./download/package",
+                    "https://npｍ.pkg.github.com/download/package",
+                    "https://%4Epm%2Epkg%2Egithub%2Ecom/download/package"):
+            with self.subTest(github=url):
+                lock = copy.deepcopy(self.lock)
+                lock["packages"]["node_modules/unmapped-package"] = {"resolved": url}
+                with self.assertRaisesRegex(InventoryGap, "^unmapped_private_package$"):
+                    locked_versions(lock, (NAME,))
+
+    def test_malformed_origin_is_incomplete_not_silently_public(self):
+        for origin in (None, 7, {}, "https://[invalid", "https:", "https://",
+                       "https:npm.pkg.github.com/download/package",
+                       "https:///npm.pkg.github.com/download/package",
+                       "http:///npm.pkg.github.com/download/package",
+                       "https://bad host/package", "https://%FF/package",
+                       "https://npm.pkg.github.com%00/package",
+                       "https://registry.npmjs.org:invalid/package",
+                       "https://registry.npmjs.org:99999/package"):
+            with self.subTest(origin=origin):
+                self.lock["packages"]["node_modules/public-package"] = {"resolved": origin}
+                with self.assertRaisesRegex(InventoryGap, "^invalid_locked_origin$"):
+                    locked_versions(self.lock, (NAME,))
+
     def test_missing_required_package_and_conflicting_nested_pin(self):
         with self.assertRaisesRegex(InventoryGap, "^required_package_missing$"):
             locked_versions({"lockfileVersion": 3, "packages": {}}, (NAME,))

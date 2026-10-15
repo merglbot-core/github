@@ -19,7 +19,7 @@ import signal
 import subprocess
 import tempfile
 import time
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 
 REGISTRY = "https://npm.pkg.github.com"
@@ -72,6 +72,29 @@ def registry_url(value):
     require(valid, "unexpected_archive_origin")
 
 
+def registry_reference(value):
+    """Classify by actual host; registry_url separately enforces the origin."""
+    require(type(value) is str, "invalid_locked_origin")
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        if parsed.scheme in ("http", "https"):
+            require(bool(hostname), "invalid_locked_origin")
+            # urlsplit defers port syntax/range validation to this property.
+            _ = parsed.port
+        decoded = unquote(hostname, errors="strict") if hostname else None
+        if parsed.scheme in ("http", "https"):
+            require(not any(char.isspace() or ord(char) < 32 or ord(char) == 127
+                            or char in "/\\#?@%"
+                            for char in decoded), "invalid_locked_origin")
+        normalized = decoded.encode("idna").decode("ascii").lower().rstrip(".") if decoded else None
+    except InventoryGap:
+        raise
+    except (ValueError, UnicodeError):
+        raise InventoryGap("invalid_locked_origin") from None
+    return normalized == "npm.pkg.github.com"
+
+
 def locked_versions(lock, allowed):
     require(type(lock) is dict and lock.get("lockfileVersion") in (2, 3)
             and type(lock.get("packages")) is dict, "unsupported_lockfile")
@@ -83,7 +106,7 @@ def locked_versions(lock, allowed):
         name = path.rsplit("node_modules/", 1)[1]
         resolved = row.get("resolved", "")
         private = (name.startswith("@merglbot-") or name in allowed
-                   or (type(resolved) is str and "npm.pkg.github.com" in resolved))
+                   or registry_reference(resolved))
         if not private:
             continue
         require(name in allowed, "unmapped_private_package")
