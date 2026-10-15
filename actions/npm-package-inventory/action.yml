@@ -1,0 +1,22 @@
+---
+name: npm-package-inventory
+description: Read-only Project 39 npm catalogue and locked-archive evidence
+inputs:
+  scope:
+    description: Fixed trusted caller binding (core or proteinaco)
+    required: true
+outputs:
+  report_path:
+    description: >-
+      Private runner JSON report path; collector failure still fails the step
+    value: ${{ steps.collect.outputs.report_path }}
+runs:
+  using: composite
+  steps:
+    - name: Collect bounded package inventory
+      id: collect
+      shell: bash
+      env:
+        PROJECT39_INVENTORY_SCOPE: ${{ inputs.scope }}
+        PROJECT39_INVENTORY_ACTION_PATH: ${{ github.action_path }}
+      run: bash "$PROJECT39_INVENTORY_ACTION_PATH/collect.sh"
