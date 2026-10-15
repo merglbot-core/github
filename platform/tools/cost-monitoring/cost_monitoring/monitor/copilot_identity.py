@@ -25,6 +25,7 @@ IAM = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/"
 JWT_TYPE = "urn:ietf:params:oauth:token-type:jwt"
 BOUND = 65536
 BEARER = re.compile(r"[A-Za-z0-9._~+/-]+=*")
+SERVICE_ACCOUNT = re.compile(r"[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,28}[a-z0-9]\.iam\.gserviceaccount\.com")
 
 
 class CopilotIdentityUnavailable(RuntimeError):
@@ -54,10 +55,16 @@ def _read_private(path):
         if (
             not stat.S_ISREG(info.st_mode)
             or info.st_uid != os.getuid()
-            or info.st_mode & 0o077
             or info.st_nlink != 1
             or not 0 < info.st_size <= BOUND
         ):
+            raise ValueError()
+        # The pinned first-party producer creates 0640. Tighten the opened,
+        # owned single-link file before reading any authentication material.
+        if stat.S_IMODE(info.st_mode) == 0o640:
+            os.fchmod(descriptor, 0o600)
+            info = os.fstat(descriptor)
+        if stat.S_IMODE(info.st_mode) != 0o600:
             raise ValueError()
         raw = bytearray()
         while True:
@@ -144,7 +151,7 @@ class _FederationRequest:
                 or not 0 < len(result["access_token"]) <= 16384
                 or not BEARER.fullmatch(result["access_token"])
                 or type(result.get("expires_in")) is not int
-                or not 300 < result["expires_in"] <= 3600
+                or not 240 < result["expires_in"] <= 3600
             ):
                 raise ValueError()
         return SimpleNamespace(status=status, headers=response_headers, data=raw)
@@ -158,12 +165,24 @@ class ActionsWorkloadIdentity:
     Local claim/context checks are parsing checks, never authorization.
     """
 
-    def __init__(self, audience, service_account, subject, provider, context, credential_path, *, now=time.time):
+    def __init__(
+        self,
+        audience,
+        service_account,
+        subject,
+        provider,
+        context,
+        credential_path,
+        *,
+        credential_account,
+        now=time.time,
+    ):
         if (
             type(service_account) is not str
-            or not re.fullmatch(
-                r"[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,28}[a-z0-9]\.iam\.gserviceaccount\.com", service_account
-            )
+            or not SERVICE_ACCOUNT.fullmatch(service_account)
+            or type(credential_account) is not str
+            or not SERVICE_ACCOUNT.fullmatch(credential_account)
+            or credential_account == service_account
             or type(subject) is not str
             or not re.fullmatch(r"[1-9][0-9]{5,31}", subject)
             or type(provider) is not str
@@ -181,9 +200,11 @@ class ActionsWorkloadIdentity:
         ):
             raise ValueError("copilot_identity_configuration_invalid")
         self._audience, self._account, self._subject = audience, service_account, subject
+        self._credential_account = credential_account
         self._provider, self._context, self._path = provider, dict(context), credential_path
         self._now, self._lock, self._value, self._expires, self._mono = now, threading.Lock(), None, 0, 0
         self._last_wall = float("-inf")
+        self._margin = 300
 
     def _source(self):
         # The reviewed auth action creates this private file in GITHUB_WORKSPACE.
@@ -222,7 +243,7 @@ class ActionsWorkloadIdentity:
             or value["audience"] != "//iam.googleapis.com/" + self._provider
             or value["subject_token_type"] != JWT_TYPE
             or value["token_url"] != STS
-            or value["service_account_impersonation_url"] != IAM + self._account + ":generateAccessToken"
+            or value["service_account_impersonation_url"] != IAM + self._credential_account + ":generateAccessToken"
         ):
             raise ValueError()
         source = value["credential_source"]
@@ -281,7 +302,7 @@ class ActionsWorkloadIdentity:
             if (
                 current >= self._last_wall
                 and self._value is not None
-                and self._expires - current > 300
+                and self._expires - current > self._margin
                 and time.monotonic() < self._mono
             ):
                 self._last_wall = current
@@ -296,7 +317,10 @@ class ActionsWorkloadIdentity:
             expiry = source.expiry
             if expiry.tzinfo is None:
                 expiry = expiry.replace(tzinfo=dt.UTC)
-            if not 300 < expiry.timestamp() - self._now() <= 3660:
+            # Actions federation can issue a five-minute access token. The
+            # pinned SDK refreshes at 225s; retain dispatch headroom without
+            # incorrectly demanding an access token lasting over five minutes.
+            if not 240 < expiry.timestamp() - self._now() <= 3660:
                 raise ValueError()
             with AuthorizedSession(
                 source, auth_request=request, max_refresh_attempts=0, refresh_status_codes=()
@@ -330,11 +354,12 @@ class ActionsWorkloadIdentity:
                 or claims.get("email") != self._account
                 or claims.get("email_verified") is not True
                 or type(claims.get("exp")) is not int
-                or not 300 < claims["exp"] - now <= 3660
+                or not 60 < claims["exp"] - now <= 3660
             ):
                 raise ValueError()
             self._value, self._expires, self._last_wall = result["token"], claims["exp"], now
-            self._mono = time.monotonic() + claims["exp"] - now - 300
+            self._margin = min(300, (claims["exp"] - now) / 2)
+            self._mono = time.monotonic() + claims["exp"] - now - self._margin
             return self._value
         except Exception:
             self._value = None

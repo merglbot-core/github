@@ -1,7 +1,9 @@
 import base64
 import datetime as dt
 import json
+import os
 import secrets
+import stat
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +17,7 @@ from google.auth import _helpers
 from cost_monitoring.monitor.copilot_identity import IAM, STS, ActionsWorkloadIdentity, CopilotIdentityUnavailable
 
 ACCOUNT = "copilot-reader@runtime-project.iam.gserviceaccount.com"
+FILE_ACCOUNT = "billing-reader@runtime-project.iam.gserviceaccount.com"
 SUBJECT = "123456789"
 PROVIDER = "projects/123456/locations/global/workloadIdentityPools/actions/providers/github"
 ORIGIN = "https://broker.example.invalid"
@@ -44,6 +47,7 @@ def identity_wire(tmp_path, monkeypatch):
             self.calls = []
             self.request_identity, self.federated = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
             self.failure = None
+            self.sts_lifetime, self.google_lifetime = 300, 600
             self.broker_response, self.latest_google = None, None
             self.claim_changes, self.google_changes = {}, {}
             self.file = tmp_path / "gha-creds-fixture.json"
@@ -58,16 +62,23 @@ def identity_wire(tmp_path, monkeypatch):
                     "headers": {"Authorization": "Bearer " + self.request_identity},
                     "format": {"type": "json", "subject_token_field_name": "value"},
                 },
-                "service_account_impersonation_url": IAM + ACCOUNT + ":generateAccessToken",
+                "service_account_impersonation_url": IAM + FILE_ACCOUNT + ":generateAccessToken",
             }
 
         def write(self):
             self.file.write_text(json.dumps(self.value))
-            self.file.chmod(0o600)
+            self.file.chmod(0o640)
 
         def provider(self):
             return ActionsWorkloadIdentity(
-                ORIGIN, ACCOUNT, SUBJECT, PROVIDER, CONTEXT, str(self.file), now=lambda: self.clock[0]
+                ORIGIN,
+                ACCOUNT,
+                SUBJECT,
+                PROVIDER,
+                CONTEXT,
+                str(self.file),
+                credential_account=FILE_ACCOUNT,
+                now=lambda: self.clock[0],
             )
 
     f = Fixture()
@@ -102,7 +113,7 @@ def identity_wire(tmp_path, monkeypatch):
             claims = {
                 "iss": "https://token.actions.githubusercontent.com",
                 "aud": "https://iam.googleapis.com/" + PROVIDER,
-                "exp": f.clock[0] + 600,
+                "exp": f.clock[0] + 300,
                 **CONTEXT,
                 **f.claim_changes,
             }
@@ -112,12 +123,12 @@ def identity_wire(tmp_path, monkeypatch):
                 "sub": SUBJECT,
                 "email": ACCOUNT,
                 "email_verified": True,
-                "exp": f.clock[0] + 3600,
+                "exp": f.clock[0] + f.google_lifetime,
                 **f.google_changes,
             }
             values = {
                 "actions": {"value": assertion(claims)},
-                "sts": {"access_token": f.federated, "token_type": "Bearer", "expires_in": 3600},
+                "sts": {"access_token": f.federated, "token_type": "Bearer", "expires_in": f.sts_lifetime},
                 "iam": {"token": assertion(google)},
             }
             if route == "iam":
@@ -177,18 +188,21 @@ def identity_wire(tmp_path, monkeypatch):
         assert not thread.is_alive()
 
 
-def test_actual_google_auth_chain_caches_and_renews_without_adc(identity_wire, monkeypatch):
+@pytest.mark.parametrize("google_lifetime", [300, 600, 3600])
+def test_actual_google_auth_chain_caches_and_renews_without_adc(identity_wire, monkeypatch, google_lifetime):
     f = identity_wire
+    f.google_lifetime = google_lifetime
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/forbidden/personal.json")
     monkeypatch.setenv("ENTERPRISE_GITHUB_TOKEN", secrets.token_urlsafe(32))
     provider = f.provider()
     first = provider()
+    assert f.file.stat().st_mode & 0o777 == 0o600
     assert provider() == first
     assert [call["route"] for call in f.calls] == ["actions", "sts", "iam"]
     assert all(call["verified_tls"] and call["proxies"] == {} and call["auth_bound"] for call in f.calls)
     assert f.calls[-1]["body"] == {"audience": ORIGIN, "includeEmail": True}
     assert "generateAccessToken" not in str(f.calls)
-    f.clock[0] += 3400
+    f.clock[0] += int(google_lifetime - min(300, google_lifetime / 2) + 1)
     assert provider() != first
     assert [call["route"] for call in f.calls] == ["actions", "sts", "iam"] * 2
 
@@ -271,4 +285,44 @@ def test_public_or_symlinked_credential_file_is_refused(identity_wire, tmp_path)
     f.file.symlink_to(target)
     with pytest.raises(CopilotIdentityUnavailable):
         f.provider()()
+    assert f.calls == []
+
+
+def test_first_party_file_is_tightened_before_read_without_replacing_billing_identity(identity_wire, monkeypatch):
+    f = identity_wire
+    original_bytes = f.file.read_bytes()
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(f.file))
+    original = os.read
+
+    def read(descriptor, count):
+        info = os.fstat(descriptor)
+        if info.st_ino == f.file.stat().st_ino:
+            assert stat.S_IMODE(info.st_mode) == 0o600
+        return original(descriptor, count)
+
+    monkeypatch.setattr(os, "read", read)
+    assert f.provider()()
+    assert f.file.read_bytes() == original_bytes
+    assert os.environ["GOOGLE_APPLICATION_CREDENTIALS"] == str(f.file)
+    assert f.value["service_account_impersonation_url"] == IAM + FILE_ACCOUNT + ":generateAccessToken"
+    assert f.calls[-1]["url"] == IAM + ACCOUNT + ":generateIdToken"
+    assert "generateAccessToken" not in str(f.calls)
+
+
+def test_hardlinked_producer_file_is_not_read_or_chmodded(identity_wire, tmp_path):
+    f = identity_wire
+    os.link(f.file, tmp_path / "second-link")
+    with pytest.raises(CopilotIdentityUnavailable):
+        f.provider()()
+    assert stat.S_IMODE(f.file.stat().st_mode) == 0o640
+    assert f.calls == []
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o660, 0o400])
+def test_other_producer_modes_are_not_repaired_or_read(identity_wire, mode):
+    f = identity_wire
+    f.file.chmod(mode)
+    with pytest.raises(CopilotIdentityUnavailable):
+        f.provider()()
+    assert stat.S_IMODE(f.file.stat().st_mode) == mode
     assert f.calls == []

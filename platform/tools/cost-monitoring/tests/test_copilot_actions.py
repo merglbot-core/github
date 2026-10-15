@@ -5,7 +5,7 @@ import google.auth
 import pytest
 import yaml
 from click.testing import CliRunner
-from test_copilot_identity import ACCOUNT, CONTEXT, ORIGIN, PROVIDER, SUBJECT
+from test_copilot_identity import ACCOUNT, CONTEXT, FILE_ACCOUNT, ORIGIN, PROVIDER, SUBJECT
 from test_copilot_identity import identity_wire as identity_wire
 
 from cost_monitoring import cli as cli_module
@@ -19,6 +19,7 @@ def configuration():
         "origin": ORIGIN,
         "identity": {
             "service_account": ACCOUNT,
+            "credential_file_service_account": FILE_ACCOUNT,
             "subject": SUBJECT,
             "provider": PROVIDER,
             **{key: value for key, value in CONTEXT.items() if key != "event_name"},
@@ -45,6 +46,22 @@ def test_actual_loader_google_auth_and_aggregate_route_without_adc(identity_wire
     assert reader("core") == {"seats_assigned": 7, "seats_purchased": 7}
     assert [call["route"] for call in f.calls] == ["actions", "sts", "iam", "broker"]
     assert all(call["auth_bound"] for call in f.calls)
+
+
+@pytest.mark.parametrize("producer", [None, ACCOUNT, "not-an-account"])
+def test_missing_invalid_or_shared_billing_identity_is_refused(identity_wire, tmp_path, monkeypatch, producer):
+    f = identity_wire
+    path = tmp_path / "broker.json"
+    prepare(f, path, monkeypatch)
+    value = configuration()
+    if producer is None:
+        del value["identity"]["credential_file_service_account"]
+    else:
+        value["identity"]["credential_file_service_account"] = producer
+    path.write_text(json.dumps(value))
+    with pytest.raises(ValueError, match="^copilot_actions_configuration_invalid$"):
+        load_actions_reader(path)
+    assert f.calls == []
 
 
 @pytest.mark.parametrize(

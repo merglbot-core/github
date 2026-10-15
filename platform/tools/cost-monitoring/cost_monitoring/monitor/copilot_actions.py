@@ -51,6 +51,7 @@ def load_actions_reader(path):
             identity,
             (
                 "service_account",
+                "credential_file_service_account",
                 "subject",
                 "provider",
                 "repository",
@@ -103,6 +104,7 @@ def load_actions_reader(path):
             identity["provider"],
             context,
             os.environ["GITHUB_ACCESS_WIF_CONFIGURATION"],
+            credential_account=identity["credential_file_service_account"],
         )
 
         def obtain(audience):
