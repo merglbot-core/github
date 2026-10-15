@@ -7,7 +7,7 @@ import logging
 import os
 import pathlib
 import sys
-from typing import Any, Dict
+from typing import Any
 
 import click
 import yaml
@@ -19,16 +19,23 @@ from rich.table import Table
 # Import all local modules at module level
 from .alerting.notifiers import send_cost_report_to_slack
 from .alerting.thresholds import evaluate_all_thresholds, format_alert_message
+from .monitor.copilot_actions import load_actions_reader
 from .monitor.gcp_monitor import collect_gcp
 from .monitor.github_monitor import collect_github
-from .report.writers import write_all_reports
 from .realized_savings import (
     RealizedSavingsError,
-    attach_delivery_state as attach_realized_savings_delivery_state,
-    read_previous_receipt as read_previous_realized_savings_receipt,
-    verify as verify_realized_savings,
     write_receipt,
 )
+from .realized_savings import (
+    attach_delivery_state as attach_realized_savings_delivery_state,
+)
+from .realized_savings import (
+    read_previous_receipt as read_previous_realized_savings_receipt,
+)
+from .realized_savings import (
+    verify as verify_realized_savings,
+)
+from .report.writers import write_all_reports
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -53,7 +60,13 @@ def cli(debug):
 @click.option("--formats", default="csv,md,json", help="Report formats to generate")
 @click.option("--dry-run", is_flag=True, default=False, help="Don't send notifications")
 @click.option("--soft-fail", is_flag=True, default=False, help="Exit 0 even if thresholds exceeded")
-def generate(month, config, thresholds, outdir, formats, dry_run, soft_fail):
+@click.option(
+    "--github-broker-config",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Explicit approved Actions broker configuration; never falls back to a personal token",
+)
+def generate(month, config, thresholds, outdir, formats, dry_run, soft_fail, github_broker_config):
     """Generate cost reports and evaluate thresholds."""
 
     try:
@@ -71,8 +84,14 @@ def generate(month, config, thresholds, outdir, formats, dry_run, soft_fail):
 
         # 3. Collect GitHub data
         console.print("\n[bold]Collecting GitHub data...[/bold]")
+        github_options = {}
+        if github_broker_config is not None:
+            github_options["copilot_reader"] = load_actions_reader(github_broker_config)
         github_data = collect_github(
-            config_data["github"]["enterprise"], config_data["github"]["orgs"], config_data["github"]["pricing"]
+            config_data["github"]["enterprise"],
+            config_data["github"]["orgs"],
+            config_data["github"]["pricing"],
+            **github_options,
         )
         console.print("✅ GitHub data collected successfully")
         display_github_summary(github_data)
@@ -234,17 +253,17 @@ def print_config(config):
         sys.exit(1)
 
 
-def load_config(path: str) -> Dict[str, Any]:
+def load_config(path: str) -> dict[str, Any]:
     """Load YAML configuration file."""
     config_path = pathlib.Path(path)
     if not config_path.exists():
         raise FileNotFoundError(f"Configuration file not found: {path}")
 
-    with open(config_path, "r", encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
-def display_github_summary(data: Dict[str, Any]):
+def display_github_summary(data: dict[str, Any]):
     """Display GitHub cost summary table."""
     table = Table(title="GitHub Costs", show_header=True)
     table.add_column("Metric", style="cyan")
@@ -264,7 +283,7 @@ def display_github_summary(data: Dict[str, Any]):
     console.print(table)
 
 
-def display_gcp_summary(data: Dict[str, Any]):
+def display_gcp_summary(data: dict[str, Any]):
     """Display GCP cost summary table."""
     table = Table(title="GCP Costs", show_header=True)
     table.add_column("Metric", style="cyan")
@@ -345,7 +364,7 @@ Status: {"⚠️ THRESHOLDS EXCEEDED" if threshold_result['threshold_exceeded'] 
     console.print(Panel(summary, title="Final Summary", border_style="bold"))
 
 
-def create_github_issue_for_alerts(alerts: list, month: str, data: Dict[str, Any]) -> bool:
+def create_github_issue_for_alerts(alerts: list, month: str, data: dict[str, Any]) -> bool:
     """Create GitHub issue for threshold alerts."""
     try:
         token = os.environ.get("GITHUB_TOKEN")
