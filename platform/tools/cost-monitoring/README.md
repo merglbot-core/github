@@ -2,6 +2,10 @@
 
 Enterprise-grade cost monitoring solution for GitHub Enterprise and Google Cloud Platform (GCP) with automated reporting and alerting capabilities.
 
+The optional, source-stage GitHub App aggregate reader is described in
+[COPILOT_BROKER.md](COPILOT_BROKER.md). The CLI and scheduled workflow still use
+legacy authentication until their separately reviewed cutover.
+
 ## 🎯 Features
 
 ### GitHub Enterprise Monitoring

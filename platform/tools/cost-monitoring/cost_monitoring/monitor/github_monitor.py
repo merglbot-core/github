@@ -3,10 +3,13 @@ GitHub Enterprise and Copilot cost monitoring.
 """
 
 import logging
+import math
 import os
 from typing import Any
 
 import requests
+
+from .copilot_broker import CopilotBrokerReader
 
 logger = logging.getLogger(__name__)
 
@@ -144,16 +147,27 @@ def get_enterprise_cloud_seats(enterprise: str) -> dict[str, Any]:
     raise RuntimeError(f"GitHub Enterprise Cloud request failed with status {response.status_code}")
 
 
-def collect_github(enterprise: str, orgs: list[str], pricing: dict[str, float]) -> dict[str, Any]:
+def collect_github(
+    enterprise: str, orgs: list[str], pricing: dict[str, float], *, copilot_reader: CopilotBrokerReader | None = None
+) -> dict[str, Any]:
     """Collect all GitHub cost data."""
-
-    # Validate authentication before any endpoint handling.
-    _enterprise_token()
 
     # Enterprise member counts are only cost-relevant when that configured
     # price is non-zero. Avoid unnecessary member APIs for the normal zero-price
     # configuration; when needed, fetch only GraphQL aggregate totalCount.
     ec_price_per_seat = float(pricing.get("enterprise_cloud_usd_per_seat", 0.0))
+    if copilot_reader is None:
+        # The legacy mode is unchanged until an explicitly reviewed cutover.
+        _enterprise_token()
+    else:
+        if type(copilot_reader) is not CopilotBrokerReader:
+            raise ValueError("copilot_broker_configuration_invalid")
+        # This adapter covers only the existing aggregate operation, not the
+        # optional enterprise/member operations. Never fall back to a PAT.
+        copilot_reader.validate_collection(orgs, ec_price_per_seat)
+        copilot_unit_price = float(pricing.get("copilot_usd_per_seat", 19.0))
+        if not math.isfinite(copilot_unit_price) or copilot_unit_price < 0:
+            raise ValueError("copilot_collection_price_invalid")
     org_members = []
     if ec_price_per_seat > 0:
         for org in orgs:
@@ -165,7 +179,7 @@ def collect_github(enterprise: str, orgs: list[str], pricing: dict[str, float]) 
     seats_purchased = 0
     org_sources = 0
     for org in orgs:
-        org_data = get_copilot_org(org)
+        org_data = get_copilot_org(org) if copilot_reader is None else copilot_reader(org)
         if org_data:
             org_sources += 1
             seats_assigned += org_data["seats_assigned"]
