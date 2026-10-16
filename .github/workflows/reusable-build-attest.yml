@@ -111,7 +111,7 @@ permissions:
 jobs:
   build:
     name: Build, Scan, Verify & Push Image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       actions: read
@@ -493,7 +493,7 @@ jobs:
     name: Binary Authorization Attestation
     needs: build
     if: inputs.attest && inputs.push
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       attestation_id: ${{ steps.attest.outputs.attestation_id }}
@@ -615,7 +615,7 @@ jobs:
     name: Build Summary
     needs: [build, attest]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     
     steps:
