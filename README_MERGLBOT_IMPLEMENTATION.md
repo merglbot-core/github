@@ -30,7 +30,7 @@ This repository contains the comprehensive implementation of MERGLBOT (Work Arch
   - Automatic version determination
   - Changelog generation
   - GitHub Release creation
-  - Slack notifications
+  - Outcome in the step summary (Slack notifications removed, merglbot-core/infra#3841)
 - **Status**: ✅ COMPLETE
 
 ### 🔧 Manual Setup Required
@@ -92,7 +92,6 @@ Apply Copilot settings at: https://github.com/organizations/YOUR_ORG/settings/co
 #### 3. Repository Secrets & Variables
 Add to repository settings:
 - **Secrets**:
-  - `SLACK_WEBHOOK_URL` - For release notifications
   - `GCP_WIF_PROVIDER` - For GCP authentication
   - `GCP_WIF_SERVICE_ACCOUNT` - Service account email
 
@@ -255,7 +254,6 @@ After full implementation:
 ## 🆘 Support
 
 For questions or issues:
-- Slack: #platform channel
 - GitHub Issues: Create in this repository
 - Email: platform@merglbot.ai
 

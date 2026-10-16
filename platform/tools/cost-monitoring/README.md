@@ -19,7 +19,7 @@ Enterprise-grade cost monitoring solution for GitHub Enterprise and Google Cloud
 ### Reporting & Alerts
 - **Multi-Format Reports**: CSV, Markdown, and JSON output formats
 - **Threshold Alerting**: Automatic alerts when costs exceed configured limits
-- **Slack Integration**: Real-time notifications with rich formatting
+- **Slack Integration** (library only; the `cost-monitoring.yml` workflow no longer passes a webhook, merglbot-core/infra#3841)
 - **GitHub Issues**: Automatic issue creation for threshold breaches
 - **Daily Automation**: Scheduled GitHub Actions workflow
 
