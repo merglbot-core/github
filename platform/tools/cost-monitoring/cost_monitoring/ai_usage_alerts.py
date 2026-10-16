@@ -249,6 +249,24 @@ def evaluate_anomaly_alerts(
     return alerts
 
 
+def _alert_line(a: Dict[str, Any]) -> Optional[str]:
+    """One human-readable line per alert, shared by Slack and the retained report."""
+    if a.get("type") == "ai_usage_budget":
+        scope = f"{a.get('provider')}" + (f" / {a.get('product')}" if a.get("product") else "")
+        used_pct = float(a.get("used_pct") or 0.0) * 100
+        proj_pct = float(a.get("projected_pct") or 0.0) * 100
+        return (
+            f"- *{scope}*: MTD ${a.get('mtd_cost_usd', 0):,.2f} / ${a.get('monthly_budget_usd', 0):,.2f} "
+            f"({used_pct:,.1f}%), projected ${a.get('projected_month_usd', 0):,.2f} ({proj_pct:,.1f}%)"
+        )
+    if a.get("type") == "ai_usage_anomaly":
+        return (
+            f"- *{a.get('provider')}*: anomaly spike — yesterday ${a.get('yesterday_cost_usd', 0):,.2f}, "
+            f"prev7 avg ${a.get('avg_prev7_cost_usd', 0):,.2f} (>{a.get('spike_factor', 0)}×)"
+        )
+    return None
+
+
 def format_slack_message(month: str, platform_project_id: str, alerts: List[Dict[str, Any]]) -> Dict[str, Any]:
     header = f"🤖 AI Usage Telemetry Alerts - {month}"
     blocks: List[Dict[str, Any]] = [
@@ -263,22 +281,7 @@ def format_slack_message(month: str, platform_project_id: str, alerts: List[Dict
         {"type": "divider"},
     ]
 
-    lines: List[str] = []
-    for a in alerts[:20]:
-        if a.get("type") == "ai_usage_budget":
-            scope = f"{a.get('provider')}" + (f" / {a.get('product')}" if a.get("product") else "")
-            used_pct = float(a.get("used_pct") or 0.0) * 100
-            proj_pct = float(a.get("projected_pct") or 0.0) * 100
-            lines.append(
-                f"- *{scope}*: MTD ${a.get('mtd_cost_usd', 0):,.2f} / ${a.get('monthly_budget_usd', 0):,.2f} "
-                f"({used_pct:,.1f}%), projected ${a.get('projected_month_usd', 0):,.2f} ({proj_pct:,.1f}%)"
-            )
-        elif a.get("type") == "ai_usage_anomaly":
-            lines.append(
-                f"- *{a.get('provider')}*: anomaly spike — yesterday ${a.get('yesterday_cost_usd', 0):,.2f}, "
-                f"prev7 avg ${a.get('avg_prev7_cost_usd', 0):,.2f} (>{a.get('spike_factor', 0)}×)"
-            )
-
+    lines = [line for line in (_alert_line(a) for a in alerts[:20]) if line]
     text = "\n".join(lines) if lines else "No AI usage budget alerts."
     blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": text}})
 
@@ -288,6 +291,47 @@ def format_slack_message(month: str, platform_project_id: str, alerts: List[Dict
         )
 
     return {"text": f"AI usage alerts ({month}): {len(alerts)}", "blocks": blocks}
+
+
+def format_markdown_report(month: str, platform_project_id: str, alerts: List[Dict[str, Any]]) -> str:
+    """Render EVERY alert as Markdown so the retained record is complete without Slack."""
+    lines = [line for line in (_alert_line(a) for a in alerts) if line]
+    other = len(alerts) - len(lines)
+    parts = [
+        f"## AI usage alerts ({month}): {len(alerts)}",
+        f"Platform project: `{platform_project_id}` · generated {_utc_now().strftime('%Y-%m-%d %H:%M UTC')}",
+        "\n".join(lines) if lines else "No AI usage budget alerts.",
+    ]
+    if other:
+        parts.append(f"{other} alert(s) of an unknown type; see the job log.")
+    return "\n\n".join(parts) + "\n"
+
+
+def write_alert_report(markdown: str) -> List[str]:
+    """Persist alert details to the uploaded reports dir and the step summary.
+
+    Slack delivery was retired (merglbot-core/infra#3826); these two files are
+    the retained record of what an alert run found.
+    """
+    written: List[str] = []
+    report_dir = os.environ.get("AI_USAGE_REPORT_DIR", "reports")
+    try:
+        os.makedirs(report_dir, exist_ok=True)
+        path = os.path.join(report_dir, "ai_usage_alerts.md")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(markdown)
+        written.append(path)
+    except OSError as exc:
+        print(f"AI usage alerts: could not write report file ({type(exc).__name__}).")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        try:
+            with open(summary, "a", encoding="utf-8") as fh:
+                fh.write(markdown)
+            written.append(summary)
+        except OSError as exc:
+            print(f"AI usage alerts: could not write step summary ({type(exc).__name__}).")
+    return written
 
 
 def main() -> int:
@@ -323,11 +367,17 @@ def main() -> int:
     if alerts:
         webhook_url = os.environ.get("SLACK_WEBHOOK_URL", "")
         formatted = format_slack_message(month, platform_project_id, alerts)
+        written = write_alert_report(format_markdown_report(month, platform_project_id, alerts))
         if webhook_url:
             send_slack(webhook_url, formatted["text"], formatted["blocks"])
         else:
             print("SLACK_WEBHOOK_URL not set; skipping Slack notification.")
         print(f"AI usage alerts: {len(alerts)} alert(s).")
+        if not written and not webhook_url:
+            # Alerts exist but no destination kept them: fail visibly (the workflow
+            # accepts only 0 = ok and 2 = alerts recorded).
+            print("AI usage alerts: no destination retained the alert details.")
+            return 3
         return 2
 
     print("AI usage alerts: OK.")

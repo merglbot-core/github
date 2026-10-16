@@ -149,3 +149,11 @@ def test_workflow_separates_enterprise_reads_from_issue_token():
     ]
     assert "ENTERPRISE_GITHUB_TOKEN: ${{ secrets.ENTERPRISE_GITHUB_TOKEN }}" in generate_block
     assert "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in generate_block
+
+
+def test_workflow_does_not_deliver_to_slack():
+    # Slack delivery retired 2026-10 (merglbot-core/infra#3826): GCP cost
+    # alerting is owned by the local gcp-cost-watch, not by a Slack webhook.
+    repo_root = Path(__file__).resolve().parents[4]
+    workflow = (repo_root / ".github/workflows/cost-monitoring.yml").read_text(encoding="utf-8")
+    assert "secrets.SLACK_WEBHOOK_URL" not in workflow

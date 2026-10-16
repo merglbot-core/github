@@ -71,7 +71,6 @@ jobs:
         id: generate
         working-directory: platform/tools/cost-monitoring
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           # Read-only enterprise/org billing APIs require the separately scoped token.
           ENTERPRISE_GITHUB_TOKEN: ${{ secrets.ENTERPRISE_GITHUB_TOKEN }}
           # Keep the run token isolated to optional issue creation.
@@ -102,7 +101,9 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || inputs.dry_run != true
         working-directory: platform/tools/cost-monitoring
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          # Slack delivery retired 2026-10 (merglbot-core/infra#3826): without
+          # SLACK_WEBHOOK_URL both notifiers skip Slack; results stay in the
+          # step summary and the uploaded report artifact.
           # Defaults are safe; keep explicit for clarity.
           AI_USAGE_ADMIN_PROJECT_ID: "merglbot-admin-prd"
           AI_USAGE_SETTINGS_FIRESTORE_DATABASE_ID: "ai-usage-settings"

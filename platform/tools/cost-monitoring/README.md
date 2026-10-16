@@ -153,10 +153,14 @@ FinOps closeout consumer links the resulting aggregate artifact fingerprint to
 the closed audit issue; this least-privilege workflow does not receive a
 cross-repository write token.
 
-### Slack (Optional)
-Set the webhook URL:
+### Slack (Optional, not used by the scheduled workflow)
+Since October 2026 the scheduled `cost-monitoring.yml` run no longer passes a
+Slack webhook (merglbot-core/infra#3826): GCP cost alerting is owned by the
+local `gcp-cost-watch` (merglbot-core/infra `scripts/gcp/cost-watch/`), and the
+workflow results stay in the step summary and report artifact. For a local run
+you can still set the webhook URL:
 ```bash
-export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..."
+export SLACK_WEBHOOK_URL="<incoming-webhook-url-from-your-secret-store>"
 ```
 
 ## 💻 Usage
