@@ -102,7 +102,7 @@ wave_matches_repo() {
       [[ "$repo" == merglbot-core/* || "$repo" == merglbot-public/* ]]
       ;;
     2)
-      [[ "$repo" == merglbot-cerano/* || "$repo" == merglbot-denatura/* || "$repo" == merglbot-proteinaco/* || "$repo" == merglbot-ruzovyslon/* ]]
+      [[ "$repo" == merglbot-cerano/* || "$repo" == merglbot-denatura/* || "$repo" == merglbot-proteinaco/* ]]
       ;;
     3)
       [[ "$repo" == merglbot-extractors/* || "$repo" == merglbot-milan-private/* || "$repo" == merglbot-autodoplnky/* || "$repo" == merglbot-hodinarstvibechyne/* || "$repo" == merglbot-kiteboarding/* ]]

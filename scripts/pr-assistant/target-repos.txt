@@ -69,9 +69,3 @@ merglbot-public/docs
 merglbot-public/kazdavterina-web
 merglbot-public/livero-web
 merglbot-public/website
-
-merglbot-ruzovyslon/business_forecasting
-merglbot-ruzovyslon/data-pipelines
-merglbot-ruzovyslon/kbc_data_quality_metodology
-merglbot-ruzovyslon/ruzovyslon-web
-merglbot-ruzovyslon/viz-api
