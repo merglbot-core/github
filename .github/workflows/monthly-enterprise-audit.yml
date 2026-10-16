@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ORGS: "merglbot-autodoplnky merglbot-cerano merglbot-core merglbot-denatura merglbot-extractors merglbot-hodinarstvibechyne merglbot-kiteboarding merglbot-milan-private merglbot-proteinaco merglbot-public merglbot-ruzovyslon"
+  ORGS: "merglbot-autodoplnky merglbot-cerano merglbot-core merglbot-denatura merglbot-extractors merglbot-hodinarstvibechyne merglbot-kiteboarding merglbot-milan-private merglbot-proteinaco merglbot-public"
 
 jobs:
   audit-settings:
