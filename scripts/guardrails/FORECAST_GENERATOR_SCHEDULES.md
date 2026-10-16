@@ -62,7 +62,7 @@ Pozn.: `13_*` importy zde typicky startují v **`:10` UTC** (např. `05:10Z`). S
 - **livero_sk** (import `:10` UTC → generator `:50` UTC): `50 12-14 * * *`
 
 ### Ruzovyslon — které Deepnote notebooky přenastavit
-Notebook mapping je v:
+Notebook mapping byl v (GitHub org `merglbot-ruzovyslon` smazána 16. 10. 2026; repo je jen v lokální záloze ownera):
 - `merglbot-ruzovyslon/data-pipelines/config/notebooks/ruzovyslon_marketing_forecast_notebooks.json`
 
 Prakticky:

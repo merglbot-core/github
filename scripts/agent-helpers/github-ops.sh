@@ -24,7 +24,6 @@ readonly -a MERGLBOT_ORGS=(
     "merglbot-public"
     "merglbot-denatura"
     "merglbot-proteinaco"
-    "merglbot-ruzovyslon"
     "merglbot-extractors"
     "merglbot-autodoplnky"
     "merglbot-hodinarstvibechyne"
