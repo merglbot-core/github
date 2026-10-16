@@ -37,7 +37,6 @@ DEFAULT_ORGS=(
   merglbot-milan-private
   merglbot-proteinaco
   merglbot-public
-  merglbot-ruzovyslon
 )
 
 usage() {

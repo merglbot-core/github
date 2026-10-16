@@ -84,7 +84,6 @@ ORGS=(
   "merglbot-cerano"
   "merglbot-denatura"
   "merglbot-proteinaco"
-  "merglbot-ruzovyslon"
   "merglbot-extractors"
   "merglbot-milan-private"
   "merglbot-autodoplnky"

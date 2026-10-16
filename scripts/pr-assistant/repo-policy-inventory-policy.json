@@ -18,7 +18,6 @@
     "merglbot-milan-private",
     "merglbot-proteinaco",
     "merglbot-public",
-    "merglbot-ruzovyslon",
     "merglbot-shared"
   ],
   "excluded_orgs": [
@@ -68,9 +67,6 @@
     },
     "merglbot-public": {
       "rollout_tier": "public"
-    },
-    "merglbot-ruzovyslon": {
-      "rollout_tier": "client"
     },
     "merglbot-shared": {
       "rollout_tier": "shared"
