@@ -290,6 +290,46 @@ def format_slack_message(month: str, platform_project_id: str, alerts: List[Dict
     return {"text": f"AI usage alerts ({month}): {len(alerts)}", "blocks": blocks}
 
 
+def format_markdown_report(formatted: Dict[str, Any]) -> str:
+    """Render the alert message as Markdown so it survives without Slack."""
+    parts = [f"## {formatted['text']}"]
+    for block in formatted.get("blocks", []):
+        text = (block.get("text") or {}).get("text") if isinstance(block.get("text"), dict) else None
+        if text:
+            parts.append(text)
+        for element in block.get("elements", []) or []:
+            if isinstance(element, dict) and element.get("text"):
+                parts.append(str(element["text"]))
+    return "\n\n".join(parts) + "\n"
+
+
+def write_alert_report(markdown: str) -> List[str]:
+    """Persist alert details to the uploaded reports dir and the step summary.
+
+    Slack delivery was retired (merglbot-core/infra#3826); these two files are
+    the retained record of what an alert run found.
+    """
+    written: List[str] = []
+    report_dir = os.environ.get("AI_USAGE_REPORT_DIR", "reports")
+    try:
+        os.makedirs(report_dir, exist_ok=True)
+        path = os.path.join(report_dir, "ai_usage_alerts.md")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(markdown)
+        written.append(path)
+    except OSError as exc:
+        print(f"AI usage alerts: could not write report file ({type(exc).__name__}).")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        try:
+            with open(summary, "a", encoding="utf-8") as fh:
+                fh.write(markdown)
+            written.append(summary)
+        except OSError as exc:
+            print(f"AI usage alerts: could not write step summary ({type(exc).__name__}).")
+    return written
+
+
 def main() -> int:
     admin_project_id = _env("AI_USAGE_ADMIN_PROJECT_ID", "merglbot-admin-prd")
     platform_project_id = _env("AI_USAGE_PLATFORM_PROJECT_ID", "merglbot-platform-prd")
@@ -323,6 +363,7 @@ def main() -> int:
     if alerts:
         webhook_url = os.environ.get("SLACK_WEBHOOK_URL", "")
         formatted = format_slack_message(month, platform_project_id, alerts)
+        write_alert_report(format_markdown_report(formatted))
         if webhook_url:
             send_slack(webhook_url, formatted["text"], formatted["blocks"])
         else:
