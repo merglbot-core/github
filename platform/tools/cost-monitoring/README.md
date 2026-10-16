@@ -160,7 +160,7 @@ local `gcp-cost-watch` (merglbot-core/infra `scripts/gcp/cost-watch/`), and the
 workflow results stay in the step summary and report artifact. For a local run
 you can still set the webhook URL:
 ```bash
-export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..."
+export SLACK_WEBHOOK_URL="<incoming-webhook-url-from-your-secret-store>"
 ```
 
 ## 💻 Usage
