@@ -52,4 +52,7 @@ class ForecastD1ScheduleDecommissionTest(unittest.TestCase):
                 permissions.group("body"),
             )
         }
+        # The readiness issue upsert needs `issues: write`, but only job-scoped on
+        # `run` (tests/test_forecast_d1_issue_upsert.py); the workflow-level block
+        # stays read-only.
         self.assertEqual(entries, {"contents": "read", "id-token": "write"})

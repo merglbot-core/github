@@ -10,7 +10,7 @@ on:
         required: false
         type: string
       dry_run:
-        description: "Skip notifications (dry run)"
+        description: "Skip GitHub issue creation (dry run)"
         required: false
         type: boolean
         default: false
@@ -71,7 +71,6 @@ jobs:
         id: generate
         working-directory: platform/tools/cost-monitoring
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           # Read-only enterprise/org billing APIs require the separately scoped token.
           ENTERPRISE_GITHUB_TOKEN: ${{ secrets.ENTERPRISE_GITHUB_TOKEN }}
           # Keep the run token isolated to optional issue creation.
@@ -96,13 +95,14 @@ jobs:
 
       - name: AI Usage Telemetry Alerts (Budgets)
         id: ai_usage_alerts
-        # This is a separate notifier path from the main CLI. A workflow-dispatch
+        # This is a separate alert path from the main CLI. A workflow-dispatch
         # dry run must suppress both paths; scheduled runs and normal dispatches
-        # still execute the budget alerts.
+        # still execute the budget alerts. Slack posting was removed (owner
+        # decision 16 Oct 2026, merglbot-core/infra#3841): alerts surface via
+        # the exit code, the step summary and the uploaded report artifacts.
         if: github.event_name != 'workflow_dispatch' || inputs.dry_run != true
         working-directory: platform/tools/cost-monitoring
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           # Defaults are safe; keep explicit for clarity.
           AI_USAGE_ADMIN_PROJECT_ID: "merglbot-admin-prd"
           AI_USAGE_SETTINGS_FIRESTORE_DATABASE_ID: "ai-usage-settings"
