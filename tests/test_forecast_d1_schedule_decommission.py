@@ -52,8 +52,7 @@ class ForecastD1ScheduleDecommissionTest(unittest.TestCase):
                 permissions.group("body"),
             )
         }
-        # `issues: write` is needed by the readiness issue upsert that replaced the
-        # Slack alert (owner decision 16 Oct 2026, merglbot-core/infra#3841).
-        self.assertEqual(
-            entries, {"contents": "read", "id-token": "write", "issues": "write"}
-        )
+        # The readiness issue upsert needs `issues: write`, but only job-scoped on
+        # `run` (tests/test_forecast_d1_issue_upsert.py); the workflow-level block
+        # stays read-only.
+        self.assertEqual(entries, {"contents": "read", "id-token": "write"})

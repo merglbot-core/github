@@ -21,7 +21,6 @@ on:
 permissions:
   contents: read
   id-token: write  # For WIF/OIDC
-  issues: write    # Readiness issue upsert (replaces the retired chat alert, infra#3841)
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -36,6 +35,10 @@ jobs:
         (github.event_name == 'schedule' && (startsWith(github.event.schedule, '20 ') || startsWith(github.event.schedule, '15 ') || startsWith(github.event.schedule, '5 ') || startsWith(github.event.schedule, '0 ')))
       }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write  # For WIF/OIDC
+      issues: write    # Readiness issue upsert (job-scoped; stats_30d manages no issues)
     timeout-minutes: 25
     env:
       PYTHONUNBUFFERED: "1"
@@ -614,6 +617,18 @@ jobs:
       # Slack alerts were removed (owner decision 16 Oct 2026, merglbot-core/infra#3841):
       # the verdict now lives in the step summary, the uploaded artifacts and one
       # GitHub issue per scope (opened/updated on a NOT-READY verdict, closed on READY).
+      #
+      # Closing rule: the current readiness issue is closed only when the PASS was
+      # measured for the CURRENT period (the default D-1 date = yesterday in
+      # Europe/Prague, or today). A dispatch with a historical `patch_date_local`
+      # that PASSes only comments on the open issue and never closes it.
+      #
+      # EPIC membership (MERGLBOT_PROGRAM_EPIC_STANDARD §5a): every new issue is
+      # attached as a native sub-issue of READINESS_PARENT_EPIC (an open [EPIC] in
+      # this repository; `github.token` is repository-scoped, so the cross-repo
+      # ops-ledger EPIC merglbot-core/monitoring#999 cannot be written from here).
+      # A failed attachment fails the step with the issue URL so it can be attached
+      # by hand; the issue is never left silently orphaned.
       - name: Upsert readiness issue (NOT-READY opens, READY closes)
         if: >-
           ${{
@@ -628,16 +643,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          READINESS_PARENT_EPIC: "769"  # [EPIC] CI/CD reliability — reusable workflows, gaty, runnery
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           MAIN_STATUS: ${{ steps.guardrail.outputs.status }}
           MAIN_OUTDIR: ${{ steps.guardrail.outputs.outdir }}
           MAIN_SCOPE_LABEL: ${{ steps.guardrail.outputs.scope_label }}
+          MAIN_PATCH_DATE: ${{ steps.guardrail.outputs.patch_date_local }}
           PROTEINACO_STATUS: ${{ steps.guardrail_proteinaco.outputs.status }}
           PROTEINACO_OUTDIR: ${{ steps.guardrail_proteinaco.outputs.outdir }}
           PROTEINACO_SCOPE_LABEL: ${{ steps.guardrail_proteinaco.outputs.scope_label }}
+          PROTEINACO_PATCH_DATE: ${{ steps.guardrail_proteinaco.outputs.patch_date_local }}
           AUTODOPLNKY_STATUS: ${{ steps.guardrail_autodoplnky.outputs.status }}
           AUTODOPLNKY_OUTDIR: ${{ steps.guardrail_autodoplnky.outputs.outdir }}
           AUTODOPLNKY_SCOPE_LABEL: ${{ steps.guardrail_autodoplnky.outputs.scope_label }}
+          AUTODOPLNKY_PATCH_DATE: ${{ steps.guardrail_autodoplnky.outputs.patch_date_local }}
         run: |
           set -euo pipefail
 
@@ -645,6 +664,15 @@ jobs:
           gh label create "$LABEL" --force \
             --color "D93F0B" \
             --description "Forecast D-1 readiness verdict (one open issue per scope while NOT-READY)"
+
+          # Current period = the default D-1 date (yesterday, Europe/Prague) or today.
+          CURRENT_D1="$(TZ=Europe/Prague date -d 'yesterday' +%F)"
+          CURRENT_D0="$(TZ=Europe/Prague date +%F)"
+
+          is_current_period() {
+            local checked="$1"
+            [[ "$checked" == "$CURRENT_D1" || "$checked" == "$CURRENT_D0" ]]
+          }
 
           # Fail closed: a failed listing is an error, never an empty backlog.
           find_open_issue() {
@@ -658,8 +686,28 @@ jobs:
             printf '%s' "$out"
           }
 
+          # Native sub-issue attachment (database id, not the issue number); verified by
+          # reading the parent's sub-issue list back. Any failure stops the step loudly.
+          attach_to_epic() {
+            local number="$1" url="$2"
+            local child_id
+            if ! child_id="$(gh api "repos/${GH_REPO}/issues/${number}" --jq .id)"; then
+              echo "::error::Could not read the database id of ${url}; attach it to #${READINESS_PARENT_EPIC} by hand."
+              exit 1
+            fi
+            if ! gh api -X POST "repos/${GH_REPO}/issues/${READINESS_PARENT_EPIC}/sub_issues" -F "sub_issue_id=${child_id}" >/dev/null; then
+              echo "::error::Sub-issue attachment failed: ${url} is NOT a sub-issue of #${READINESS_PARENT_EPIC}; attach it by hand."
+              exit 1
+            fi
+            if ! gh api --paginate "repos/${GH_REPO}/issues/${READINESS_PARENT_EPIC}/sub_issues" --jq '.[].id' | grep -qx "$child_id"; then
+              echo "::error::Sub-issue readback failed: ${url} not listed under #${READINESS_PARENT_EPIC}; attach it by hand."
+              exit 1
+            fi
+            echo "Attached ${url} as sub-issue of #${READINESS_PARENT_EPIC} (id ${child_id})"
+          }
+
           build_body() {
-            local status="$1" scope="$2" outdir="$3" body="$4"
+            local status="$1" scope="$2" outdir="$3" checked="$4" body="$5"
             local summary_json="${outdir}/forecast_d1_readiness_summary.json"
             local report_md="${outdir}/forecast_d1_readiness_report.md"
             {
@@ -667,6 +715,7 @@ jobs:
               echo ""
               echo "- Verdict: **${status}**"
               echo "- Scope: \`${scope}\`"
+              echo "- Checked date (Europe/Prague): \`${checked:-?}\` (current D-1: \`${CURRENT_D1}\`)"
               echo "- Run: ${RUN_URL}"
               if [ -f "$summary_json" ]; then
                 SUMMARY_JSON="$summary_json" python - <<'PY'
@@ -674,7 +723,7 @@ jobs:
           import os
 
           s = json.loads(open(os.environ["SUMMARY_JSON"], encoding="utf-8").read())
-          for key in ("slot", "patch_date_local", "required_policy", "required_failed", "required_total", "optional_failed", "optional_total"):
+          for key in ("slot", "required_policy", "required_failed", "required_total", "optional_failed", "optional_total"):
               print(f"- {key}: `{s.get(key, '')}`")
           PY
               fi
@@ -689,45 +738,54 @@ jobs:
                 echo "_No report file produced._"
               fi
               echo ""
-              echo "_Automated by forecast-d1-readiness.yml (issue upsert replaces the retired chat alert, merglbot-core/infra#3841)._"
+              echo "_Ops-ledger stream issue (sub-issue of #${READINESS_PARENT_EPIC}): do not close by hand; the workflow closes it on a current-period READY verdict. Automated by forecast-d1-readiness.yml (replaces the retired chat alert, merglbot-core/infra#3841)._"
             } > "$body"
           }
 
           upsert_scope() {
-            local status="$1" outdir="$2" scope="$3"
+            local status="$1" outdir="$2" scope="$3" checked="$4"
             local title="[final-data] D1 readiness: ${scope}"
             local existing body
             existing="$(find_open_issue "$title")"
             body="$(mktemp)"
-            build_body "$status" "$scope" "$outdir" "$body"
+            build_body "$status" "$scope" "$outdir" "$checked" "$body"
 
             if [ "$status" = "PASS" ]; then
-              if [ -n "$existing" ]; then
-                gh issue close "$existing" --comment "READY again on ${RUN_URL}; closing." --reason completed
-                echo "Closed #${existing} (${title}) — verdict PASS"
+              if [ -z "$existing" ]; then
+                echo "PASS for '${title}' (checked ${checked:-?}) — nothing to close"
+              elif is_current_period "$checked"; then
+                gh issue close "$existing" --reason completed \
+                  --comment "READY for the current period (${checked}) on ${RUN_URL}; closing."
+                echo "Closed #${existing} (${title}) — current-period PASS (${checked})"
               else
-                echo "PASS for '${title}' — nothing to close"
+                # Historical PASS never clears the current alert.
+                gh issue comment "$existing" \
+                  --body "Historical check PASSED for ${checked:-?} (current D-1 is ${CURRENT_D1}) on ${RUN_URL}; the current alert stays open until a current-period READY verdict."
+                echo "Kept #${existing} open (${title}) — historical PASS (${checked:-?})"
               fi
             else
               if [ -n "$existing" ]; then
                 gh issue comment "$existing" --body-file "$body"
                 echo "Updated #${existing} (${title}) — verdict ${status}"
               else
-                gh issue create --title "$title" --label "$LABEL" --body-file "$body"
-                echo "Opened issue (${title}) — verdict ${status}"
+                local url number
+                url="$(gh issue create --title "$title" --label "$LABEL" --body-file "$body")"
+                number="${url##*/}"
+                echo "Opened ${url} (${title}) — verdict ${status}"
+                attach_to_epic "$number" "$url"
               fi
             fi
             rm -f "$body"
           }
 
           if [[ -n "${MAIN_STATUS:-}" && "${MAIN_STATUS}" != "NOOP" && -n "${MAIN_OUTDIR:-}" ]]; then
-            upsert_scope "$MAIN_STATUS" "$MAIN_OUTDIR" "${MAIN_SCOPE_LABEL:-main}"
+            upsert_scope "$MAIN_STATUS" "$MAIN_OUTDIR" "${MAIN_SCOPE_LABEL:-main}" "${MAIN_PATCH_DATE:-}"
           fi
           if [[ -n "${PROTEINACO_STATUS:-}" && "${PROTEINACO_STATUS}" != "NOOP" && -n "${PROTEINACO_OUTDIR:-}" ]]; then
-            upsert_scope "$PROTEINACO_STATUS" "$PROTEINACO_OUTDIR" "${PROTEINACO_SCOPE_LABEL:-proteinaco}"
+            upsert_scope "$PROTEINACO_STATUS" "$PROTEINACO_OUTDIR" "${PROTEINACO_SCOPE_LABEL:-proteinaco}" "${PROTEINACO_PATCH_DATE:-}"
           fi
           if [[ -n "${AUTODOPLNKY_STATUS:-}" && "${AUTODOPLNKY_STATUS}" != "NOOP" && -n "${AUTODOPLNKY_OUTDIR:-}" ]]; then
-            upsert_scope "$AUTODOPLNKY_STATUS" "$AUTODOPLNKY_OUTDIR" "${AUTODOPLNKY_SCOPE_LABEL:-autodoplnky}"
+            upsert_scope "$AUTODOPLNKY_STATUS" "$AUTODOPLNKY_OUTDIR" "${AUTODOPLNKY_SCOPE_LABEL:-autodoplnky}" "${AUTODOPLNKY_PATCH_DATE:-}"
           fi
 
       - name: Fail workflow if guardrail failed
