@@ -1,11 +1,14 @@
-# ⚠️ DEPRECATED: Claude PR Assistant v2
+# Historical: Claude PR Assistant v2/v3
 
-> **This document is deprecated.** PR Assistant v3 is now the standard.
-> See [MERGLBOT_PR_ASSISTANT_V3.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_PR_ASSISTANT_V3.md)
+> **Historical reference, not a current operating procedure.** Both V2 and V3 below are retired. Current review and delivery follow [Merglbot PR Assistant V6](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_PR_ASSISTANT_V6.md) and [PR policy](https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md).
+>
+> The canonical V6 receipt verifier is `scripts/pr-assistant/verify-review-receipt.py --surface v6` in an explicitly verified `merglbot-public/docs` checkout. The same-named helper in this repository is a different, historical consumer. Resolve the repository and follow the live contract before use.
+>
+> The model names, comment commands, receipt markers, workflow locations, installation and rollback steps below preserve historical context; they do not grant current execution, installation, secret or policy-change authority.
 
 ---
 
-## Quick Start (v3)
+## Historical quick start (v3)
 
 On any PR in any Merglbot repository, comment:
 
@@ -59,7 +62,7 @@ For lighter review: `@merglbot review --light`
 
 ---
 
-## Current Workflow Location
+## Historical workflow locations (v3)
 
 - **Canonical source**: `merglbot-core/github/.github/workflows/merglbot-pr-assistant-v3-on-demand.yml`
 - **Deployed copy** (per target repo): `.github/workflows/merglbot-pr-v3-on-demand.yml` via `scripts/pr-assistant/deploy-v3.sh`
