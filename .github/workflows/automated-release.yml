@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -284,7 +284,7 @@ jobs:
   notify:
     needs: release
     if: needs.release.outputs.release_outcome == 'release_created'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     
     steps:

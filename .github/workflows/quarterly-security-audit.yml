@@ -44,7 +44,7 @@ env:
 jobs:
   prepare:
     name: Prepare Audit Environment
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -86,7 +86,7 @@ jobs:
   gitignore-compliance:
     name: Gitignore Compliance Check
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -124,7 +124,7 @@ jobs:
   secret-scanning:
     name: Secret Scanning
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - name: Checkout repository
@@ -194,7 +194,7 @@ jobs:
   bot-configuration:
     name: Bot Configuration Validation
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -236,7 +236,7 @@ jobs:
   pre-commit-hooks:
     name: Pre-commit Hook Adoption
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -277,7 +277,7 @@ jobs:
   dependency-scanning:
     name: Dependency Vulnerability Scan
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - name: Checkout repository
@@ -341,7 +341,7 @@ jobs:
   release-process-audit:
     name: Release Process Compliance
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -374,7 +374,7 @@ jobs:
     name: Generate Consolidated Report
     needs: [prepare, gitignore-compliance, secret-scanning, bot-configuration, pre-commit-hooks, dependency-scanning, release-process-audit]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -417,7 +417,7 @@ jobs:
     name: Automatic Remediation
     needs: [prepare, generate-report]
     if: inputs.auto_fix == true && always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: write

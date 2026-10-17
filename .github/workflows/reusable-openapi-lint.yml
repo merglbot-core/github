@@ -35,7 +35,7 @@ permissions:
 jobs:
   lint:
     name: Lint OpenAPI Specification
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     
     steps:
