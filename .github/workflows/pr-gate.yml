@@ -220,6 +220,17 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+    # `pull_request: edited` (title/body/base edits) cannot change the diff, so the
+    # content checks (dependency review, docs-governance, gitleaks, markdown lint,
+    # workflow lint, terraform fmt) re-run with an identical result. Measured
+    # 2026-09-28 (github#949): 95 runs / 107 billed minutes in 48 h from body edits
+    # alone. On `edited` only the PR-convention steps (title, branch, size,
+    # merge commits, text length) run; every skipped step reports `skipped`,
+    # which the final gate already treats as a legitimate outcome, so the
+    # `PR Gate` check still reports on every event. Hub-only change: the
+    # callers keep `types: [opened, edited, synchronize, reopened]`.
+    env:
+      PR_GATE_CONTENT_CHECKS: ${{ github.event_name != 'pull_request' || github.event.action != 'edited' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -233,7 +244,7 @@ jobs:
 
       - name: Run Dependency Review
         id: dependency_review
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.PR_GATE_CONTENT_CHECKS == 'true' }}
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48  # v4.9.0
         with:
           fail-on-severity: ${{ inputs.fail-on-severity }}
@@ -384,7 +395,7 @@ jobs:
       # Without this, a consumer pinned to hub@SHA_X still executed check.mjs and
       # ssot-map.snapshot.json from mutable hub main (transitive supply-chain gap).
       - name: Resolve pinned hub governance ref
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.PR_GATE_CONTENT_CHECKS == 'true' }}
         id: hubref
         env:
           JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
@@ -398,7 +409,7 @@ jobs:
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
           echo "docs-governance code pinned to $repo@$ref"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.PR_GATE_CONTENT_CHECKS == 'true' }}
         with:
           repository: ${{ steps.hubref.outputs.repo }}
           ref: ${{ steps.hubref.outputs.ref }}
@@ -408,7 +419,7 @@ jobs:
             config/ssot-map.snapshot.json
       - name: docs-governance
         id: docs_governance
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.PR_GATE_CONTENT_CHECKS == 'true' }}
         env:
           DG_MODE: ${{ inputs.mode }}
           DG_IMPACT_PREFIXES: ${{ inputs['impact-prefixes'] }}
@@ -421,7 +432,7 @@ jobs:
       # Installed into RUNNER_TEMP (no sudo) and pinned by release checksum, so a
       # compromised release asset cannot silently replace the scanner.
       - name: Install gitleaks
-        if: ${{ !cancelled() && inputs.gitleaks }}
+        if: ${{ !cancelled() && env.PR_GATE_CONTENT_CHECKS == 'true' && inputs.gitleaks }}
         env:
           GITLEAKS_VERSION: '8.18.4'
           GITLEAKS_SHA256: 'ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d'
@@ -439,7 +450,7 @@ jobs:
 
       - name: Run gitleaks
         id: gitleaks
-        if: ${{ !cancelled() && inputs.gitleaks }}
+        if: ${{ !cancelled() && env.PR_GATE_CONTENT_CHECKS == 'true' && inputs.gitleaks }}
         shell: bash
         env:
           GITLEAKS_CONFIG_PATH: ${{ inputs['gitleaks-config-path'] }}
@@ -480,7 +491,7 @@ jobs:
           exit "${rc}"
 
       - name: Upload gitleaks report (redacted)
-        if: ${{ !cancelled() && inputs.gitleaks && inputs['gitleaks-upload-report'] }}
+        if: ${{ !cancelled() && env.PR_GATE_CONTENT_CHECKS == 'true' && inputs.gitleaks && inputs['gitleaks-upload-report'] }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: gitleaks-report
@@ -491,7 +502,7 @@ jobs:
       # --- optional markdown danger lint (github#891) -------------------------
       - name: Markdown danger lint
         id: markdown_danger_lint
-        if: ${{ !cancelled() && inputs['markdown-danger-lint'] }}
+        if: ${{ !cancelled() && env.PR_GATE_CONTENT_CHECKS == 'true' && inputs['markdown-danger-lint'] }}
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           CHANGED_LIST: ${{ runner.temp }}/changed_md.txt
@@ -546,7 +557,7 @@ jobs:
       # --- optional workflow lint: actionlint + zizmor (github#961) ------------
       # Same install pattern as gitleaks: RUNNER_TEMP, no sudo, release checksum.
       - name: Install actionlint and zizmor
-        if: ${{ !cancelled() && inputs['workflow-lint'] }}
+        if: ${{ !cancelled() && env.PR_GATE_CONTENT_CHECKS == 'true' && inputs['workflow-lint'] }}
         env:
           ACTIONLINT_VERSION: '1.7.12'
           ACTIONLINT_SHA256: '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8'
@@ -571,7 +582,7 @@ jobs:
 
       - name: Workflow lint (actionlint + zizmor)
         id: workflow_lint
-        if: ${{ !cancelled() && inputs['workflow-lint'] }}
+        if: ${{ !cancelled() && env.PR_GATE_CONTENT_CHECKS == 'true' && inputs['workflow-lint'] }}
         shell: bash
         env:
           ZIZMOR_MIN_SEVERITY: ${{ inputs['zizmor-min-severity'] }}
@@ -604,7 +615,7 @@ jobs:
 
       # --- optional terraform fmt (S3, EPIC platform#1722) ---------------------
       - name: Setup Terraform
-        if: ${{ !cancelled() && inputs['run-terraform-fmt'] }}
+        if: ${{ !cancelled() && env.PR_GATE_CONTENT_CHECKS == 'true' && inputs['run-terraform-fmt'] }}
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e  # v4.0.1
         with:
           terraform_version: ${{ inputs['terraform-version'] }}
@@ -612,7 +623,7 @@ jobs:
 
       - name: Terraform fmt
         id: terraform_fmt
-        if: ${{ !cancelled() && inputs['run-terraform-fmt'] }}
+        if: ${{ !cancelled() && env.PR_GATE_CONTENT_CHECKS == 'true' && inputs['run-terraform-fmt'] }}
         env:
           TF_DIR: ${{ inputs['terraform-directory'] }}
         run: |
