@@ -25,6 +25,7 @@ dependencies = [
     "google-cloud-firestore>=2.16.0",
     "google-cloud-billing-budgets>=1.11.2",
     "google-api-core>=2.14.0",
+    "google-auth==2.62.0",
 ]
 
 [project.optional-dependencies]
