@@ -34,7 +34,7 @@ jobs:
         github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && (startsWith(github.event.schedule, '20 ') || startsWith(github.event.schedule, '15 ') || startsWith(github.event.schedule, '5 ') || startsWith(github.event.schedule, '0 ')))
       }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write  # For WIF/OIDC
@@ -618,10 +618,12 @@ jobs:
       # the verdict now lives in the step summary, the uploaded artifacts and one
       # GitHub issue per scope (opened/updated on a NOT-READY verdict, closed on READY).
       #
-      # Closing rule: the current readiness issue is closed only when the PASS was
-      # measured for the CURRENT period (the default D-1 date = yesterday in
-      # Europe/Prague, or today). A dispatch with a historical `patch_date_local`
-      # that PASSes only comments on the open issue and never closes it.
+      # Current-period rule: only a result for the CURRENT period (the default D-1
+      # date = yesterday in Europe/Prague, or today) may create, update or close the
+      # active issue. A historical result (PASS or FAIL, e.g. a dispatch with an
+      # older `patch_date_local`) is written to the step summary only; an existing
+      # issue may get a comment marked [historical], but is never created, edited
+      # or closed by it. A PASS closes only with a reported (verified) date.
       #
       # EPIC membership (MERGLBOT_PROGRAM_EPIC_STANDARD §5a): every new issue is
       # attached as a native sub-issue of READINESS_PARENT_EPIC (an open [EPIC] in
@@ -645,6 +647,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           READINESS_PARENT_EPIC: "769"  # [EPIC] CI/CD reliability — reusable workflows, gaty, runnery
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REQUESTED_PATCH_DATE: ${{ inputs.patch_date_local }}
           MAIN_STATUS: ${{ steps.guardrail.outputs.status }}
           MAIN_OUTDIR: ${{ steps.guardrail.outputs.outdir }}
           MAIN_SCOPE_LABEL: ${{ steps.guardrail.outputs.scope_label }}
@@ -669,18 +672,45 @@ jobs:
           CURRENT_D1="$(TZ=Europe/Prague date -d 'yesterday' +%F)"
           CURRENT_D0="$(TZ=Europe/Prague date +%F)"
 
+          {
+            echo "## Readiness issue upsert"
+            echo ""
+            echo "Current period: D-1 \`${CURRENT_D1}\` (or today \`${CURRENT_D0}\`). Only current-period results create, update or close issues."
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
           is_current_period() {
-            local checked="$1"
-            [[ "$checked" == "$CURRENT_D1" || "$checked" == "$CURRENT_D0" ]]
+            local period="$1"
+            [[ -n "$period" && ( "$period" == "$CURRENT_D1" || "$period" == "$CURRENT_D0" ) ]]
           }
 
-          # Fail closed: a failed listing is an error, never an empty backlog.
+          # The period a result is about: the date the guardrail reported; when it
+          # crashed before reporting one, the requested dispatch date; for a default
+          # run (no requested date) the guardrail's own default, yesterday in Prague.
+          result_period() {
+            local checked="$1"
+            if [[ -n "$checked" ]]; then
+              printf '%s' "$checked"
+            elif [[ -n "${REQUESTED_PATCH_DATE:-}" ]]; then
+              printf '%s' "$REQUESTED_PATCH_DATE"
+            else
+              printf '%s' "$CURRENT_D1"
+            fi
+          }
+
+          summary_line() {
+            local scope="$1" period="$2" status="$3" action="$4"
+            printf -- "- \`%s\` (%s): **%s** — %s\n" "$scope" "$period" "$status" "$action" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          # Fail closed: a failed listing is an error, never an empty backlog. The error
+          # goes to stderr so it is not swallowed by the caller's command substitution.
           find_open_issue() {
             local title="$1"
             local out
             if ! out="$(gh issue list --label "$LABEL" --state open --limit 100 --json number,title \
                         | jq -r --arg t "$title" '[.[] | select(.title == $t) | .number] | first // ""')"; then
-              echo "::error::gh issue list failed for '${title}'"
+              echo "::error::gh issue list failed for '${title}'" >&2
               exit 1
             fi
             printf '%s' "$out"
@@ -690,7 +720,7 @@ jobs:
           # reading the parent's sub-issue list back. Any failure stops the step loudly.
           attach_to_epic() {
             local number="$1" url="$2"
-            local child_id
+            local child_id children
             if ! child_id="$(gh api "repos/${GH_REPO}/issues/${number}" --jq .id)"; then
               echo "::error::Could not read the database id of ${url}; attach it to #${READINESS_PARENT_EPIC} by hand."
               exit 1
@@ -699,7 +729,9 @@ jobs:
               echo "::error::Sub-issue attachment failed: ${url} is NOT a sub-issue of #${READINESS_PARENT_EPIC}; attach it by hand."
               exit 1
             fi
-            if ! gh api --paginate "repos/${GH_REPO}/issues/${READINESS_PARENT_EPIC}/sub_issues" --jq '.[].id' | grep -qx "$child_id"; then
+            # Read the full list first, then match (no early pipe close under pipefail).
+            if ! children="$(gh api --paginate "repos/${GH_REPO}/issues/${READINESS_PARENT_EPIC}/sub_issues" --jq '.[].id')" \
+               || ! grep -qx "$child_id" <<<"$children"; then
               echo "::error::Sub-issue readback failed: ${url} not listed under #${READINESS_PARENT_EPIC}; attach it by hand."
               exit 1
             fi
@@ -707,7 +739,7 @@ jobs:
           }
 
           build_body() {
-            local status="$1" scope="$2" outdir="$3" checked="$4" body="$5"
+            local status="$1" scope="$2" outdir="$3" period="$4" body="$5"
             local summary_json="${outdir}/forecast_d1_readiness_summary.json"
             local report_md="${outdir}/forecast_d1_readiness_report.md"
             {
@@ -715,7 +747,7 @@ jobs:
               echo ""
               echo "- Verdict: **${status}**"
               echo "- Scope: \`${scope}\`"
-              echo "- Checked date (Europe/Prague): \`${checked:-?}\` (current D-1: \`${CURRENT_D1}\`)"
+              echo "- Evaluated date (Europe/Prague): \`${period}\` (current D-1: \`${CURRENT_D1}\`)"
               echo "- Run: ${RUN_URL}"
               if [ -f "$summary_json" ]; then
                 SUMMARY_JSON="$summary_json" python - <<'PY'
@@ -745,35 +777,57 @@ jobs:
           upsert_scope() {
             local status="$1" outdir="$2" scope="$3" checked="$4"
             local title="[final-data] D1 readiness: ${scope}"
-            local existing body
+            local period existing body url number
+            period="$(result_period "$checked")"
             existing="$(find_open_issue "$title")"
-            body="$(mktemp)"
-            build_body "$status" "$scope" "$outdir" "$checked" "$body"
 
+            if ! is_current_period "$period"; then
+              # Historical result (PASS or FAIL): step summary only. Never creates, edits
+              # or closes the current-period issue; an existing one gets at most a comment
+              # marked [historical].
+              summary_line "$scope" "$period" "$status" "historical result; readiness issue not created, edited or closed"
+              if [ -n "$existing" ]; then
+                gh issue comment "$existing" \
+                  --body "[historical] ${status} for ${period} (current D-1 is ${CURRENT_D1}) on ${RUN_URL}. This does not change the current-period alert."
+              fi
+              echo "Historical ${status} for '${title}' (${period}): issue not created, edited or closed"
+              return 0
+            fi
+
+            # Current-period result: the only path that may create, update or close the issue.
             if [ "$status" = "PASS" ]; then
-              if [ -z "$existing" ]; then
-                echo "PASS for '${title}' (checked ${checked:-?}) — nothing to close"
-              elif is_current_period "$checked"; then
+              if [ -z "$checked" ]; then
+                # A PASS without a reported date is unverified coverage and never closes.
+                summary_line "$scope" "$period" "$status" "no reported date; issue left unchanged"
+                echo "::warning::PASS for '${title}' without a reported date; not closing."
+              elif [ -n "$existing" ]; then
                 gh issue close "$existing" --reason completed \
                   --comment "READY for the current period (${checked}) on ${RUN_URL}; closing."
-                echo "Closed #${existing} (${title}) — current-period PASS (${checked})"
+                summary_line "$scope" "$period" "$status" "closed #${existing}"
+                echo "Closed #${existing} (${title}): current-period PASS (${checked})"
               else
-                # Historical PASS never clears the current alert.
-                gh issue comment "$existing" \
-                  --body "Historical check PASSED for ${checked:-?} (current D-1 is ${CURRENT_D1}) on ${RUN_URL}; the current alert stays open until a current-period READY verdict."
-                echo "Kept #${existing} open (${title}) — historical PASS (${checked:-?})"
+                summary_line "$scope" "$period" "$status" "no open issue"
+                echo "PASS for '${title}' (${checked}): nothing to close"
               fi
+              return 0
+            fi
+
+            body="$(mktemp)"
+            build_body "$status" "$scope" "$outdir" "$period" "$body"
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body-file "$body"
+              summary_line "$scope" "$period" "$status" "updated #${existing}"
+              echo "Updated #${existing} (${title}): verdict ${status}"
             else
-              if [ -n "$existing" ]; then
-                gh issue comment "$existing" --body-file "$body"
-                echo "Updated #${existing} (${title}) — verdict ${status}"
-              else
-                local url number
-                url="$(gh issue create --title "$title" --label "$LABEL" --body-file "$body")"
-                number="${url##*/}"
-                echo "Opened ${url} (${title}) — verdict ${status}"
-                attach_to_epic "$number" "$url"
+              url="$(gh issue create --title "$title" --label "$LABEL" --body-file "$body")"
+              number="${url##*/}"
+              if [[ ! "$number" =~ ^[0-9]+$ ]]; then
+                echo "::error::Unexpected issue-create output '${url}' for '${title}'."
+                exit 1
               fi
+              echo "Opened ${url} (${title}): verdict ${status}"
+              attach_to_epic "$number" "$url"
+              summary_line "$scope" "$period" "$status" "opened ${url}"
             fi
             rm -f "$body"
           }
@@ -806,7 +860,7 @@ jobs:
         (github.event_name == 'schedule' && (github.event.schedule == '0 8 * * *' || github.event.schedule == '0 9 * * *')) ||
         (github.event_name == 'workflow_dispatch' && inputs.send_success_rate == true)
       }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       PYTHONUNBUFFERED: "1"

@@ -148,8 +148,8 @@ class TriggerContractTests(unittest.TestCase):
             if entry["review_owner_policy"] == "no_owner"
         }
 
-        self.assertEqual(len(manifest["repos"]), 53)
-        self.assertEqual(counts["hard_gate"], 47)
+        self.assertEqual(len(manifest["repos"]), 48)
+        self.assertEqual(counts["hard_gate"], 42)
         self.assertEqual(counts["no_owner"], 6)
         self.assertEqual(counts["advisory"], 0)
         self.assertEqual(policy["excluded_orgs"], ["Merglevsky-cz", "lrtch"])

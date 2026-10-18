@@ -1,0 +1,50 @@
+---
+name: Canonical container provenance
+description: Generate bound container provenance JSON without claiming an assurance level
+inputs:
+  candidate-digest:
+    description: Exact manifest or index digest returned by the image build
+    required: true
+  platform-digest:
+    description: Optional verified platform manifest digest
+    default: ''
+  registry:
+    description: Registry namespace used by the image build
+    required: true
+  image-name:
+    description: Image name within the registry namespace
+    required: true
+  context:
+    description: Caller build context
+    default: '.'
+  dockerfile:
+    description: Caller Dockerfile path
+    default: Dockerfile
+outputs:
+  provenance:
+    description: Full bound provenance statement JSON
+    value: ${{ steps.generate.outputs.provenance }}
+  platform_provenance:
+    description: Single-subject verified platform statement JSON, when available
+    value: ${{ steps.generate.outputs.platform_provenance }}
+  provenance_path:
+    description: Generated full statement in an isolated runner temporary directory
+    value: ${{ steps.generate.outputs.provenance_path }}
+  platform_provenance_path:
+    description: Generated platform statement path, when available
+    value: ${{ steps.generate.outputs.platform_provenance_path }}
+runs:
+  using: composite
+  steps:
+    - name: Generate bound provenance statements
+      id: generate
+      shell: bash
+      env:
+        PROVENANCE_ACTION_PATH: ${{ github.action_path }}
+        CANDIDATE_DIGEST: ${{ inputs.candidate-digest }}
+        PLATFORM_DIGEST: ${{ inputs.platform-digest }}
+        IMAGE_REGISTRY: ${{ inputs.registry }}
+        IMAGE_NAME: ${{ inputs.image-name }}
+        BUILD_CONTEXT: ${{ inputs.context }}
+        BUILD_DOCKERFILE: ${{ inputs.dockerfile }}
+      run: python3 "$PROVENANCE_ACTION_PATH/generate.py"

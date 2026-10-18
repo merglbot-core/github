@@ -21,12 +21,12 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ORGS: "merglbot-autodoplnky merglbot-cerano merglbot-core merglbot-denatura merglbot-extractors merglbot-hodinarstvibechyne merglbot-kiteboarding merglbot-milan-private merglbot-proteinaco merglbot-public merglbot-ruzovyslon"
+  ORGS: "merglbot-autodoplnky merglbot-cerano merglbot-core merglbot-denatura merglbot-extractors merglbot-hodinarstvibechyne merglbot-kiteboarding merglbot-milan-private merglbot-proteinaco merglbot-public"
 
 jobs:
   audit-settings:
     name: Audit Organization Settings
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
       has_issues: ${{ steps.audit.outputs.has_issues }}
@@ -146,7 +146,7 @@ jobs:
     name: Create Tracking Issue
     needs: audit-settings
     if: needs.audit-settings.outputs.has_issues == 'true' && inputs.create_issues != false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Create issue for violations

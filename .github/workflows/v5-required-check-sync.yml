@@ -29,7 +29,7 @@ concurrency:
 jobs:
   sync:
     name: Sync v6 required check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Checkout merglbot-core/github (self)
@@ -55,7 +55,7 @@ jobs:
           set -euo pipefail
           orgs=(
             merglbot-core merglbot-public merglbot-denatura merglbot-shared
-            merglbot-proteinaco merglbot-ruzovyslon merglbot-milan-private
+            merglbot-proteinaco merglbot-milan-private
             merglbot-extractors merglbot-autodoplnky merglbot-hodinarstvibechyne
             merglbot-kiteboarding merglbot-cerano
           )

@@ -56,10 +56,6 @@ merglbot-cerano/viz-api
 merglbot-cerano/product-forecasting
 merglbot-cerano/cerano-web
 merglbot-cerano/feed-generator
-merglbot-ruzovyslon/ruzovyslon-web
-merglbot-ruzovyslon/kbc_data_quality_metodology
-merglbot-ruzovyslon/viz-api
-merglbot-ruzovyslon/business_forecasting
 merglbot-autodoplnky/autodoplnky-web
 merglbot-hodinarstvibechyne/hodinarstvi-web
 merglbot-kiteboarding/kiteboarding-web

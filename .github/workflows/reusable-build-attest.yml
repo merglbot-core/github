@@ -111,7 +111,7 @@ permissions:
 jobs:
   build:
     name: Build, Scan, Verify & Push Image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       actions: read
@@ -387,113 +387,39 @@ jobs:
             fi
           done <<< "$TARGET_TAGS"
 
+      - name: Set up Python for provenance
+        if: inputs.push || steps.build.outputs.digest != ''
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+
       - name: Generate SLSA Provenance
+        if: inputs.push || steps.build.outputs.digest != ''
         id: provenance
-        env:
-          PLATFORM_DIGEST: ${{ steps.parity.outputs.platform_digest }}
-        run: |
-          # Create SLSA provenance document
-          PROVENANCE=$(cat <<EOF
-          {
-            "_type": "https://in-toto.io/Statement/v0.1",
-            "predicateType": "https://slsa.dev/provenance/v0.2",
-            "subject": [
-              {
-                "name": "${{ inputs.registry }}/${{ inputs.image_name }}",
-                "digest": {
-                  "sha256": "${{ steps.build.outputs.digest }}"
-                }
-              }
-            ],
-            "predicate": {
-              "builder": {
-                "id": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-              },
-              "buildType": "https://github.com/slsa-framework/slsa-github-generator/container@v1",
-              "invocation": {
-                "configSource": {
-                  "uri": "git+https://github.com/${{ github.repository }}@${{ github.ref }}",
-                  "digest": {
-                    "sha1": "${{ github.sha }}"
-                  },
-                  "entryPoint": "${{ github.workflow }}"
-                },
-                "parameters": {},
-                "environment": {
-                  "github_actor": "${{ github.actor }}",
-                  "github_sha": "${{ github.sha }}",
-                  "github_repository": "${{ github.repository }}",
-                  "github_ref": "${{ github.ref }}",
-                  "github_run_id": "${{ github.run_id }}"
-                }
-              },
-              "buildConfig": {
-                "dockerfile": "${{ inputs.dockerfile }}",
-                "context": "${{ inputs.context }}"
-              },
-              "metadata": {
-                "buildInvocationId": "${{ github.run_id }}-${{ github.run_attempt }}",
-                "buildStartedOn": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-                "completeness": {
-                  "parameters": true,
-                  "environment": true,
-                  "materials": true
-                },
-                "reproducible": false
-              },
-              "materials": [
-                {
-                  "uri": "git+https://github.com/${{ github.repository }}",
-                  "digest": {
-                    "sha1": "${{ github.sha }}"
-                  }
-                }
-              ]
-            }
-          }
-          EOF
-          )
-
-          if [ -n "$PLATFORM_DIGEST" ]; then
-            PROVENANCE="$(printf '%s' "$PROVENANCE" | jq --arg digest "${PLATFORM_DIGEST#sha256:}" \
-              '.subject += [{name: .subject[0].name, digest: {sha256: $digest}}]')"
-          fi
-
-          PROVENANCE_DELIMITER="PROVENANCE_EOF_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}_$(date +%s%N)"
-          if printf '%s\n' "$PROVENANCE" | grep -Fxq "$PROVENANCE_DELIMITER"; then
-            echo "::error::Generated provenance output delimiter collided with provenance content."
-            exit 1
-          fi
-
-          {
-            printf 'provenance<<%s\n' "$PROVENANCE_DELIMITER"
-            echo "$PROVENANCE"
-            printf '%s\n' "$PROVENANCE_DELIMITER"
-          } >> "$GITHUB_OUTPUT"
-          echo "$PROVENANCE" > provenance.json
-          # Keep the full statement artifact and expose a single-subject projection
-          # for strict deployment consumers. All builder/commit/material claims remain.
-          if [ -n "$PLATFORM_DIGEST" ]; then
-            PLATFORM_PROVENANCE="$(printf '%s' "$PROVENANCE" | jq -ce --arg digest "${PLATFORM_DIGEST#sha256:}" \
-              '.subject = [.subject[] | select((.digest.sha256 | sub("^sha256:"; "")) == $digest)] | if (.subject | length) >= 1 then .subject = [.subject[0]] else error("missing verified platform subject") end')"
-            printf 'platform_provenance=%s\n' "$PLATFORM_PROVENANCE" >> "$GITHUB_OUTPUT"
-            printf '%s\n' "$PLATFORM_PROVENANCE" > platform-provenance.json
-          fi
+        uses: merglbot-core/github/actions/container-provenance@e6b0b8864f92b1453278250ae773d331c7a81165
+        with:
+          candidate-digest: ${{ steps.build.outputs.digest }}
+          platform-digest: ${{ steps.parity.outputs.platform_digest }}
+          registry: ${{ inputs.registry }}
+          image-name: ${{ inputs.image_name }}
+          context: ${{ inputs.context }}
+          dockerfile: ${{ inputs.dockerfile }}
 
       - name: Upload SLSA Provenance
+        if: inputs.push || steps.build.outputs.digest != ''
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: slsa-provenance
           path: |
-            provenance.json
-            platform-provenance.json
+            ${{ steps.provenance.outputs.provenance_path }}
+            ${{ steps.provenance.outputs.platform_provenance_path }}
           retention-days: 90
 
   attest:
     name: Binary Authorization Attestation
     needs: build
     if: inputs.attest && inputs.push
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       attestation_id: ${{ steps.attest.outputs.attestation_id }}
@@ -615,7 +541,7 @@ jobs:
     name: Build Summary
     needs: [build, attest]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     
     steps:
