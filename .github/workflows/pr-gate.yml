@@ -306,7 +306,7 @@ jobs:
           github-token: ${{ github.token }}
           script: |
             const branch = process.env.PR_BRANCH || '';
-            const allowedPrefixes = '${{ inputs.allowed-branch-prefixes }}'.split(',');
+            const allowedPrefixes = (process.env.ALLOWED_BRANCH_PREFIXES || '').split(',');
             
             const isValid = allowedPrefixes.some(prefix => branch.startsWith(prefix.trim()));
             
@@ -320,6 +320,7 @@ jobs:
             }
         env:
           PR_BRANCH: ${{ steps.pr-data.outputs.branch }}
+          ALLOWED_BRANCH_PREFIXES: ${{ inputs.allowed-branch-prefixes }}
       
       - name: Check PR size
         id: pr_size
