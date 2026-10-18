@@ -18,7 +18,7 @@ class ForecastD1RzDecommissionTests(unittest.TestCase):
     merglbot-core/infra#1712).
     """
 
-    def test_decommissioned_ruzovyslon_never_gets_a_readiness_lane_or_slack_scope(self):
+    def test_decommissioned_ruzovyslon_never_gets_a_readiness_lane_or_alert_scope(self):
         source = WORKFLOW.read_text()
 
         assert "guardrail_ruzovyslon" not in source
