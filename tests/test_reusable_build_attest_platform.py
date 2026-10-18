@@ -1,5 +1,6 @@
 """Execute the workflow signing step with a fake gcloud; no cloud calls."""
 import os
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -13,6 +14,13 @@ import unittest
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/reusable-build-attest.yml"
 INDEX = "sha256:" + "a" * 64
 CHILD = "sha256:" + "b" * 64
+PROVENANCE_SOURCE = "e6b0b8864f92b1453278250ae773d331c7a81165"
+# Read from the landed source commit, not from the worktree under test. A pin
+# bump must re-read that commit and update these two source witnesses together.
+PROVENANCE_SOURCE_SHA256 = {
+    'action.yml': '82e696ee27a248308a1927e838c2858b4389a4cd28f898f829e2f03ec2edbb15',
+    'generate.py': '2e5364f9176ed2d642ce420a16f35f8ed9acfae5d87e3064fb8e71dbe3789a72',
+}
 
 
 class PlatformAttestationTests(unittest.TestCase):
@@ -72,11 +80,36 @@ printf 'projects/merglbot-artifacts/occurrences/test\\n'
 
 
 class PlatformProvenanceTests(unittest.TestCase):
+    def parse_outputs(self, text):
+        lines = text.splitlines()
+        values = {}
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            index += 1
+            multiline = re.fullmatch(r'([a-z_]+)<<(.+)', line)
+            if multiline:
+                name, delimiter = multiline.groups()
+                body = []
+                while index < len(lines) and lines[index] != delimiter:
+                    body.append(lines[index])
+                    index += 1
+                self.assertLess(index, len(lines), 'Unterminated action output')
+                index += 1
+                value = '\n'.join(body)
+            else:
+                self.assertIn('=', line, 'Unexpected output entry')
+                name, value = line.split('=', 1)
+                self.assertRegex(name, r'\A[a-z_]+\Z')
+            self.assertNotIn(name, values, 'Duplicate public output')
+            values[name] = value
+        return values
+
     def generate(self, candidate=INDEX, platform=CHILD):
         """Resolve workflow bindings, then execute the composite action's shell."""
         source = WORKFLOW.read_text()
         block = source.split('      - name: Generate SLSA Provenance\n', 1)[1].split('      - name: Upload SLSA Provenance\n', 1)[0]
-        self.assertIn('uses: merglbot-core/github/actions/container-provenance@e6b0b8864f92b1453278250ae773d331c7a81165', block)
+        self.assertIn('uses: merglbot-core/github/actions/container-provenance@' + PROVENANCE_SOURCE, block)
         self.assertNotIn('run:', block)
         values = {
             '${{ steps.build.outputs.digest }}': candidate,
@@ -89,7 +122,17 @@ class PlatformProvenanceTests(unittest.TestCase):
         inputs = {name: values[value] for name, value in re.findall(r'^          ([a-z-]+): (.+)$', block, re.MULTILINE)}
         self.assertEqual(set(inputs), {'candidate-digest', 'platform-digest', 'registry', 'image-name', 'context', 'dockerfile'})
         action = WORKFLOW.parents[2] / 'actions/container-provenance'
+        for name, expected in PROVENANCE_SOURCE_SHA256.items():
+            self.assertEqual(hashlib.sha256((action / name).read_bytes()).hexdigest(), expected,
+                             'Local action must match the immutable workflow pin')
         action_source = (action / 'action.yml').read_text()
+        output_block = action_source.split('\noutputs:\n', 1)[1].split('\nruns:\n', 1)[0]
+        declared = set(re.findall(r'^  ([a-z_]+):$', output_block, re.MULTILINE))
+        referenced = set(re.findall(r'steps\.provenance\.outputs\.([a-z_]+)', source))
+        self.assertEqual(referenced, {'provenance', 'platform_provenance', 'provenance_path', 'platform_provenance_path'})
+        self.assertEqual(declared, referenced)
+        for name in referenced:
+            self.assertIn('value: ${{ steps.generate.outputs.' + name + ' }}', output_block)
         script = action_source.split('      run: ', 1)[1].strip()
         bindings = {}
         for name, value in re.findall(r'^        ([A-Z_]+): (.+)$', action_source, re.MULTILINE):
@@ -116,11 +159,25 @@ class PlatformProvenanceTests(unittest.TestCase):
             result = subprocess.run(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
                                     cwd=root, env=env, capture_output=True, text=True, timeout=10)
             text = output.read_text() if output.exists() else ''
+            values = self.parse_outputs(text)
             documents = {}
-            for name, path in re.findall(r'^(provenance_path|platform_provenance_path)=(.+)$', text, re.MULTILINE):
-                artifact = Path(path)
+            for name in ('provenance', 'platform_provenance'):
+                if name + '_path' not in values:
+                    self.assertNotIn(name, values)
+                    continue
+                artifact = Path(values[name + '_path'])
                 self.assertEqual(artifact.parent.parent, root)
-                documents[name] = json.loads(artifact.read_text())
+                documents[name + '_path'] = json.loads(artifact.read_text())
+                self.assertIn(name, values, 'Reusable workflow JSON output must exist')
+                self.assertEqual(json.loads(values[name]), documents[name + '_path'])
+            if result.returncode == 0:
+                self.assertEqual(set(values), {'provenance', 'provenance_path'} |
+                                 ({'platform_provenance', 'platform_provenance_path'} if platform else set()))
+                full = documents['provenance_path']
+                self.assertEqual(full['_type'], 'https://in-toto.io/Statement/v0.1')
+                self.assertEqual(full['predicateType'], 'https://slsa.dev/provenance/v0.2')
+                for subject in full['subject']:
+                    self.assertRegex(subject['digest']['sha256'], r'\A[0-9a-f]{64}\Z')
             return result.returncode, documents
 
     def test_projection_preserves_claims_and_selects_only_runtime(self):

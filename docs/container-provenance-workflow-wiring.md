@@ -7,6 +7,13 @@ only the generated temporary paths returned by the action. Existing workflow
 outputs retain their names. A pushing build still validates a missing digest;
 a non-pushing build without a manifest skips generation and upload.
 
+The binding test checks every referenced action output declaration, parses both
+multiline and single-line runner outputs, and compares each JSON value with its
+generated file. The local action manifest and executable must match the exact
+SHA-256 witnesses read from the pinned source commit. For a future pin bump,
+first verify the new landed commit, then update the workflow pin and both source
+witnesses together; rerun the binding and action tests. Tests do not fetch code.
+
 The action emits canonical bare SHA-256 subjects with caller-bound metadata.
 It does not establish a SLSA assurance level, cryptographic signature, runtime
 adoption, or financial savings. Workflow binding tests execute the composite
