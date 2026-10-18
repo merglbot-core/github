@@ -24,7 +24,7 @@ permissions:
 jobs:
   collect-feedback:
     name: Collect Review Feedback
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30  # Typical run 5-10m; buffer for API pagination/rate limits
     
     steps:
