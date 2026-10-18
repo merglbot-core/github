@@ -30,3 +30,7 @@ Neither feature branch is a landed dependency or authorised runtime change.
 Both PRs remain DRAFT: merge, workflow activation and downstream caller
 verification require their separate legitimate stage. Preserve the original
 workflow and test postimages; do not weaken the tests to pass the old workflow.
+
+The test-review head adds the exact original regression module. Relative to
+the authority feature branch, its diff contains only that test module and
+this documentation note; it does not change a workflow or grant activation.
