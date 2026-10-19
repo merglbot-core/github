@@ -1,58 +1,50 @@
-# Final Merge Readiness Policy
+# Final Merge Readiness Policy (retired)
 
-The Final Merge Readiness check is a read-only policy gate for Merglbot pull
-requests. It does not merge, deploy, run Terraform, or create documentation
-pull requests. The check only decides whether the current PR head has enough
-evidence for a human merge.
+**Status: retired 2026-10-19** (merglbot-core/github#774, program "V6 autonomie (5)",
+merglbot-core/platform#2448). The hub copy of the Final Merge Readiness check
+(`.github/workflows/final-merge-readiness.yml`, evaluator
+`scripts/pr-assistant/final-merge-readiness.py`, manifest
+`.github/policies/final-merge-readiness.json`) was removed. Restore it from git
+history if ever needed (`git log --diff-filter=D -- scripts/pr-assistant/final-merge-readiness.py`).
 
-The policy manifest lives in `.github/policies/final-merge-readiness.json`.
-The evaluator lives in `scripts/pr-assistant/final-merge-readiness.py`, and the
-GitHub Actions check is `.github/workflows/final-merge-readiness.yml`.
-The workflow checks out the PR head only as inspected content. When the
-evaluator already exists on the protected base ref, the check executes that
-trusted base copy of the evaluator and policy while scanning changed-file
-content from the PR checkout. If no protected base copy exists yet, the check
-does not execute PR-head evaluator code and does not expose the workflow token
-to PR head code. It emits a `human_confirmation_required:trusted_evaluator_missing_on_base`
-receipt as explicit bootstrap evidence, not autonomous merge authority.
+## Why
 
-The evaluator emits a JSON receipt with these gates:
+- It was V5-era: it parsed PR Assistant v4/v3 receipt **comments** and never
+  recognised the `Merglbot PR Assistant v6` check-run receipt, which is the
+  only active review gate.
+- It had no `workflow_call` trigger and no repository called it; it only ran
+  here as a path-filtered self-test and was not a required check in this repo
+  (required: `ci`, `Merglbot PR Assistant v6`).
+- The repo-local readiness copies raced the V6 review: they read the receipt
+  once per `pull_request` event while V6 publishes minutes after the push.
+  merglbot-denatura/acquisition-analysis measured 51 failures / 27 manual
+  re-runs in 100 runs and folded the job into `ci` with **no receipt wait and
+  no validator call** (merglbot-core/github#958, merglbot-core/platform#1722).
+  merglbot-proteinaco/acquisition-analysis follows the same shape under
+  github#774 and keeps its required `final-merge-readiness` context reporting.
 
-- `path_risk_gate`: classifies changed paths, blocks committed secret-like
-  files, private key material including encrypted private key PEM headers,
-  service account JSON keys, Terraform execution commands, and
-  branch-protection bypass language.
-- `pr_assistant_review_only_evidence`: parses the latest trusted PR Assistant
-  v4 or v3 receipt comment from `github-actions[bot]` or the approved
-  Merglbot v4 GitHub App bot, requires review-only markers where the runtime
-  emits them, current-head SHA, approved verdict, successful status, satisfied
-  or not-required documentation state, verified PR check surface, and either an
-  allowed PR Assistant workflow run path or an approved external v4 run id.
-- `required_checks_gate`: reads branch-protection required checks from GitHub
-  and falls back to the manifest context list when that surface is unavailable.
-- `draft_state_gate`: blocks draft pull requests.
+## What replaces it
 
-Docs-only pull requests can pass without a PR Assistant receipt. Any non-docs
-or high-risk path still requires trusted PR Assistant evidence for the current
-head.
+Merge readiness is the required `Merglbot PR Assistant v6` check on the exact
+head plus the agent merge readback of its receipt markers
+(`merglbot-public/docs/MERGLBOT_PR_ASSISTANT_V6.md` §5a). A repository that
+still requires a `final-merge-readiness` context keeps a job of that name that
+only runs local self-tests; it must never fail because the V6 receipt has not
+landed yet.
 
-The check polls bounded asynchronous dependencies for up to 12 minutes. It only
-retries while required checks are still settling or the latest PR Assistant
-receipt is missing/stale for the current head; current-head `changes_required`,
-`partial_authority`, degraded, or blocked receipts still fail immediately.
+Tenant copies at retirement (repo-local, not callers of this hub file):
 
-Local validation:
-
-```bash
-python3 -m py_compile scripts/pr-assistant/final-merge-readiness.py
-python3 scripts/pr-assistant/final-merge-readiness.py --self-test
-```
+- `merglbot-denatura/acquisition-analysis`: `scripts/check-final-merge-readiness.mjs`
+  (parser self-test inside the `ci` job).
+- `merglbot-proteinaco/acquisition-analysis`: `.github/workflows/final-merge-readiness.yml`
+  + `scripts/check-final-merge-readiness.mjs` (required context, self-test only).
 
 ## Policy Engine Bootstrap
 
-`scripts/policy-engine/final_merge_readiness.py` is the stdlib-only bootstrap
-evaluator used before the protected-base final merge readiness evaluator is
-available in a repository. It is covered by
+`scripts/policy-engine/final_merge_readiness.py` is the stdlib-only policy
+engine (modes `final-merge-readiness` and `terraform-approval`). It is out of
+scope of this retirement: it also carries the `terraform-approval` mode and
+its own tests, so removing it is a separate decision. It is covered by
 `.github/workflows/policy-engine-tests.yml` and
 `tests/test_final_merge_readiness.py`.
 

@@ -33,11 +33,9 @@ jobs:
           bash scripts/pr-assistant/secret-scan-patterns-smoke-test.sh
           python3 -m py_compile scripts/pr-assistant/verify-review-receipt.py
           python3 -m py_compile scripts/pr-assistant/pr-assistant-v4-evidence-canary.py
-          python3 -m py_compile scripts/pr-assistant/final-merge-readiness.py
           python3 scripts/pr-assistant/verify-review-receipt.py --self-test
           python3 scripts/pr-assistant/pr-assistant-v4-evidence-canary.py self-test
           python3 scripts/pr-assistant/pr-assistant-v4-evidence-canary.py validate-config
-          python3 scripts/pr-assistant/final-merge-readiness.py --self-test
       - name: Run repo contract tests (unittest discover collects TestCase only)
         run: |
           set -euo pipefail
