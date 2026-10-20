@@ -11,7 +11,7 @@ from typing import Any, Dict
 
 import click
 import yaml
-from github import Github
+from github import Github, UnknownObjectException
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -347,9 +347,15 @@ Status: {"⚠️ THRESHOLDS EXCEEDED" if threshold_result['threshold_exceeded'] 
 
 def find_open_monthly_issue(repo: Any, title: str) -> Any:
     """Return the oldest open cost-monitoring issue with exactly this title, or None."""
+    # PyGithub < 2.2 accepts only Label objects in get_issues(labels=...), so resolve the
+    # label first; a missing label means no carrier can exist yet.
+    try:
+        label = repo.get_label("cost-monitoring")
+    except UnknownObjectException:
+        return None
     matches = [
         issue
-        for issue in repo.get_issues(state="open", labels=["cost-monitoring"])
+        for issue in repo.get_issues(state="open", labels=[label])
         if issue.title == title and getattr(issue, "pull_request", None) is None
     ]
     return min(matches, key=lambda issue: issue.number) if matches else None
