@@ -1,5 +1,5 @@
 # Build stage
-FROM node:24-alpine AS builder
+FROM node:25-alpine AS builder
 
 WORKDIR /app
 
@@ -16,7 +16,7 @@ COPY . .
 RUN npm run build
 
 # Production stage
-FROM nginx:1.24-alpine
+FROM nginx:1.29-alpine
 
 # Install curl for health checks, gettext for envsubst, and su-exec for privilege dropping
 RUN apk add --no-cache curl gettext su-exec
