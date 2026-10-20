@@ -11,7 +11,7 @@ from typing import Any, Dict
 
 import click
 import yaml
-from github import Github
+from github import Github, UnknownObjectException
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -345,6 +345,22 @@ Status: {"⚠️ THRESHOLDS EXCEEDED" if threshold_result['threshold_exceeded'] 
     console.print(Panel(summary, title="Final Summary", border_style="bold"))
 
 
+def find_open_monthly_issue(repo: Any, title: str) -> Any:
+    """Return the oldest open cost-monitoring issue with exactly this title, or None."""
+    # PyGithub < 2.2 accepts only Label objects in get_issues(labels=...), so resolve the
+    # label first; a missing label means no carrier can exist yet.
+    try:
+        label = repo.get_label("cost-monitoring")
+    except UnknownObjectException:
+        return None
+    matches = [
+        issue
+        for issue in repo.get_issues(state="open", labels=[label])
+        if issue.title == title and getattr(issue, "pull_request", None) is None
+    ]
+    return min(matches, key=lambda issue: issue.number) if matches else None
+
+
 def create_github_issue_for_alerts(alerts: list, month: str, data: Dict[str, Any]) -> bool:
     """Create GitHub issue for threshold alerts."""
     try:
@@ -391,10 +407,20 @@ def create_github_issue_for_alerts(alerts: list, month: str, data: Dict[str, Any
         body += "---\n"
         body += "*This issue was automatically created by the Cost Monitoring tool.*"
 
-        # Create issue
-        issue = repo.create_issue(
-            title=f"Cost Threshold Exceeded - {month}", body=body, labels=["cost-monitoring", "alert", "automated"]
-        )
+        title = f"Cost Threshold Exceeded - {month}"
+        carrier = find_open_monthly_issue(repo, title)
+        if carrier is not None:
+            # One carrier issue per month: the daily snapshot is a comment on it, never a
+            # new issue (merglbot-core/infra#3826 decision D-1, 16 Oct 2026).
+            carrier.create_comment(
+                body.replace(
+                    f"## Cost Threshold Alert - {month}", f"## Cost Threshold Alert - {month} — daily snapshot", 1
+                )
+            )
+            logger.info(f"Commented on monthly GitHub issue #{carrier.number}")
+            return True
+
+        issue = repo.create_issue(title=title, body=body, labels=["cost-monitoring", "alert", "automated"])
 
         logger.info(f"Created GitHub issue #{issue.number}")
         return True

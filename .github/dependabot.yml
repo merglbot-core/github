@@ -42,3 +42,22 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+
+  # Base images (merglbot-core/github#772): without this lane a base image is never
+  # bumped and EOL runtimes or unpatched OS packages stay in production unnoticed.
+  # Monthly, one grouped PR, 7-day cooldown like the other lanes (github#916).
+  - package-ecosystem: "docker"
+    directories:
+      - "/dashboard"
+    schedule:
+      interval: "monthly"
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+    groups:
+      docker-base:
+        patterns:
+          - "*"
