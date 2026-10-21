@@ -316,8 +316,9 @@ running revision:
   `latest`. Blank and `#` lines are ignored. A secret that is not listed stays mounted. These are
   references only, never values.
 - The optional secret `NODE_AUTH_TOKEN` reaches `docker build` as the `node_auth_token` BuildKit secret,
-  for a Dockerfile that installs private GitHub Packages. The caller passes its own `github.token` from a
-  job that grants `packages: read`. This workflow requests no new permission.
+  for a Dockerfile that installs private GitHub Packages. The caller passes `${{ secrets.GITHUB_TOKEN }}`
+  from a job that grants `packages: read`; `${{ github.token }}` evaluates empty in a `secrets:` block of a
+  reusable-workflow call (merglbot-admin run 39580884222). This workflow requests no new permission.
 ## reusable-frontend-artifact-gate.yml
 
 A `uses:` job gets a fresh checkout of the sources, so it can only gate a build that an earlier job
