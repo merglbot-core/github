@@ -40,6 +40,14 @@ existing deploy job permissions. Both deploy and release already required
 debounce does not raise that caller permission floor. GitHub validates nested job
 permissions before evaluating their guards, so callers must retain the complete
 existing permission contract listed below even when debounce is disabled.
+The timer read uses `GET /repos/{owner}/{repo}/environments/{environment_name}`.
+GitHub's [Get an environment permission contract](https://docs.github.com/en/rest/deployments/environments#get-an-environment)
+lists **Actions: read** for GitHub App installation tokens, including access to
+private repositories. The job uses its repository-scoped `github.token`; it does
+not create or update environments. **Administration: write** belongs to the
+separate environment mutation endpoint and is not requested here. A failed GET
+still refuses admission; production caller activation must verify this read with
+the actual job token rather than infer access from an owner's CLI token.
 Shared concurrency preserves a running deployment; GitHub may replace an older
 pending deployment with a newer pending one. Only the current main head with a
 fresh successful CI result may enter the deploy job after the native timer.
