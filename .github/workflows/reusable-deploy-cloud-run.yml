@@ -861,6 +861,10 @@ jobs:
           if [ "${#CROSS_PROJECT_SECRET_LINES[@]}" -gt 0 ]; then
             echo "::notice::Base rollout succeeded, exporting fresh service YAML for cross-project alias reconcile"
 
+            if [ -n "$STAGED_HEALTH_PATH" ]; then
+              gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format=json > "$STAGE_DIR/alias-origin.json"
+            fi
+
             if ! gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format=export > /tmp/service.yaml; then
               echo "::error::Failed to export service YAML for $SERVICE"
               exit 1
@@ -869,6 +873,10 @@ jobs:
             if [ ! -s /tmp/service.yaml ]; then
               echo "::error::Exported service YAML is empty"
               exit 1
+            fi
+
+            if [ -n "$STAGED_HEALTH_PATH" ]; then
+              cp /tmp/service.yaml "$STAGE_DIR/alias-export.yaml"
             fi
 
             write_xproj_patcher
@@ -892,15 +900,29 @@ jobs:
               STAGE_CANDIDATE="${SERVICE}-${STAGE_SUFFIX}-final"
               [ "${#STAGE_CANDIDATE}" -le 63 ] || exit 1
               gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format=json > "$STAGE_DIR/before-alias.json"
-              python3 - "$STAGE_CANDIDATE" "$STAGE_DIR" <<'STAGE_ALIAS_PY'
+              python3 - "$STAGE_CANDIDATE" "$STAGE_DIR" "${SERVICE}-${STAGE_SUFFIX}-base" <<'STAGE_ALIAS_PY'
           import json, sys, yaml
           from pathlib import Path
           directory = Path(sys.argv[2])
           sys.path.insert(0, str(directory))
           from policy import serving_state, require
           rollback = json.loads((directory / 'rollback.json').read_text())
-          current = serving_state(json.loads((directory / 'before-alias.json').read_text()))
+          live = json.loads((directory / 'before-alias.json').read_text())
+          origin = json.loads((directory / 'alias-origin.json').read_text())
+          exported = yaml.safe_load((directory / 'alias-export.yaml').read_text())
+          current = serving_state(live)
           require(current == rollback, 'traffic changed before alias reconciliation')
+          for document in (origin, live):
+              require(document['status'].get('latestCreatedRevisionName') == sys.argv[3]
+                      and document['status'].get('latestReadyRevisionName') == sys.argv[3],
+                      'base revision superseded before alias reconciliation')
+              require(document['spec']['template'].get('metadata', {}).get('name') == sys.argv[3],
+                      'foreign template before alias reconciliation')
+          require(origin.get('metadata') == live.get('metadata')
+                  and origin.get('spec') == live.get('spec'),
+                  'service configuration changed during alias export')
+          require(exported.get('spec') == origin.get('spec'),
+                  'export does not match pinned base configuration')
           with open('/tmp/service.yaml') as stream:
               service = yaml.safe_load(stream)
           service['spec']['template'].setdefault('metadata', {})['name'] = sys.argv[1]

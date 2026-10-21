@@ -31,6 +31,16 @@ if args[:3] == ['run', 'services', 'describe']:
             state['status']['traffic'] = [{'revisionName': 'service-foreign', 'percent': 100}]
             save()
         print(yaml.safe_dump(state))
+        if failure in ('foreign-no-traffic', 'foreign-config-only'):
+            if failure == 'foreign-no-traffic':
+                state['status'].update(latestCreatedRevisionName='service-foreign',
+                                      latestReadyRevisionName='service-foreign')
+                state['spec']['template']['metadata']['name'] = 'service-foreign'
+            state['metadata']['generation'] += 1
+            state['status']['observedGeneration'] = state['metadata']['generation']
+            state['spec']['template']['spec']['containers'][0]['env'].append(
+                {'name': 'FOREIGN_NON_SECRET_CONFIG', 'value': 'preserve'})
+            save()
     elif '--format=value(status.url)' in args:
         print('https://service.invalid')
     else:
@@ -146,6 +156,17 @@ class CompleteDeployStepTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(state['status']['traffic'][0]['revisionName'], 'service-foreign')
         self.assertFalse(any(call[:3] == ['run', 'services', 'replace'] for call in calls))
+
+    def test_foreign_nonserving_revision_or_config_is_not_overwritten(self):
+        for failure in ('foreign-no-traffic', 'foreign-config-only'):
+            with self.subTest(failure=failure):
+                result, calls, state = self.execute(failure=failure)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(state['status']['traffic'][0]['revisionName'], 'service-old')
+                self.assertIn({'name': 'FOREIGN_NON_SECRET_CONFIG', 'value': 'preserve'},
+                              state['spec']['template']['spec']['containers'][0]['env'])
+                self.assertFalse(any(call[:3] in (['run', 'services', 'replace'],
+                                                 ['run', 'services', 'update-traffic']) for call in calls))
 
 
 if __name__ == '__main__':
