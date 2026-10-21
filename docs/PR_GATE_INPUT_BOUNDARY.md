@@ -30,3 +30,8 @@ Neither feature branch is a landed dependency or authorised runtime change.
 Both PRs remain DRAFT: merge, workflow activation and downstream caller
 verification require their separate legitimate stage. Preserve the original
 workflow and test postimages; do not weaken the tests to pass the old workflow.
+
+Status 21. 10. 2026: the boundary landed in merglbot-core/github#1014 (merge
+`0cc5eefb`). `tests/test_pr_gate_branch_input.py` is its regression test: it
+reads the `pr-gate.yml` on `main` and fails if the input returns to the script
+source. It changes no workflow (merglbot-core/github#961, #1015 superseded).
