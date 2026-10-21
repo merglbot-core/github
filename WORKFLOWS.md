@@ -1,5 +1,113 @@
 # Workflow Catalogue
 
+## Staged deployment and native debounce (github#962)
+
+The secrets-based `reusable-deploy-cloud-run.yml` provides two explicit caller
+inputs; existing callers keep the old deployment mode until their reviewed pins
+and inputs change. Source delivery alone does not activate either feature.
+
+- `debounce_environment`: a dedicated, owner-configured environment with exactly
+  one ten-minute wait timer. Keep the production/preview environment and its
+  existing protections on the deploy job. The timer job has only read permissions
+  and no cloud identity. GitHub performs the wait before allocating its runner;
+  there is no paid ten-minute shell sleep. The admission checks the live timer,
+  this workflow run's age, the triggering same-repository successful `ci` push
+  run, its current conclusion, and current `main`. A superseded head skips the
+  deploy; a missing timer, API error, or changed CI result refuses admission.
+  Manual dispatch is deliberately not inferred to be green CI in this mode.
+- `staged_health_path`: the reviewed HTTP startup endpoint, `/healthz` for the
+  admin and PM targets. The workflow captures the existing resolved traffic and
+  tags, stages a digest-pinned, named revision with `--no-traffic`, and preserves
+  that split. All cross-project references are supplied through native SDK
+  `--update-secrets` before startup; staged mode never patches service YAML
+  after creating an incomplete candidate. It validates the final
+  revision's service/project identity, observed generation, digest, successful
+  HTTP startup probe and unchanged traffic/ingress before promoting that exact
+  revision. The configured probe uses port 8080, period 10 seconds, timeout 5
+  seconds and 24 attempts. The hub helper is embedded from the same source;
+  tests reject drift between the embedded and standalone implementations.
+
+Staging requires an existing service with resolved traffic and `RoutesReady=True`.
+A failed latest-created candidate does not prevent recovery when the existing
+routes remain ready; the new candidate still requires its own Ready and
+ContainerHealthy proof. Tags are captured as resolved revision identities, even
+when originally bound to LATEST, and must retain that identity after promotion.
+
+The debounce contract assumes a workflow named `ci` and the branch `main`.
+Debounce requests only `contents: read` and `actions: read`, a subset of the
+existing deploy job permissions. Both deploy and release already required
+`actions: read` before this feature (hub baseline `8ffa841`); enabling or disabling
+debounce does not raise that caller permission floor. GitHub validates nested job
+permissions before evaluating their guards, so callers must retain the complete
+existing permission contract listed below even when debounce is disabled.
+The timer read uses `GET /repos/{owner}/{repo}/environments/{environment_name}`.
+GitHub's [Get an environment permission contract](https://docs.github.com/en/rest/deployments/environments#get-an-environment)
+lists **Actions: read** for GitHub App installation tokens, including access to
+private repositories. The job uses its repository-scoped `github.token`; it does
+not create or update environments. **Administration: write** belongs to the
+separate environment mutation endpoint and is not requested here. A failed GET
+still refuses admission; production caller activation must verify this read with
+the actual job token rather than infer access from an owner's CLI token.
+Shared concurrency preserves a running deployment; GitHub may replace an older
+pending deployment with a newer pending one. Only the current main head with a
+fresh successful CI result may enter the deploy job after the native timer.
+
+HTTP startup success proves the configured endpoint at startup, not full business
+acceptance. Cloud Run accepts HTTP success/redirect responses for this probe;
+caller review must establish that the chosen endpoint cannot redirect to a login
+or unrelated healthy page. Production business smoke checks remain necessary.
+The private admin ingress is not opened to test a tag URL. The deploy group is
+scoped by project, region and service and never cancels an executing deployment.
+External writers must respect that serialization; the pre-promotion readback is
+not a Cloud Run cross-client transaction lock.
+
+The summary records the exact pre-deploy revision split for rollback. On failure
+before promotion the old split is retained; a failed post-promotion readback is an
+incident requiring fresh traffic evidence before rollback, never a blind rewrite
+of a possible concurrent owner's change. This feature does not delete revisions,
+alter IAM, change the original acceptance windows, or prove the deploy-count and
+30-minute freshness targets. Timer activation and workflow merges retain their
+owner-only boundary. Consumer rollout and runtime acceptance remain under #962.
+
+Staged deployment preserves service-wide authentication: it reads the existing
+IAM policy and invoker-IAM-check setting before deploying, requires anonymous
+invocation to match `allow_unauthenticated`, and omits both authentication mutation
+flags. Access mismatches or ambiguous public grants require a separate authorized
+IAM change; staging does not perform it. The caller needs permission to read the
+service IAM policy; a failed read stops before deployment.
+
+### Returning from staged to legacy deployment
+
+Disabling `staged_health_path` alone is **not a rollback**. `--no-traffic` and
+named-revision promotion leave traffic pinned to a revision. A later legacy
+deployment may create a healthy revision without serving it; a successful deploy
+command does not establish serving acceptance in this state.
+
+Before disabling staged mode, prepare a separately owner-authorized transition:
+
+1. Serialize against every deployment and external traffic writer. Read the live
+   service and record its resolved traffic split, tags, latest-created and
+   latest-ready revisions, and the currently serving revision image digests.
+   Retain the exact named-revision split as the rollback target.
+2. Establish that the latest-created revision equals the latest-ready revision
+   and the intended healthy serving revision. Verify its immutable image digest,
+   source binding, startup health and business smoke evidence. If an unserved,
+   failed or foreign candidate is latest, stop: switching to LATEST could expose
+   it. Resolve that candidate through a separately reviewed deployment first.
+3. With fresh unchanged revision/traffic evidence, execute the approved Cloud Run
+   traffic transition `gcloud run services update-traffic SERVICE --project PROJECT
+   --region REGION --to-latest`. This is a production traffic mutation, never an
+   automatic effect of disabling an input. Preserve existing tags and ingress.
+4. Read the service back and require 100% LATEST traffic resolving to the verified
+   intended revision, unchanged tags and ingress, and successful business smoke.
+   Only then disable staged mode through the authorized caller change. Verify
+   the next legacy deployment actually serves its intended digest; its CLI exit
+   status alone is insufficient.
+5. If verification fails, treat it as an incident. Re-read current traffic and
+   writers before an authorized rollback to the recorded named-revision split;
+   never overwrite a concurrent change blindly. Restoring a named split requires
+   keeping staged mode until a new verified LATEST transition succeeds.
+
 This repository hosts all reusable and scheduled GitHub Actions workflows for the Merglbot platform.  
 Every consumer **must** follow [Rulebook v2](https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md), [PR Policy](https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md), [Branch Protection](https://github.com/merglbot-public/docs/blob/main/BRANCH_PROTECTION.md), and [MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md).
 
