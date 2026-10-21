@@ -45,6 +45,17 @@ else:
 
 
 class WorkflowStagingTests(unittest.TestCase):
+    def test_debounce_does_not_expand_existing_caller_permissions(self):
+        jobs = yaml.safe_load(WORKFLOW.read_text())['jobs']
+        # GitHub validates every nested job even when its runtime guard is false.
+        # A caller satisfying the existing deploy contract must admit debounce.
+        permissions = jobs['debounce']['permissions']
+        self.assertEqual(permissions, {'contents': 'read', 'actions': 'read'})
+        levels = {'none': 0, 'read': 1, 'write': 2}
+        for scope, level in permissions.items():
+            self.assertLessEqual(levels[level], levels[jobs['deploy']['permissions'].get(scope, 'none')])
+        self.assertEqual(jobs['publish_release_sbom']['permissions']['actions'], 'read')
+
     def test_all_run_steps_fit_github_expression_length_limit(self):
         for job in yaml.safe_load(WORKFLOW.read_text())['jobs'].values():
             for step in job.get('steps', []):

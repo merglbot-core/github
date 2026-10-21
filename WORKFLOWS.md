@@ -34,6 +34,12 @@ ContainerHealthy proof. Tags are captured as resolved revision identities, even
 when originally bound to LATEST, and must retain that identity after promotion.
 
 The debounce contract assumes a workflow named `ci` and the branch `main`.
+Debounce requests only `contents: read` and `actions: read`, a subset of the
+existing deploy job permissions. Both deploy and release already required
+`actions: read` before this feature (hub baseline `8ffa841`); enabling or disabling
+debounce does not raise that caller permission floor. GitHub validates nested job
+permissions before evaluating their guards, so callers must retain the complete
+existing permission contract listed below even when debounce is disabled.
 Shared concurrency preserves a running deployment; GitHub may replace an older
 pending deployment with a newer pending one. Only the current main head with a
 fresh successful CI result may enter the deploy job after the native timer.
