@@ -39,6 +39,10 @@ dependency review, PR hygiene checks and docs governance. Steps are copied verba
 no rule, threshold, action pin or message changed. GitHub bills `ceil(seconds/60)` **per job**,
 so three 7-12 s jobs cost 3 minutes while one ~30 s job costs 1 (github#877).
 
+The merge-commit check stays advisory in both files: a merge commit is a warning. Its REST read is
+retried three times and paginated, and if it still fails the step warns instead of failing, so a
+GitHub API incident no longer blocks every PR (github#767).
+
 Gitleaks used to stay separate because the job took 53-58 s. Measured again 22. 9. 2026 on
 merglbot-extractors/shoptet-extractor, **45 of those seconds were `Upload SARIF report`** and the
 scan itself was ~1 s, so `gitleaks: true` now folds the scan into this job as an opt-in step
