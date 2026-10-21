@@ -235,9 +235,13 @@ jobs:
           # Two single commits are enough for a tree diff; no history is fetched.
           # An unreadable base resolves to scanning, never to skipping.
           scan=true
+          # Compare the configured Dockerfile as an exact, normalised path (a leading
+          # ./ is dropped) so a custom location is never treated as a regex.
+          dockerfile_path="${DOCKERFILE#./}"
           if git fetch --quiet --depth=1 origin "${BASE_SHA}"; then
             changed="$(git diff --name-only "${BASE_SHA}" HEAD)"
-            if ! grep -E -q "(^|/)(Dockerfile[^/]*|requirements[^/]*\.(txt|in)|${DOCKERFILE})$" <<< "${changed}"; then
+            if ! grep -E -q '(^|/)(Dockerfile[^/]*|requirements[^/]*\.(txt|in))$' <<< "${changed}" \
+              && ! grep -F -x -q -- "${dockerfile_path}" <<< "${changed}"; then
               scan=false
             fi
           fi
