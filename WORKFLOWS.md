@@ -61,6 +61,38 @@ alter IAM, change the original acceptance windows, or prove the deploy-count and
 30-minute freshness targets. Timer activation and workflow merges retain their
 owner-only boundary. Consumer rollout and runtime acceptance remain under #962.
 
+### Returning from staged to legacy deployment
+
+Disabling `staged_health_path` alone is **not a rollback**. `--no-traffic` and
+named-revision promotion leave traffic pinned to a revision. A later legacy
+deployment may create a healthy revision without serving it; a successful deploy
+command does not establish serving acceptance in this state.
+
+Before disabling staged mode, prepare a separately owner-authorized transition:
+
+1. Serialize against every deployment and external traffic writer. Read the live
+   service and record its resolved traffic split, tags, latest-created and
+   latest-ready revisions, and the currently serving revision image digests.
+   Retain the exact named-revision split as the rollback target.
+2. Establish that the latest-created revision equals the latest-ready revision
+   and the intended healthy serving revision. Verify its immutable image digest,
+   source binding, startup health and business smoke evidence. If an unserved,
+   failed or foreign candidate is latest, stop: switching to LATEST could expose
+   it. Resolve that candidate through a separately reviewed deployment first.
+3. With fresh unchanged revision/traffic evidence, execute the approved Cloud Run
+   traffic transition `gcloud run services update-traffic SERVICE --project PROJECT
+   --region REGION --to-latest`. This is a production traffic mutation, never an
+   automatic effect of disabling an input. Preserve existing tags and ingress.
+4. Read the service back and require 100% LATEST traffic resolving to the verified
+   intended revision, unchanged tags and ingress, and successful business smoke.
+   Only then disable staged mode through the authorized caller change. Verify
+   the next legacy deployment actually serves its intended digest; its CLI exit
+   status alone is insufficient.
+5. If verification fails, treat it as an incident. Re-read current traffic and
+   writers before an authorized rollback to the recorded named-revision split;
+   never overwrite a concurrent change blindly. Restoring a named split requires
+   keeping staged mode until a new verified LATEST transition succeeds.
+
 This repository hosts all reusable and scheduled GitHub Actions workflows for the Merglbot platform.  
 Every consumer **must** follow [Rulebook v2](https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md), [PR Policy](https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md), [Branch Protection](https://github.com/merglbot-public/docs/blob/main/BRANCH_PROTECTION.md), and [MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md).
 
