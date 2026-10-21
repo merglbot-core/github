@@ -5,15 +5,31 @@
 # inventory. S5 preventive components 3, 4 and 5a from the 2026-08-05 external security audit
 # (merglbot-core/infra#1912).
 #
-# Usage in a caller workflow, right after `npm run build`:
+# Usage. A `uses:` job runs on its own runner with a fresh checkout of the SOURCES, so it can
+# never see a `dist/` that another job built (github#762). Upload the build from the build job
+# and name the artifact here:
 #
 #   jobs:
+#     build:
+#       steps:
+#         - run: npm ci && npm run build
+#         - uses: actions/upload-artifact@<sha>
+#           # include-hidden-files: v4+ drops dot-paths by default, which would lose
+#           # .well-known/security.txt and fail the required-path check.
+#           with: { name: dist, path: dist, include-hidden-files: true }
 #     artifact-gate:
+#       needs: build
 #       uses: merglbot-core/github/.github/workflows/reusable-frontend-artifact-gate.yml@<sha>
 #       with:
+#         artifact_name: dist
 #         dist_path: dist
 #         baseline_path: security/frontend-artifact-contract.json
 #         extra_assets_path: packages        # optional; see below
+#
+# Without `artifact_name` the job finds no `dist/` and exits 2 ("cannot conclude"). Callers that
+# build inside one job can instead run the gate CLI as a step right after `npm run build`
+# (`node scripts/frontend-artifact-gate/gate.mjs --dist dist --baseline ...`), as
+# merglbot-public/website does.
 #
 # `extra_assets_path` is not decoration. merglbot-public/website#470 — the one confirmed
 # client-data leak in this estate — was twelve PNGs under `packages/*/src/**/assets/`, bundled
@@ -48,6 +64,11 @@ on:
         required: false
         default: ''
         type: string
+      artifact_name:
+        description: 'Name of an artifact uploaded by an earlier job that holds the build; downloaded into dist_path before the gate runs'
+        required: false
+        default: ''
+        type: string
       gate_ref:
         description: 'Ref of merglbot-core/github to take the gate from'
         required: false
@@ -66,6 +87,13 @@ jobs:
     steps:
       - name: Checkout caller repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Download the build artifact
+        if: ${{ inputs.artifact_name != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: ${{ inputs.dist_path }}
 
       - name: Checkout the gate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

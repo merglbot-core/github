@@ -1,0 +1,35 @@
+{
+  "required_paths": [
+    {
+      "path": "robots.txt",
+      "reason": "SEO/hygiene",
+      "permanent": true
+    },
+    {
+      "path": ".well-known/security.txt",
+      "reason": "WEB-HYGIENE, external audit 2026-08",
+      "permanent": true
+    }
+  ],
+  "banned_globs": [
+    {
+      "glob": "**/*.map",
+      "reason": "source maps ship original sources",
+      "permanent": true
+    },
+    {
+      "glob": "**/.env*",
+      "reason": "never ship env files",
+      "permanent": true
+    }
+  ],
+  "allowed_extensions": [
+    ".js",
+    ".css",
+    ".html",
+    ".txt",
+    ".png",
+    ".svg"
+  ],
+  "min_files": 3
+}
