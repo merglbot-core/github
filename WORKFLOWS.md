@@ -178,3 +178,10 @@ jobs:
     needs: [runtime-changes]
     if: ${{ !cancelled() && needs.runtime-changes.outputs.runtime != 'false' }}
 ```
+
+## reusable-deploy-cloud-run-wif.yml: env_vars
+
+`env_vars` takes the same comma-separated `NAME=value` list as the secrets-based variant. It is set together
+with `ENVIRONMENT` and **replaces** the service env, so pass the complete list. Plain values only: secret
+mounts are not part of this input (github#709). Callers that need Secret Manager mounts stay on the
+secrets-based variant until a reviewed `secrets` input exists.
