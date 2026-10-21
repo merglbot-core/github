@@ -174,3 +174,33 @@ class StagedRolloutPolicyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExistingAccessTests(unittest.TestCase):
+    def test_private_and_public_contracts(self):
+        service = evidence()[0]
+        self.assertFalse(policy.verify_access(service, {}, "false")["anonymous_invocation"])
+        public = {"bindings": [{"role": "roles/run.invoker", "members": ["allUsers"]}]}
+        self.assertTrue(policy.verify_access(service, public, "true")["anonymous_invocation"])
+        for iam, requested in (({}, "true"), (public, "false")):
+            with self.assertRaises(policy.Refused):
+                policy.verify_access(service, iam, requested)
+
+    def test_disabled_iam_check_is_public_even_without_binding(self):
+        service = evidence()[0]
+        service["metadata"]["annotations"]["run.googleapis.com/invoker-iam-disabled"] = "true"
+        self.assertTrue(policy.verify_access(service, {}, "true")["anonymous_invocation"])
+        with self.assertRaises(policy.Refused):
+            policy.verify_access(service, {}, "false")
+
+    def test_unknown_and_conditional_grants_fail_closed(self):
+        service = evidence()[0]
+        for iam in ([], {"bindings": {}}, {"bindings": [None]},
+                    {"bindings": [{"role": "roles/custom", "members": ["allUsers"]}]},
+                    {"bindings": [{"role": "roles/run.invoker", "members": ["allUsers"],
+                                   "condition": {"expression": "true"}}]}):
+            with self.subTest(iam=iam), self.assertRaises(policy.Refused):
+                policy.verify_access(service, iam, "false")
+        service["metadata"]["annotations"]["run.googleapis.com/invoker-iam-disabled"] = "unknown"
+        with self.assertRaises(policy.Refused):
+            policy.verify_access(service, {}, "false")

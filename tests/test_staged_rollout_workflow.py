@@ -34,6 +34,8 @@ if args[:3] == ['run', 'services', 'describe']:
     n = int(count.read_text()) if count.exists() else 0
     count.write_text(str(n + 1))
     print((base / ['before.json', 'current.json', 'after.json'][n]).read_text())
+elif args[:3] == ['run', 'services', 'get-iam-policy']:
+    print('{{}}')
 elif args[:3] == ['run', 'revisions', 'describe']:
     print((base / 'revision.json').read_text())
 elif args[:3] == ['run', 'services', 'update-traffic']:
@@ -102,7 +104,7 @@ class WorkflowStagingTests(unittest.TestCase):
             stub.chmod(0o755)
             env = {**os.environ, 'PATH': str(root) + os.pathsep + str(Path(sys.executable).parent) + os.pathsep + os.environ['PATH'],
                    'FIXTURE': directory, 'STAGED_POLICY_FILE': str(root / 'policy-source.py'), 'STAGED_HEALTH_PATH': '/healthz', 'STAGED_IMAGE': IMAGE,
-                   'DEBOUNCE_ENVIRONMENT': '',
+                   'DEBOUNCE_ENVIRONMENT': '', 'STAGED_REQUESTED_PUBLIC': 'false',
                    'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1', 'SERVICE': 'service',
                    'REGION': 'europe-west1', 'PROJECT_ID': 'project',
                    'GITHUB_STEP_SUMMARY': str(root / 'summary')}

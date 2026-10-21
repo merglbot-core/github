@@ -300,3 +300,10 @@ the upload, download and gate path on every change.
 `requirements*.txt|.in` file it builds the image locally (never pushed) and scans it with Trivy
 (HIGH/CRITICAL, ignore-unfixed). A filesystem scan cannot see the base image OS packages (github#775).
 The required `Python CI` job is unchanged; an unreadable base commit resolves to scanning.
+
+Staged deployment preserves service-wide authentication: it reads the existing
+IAM policy and invoker-IAM-check setting before deploying, requires anonymous
+invocation to match `allow_unauthenticated`, and omits both authentication mutation
+flags. Access mismatches or ambiguous public grants require a separate authorized
+IAM change; staging does not perform it. The caller needs permission to read the
+service IAM policy; a failed read stops before deployment.

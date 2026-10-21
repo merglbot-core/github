@@ -220,21 +220,21 @@ jobs:
             echo "::error::Create a dedicated deploy SA in an active target project and update the repo variable."
             exit 1
           fi
-     
+
       - name: Authenticate to Google Cloud (WIF)
         id: auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
           service_account: ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
-      
+
       - name: Set up Cloud SDK
         if: ${{ inputs.install_gcloud }}
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db  # v3
-      
+
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ env.GAR_LOCATION }}-docker.pkg.dev
-      
+
       # Before the build: `adoptable` verifies an existing tag's signature (github#909).
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
@@ -382,7 +382,7 @@ jobs:
           limit-severities-for-sarif: true
           exit-code: '0'
           ignore-unfixed: true
-      
+
       - name: Upload Trivy results
         uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4
         if: ${{ always() && hashFiles('trivy-results.sarif') != '' }}
@@ -400,7 +400,7 @@ jobs:
           severity: 'CRITICAL'
           exit-code: '1'
           ignore-unfixed: true
-      
+
       # Container Security: SBOM Generation
       - name: Generate SBOM
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26  # v0.24.2
@@ -408,14 +408,14 @@ jobs:
           image: ${{ steps.build.outputs.full_image }}
           format: 'cyclonedx-json'
           output-file: 'sbom.json'
-      
+
       - name: Upload SBOM as artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
           name: 'sbom-${{ github.sha }}'
           path: 'sbom.json'
           retention-days: 365
-      
+
       # Container Security: Cosign Signing (Keyless with OIDC)
       - name: Sign container image
         env:
@@ -452,7 +452,7 @@ jobs:
           fi
           cosign sign --yes "$IMAGE_REF"
           # END cosign-sign
-      
+
       - name: Materialize pinned staging policy
         id: staged_policy
         if: ${{ inputs.staged_health_path != '' }}
@@ -485,6 +485,34 @@ jobs:
           def require(value, message):
               if not value:
                   raise Refused(message)
+
+
+          def verify_access(service, iam, requested):
+              """Check existing anonymous invocation without changing service-wide IAM.
+
+              Conditional or nonstandard public grants need a separately reviewed access
+              contract. An absent bindings list is a valid empty get-iam-policy response.
+              """
+              require(requested in ("true", "false"), "invalid requested access state")
+              require(isinstance(iam, dict), "invalid IAM policy")
+              bindings = iam.get("bindings", [])
+              require(isinstance(bindings, list), "invalid IAM bindings")
+              disabled = service.get("metadata", {}).get("annotations", {}).get(
+                  "run.googleapis.com/invoker-iam-disabled", "false")
+              require(disabled in ("true", "false"), "unknown invoker IAM check state")
+              public = disabled == "true"
+              for binding in bindings:
+                  require(isinstance(binding, dict), "invalid IAM binding")
+                  members = binding.get("members")
+                  require(isinstance(members, list) and all(isinstance(m, str) for m in members)
+                          and isinstance(binding.get("role"), str), "invalid IAM grant")
+                  if "allUsers" in members:
+                      require(binding["role"] == "roles/run.invoker" and not binding.get("condition"),
+                              "ambiguous anonymous access grant")
+                      public = True
+              require(public == (requested == "true"),
+                      "existing access differs; separate authorized IAM change required")
+              return {"anonymous_invocation": public, "iam_mutation": False}
 
 
           def serving_state(service):
@@ -579,6 +607,8 @@ jobs:
               parser = argparse.ArgumentParser(description=__doc__)
               parser.add_argument("--before", type=Path, required=True)
               parser.add_argument("--snapshot", action="store_true")
+              parser.add_argument("--iam-policy", type=Path)
+              parser.add_argument("--requested-public", choices=("true", "false"))
               parser.add_argument("--current", type=Path)
               parser.add_argument("--revision", type=Path)
               parser.add_argument("--expected-revision")
@@ -586,6 +616,11 @@ jobs:
               parser.add_argument("--health-path")
               args = parser.parse_args()
               try:
+                  if args.iam_policy:
+                      print(json.dumps(verify_access(json.loads(args.before.read_text()),
+                                                    json.loads(args.iam_policy.read_text()),
+                                                    args.requested_public), sort_keys=True))
+                      return
                   if args.snapshot:
                       print(json.dumps(serving_state(json.loads(args.before.read_text())), sort_keys=True))
                       return
@@ -613,6 +648,7 @@ jobs:
           DEBOUNCE_ENVIRONMENT: ${{ inputs.debounce_environment }}
           GH_TOKEN: ${{ github.token }}
           STAGED_IMAGE: ${{ steps.build.outputs.full_image }}
+          STAGED_REQUESTED_PUBLIC: ${{ inputs.allow_unauthenticated }}
           STAGED_POLICY_FILE: ${{ runner.temp }}/merglbot-staged-policy.py
         run: |
           set -euo pipefail
@@ -754,7 +790,9 @@ jobs:
             cp "$STAGED_POLICY_FILE" "$STAGE_DIR/policy.py"
             gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format=json > "$STAGE_DIR/before.json"
             python3 "$STAGE_DIR/policy.py" --before "$STAGE_DIR/before.json" --snapshot > "$STAGE_DIR/rollback.json"
-            # No mutation until the existing, fully resolved rollback split is validated.
+            gcloud run services get-iam-policy "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format=json > "$STAGE_DIR/iam.json"
+            python3 "$STAGE_DIR/policy.py" --before "$STAGE_DIR/before.json" --iam-policy "$STAGE_DIR/iam.json" --requested-public "$STAGED_REQUESTED_PUBLIC" > "$STAGE_DIR/access.json"
+            # No mutation until rollback and existing access have been validated.
           fi
           # END stage-prepare
 
@@ -776,11 +814,14 @@ jobs:
               "--startup-probe=httpGet.path=${STAGED_HEALTH_PATH},httpGet.port=8080,initialDelaySeconds=0,failureThreshold=24,timeoutSeconds=5,periodSeconds=10")
           fi
 
-          # Authentication flag (default: no-allow-unauthenticated for security)
-          if [ "${{ inputs.allow_unauthenticated }}" = "true" ]; then
-            gcloud_cmd+=("--allow-unauthenticated")
-          else
-            gcloud_cmd+=("--no-allow-unauthenticated")
+          # Staging must never change service-wide access before validation.
+          # Legacy mode retains its existing explicit authentication behavior.
+          if [ -z "$STAGED_HEALTH_PATH" ]; then
+            if [ "${{ inputs.allow_unauthenticated }}" = "true" ]; then
+              gcloud_cmd+=("--allow-unauthenticated")
+            else
+              gcloud_cmd+=("--no-allow-unauthenticated")
+            fi
           fi
 
           if [ -n "$SECRETS_INPUT" ]; then
@@ -976,7 +1017,7 @@ jobs:
 
           URL=$(gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format="value(status.url)")
           echo "url=$URL" >> "$GITHUB_OUTPUT"
-      
+
       - name: Update deployment summary
         if: always()
         run: |

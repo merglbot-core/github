@@ -22,6 +22,34 @@ def require(value, message):
         raise Refused(message)
 
 
+def verify_access(service, iam, requested):
+    """Check existing anonymous invocation without changing service-wide IAM.
+
+    Conditional or nonstandard public grants need a separately reviewed access
+    contract. An absent bindings list is a valid empty get-iam-policy response.
+    """
+    require(requested in ("true", "false"), "invalid requested access state")
+    require(isinstance(iam, dict), "invalid IAM policy")
+    bindings = iam.get("bindings", [])
+    require(isinstance(bindings, list), "invalid IAM bindings")
+    disabled = service.get("metadata", {}).get("annotations", {}).get(
+        "run.googleapis.com/invoker-iam-disabled", "false")
+    require(disabled in ("true", "false"), "unknown invoker IAM check state")
+    public = disabled == "true"
+    for binding in bindings:
+        require(isinstance(binding, dict), "invalid IAM binding")
+        members = binding.get("members")
+        require(isinstance(members, list) and all(isinstance(m, str) for m in members)
+                and isinstance(binding.get("role"), str), "invalid IAM grant")
+        if "allUsers" in members:
+            require(binding["role"] == "roles/run.invoker" and not binding.get("condition"),
+                    "ambiguous anonymous access grant")
+            public = True
+    require(public == (requested == "true"),
+            "existing access differs; separate authorized IAM change required")
+    return {"anonymous_invocation": public, "iam_mutation": False}
+
+
 def serving_state(service):
     """Resolve LATEST from status, never preserve a movable alias as rollback."""
     metadata = service.get("metadata", {})
@@ -114,6 +142,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--before", type=Path, required=True)
     parser.add_argument("--snapshot", action="store_true")
+    parser.add_argument("--iam-policy", type=Path)
+    parser.add_argument("--requested-public", choices=("true", "false"))
     parser.add_argument("--current", type=Path)
     parser.add_argument("--revision", type=Path)
     parser.add_argument("--expected-revision")
@@ -121,6 +151,11 @@ def main():
     parser.add_argument("--health-path")
     args = parser.parse_args()
     try:
+        if args.iam_policy:
+            print(json.dumps(verify_access(json.loads(args.before.read_text()),
+                                          json.loads(args.iam_policy.read_text()),
+                                          args.requested_public), sort_keys=True))
+            return
         if args.snapshot:
             print(json.dumps(serving_state(json.loads(args.before.read_text())), sort_keys=True))
             return

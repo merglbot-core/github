@@ -45,7 +45,13 @@ if args[:3] == ['run', 'services', 'describe']:
         print('https://service.invalid')
     else:
         print(json.dumps(state))
+elif args[:3] == ['run', 'services', 'get-iam-policy']:
+    if failure == 'iam-read':
+        sys.exit(7)
+    print(json.dumps({'bindings': [{'role': 'roles/run.invoker', 'members': ['allUsers']}]}
+                     if os.environ.get('EXISTING_PUBLIC') == 'true' else {}))
 elif args[:2] == ['run', 'deploy']:
+    assert '--allow-unauthenticated' not in args and '--no-allow-unauthenticated' not in args
     assert '--no-traffic' in args and '--deploy-health-check' in args
     assert '--startup-probe=httpGet.path=/healthz,httpGet.port=8080,initialDelaySeconds=0,failureThreshold=24,timeoutSeconds=5,periodSeconds=10' in args
     if os.environ.get('EXPECT_ALIAS') == 'true':
@@ -102,7 +108,7 @@ else:
 
 @unittest.skipUnless(BASH, 'Bash >=4 required by existing mapfile usage')
 class CompleteDeployStepTests(unittest.TestCase):
-    def execute(self, *, cross_project=True, failure=''):
+    def execute(self, *, cross_project=True, failure='', requested_public=False, existing_public=False):
         workflow = yaml.safe_load(WORKFLOW.read_text())
         step = next(step for step in workflow['jobs']['deploy']['steps'] if step.get('id') == 'deploy')
         prepare = next(s for s in workflow['jobs']['deploy']['steps'] if s.get('id') == 'staged_policy')
@@ -130,6 +136,7 @@ class CompleteDeployStepTests(unittest.TestCase):
             env = {**os.environ, 'PATH': directory + os.pathsep + str(Path(sys.executable).parent) + os.pathsep + os.environ['PATH'],
                    'FIXTURE': directory, 'STAGED_POLICY_FILE': str(root / 'policy-source.py'), 'FAILURE': failure, 'EXPECT_ALIAS': str(cross_project).lower(), 'STAGED_HEALTH_PATH': '/healthz',
                    'STAGED_IMAGE': IMAGE, 'DEBOUNCE_ENVIRONMENT': '',
+                   'STAGED_REQUESTED_PUBLIC': str(requested_public).lower(), 'EXISTING_PUBLIC': str(existing_public).lower(),
                    'SERVICE': 'service', 'PROJECT_ID': 'project', 'REGION': 'europe-west1',
                    'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',
                    'GITHUB_ENV': str(root / 'env'), 'GITHUB_OUTPUT': str(root / 'output'),
@@ -139,6 +146,22 @@ class CompleteDeployStepTests(unittest.TestCase):
             calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
             final = json.loads((root / 'state.json').read_text())
             return result, calls, final
+
+    def test_matching_public_access_is_preserved(self):
+        result, calls, state = self.execute(requested_public=True, existing_public=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(any(c[:2] == ['run', 'deploy'] for c in calls))
+
+    def test_access_mismatch_or_unavailable_policy_prevents_any_deploy(self):
+        for requested, existing, failure in ((True, False, ''), (False, True, ''),
+                                              (False, False, 'iam-read')):
+            with self.subTest(requested=requested, existing=existing, failure=failure):
+                result, calls, state = self.execute(requested_public=requested,
+                                                   existing_public=existing, failure=failure)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(any(c[:2] == ['run', 'deploy'] or c[:3] ==
+                                     ['run', 'services', 'update-traffic'] for c in calls))
+                self.assertEqual(state['status']['traffic'][0]['revisionName'], 'service-old')
 
     def test_full_cross_project_step_promotes_only_final_verified_revision(self):
         result, calls, state = self.execute()
