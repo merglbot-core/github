@@ -39,6 +39,10 @@ dependency review, PR hygiene checks and docs governance. Steps are copied verba
 no rule, threshold, action pin or message changed. GitHub bills `ceil(seconds/60)` **per job**,
 so three 7-12 s jobs cost 3 minutes while one ~30 s job costs 1 (github#877).
 
+The merge-commit check stays advisory in both files: a merge commit is a warning. Its REST read is
+retried three times and paginated, and if it still fails the step warns instead of failing, so a
+GitHub API incident no longer blocks every PR (github#767).
+
 Gitleaks used to stay separate because the job took 53-58 s. Measured again 22. 9. 2026 on
 merglbot-extractors/shoptet-extractor, **45 of those seconds were `Upload SARIF report`** and the
 scan itself was ~1 s, so `gitleaks: true` now folds the scan into this job as an opt-in step
@@ -174,3 +178,17 @@ jobs:
     needs: [runtime-changes]
     if: ${{ !cancelled() && needs.runtime-changes.outputs.runtime != 'false' }}
 ```
+
+## reusable-deploy-cloud-run-wif.yml: env_vars
+
+`env_vars` takes the same comma-separated `NAME=value` list as the secrets-based variant. It is set together
+with `ENVIRONMENT` and **replaces** the service env, so pass the complete list. Plain values only: secret
+mounts are not part of this input (github#709). Callers that need Secret Manager mounts stay on the
+secrets-based variant until a reviewed `secrets` input exists.
+## reusable-frontend-artifact-gate.yml
+
+A `uses:` job gets a fresh checkout of the sources, so it can only gate a build that an earlier job
+uploaded. Pass that artifact as `artifact_name`, and upload it with `include-hidden-files: true` so
+`.well-known/` survives. Without it the job exits 2 ("cannot conclude"). Callers that build in a single
+job run the gate CLI as a step instead (github#762). `frontend-artifact-gate-tests.yml` exercises
+the upload, download and gate path on every change.
