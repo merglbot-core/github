@@ -5,6 +5,7 @@ on:
     paths:
       - "scripts/frontend-artifact-gate/**"
       - "tests/test_frontend_artifact_gate.py"
+      - "tests/fixtures/frontend_artifact_gate/**"
       - ".github/workflows/frontend-artifact-gate-tests.yml"
       # The reusable workflow is the only consumer of the gate's CLI contract (--dist,
       # --baseline, --extra-assets). An edit there that drops a flag would leave the gate
@@ -35,3 +36,31 @@ jobs:
       # install breaks.
       - name: Run gate contract tests
         run: python3 -m unittest discover -s tests -p "test_frontend_artifact_gate.py" -v
+
+  # github#762: the reusable runs on its own runner, so it can only gate a build that an
+  # earlier job uploaded. Exercise exactly that path: upload a known-good fixture dist, then
+  # call the reusable with artifact_name and the gate from this PR's head.
+  fixture-dist:
+    name: Upload fixture dist
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Upload fixture dist
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: frontend-gate-fixture-dist
+          path: tests/fixtures/frontend_artifact_gate/artifact
+          include-hidden-files: true
+          retention-days: 1
+
+  reusable-roundtrip:
+    name: Reusable gate on a downloaded artifact
+    needs: fixture-dist
+    uses: ./.github/workflows/reusable-frontend-artifact-gate.yml
+    with:
+      artifact_name: frontend-gate-fixture-dist
+      dist_path: dist-under-test
+      baseline_path: tests/fixtures/frontend_artifact_gate/baseline.json
+      gate_ref: ${{ github.event.pull_request.head.sha || github.sha }}

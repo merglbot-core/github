@@ -39,6 +39,10 @@ dependency review, PR hygiene checks and docs governance. Steps are copied verba
 no rule, threshold, action pin or message changed. GitHub bills `ceil(seconds/60)` **per job**,
 so three 7-12 s jobs cost 3 minutes while one ~30 s job costs 1 (github#877).
 
+The merge-commit check stays advisory in both files: a merge commit is a warning. Its REST read is
+retried three times and paginated, and if it still fails the step warns instead of failing, so a
+GitHub API incident no longer blocks every PR (github#767).
+
 Gitleaks used to stay separate because the job took 53-58 s. Measured again 22. 9. 2026 on
 merglbot-extractors/shoptet-extractor, **45 of those seconds were `Upload SARIF report`** and the
 scan itself was ~1 s, so `gitleaks: true` now folds the scan into this job as an opt-in step
@@ -46,6 +50,13 @@ scan itself was ~1 s, so `gitleaks: true` now folds the scan into this job as an
 SARIF upload, so no `security-events: write` is inherited and PR Gate stays around 20 s. Repos that
 switch it on delete their `security-gitleaks.yml` and keep a weekly full-tree scan for pushes that
 never open a PR. GHAS Secret Protection push protection is untouched either way.
+
+The standalone `security-gitleaks.yml` reusable is still the only path that persists findings to
+code scanning (SARIF). Its job grants `actions: read` because `upload-sarif` reads the workflow run
+and an enumerative job `permissions:` block drops any grant the caller adds (github#805: uploads had
+silently failed since 4. 4. 2026 behind `continue-on-error`). The upload step now fails the check,
+and the PR comment fires only when the scan itself fails. Measured 20. 10. 2026: two callers left
+(`merglbot-public/docs`, `merglbot-denatura/acquisition-analysis`), both already grant `actions: read`.
 
 ### Optional steps (all default to `false`, so existing callers are unaffected)
 
@@ -167,3 +178,32 @@ jobs:
     needs: [runtime-changes]
     if: ${{ !cancelled() && needs.runtime-changes.outputs.runtime != 'false' }}
 ```
+
+## reusable-deploy-cloud-run-wif.yml: env_vars
+
+`env_vars` takes the same comma-separated `NAME=value` list as the secrets-based variant. It is set together
+with `ENVIRONMENT` and **replaces** the service env, so pass the complete list. Plain values only: secret
+mounts are not part of this input (github#709). Callers that need Secret Manager mounts stay on the
+secrets-based variant until a reviewed `secrets` input exists.
+## reusable-frontend-artifact-gate.yml
+
+A `uses:` job gets a fresh checkout of the sources, so it can only gate a build that an earlier job
+uploaded. Pass that artifact as `artifact_name`, and upload it with `include-hidden-files: true` so
+`.well-known/` survives. Without it the job exits 2 ("cannot conclude"). Callers that build in a single
+job run the gate CLI as a step instead (github#762). `frontend-artifact-gate-tests.yml` exercises
+the upload, download and gate path on every change.
+
+## ci-python.yml: docker-image-scan
+
+`docker-image-scan: true` adds an `Image scan` job: in pull requests that change a `Dockerfile` or a
+`requirements*.txt|.in` file it builds the image locally (never pushed) and scans it with Trivy
+(HIGH/CRITICAL, ignore-unfixed). A filesystem scan cannot see the base image OS packages (github#775).
+The required `Python CI` job is unchanged; an unreadable base commit resolves to scanning.
+
+## Pin mirrors in caller workflows (github#773)
+
+A caller workflow may name only the `merglbot-core/github` SHA it runs. Dependabot moves the `uses:`
+line but not a comment such as `# ... pinned to merglbot-core/github@<sha>`. Check a checkout with
+`python3 scripts/verify-caller-pin-mirrors.py <repo-root>`; it exits 1 and lists each stale mirror,
+and exits 2 when PyYAML is missing. Prefer deleting the SHA from the comment and pointing at the
+`uses:` line over rewriting it.
