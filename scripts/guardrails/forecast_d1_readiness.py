@@ -2419,7 +2419,8 @@ def main() -> int:
             allow_empty_specs=bool(args.allow_empty_specs),
         )
     except Exception as exc:  # noqa: BLE001
-        # Best-effort summary so CI can Slack even on unexpected errors.
+        # Best-effort summary so CI can surface the verdict (step summary, issue upsert)
+        # even on unexpected errors.
         outdir = Path(args.outdir)
         outdir.mkdir(parents=True, exist_ok=True)
         spec_filters = {

@@ -138,7 +138,7 @@ The `automated-release.yml` workflow handles:
 - Tag creation
 - GitHub Release creation
 - Explicit release outcomes (`release_created`, `release_already_exists`, `release_skipped_no_version`)
-- Slack notifications for newly created releases only
+- Release outcome in the workflow step summary (the Slack notify job was removed, merglbot-core/infra#3841)
 - Artifact building
 
 ### Trigger Methods
