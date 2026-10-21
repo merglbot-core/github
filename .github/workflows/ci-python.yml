@@ -223,27 +223,31 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 1
+          # The PR merge commit and its first parent (the base) are enough for a
+          # tree diff; no credentials are needed to fetch anything later.
+          fetch-depth: 2
 
       - name: Decide whether the image inputs changed
         id: decide
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           DOCKERFILE: ${{ inputs.dockerfile }}
         run: |
           set -euo pipefail
-          # Two single commits are enough for a tree diff; no history is fetched.
-          # An unreadable base resolves to scanning, never to skipping.
+          # pull_request checks out the merge commit; HEAD^1 is the base it was
+          # merged onto, so HEAD^1..HEAD is exactly the PR's change. Private repos
+          # need no extra fetch (persist-credentials is off). A missing parent
+          # resolves to scanning, never to skipping.
           scan=true
           # Compare the configured Dockerfile as an exact, normalised path (a leading
           # ./ is dropped) so a custom location is never treated as a regex.
           dockerfile_path="${DOCKERFILE#./}"
-          if git fetch --quiet --depth=1 origin "${BASE_SHA}"; then
-            changed="$(git diff --name-only "${BASE_SHA}" HEAD)"
+          if changed="$(git diff --name-only HEAD^1 HEAD 2>/dev/null)"; then
             if ! grep -E -q '(^|/)(Dockerfile[^/]*|requirements[^/]*\.(txt|in))$' <<< "${changed}" \
               && ! grep -F -x -q -- "${dockerfile_path}" <<< "${changed}"; then
               scan=false
             fi
+          else
+            echo "::warning::could not diff HEAD^1..HEAD; scanning to stay safe"
           fi
           echo "scan=${scan}" >> "${GITHUB_OUTPUT}"
           echo "image scan: ${scan}" >> "${GITHUB_STEP_SUMMARY}"
