@@ -34,8 +34,8 @@ class ObserverBudgetTests(unittest.TestCase):
         self.stack.enter_context(patch.object(m, 'WORKSPACE', self.temp))
         for name in ('OBJECTIVE', 'HANDOFF', 'CODEX', 'CAPPED'):
             getattr(m, name).write_text('synthetic fixture only')
-        self.stack.enter_context(patch.object(m.dt, 'datetime', FixedDateTime))
-        self.clock = self.stack.enter_context(patch.object(m.time, 'monotonic', return_value=100.0))
+        self.stack.enter_context(patch.object(m, 'now_prague', return_value=FixedDateTime.now()))
+        self.clock = self.stack.enter_context(patch.object(m, 'monotonic', return_value=100.0))
         self.child = self.stack.enter_context(patch.object(m.subprocess, 'run', return_value=Mock(returncode=0)))
         self.stack.enter_context(patch.object(m, 'prompt_for', return_value='synthetic prompt; no private input read'))
         self.state = {'schema_version': 1, 'stages': {'post_window': {'status': 'done', 'attempts': 1}}}
@@ -73,7 +73,23 @@ class ObserverBudgetTests(unittest.TestCase):
         self.assertEqual(self.invoke(['--objective', str(self.temp/'does-not-exist')]), 2)
         self.child.assert_not_called()
         self.assertEqual(self.load()['halted'], 'MISSING_REQUIRED_LOCAL_INPUT')
+        self.assertTrue(self.load()['needs_owner_review'])
         self.assertNotIn('closed_month', self.load()['stages'])
+
+    def test_relative_objective_is_rejected_before_state_access_including_dry_run(self):
+        for argv in (['--objective', 'relative-objective'], ['--dry-run', '--objective', 'relative-objective']):
+            with self.subTest(argv=argv):
+                before = m.STATE.read_bytes()
+                with patch.object(m, 'read_json', side_effect=AssertionError('must not access state')):
+                    with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                        m.main(argv)
+                self.assertEqual(raised.exception.code, 2)
+                self.child.assert_not_called()
+                self.assertEqual(m.STATE.read_bytes(), before)
+
+    def test_clock_mocks_are_local_to_the_observer_module(self):
+        self.assertIs(m.dt.datetime, REAL_DATETIME)
+        self.assertEqual(m.now_prague(), FixedDateTime.now())
 
     def test_journal_flushes_file_then_replaces_then_flushes_directory(self):
         events = []
@@ -113,8 +129,8 @@ class ObserverBudgetTests(unittest.TestCase):
         self.clock.side_effect = [100.0, 110.0, 120.0, 121.0]
         self.assertEqual(self.invoke(), 0)
         args, kwargs = self.child.call_args
-        self.assertEqual(args[0][1:6], ['--max-gb', '2', '--timeout', '577', '--'])
-        self.assertEqual(kwargs['timeout'], 578.0)
+        self.assertEqual(args[0][1:6], ['--max-gb', '2', '--timeout', '569', '--'])
+        self.assertEqual(kwargs['timeout'], 570.0)
         self.assertEqual(self.load()['stages']['closed_month']['attempts'], 1)
         self.assertFalse(self.load().get('complete', False))
 
@@ -128,6 +144,7 @@ class ObserverBudgetTests(unittest.TestCase):
                 self.assertEqual(self.invoke(), 3)
                 first = self.load()
                 self.assertEqual(first['halted'], 'CAPPED_RUN_KILLED_NO_AUTO_RETRY')
+                self.assertTrue(first['needs_owner_review'])
                 self.assertEqual(self.invoke(), 0)
                 self.assertEqual(self.child.call_count, 1)
                 self.assertEqual(self.load()['stages'], first['stages'])
@@ -149,6 +166,7 @@ class ObserverBudgetTests(unittest.TestCase):
         self.child.side_effect = OSError('synthetic refusal')
         self.assertEqual(self.invoke(), 3)
         self.assertEqual(self.load()['halted'], 'CHILD_START_FAILED_NO_AUTO_RETRY')
+        self.assertTrue(self.load()['needs_owner_review'])
         self.assertEqual(self.load()['stages']['closed_month']['attempts'], 1)
         self.child.reset_mock()
         self.assertEqual(self.invoke(), 0)
@@ -177,6 +195,7 @@ class ObserverBudgetTests(unittest.TestCase):
         self.assertEqual(self.invoke(), 2)
         self.child.assert_not_called()
         self.assertNotIn('closed_month', self.load()['stages'])
+        self.assertTrue(self.load()['needs_owner_review'])
 
     def test_exhausted_journal_budget_preserves_consumed_attempt_without_child(self):
         self.clock.side_effect = [100.0, 110.0, 699.0]
@@ -185,6 +204,7 @@ class ObserverBudgetTests(unittest.TestCase):
         stage = self.load()['stages']['closed_month']
         self.assertEqual(stage['attempts'], 1)
         self.assertEqual(stage['status'], 'not_started_time_budget_exhausted')
+        self.assertTrue(self.load()['needs_owner_review'])
 
     def test_final_budget_expiry_refuses_child_instead_of_clamping_timeout(self):
         for final_time in (698.0, 699.0, 700.0, 701.0):
@@ -196,6 +216,7 @@ class ObserverBudgetTests(unittest.TestCase):
                 self.child.assert_not_called()
                 result = self.load()
                 self.assertEqual(result['halted'], 'OBSERVER_TIME_BUDGET_EXHAUSTED_NO_AUTO_RETRY')
+                self.assertTrue(result['needs_owner_review'])
                 self.assertEqual(result['stages']['closed_month']['attempts'], 1)
                 self.assertEqual(result['stages']['closed_month']['status'], 'not_started_time_budget_exhausted')
 
@@ -207,6 +228,27 @@ class ObserverBudgetTests(unittest.TestCase):
         self.child.assert_not_called()
         self.assertEqual(self.load()['halted'], 'EXISTING_STOP_MUST_SURVIVE')
         self.assertEqual(self.load()['stages'], self.state['stages'])
+
+    def test_finalization_reserve_and_smallest_positive_child_budget(self):
+        self.assertEqual(m.FINALIZATION_RESERVE_SECONDS, 10)
+        self.clock.side_effect = [100.0, 110.0, 120.0, 689.0]
+        self.assertEqual(self.invoke(), 0)
+        args, kwargs = self.child.call_args
+        self.assertEqual(args[0][4], '1')
+        self.assertEqual(kwargs['timeout'], 2)
+
+    def test_other_exit_codes_keep_original_bounded_retry_semantics(self):
+        for code in (-15, 1, 2):
+            with self.subTest(code=code):
+                self.save()
+                self.child.reset_mock()
+                self.child.return_value = Mock(returncode=code)
+                self.assertEqual(self.invoke(), 3)
+                first = self.load()
+                self.assertEqual(first['stages']['closed_month']['status'], 'failed_retry_bounded')
+                self.assertNotIn('halted', first)
+                self.assertEqual(self.invoke(), 0)
+                self.assertEqual(self.child.call_count, 1)
 
     def test_existing_schedule_retry_limits_and_completion_semantics(self):
         self.assertEqual(m.CAP_SECONDS, 600)

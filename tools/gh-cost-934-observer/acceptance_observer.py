@@ -10,7 +10,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import time
+from time import monotonic
 from zoneinfo import ZoneInfo
 
 
@@ -33,7 +33,11 @@ STAGES = (
 MAX_ATTEMPTS_PER_STAGE = 2
 RETRY_AFTER = dt.timedelta(hours=24)
 CAP_SECONDS = 600
-FINALIZATION_RESERVE_SECONDS = 2
+FINALIZATION_RESERVE_SECONDS = 10
+
+
+def now_prague():
+    return dt.datetime.now(PRAGUE)
 
 
 def read_json(path, fallback):
@@ -66,7 +70,7 @@ def running_stages(state):
 
 
 def child_seconds(deadline):
-    return max(0, min(CAP_SECONDS, int(deadline - time.monotonic())
+    return max(0, min(CAP_SECONDS, int(deadline - monotonic())
                       - FINALIZATION_RESERVE_SECONDS))
 
 
@@ -125,15 +129,16 @@ def prompt_for(stage):
 
 def main(argv=None):
     global OBJECTIVE
-    deadline = time.monotonic() + CAP_SECONDS
+    deadline = monotonic() + CAP_SECONDS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--objective', type=Path, required=True,
                         help='Existing admitted local objective file; never its contents')
     args = parser.parse_args(argv)
-    if args.objective is not None:
-        OBJECTIVE = args.objective
-    now = dt.datetime.now(PRAGUE)
+    if not args.objective.is_absolute():
+        parser.error('--objective must be an absolute path')
+    OBJECTIVE = args.objective
+    now = now_prague()
     state = read_json(STATE, {'schema_version': 1, 'stages': {}})
     # A dry read cannot distinguish an active stage from an interrupted one.
     # Neither may cause a new child or an inferred successful completion.
@@ -175,10 +180,12 @@ def main(argv=None):
             return 0
         if not all(path.exists() for path in (OBJECTIVE, HANDOFF, CODEX, CAPPED)):
             state['halted'] = 'MISSING_REQUIRED_LOCAL_INPUT'
+            state['needs_owner_review'] = True
             atomic_json(STATE, state)
             return 2
         if child_seconds(deadline) < 1:
             state['halted'] = 'OBSERVER_TIME_BUDGET_EXHAUSTED_NO_AUTO_RETRY'
+            state['needs_owner_review'] = True
             atomic_json(STATE, state)
             return 2
         record = state.setdefault('stages', {}).setdefault(stage, {})
@@ -190,6 +197,7 @@ def main(argv=None):
         if child_limit < 1:
             record['status'] = 'not_started_time_budget_exhausted'
             state['halted'] = 'OBSERVER_TIME_BUDGET_EXHAUSTED_NO_AUTO_RETRY'
+            state['needs_owner_review'] = True
             atomic_json(STATE, state)
             return 3
         command = [str(CAPPED), '--max-gb', '2', '--timeout', str(child_limit), '--',
@@ -203,6 +211,7 @@ def main(argv=None):
         if launch_limit < 1:
             record['status'] = 'not_started_time_budget_exhausted'
             state['halted'] = 'OBSERVER_TIME_BUDGET_EXHAUSTED_NO_AUTO_RETRY'
+            state['needs_owner_review'] = True
             atomic_json(STATE, state)
             return 3
         command[4] = str(min(child_limit, launch_limit))
@@ -216,19 +225,21 @@ def main(argv=None):
         except OSError:
             record['status'] = 'child_start_failed_no_auto_retry'
             state['halted'] = 'CHILD_START_FAILED_NO_AUTO_RETRY'
+            state['needs_owner_review'] = True
             atomic_json(STATE, state)
             return 3
         record['exit_code'] = code
-        record['finished_at_prague'] = dt.datetime.now(PRAGUE).isoformat(timespec='seconds')
+        record['finished_at_prague'] = now_prague().isoformat(timespec='seconds')
         if code in (86, 137, -9):
             record['status'] = 'stopped_by_memory_or_time_guard'
             state['halted'] = 'CAPPED_RUN_KILLED_NO_AUTO_RETRY'
+            state['needs_owner_review'] = True
         elif code == 0:
             record['status'] = 'done'
         else:
             record['status'] = 'failed_retry_bounded'
         refresh_completion_from_audit(state)
-        if exhausted_without_completion(dt.datetime.now(PRAGUE), state):
+        if exhausted_without_completion(now_prague(), state):
             state['halted'] = 'BOUNDED_FOLLOWUP_EXHAUSTED_UNRESOLVED'
             state['needs_owner_review'] = True
         atomic_json(STATE, state)

@@ -12,7 +12,8 @@ code must preserve the existing state rather than repeat completed work.
 The proposed caller must wrap the entire observer process tree in the existing
 `capped-run` with a 2 GB limit and a 600-second timeout. The source independently
 subtracts elapsed preparation time and finalization headroom from its child
-budget. If the budget expires before launch, it records a terminal halt without
+budget, including a ten-second internal finalization reserve. If the budget
+expires before launch, it records a terminal halt without
 starting the child. Memory/time guard exits and child-start errors prohibit an
 automatic retry. A persisted `running` phase found by the next exclusive lock
 holder also halts; an existing halt reason and consumed attempts are preserved.
@@ -21,7 +22,7 @@ directory before launching a child. A synchronization failure refuses the child;
 an already replaced `running` state halts on the next lock holder. Tests cover
 the synchronization order and injected errors, not a physical power-loss drill.
 
-The caller must supply `--objective` with the same already-admitted private local
+The caller must supply an absolute `--objective` path to the same admitted private
 objective file. No private objective locator or contents are published in this
 directory. A missing argument or missing file fails before an attempt is
 consumed. The observer passes the locator to its existing child prompt; the
