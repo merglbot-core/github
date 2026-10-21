@@ -35,6 +35,14 @@ class CallerPinMirrors(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertIn(f"merglbot-core/github@{OLD}", proc.stdout)
 
+    def test_stale_mirror_inside_a_block_scalar_fails(self) -> None:
+        proc = run(f"on:\n  workflow_dispatch:\n    inputs:\n      x:\n        description: |\n          Calls merglbot-core/github@{OLD}.\njobs:\n  ci:\n    uses: merglbot-core/github/.github/workflows/ci-python.yml@{NEW}\n")
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+
+    def test_stale_comment_on_the_uses_line_fails(self) -> None:
+        proc = run(f"jobs:\n  ci:\n    uses: merglbot-core/github/.github/workflows/ci-python.yml@{NEW}  # was merglbot-core/github@{OLD}\n")
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+
     def test_file_without_mirror_comment_passes(self) -> None:
         proc = run(f"jobs:\n  ci:\n    uses: merglbot-core/github/.github/workflows/ci-python.yml@{NEW}  # v1\n")
         self.assertEqual(proc.returncode, 0, proc.stdout)

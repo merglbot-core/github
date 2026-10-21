@@ -19,13 +19,20 @@ import sys
 from pathlib import Path
 
 USES = re.compile(r"^\s*-?\s*uses:\s*merglbot-core/github/[^@\s]+@([0-9a-f]{40})\b", re.M)
-MIRROR = re.compile(r"#.*?merglbot-core/github(?:/[^@\s]*)?@([0-9a-f]{7,40})\b")
+MIRROR = re.compile(r"merglbot-core/github(?:/[^@\s]*)?@([0-9a-f]{7,40})\b")
+USES_LINE = re.compile(r"^\s*-?\s*uses:\s")
 
 
 def stale_mirrors(text: str) -> list[tuple[int, str]]:
     running = set(USES.findall(text))
     out = []
     for lineno, line in enumerate(text.splitlines(), 1):
+        # A mirror can hide anywhere outside the uses: line itself: a comment, a
+        # description block scalar, an echo in run: (review of #1043).
+        if USES_LINE.match(line):
+            # The pin itself is the source of truth; only a trailing comment on it
+            # can mirror (and drift from) another SHA.
+            line = line.split("#", 1)[1] if "#" in line else ""
         for sha in MIRROR.findall(line):
             if not any(r.startswith(sha) for r in running):
                 out.append((lineno, sha))
