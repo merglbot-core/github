@@ -148,7 +148,8 @@ on:
         required: false
 
 concurrency:
-  group: deploy-${{ inputs.deploy_project_id || github.repository }}-${{ inputs.region }}-${{ inputs.service_name }}
+  # Secrets are unavailable here: conservatively serialize both project paths.
+  group: deploy-wif-${{ github.repository }}-${{ inputs.region }}-${{ inputs.service_name }}
   cancel-in-progress: false
 
 jobs:
@@ -759,6 +760,18 @@ jobs:
             # No mutation until rollback and existing access have been validated.
           fi
           # END stage-prepare
+
+          # A no-traffic rollout must not change service-wide ingress first.
+          if [ -n "$STAGED_HEALTH_PATH" ] && [ -n "$INPUT_INGRESS" ]; then
+            python3 - "$STAGE_DIR/before.json" "$INPUT_INGRESS" <<'INGRESS_PY'
+          import json, sys
+          with open(sys.argv[1]) as stream:
+              before = json.load(stream)
+          current = before.get('metadata', {}).get('annotations', {}).get('run.googleapis.com/ingress')
+          if current != sys.argv[2]:
+              raise SystemExit('Staged deploy refuses an ingress change or missing ingress evidence')
+          INGRESS_PY
+          fi
 
           NORMALIZED_DEPLOY_ENVIRONMENT="$(printf '%s' "${INPUT_ENVIRONMENT}" | tr '[:upper:]' '[:lower:]')"
 

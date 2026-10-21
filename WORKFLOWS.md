@@ -65,7 +65,13 @@ acceptance. Cloud Run accepts HTTP success/redirect responses for this probe;
 caller review must establish that the chosen endpoint cannot redirect to a login
 or unrelated healthy page. Production business smoke checks remain necessary.
 The private admin ingress is not opened to test a tag URL. The deploy group is
-scoped by project, region and service and never cancels an executing deployment.
+scoped by project, region and service for the secrets-based variant. WIF uses a
+conservative repository/region/service lock regardless of whether the project
+comes from an input or a secret: secrets cannot be resolved in workflow-level
+concurrency. Same-named services in different projects therefore serialize too.
+Neither variant cancels an executing deployment. During caller adoption, drain
+older runs and ensure a service has one writer using the selected variant/pin;
+GitHub concurrency does not coordinate different repositories or variant locks.
 External writers must respect that serialization; the pre-promotion readback is
 not a Cloud Run cross-client transaction lock.
 

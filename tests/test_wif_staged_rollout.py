@@ -16,7 +16,7 @@ from test_staged_rollout_policy import evidence, IMAGE, MODULE
 WORKFLOW = MODULE.parents[2] / '.github/workflows/reusable-deploy-cloud-run-wif.yml'
 
 class WifStagedTests(unittest.TestCase):
-    def execute(self, failure='', requested=False, existing=False, port=8080, staged=True):
+    def execute(self, failure='', requested=False, existing=False, port=8080, staged=True, ingress=""):
         steps = yaml.safe_load(WORKFLOW.read_text())['jobs']['build-and-deploy']['steps']
         script = (next(s['run'] for s in steps if s.get('id') == 'staged_policy') + '\n') if staged else ''
         script += next(s['run'] for s in steps if s.get('name') == 'Deploy to Cloud Run')
@@ -44,7 +44,7 @@ class WifStagedTests(unittest.TestCase):
                 'INPUT_SERVICE_NAME': 'service', 'INPUT_REGION': 'europe-west1',
                 'INPUT_ENVIRONMENT': 'staging', 'INPUT_MIN_INSTANCES': '0', 'INPUT_MAX_INSTANCES': '10',
                 'INPUT_TIMEOUT': '0', 'INPUT_PORT': str(port), 'INPUT_RUNTIME_SERVICE_ACCOUNT': '',
-                'INPUT_INGRESS': '', 'INPUT_MEMORY': '', 'INPUT_CPU': '', 'INPUT_ENV_VARS': '',
+                'INPUT_INGRESS': ingress, 'INPUT_MEMORY': '', 'INPUT_CPU': '', 'INPUT_ENV_VARS': '',
                 'INPUT_ALLOW_UNAUTHENTICATED': str(requested).lower(),
                 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',
                 'GITHUB_STEP_SUMMARY': str(root / 'summary')}
@@ -67,6 +67,15 @@ class WifStagedTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(any(x[:2] == ['run', 'deploy'] for x in calls))
         self.assertFalse(any(x[:3] == ['run', 'services', 'update-traffic'] for x in calls))
+
+    def test_changed_ingress_refused_before_deploy(self):
+        result, calls = self.execute(ingress='all')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(x[:2] == ['run', 'deploy'] for x in calls))
+
+    def test_unchanged_ingress_can_stage(self):
+        result, _ = self.execute(ingress='internal-and-cloud-load-balancing')
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_existing_public_access_preserved(self):
         result, _ = self.execute(requested=True, existing=True)
@@ -103,6 +112,13 @@ class WifStagedTests(unittest.TestCase):
         for job in doc['jobs'].values():
             for step in job.get('steps', []):
                 self.assertLessEqual(len(step.get('run', '')), 21000)
+
+    def test_project_resolution_cannot_split_serialization(self):
+        group = yaml.safe_load(WORKFLOW.read_text())['concurrency']['group']
+        # Both explicit-project and secret-backed callers must share this lock.
+        self.assertEqual(group, 'deploy-wif-${{ github.repository }}-${{ inputs.region }}-${{ inputs.service_name }}')
+        self.assertNotIn('deploy_project_id', group)
+        self.assertNotIn('secrets.', group)
 
     def test_legacy_deploy_preserves_access_flags_without_staging(self):
         for requested in (True, False):
