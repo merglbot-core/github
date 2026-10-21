@@ -45,6 +45,21 @@ else:
 
 
 class WorkflowStagingTests(unittest.TestCase):
+    def test_release_survives_optional_ancestor_skip_without_bypassing_guards(self):
+        jobs = yaml.safe_load(WORKFLOW.read_text())['jobs']
+        self.assertEqual(jobs['deploy']['needs'], 'debounce')
+        self.assertEqual(jobs['publish_release_sbom']['needs'], 'deploy')
+        # GitHub applies implicit success() without a status function, including
+        # skipped ancestors. Both downstream jobs must opt out of that default.
+        for name in ('deploy', 'publish_release_sbom'):
+            self.assertIn('!cancelled()', jobs[name]['if'])
+        release_guard = jobs['publish_release_sbom']['if']
+        for required in ("needs.deploy.result == 'success'",
+                         "startsWith(github.ref, 'refs/tags/')",
+                         "github.repository_visibility != 'public'"):
+            self.assertIn('&& ' + required, release_guard)
+        self.assertNotIn('||', release_guard)
+
     def test_debounce_does_not_expand_existing_caller_permissions(self):
         jobs = yaml.safe_load(WORKFLOW.read_text())['jobs']
         # GitHub validates every nested job even when its runtime guard is false.

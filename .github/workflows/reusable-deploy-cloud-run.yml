@@ -982,7 +982,9 @@ jobs:
 
   publish_release_sbom:
     needs: deploy
-    if: ${{ needs.deploy.result == 'success' && startsWith(github.ref, 'refs/tags/') && github.repository_visibility != 'public' }}
+    # The optional debounce ancestor may be skipped; do not inherit success().
+    # Keep failed/cancelled deploys, non-tags and public repositories excluded.
+    if: ${{ !cancelled() && needs.deploy.result == 'success' && startsWith(github.ref, 'refs/tags/') && github.repository_visibility != 'public' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
