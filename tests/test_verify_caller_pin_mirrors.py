@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import subprocess
 import sys
 import tempfile
@@ -14,7 +13,9 @@ NEW = "1b83d5857c3486e62d5207aa87551f2792647c38"
 OLD = "a71d7d0dca646b1d6564d1454ace4f9ebc27417c"
 # The checker reads running pins with PyYAML. The hub CI interpreter has no PyYAML,
 # so the parser cases skip there; the missing-parser case below runs everywhere.
-HAS_YAML = importlib.util.find_spec("yaml") is not None
+# Probe in a child process, where the checker itself runs: another test module
+# may put a stand-in `yaml` into this process's sys.modules.
+HAS_YAML = subprocess.run([sys.executable, "-c", "import yaml"], capture_output=True).returncode == 0
 
 
 def run(workflow: str) -> subprocess.CompletedProcess:
