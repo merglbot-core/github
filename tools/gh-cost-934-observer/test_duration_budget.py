@@ -76,6 +76,56 @@ class ObserverBudgetTests(unittest.TestCase):
         self.assertTrue(self.load()['needs_owner_review'])
         self.assertNotIn('closed_month', self.load()['stages'])
 
+    def test_dry_run_refuses_missing_inputs_without_state_or_lock_writes(self):
+        for name in ('OBJECTIVE', 'HANDOFF', 'CODEX', 'CAPPED'):
+            with self.subTest(name=name):
+                for required in ('OBJECTIVE', 'HANDOFF', 'CODEX', 'CAPPED'):
+                    getattr(m, required).write_text('synthetic fixture only')
+                selected = getattr(m, name)
+                selected.unlink()
+                before = m.STATE.read_bytes()
+                before_files = set(self.temp.iterdir())
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    code = m.main(['--dry-run', '--objective', str(self.temp/'OBJECTIVE')])
+                result = json.loads(output.getvalue())
+                self.assertFalse(result['will_launch_codex'])
+                self.assertEqual(code, 2)
+                self.assertEqual(result['input_preflight_error'], 'MISSING_REQUIRED_LOCAL_INPUT')
+                self.child.assert_not_called()
+                self.assertEqual(m.STATE.read_bytes(), before)
+                self.assertEqual(set(self.temp.iterdir()), before_files)
+                selected.write_text('synthetic fixture only')
+
+    def test_dry_run_reports_ready_with_existing_inputs_without_writes(self):
+        before = m.STATE.read_bytes()
+        before_files = set(self.temp.iterdir())
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = m.main(['--dry-run', '--objective', str(self.temp/'OBJECTIVE')])
+        result = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertTrue(result['will_launch_codex'])
+        self.assertIsNone(result['input_preflight_error'])
+        self.child.assert_not_called()
+        self.assertEqual(m.STATE.read_bytes(), before)
+        self.assertEqual(set(self.temp.iterdir()), before_files)
+
+    def test_missing_dry_run_input_preserves_existing_stop_and_attempts(self):
+        self.state['halted'] = 'EXISTING_STOP'
+        self.state['stages']['closed_month'] = {'attempts': 2, 'status': 'failed_retry_bounded'}
+        self.save()
+        before = m.STATE.read_bytes()
+        m.OBJECTIVE.unlink()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = m.main(['--dry-run', '--objective', str(self.temp/'OBJECTIVE')])
+        result = json.loads(output.getvalue())
+        self.assertEqual(code, 2)
+        self.assertFalse(result['will_launch_codex'])
+        self.assertEqual(m.STATE.read_bytes(), before)
+        self.child.assert_not_called()
+
     def test_relative_objective_is_rejected_before_state_access_including_dry_run(self):
         for argv in (['--objective', 'relative-objective'], ['--dry-run', '--objective', 'relative-objective']):
             with self.subTest(argv=argv):

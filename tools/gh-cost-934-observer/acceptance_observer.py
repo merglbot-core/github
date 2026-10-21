@@ -138,6 +138,9 @@ def main(argv=None):
     if not args.objective.is_absolute():
         parser.error('--objective must be an absolute path')
     OBJECTIVE = args.objective
+    # Dry-run readiness includes the same input-presence gate as real launch.
+    # The lock holder still rechecks it; this read-only snapshot admits no run.
+    inputs_present = all(path.exists() for path in (OBJECTIVE, HANDOFF, CODEX, CAPPED))
     now = now_prague()
     state = read_json(STATE, {'schema_version': 1, 'stages': {}})
     # A dry read cannot distinguish an active stage from an interrupted one.
@@ -150,10 +153,11 @@ def main(argv=None):
         print(json.dumps({'now_prague': now.isoformat(timespec='seconds'),
                           'due_stage': stage, 'stages': state.get('stages', {}),
                           'complete': state.get('complete', False),
-                          'will_launch_codex': bool(stage),
+                          'will_launch_codex': bool(stage) and inputs_present,
+                          'input_preflight_error': None if inputs_present else 'MISSING_REQUIRED_LOCAL_INPUT',
                           'unfinalized_or_active_stages': pending,
                           'source_deadline_seconds': CAP_SECONDS}))
-        return 0
+        return 0 if inputs_present else 2
     BASE.mkdir(parents=True, exist_ok=True)
     with LOCK.open('a+') as lock:
         try:

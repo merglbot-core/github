@@ -29,6 +29,13 @@ consumed. The observer passes the locator to its existing child prompt; the
 observer itself does not read objective contents. Permission to publish source
 does not admit a profile, its automatically loaded context or a new model run.
 
+Dry-run checks the presence of the objective, handoff, executable and guard before
+reading state. A missing input returns exit 2 with `will_launch_codex: false` and
+`input_preflight_error: MISSING_REQUIRED_LOCAL_INPUT`; it never creates a lock or
+changes state, STOP reasons or attempt counters. This is a readiness snapshot,
+not permission to launch. The real lock holder rechecks inputs before consuming
+an attempt. Neither presence check reads or admits private file contents.
+
 Run the offline tests from the repository root:
 
 ```bash
