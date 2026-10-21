@@ -307,3 +307,11 @@ the upload, download and gate path on every change.
 `requirements*.txt|.in` file it builds the image locally (never pushed) and scans it with Trivy
 (HIGH/CRITICAL, ignore-unfixed). A filesystem scan cannot see the base image OS packages (github#775).
 The required `Python CI` job is unchanged; an unreadable base commit resolves to scanning.
+
+## Pin mirrors in caller workflows (github#773)
+
+A caller workflow may name only the `merglbot-core/github` SHA it runs. Dependabot moves the `uses:`
+line but not a comment such as `# ... pinned to merglbot-core/github@<sha>`. Check a checkout with
+`python3 scripts/verify-caller-pin-mirrors.py <repo-root>`; it exits 1 and lists each stale mirror,
+and exits 2 when PyYAML is missing. Prefer deleting the SHA from the comment and pointing at the
+`uses:` line over rewriting it.
