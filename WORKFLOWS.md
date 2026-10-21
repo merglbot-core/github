@@ -167,3 +167,10 @@ jobs:
     needs: [runtime-changes]
     if: ${{ !cancelled() && needs.runtime-changes.outputs.runtime != 'false' }}
 ```
+
+## Pin mirrors in caller workflows (github#773)
+
+A caller workflow may name only the `merglbot-core/github` SHA it runs. Dependabot moves the `uses:`
+line but not a comment such as `# ... pinned to merglbot-core/github@<sha>`. Check a checkout with
+`python3 scripts/verify-caller-pin-mirrors.py <repo-root>`; it exits 1 and lists each stale mirror.
+Prefer deleting the SHA from the comment and pointing at the `uses:` line over rewriting it.
