@@ -31,6 +31,7 @@ Both PRs remain DRAFT: merge, workflow activation and downstream caller
 verification require their separate legitimate stage. Preserve the original
 workflow and test postimages; do not weaken the tests to pass the old workflow.
 
-The test-review head adds the exact original regression module. Relative to
-the authority feature branch, its diff contains only that test module and
-this documentation note; it does not change a workflow or grant activation.
+Status 21. 10. 2026: the boundary landed in merglbot-core/github#1014 (merge
+`0cc5eefb`). `tests/test_pr_gate_branch_input.py` is its regression test: it
+reads the `pr-gate.yml` on `main` and fails if the input returns to the script
+source. It changes no workflow (merglbot-core/github#961, #1015 superseded).
