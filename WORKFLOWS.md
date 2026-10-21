@@ -192,3 +192,9 @@ uploaded. Pass that artifact as `artifact_name`, and upload it with `include-hid
 `.well-known/` survives. Without it the job exits 2 ("cannot conclude"). Callers that build in a single
 job run the gate CLI as a step instead (github#762). `frontend-artifact-gate-tests.yml` exercises
 the upload, download and gate path on every change.
+## Pin mirrors in caller workflows (github#773)
+
+A caller workflow may name only the `merglbot-core/github` SHA it runs. Dependabot moves the `uses:`
+line but not a comment such as `# ... pinned to merglbot-core/github@<sha>`. Check a checkout with
+`python3 scripts/verify-caller-pin-mirrors.py <repo-root>`; it exits 1 and lists each stale mirror.
+Prefer deleting the SHA from the comment and pointing at the `uses:` line over rewriting it.
