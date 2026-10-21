@@ -30,7 +30,7 @@ def serving_state(service):
     require(metadata.get("generation") == status.get("observedGeneration")
             and metadata.get("generation") is not None, "unobserved service generation")
     conditions = {c.get("type"): c.get("status") for c in status.get("conditions", [])}
-    require(conditions.get("Ready") == "True", "service not Ready")
+    require(conditions.get("RoutesReady") == "True", "serving routes not Ready")
     traffic = status.get("traffic")
     require(isinstance(traffic, list) and traffic, "missing resolved traffic")
     split, tags = {}, {}
@@ -97,9 +97,9 @@ def promotion_plan(before, current, revision, *, expected_revision, expected_ima
     require("tcpSocket" not in probe and "grpc" not in probe, "ambiguous startup probe")
     expected_probe = {"initialDelaySeconds": 0, "failureThreshold": 24,
                       "timeoutSeconds": 5, "periodSeconds": 10}
-    require(all(type(probe.get(key, 0 if key == "initialDelaySeconds" else None)) is int
-                and probe.get(key, 0 if key == "initialDelaySeconds" else None) == value
-                for key, value in expected_probe.items()), "startup timing contract mismatch")
+    require(all(type(probe.get(field, 0 if field == "initialDelaySeconds" else None)) is int
+                and probe.get(field, 0 if field == "initialDelaySeconds" else None) == value
+                for field, value in expected_probe.items()), "startup timing contract mismatch")
     return {
         "revision": expected_revision, "image": expected_image,
         "promote_argument": f"{expected_revision}=100",

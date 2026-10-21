@@ -19,7 +19,7 @@ def evidence():
     before = {
         "metadata": {"name": "service", "uid": "service-uid", "namespace": "123", "generation": 3,
                      "annotations": {"run.googleapis.com/ingress": "internal-and-cloud-load-balancing"}},
-        "status": {"observedGeneration": 3, "conditions": [{"type": "Ready", "status": "True"}],
+        "status": {"observedGeneration": 3, "conditions": [{"type": "Ready", "status": "True"}, {"type": "RoutesReady", "status": "True"}],
                    "traffic": [{"revisionName": "service-old", "percent": 100, "latestRevision": True}]},
     }
     current = copy.deepcopy(before)
@@ -48,6 +48,18 @@ class StagedRolloutPolicyTests(unittest.TestCase):
         self.assertEqual(plan["promote_argument"], "service-new=100")
         self.assertEqual(plan["rollback_argument"], "service-old=100")
         self.assertNotIn("latest", plan["rollback_argument"])
+
+    def test_failed_latest_revision_does_not_prevent_repair(self):
+        docs = evidence()
+        docs[0]["status"]["conditions"][0]["status"] = "False"
+        docs[0]["status"]["latestCreatedRevisionName"] = "service-failed"
+        self.assertEqual(self.plan(docs)["promote_argument"], "service-new=100")
+
+    def test_unready_routes_cannot_authorize_repair(self):
+        docs = evidence()
+        docs[0]["status"]["conditions"][1]["status"] = "False"
+        with self.assertRaisesRegex(policy.Refused, "routes"):
+            self.plan(docs)
 
     def test_existing_split_and_tags_are_preserved(self):
         docs = evidence()

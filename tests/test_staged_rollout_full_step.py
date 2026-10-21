@@ -48,6 +48,12 @@ if args[:3] == ['run', 'services', 'describe']:
 elif args[:2] == ['run', 'deploy']:
     assert '--no-traffic' in args and '--deploy-health-check' in args
     assert '--startup-probe=httpGet.path=/healthz,httpGet.port=8080,initialDelaySeconds=0,failureThreshold=24,timeoutSeconds=5,periodSeconds=10' in args
+    if os.environ.get('EXPECT_ALIAS') == 'true':
+        assert '--update-secrets=FAKE_SECRET=projects/123/secrets/fixture:1' in args
+        # Simulate a container whose health cannot succeed without its remote alias.
+        state['spec']['template']['metadata']['annotations']['run.googleapis.com/secrets'] = 'sdk-alias:projects/123/secrets/fixture'
+        state['spec']['template']['spec']['containers'][0]['env'] = [
+            {'name': 'FAKE_SECRET', 'valueFrom': {'secretKeyRef': {'name': 'sdk-alias', 'key': '1'}}}]
     suffix = next(arg.split('=', 1)[1] for arg in args if arg.startswith('--revision-suffix='))
     image = next(arg.split('=', 1)[1] for arg in args if arg.startswith('--image='))
     state['spec']['template']['metadata']['name'] = 'service-' + suffix
@@ -57,24 +63,25 @@ elif args[:2] == ['run', 'deploy']:
     state['metadata']['generation'] += 1
     state['status'].update(observedGeneration=state['metadata']['generation'],
         latestReadyRevisionName='service-' + suffix, latestCreatedRevisionName='service-' + suffix)
-    save()
-elif args[:3] == ['run', 'services', 'replace']:
-    if failure == 'replace':
-        sys.exit(4)
-    replacement = yaml.safe_load(pathlib.Path(args[3]).read_text())
-    assert replacement['spec']['traffic'] == [{'revisionName': 'service-old', 'percent': 100}]
-    candidate = replacement['spec']['template']['metadata']['name']
-    assert candidate == 'service-r123-1-final'
-    state['spec'] = replacement['spec']
-    state['metadata']['generation'] += 1
-    state['status'].update(observedGeneration=state['metadata']['generation'],
-        latestReadyRevisionName=candidate, latestCreatedRevisionName=candidate)
+    state['status']['conditions'][0]['status'] = 'True'
     if failure == 'alias-readback':
         state['spec']['template']['spec']['containers'][0]['env'] = []
+    if failure in ('foreign-no-traffic', 'foreign-config-only', 'foreign-before-alias'):
+        state['spec']['template']['spec']['containers'][0]['env'].append(
+            {'name': 'FOREIGN_NON_SECRET_CONFIG', 'value': 'preserve'})
+        state['status'].update(latestCreatedRevisionName='service-foreign',
+                              latestReadyRevisionName='service-foreign')
+        if failure == 'foreign-before-alias':
+            state['status']['traffic'] = [{'revisionName': 'service-foreign', 'percent': 100}]
     save()
+    if failure == 'deploy':
+        sys.exit(4)
+elif args[:3] == ['run', 'services', 'replace']:
+    raise SystemExit('staged mode must not replace service YAML')
 elif args[:3] == ['run', 'revisions', 'describe']:
     candidate = state['status']['latestCreatedRevisionName']
-    assert args[3] == candidate
+    if args[3] != candidate:
+        sys.exit(3)
     print(json.dumps({
         'metadata': {'name': candidate, 'namespace': '123', 'generation': 1,
                      'labels': {'serving.knative.dev/service': 'service'}},
@@ -105,6 +112,9 @@ class CompleteDeployStepTests(unittest.TestCase):
             script = script.replace('${{ ' + key + ' }}', value)
         self.assertNotIn('${{', script)
         before = evidence()[0]
+        if failure == 'prior-failed':
+            before['status']['conditions'][0]['status'] = 'False'
+            before['status']['latestCreatedRevisionName'] = 'service-prior-failed'
         before['spec'] = {'traffic': [{'latestRevision': True, 'percent': 100}],
                           'template': {'metadata': {'name': 'service-old', 'annotations': {}},
                           'spec': {'containers': [{'name': 'ingress', 'image': IMAGE,
@@ -117,7 +127,7 @@ class CompleteDeployStepTests(unittest.TestCase):
             (root / 'gcloud').write_text(GCLOUD.replace('PYTHON', sys.executable, 1))
             (root / 'gcloud').chmod(0o755)
             env = {**os.environ, 'PATH': directory + os.pathsep + str(Path(sys.executable).parent) + os.pathsep + os.environ['PATH'],
-                   'FIXTURE': directory, 'FAILURE': failure, 'STAGED_HEALTH_PATH': '/healthz',
+                   'FIXTURE': directory, 'FAILURE': failure, 'EXPECT_ALIAS': str(cross_project).lower(), 'STAGED_HEALTH_PATH': '/healthz',
                    'STAGED_IMAGE': IMAGE, 'DEBOUNCE_ENVIRONMENT': '',
                    'SERVICE': 'service', 'PROJECT_ID': 'project', 'REGION': 'europe-west1',
                    'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',
@@ -132,10 +142,16 @@ class CompleteDeployStepTests(unittest.TestCase):
     def test_full_cross_project_step_promotes_only_final_verified_revision(self):
         result, calls, state = self.execute()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(state['status']['traffic'], [{'revisionName': 'service-r123-1-final', 'percent': 100}])
+        self.assertEqual(state['status']['traffic'], [{'revisionName': 'service-r123-1-base', 'percent': 100}])
         kinds = [call[:3] for call in calls]
-        self.assertLess(kinds.index(['run', 'services', 'replace']), kinds.index(['run', 'revisions', 'describe']))
+        self.assertNotIn(['run', 'services', 'replace'], kinds)
+        self.assertEqual(sum(call[:2] == ['run', 'deploy'] for call in calls), 1)
         self.assertLess(kinds.index(['run', 'revisions', 'describe']), kinds.index(['run', 'services', 'update-traffic']))
+
+    def test_repair_after_prior_failed_candidate_succeeds(self):
+        result, calls, state = self.execute(failure='prior-failed')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(state['status']['traffic'][0]['revisionName'], 'service-r123-1-base')
 
     def test_no_cross_project_aliases_promotes_base_revision(self):
         result, calls, state = self.execute(cross_project=False)
@@ -144,7 +160,7 @@ class CompleteDeployStepTests(unittest.TestCase):
         self.assertFalse(any(call[:3] == ['run', 'services', 'replace'] for call in calls))
 
     def test_reconcile_or_health_failure_leaves_old_traffic(self):
-        for failure in ('replace', 'alias-readback', 'health'):
+        for failure in ('deploy', 'alias-readback', 'health'):
             with self.subTest(failure=failure):
                 result, calls, state = self.execute(failure=failure)
                 self.assertNotEqual(result.returncode, 0)

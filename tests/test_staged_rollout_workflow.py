@@ -75,7 +75,7 @@ class WorkflowStagingTests(unittest.TestCase):
                    'REGION': 'europe-west1', 'PROJECT_ID': 'project',
                    'GITHUB_STEP_SUMMARY': str(root / 'summary')}
             # Only the actual workflow blocks execute; gcloud cannot reach the network.
-            script = 'set -euo pipefail\nSTAGE_DIR=""\ntrap \'[ -z "$STAGE_DIR" ] || rm -rf "$STAGE_DIR"\' EXIT\n'
+            script = 'set -euo pipefail\nSTAGE_DIR=""\nCROSS_PROJECT_SECRET_LINES=()\ntrap \'[ -z "$STAGE_DIR" ] || rm -rf "$STAGE_DIR"\' EXIT\n'
             result = subprocess.run(['bash', '-c', script + block('stage-prepare') + '\n' + block('stage-promote')],
                                     env=env, text=True, capture_output=True, timeout=10)
             calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
@@ -107,8 +107,8 @@ class WorkflowStagingTests(unittest.TestCase):
         source = WORKFLOW.read_text()
         self.assertIn('"--no-traffic" "--deploy-health-check"', source)
         self.assertIn('"--revision-suffix=${STAGE_SUFFIX}-base"', source)
-        self.assertIn("service['spec']['template'].setdefault('metadata', {})['name'] = sys.argv[1]", source)
-        self.assertIn("require(current == rollback, 'traffic changed before alias reconciliation')", source)
+        self.assertIn('ALL_SECRET_LINES=("${SAME_PROJECT_SECRET_LINES[@]}" "${CROSS_PROJECT_SECRET_LINES[@]}")', source)
+        self.assertIn('&& [ -z "$STAGED_HEALTH_PATH" ]', source)
         self.assertLess(source.index('python3 "$STAGE_DIR/policy.py" --before'),
                         source.index('"${gcloud_cmd[@]}"'))
         self.assertNotIn('--to-latest', block('stage-promote'))

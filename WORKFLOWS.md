@@ -18,12 +18,25 @@ and inputs change. Source delivery alone does not activate either feature.
 - `staged_health_path`: the reviewed HTTP startup endpoint, `/healthz` for the
   admin and PM targets. The workflow captures the existing resolved traffic and
   tags, stages a digest-pinned, named revision with `--no-traffic`, and preserves
-  that split when applying cross-project secret aliases. It validates the final
+  that split. All cross-project references are supplied through native SDK
+  `--update-secrets` before startup; staged mode never patches service YAML
+  after creating an incomplete candidate. It validates the final
   revision's service/project identity, observed generation, digest, successful
   HTTP startup probe and unchanged traffic/ingress before promoting that exact
   revision. The configured probe uses port 8080, period 10 seconds, timeout 5
   seconds and 24 attempts. The hub helper is embedded from the same source;
   tests reject drift between the embedded and standalone implementations.
+
+Staging requires an existing service with resolved traffic and `RoutesReady=True`.
+A failed latest-created candidate does not prevent recovery when the existing
+routes remain ready; the new candidate still requires its own Ready and
+ContainerHealthy proof. Tags are captured as resolved revision identities, even
+when originally bound to LATEST, and must retain that identity after promotion.
+
+The debounce contract assumes a workflow named `ci` and the branch `main`.
+Shared concurrency preserves a running deployment; GitHub may replace an older
+pending deployment with a newer pending one. Only the current main head with a
+fresh successful CI result may enter the deploy job after the native timer.
 
 HTTP startup success proves the configured endpoint at startup, not full business
 acceptance. Cloud Run accepts HTTP success/redirect responses for this probe;

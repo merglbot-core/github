@@ -503,6 +503,7 @@ jobs:
 
             python3 - "$service_json" "$@" <<'PY'
           import json
+          import os
           import sys
 
           service_path = sys.argv[1]
@@ -547,7 +548,9 @@ jobs:
               else:
                   secret_resource, secret_version = rest, "latest"
 
-              if mapping.get(env_name) != secret_resource:
+              env_alias = env_index.get(env_name, {}).get("valueFrom", {}).get("secretKeyRef", {}).get("name")
+              expected_alias = env_alias if os.environ.get("STAGED_HEALTH_PATH") else env_name
+              if not expected_alias or mapping.get(expected_alias) != secret_resource:
                   errors.append(
                       f"annotation mismatch for {env_name}: alias mapping is missing or points to an unexpected resource"
                   )
@@ -561,7 +564,7 @@ jobs:
                   env_entry.get("valueFrom", {})
                            .get("secretKeyRef", {})
               )
-              if secret_ref.get("name") != env_name:
+              if secret_ref.get("name") != expected_alias:
                   errors.append(
                       f"secretKeyRef.name mismatch for {env_name}: expected alias {env_name}, got {secret_ref.get('name')!r}"
                   )
@@ -623,7 +626,7 @@ jobs:
               require(metadata.get("generation") == status.get("observedGeneration")
                       and metadata.get("generation") is not None, "unobserved service generation")
               conditions = {c.get("type"): c.get("status") for c in status.get("conditions", [])}
-              require(conditions.get("Ready") == "True", "service not Ready")
+              require(conditions.get("RoutesReady") == "True", "serving routes not Ready")
               traffic = status.get("traffic")
               require(isinstance(traffic, list) and traffic, "missing resolved traffic")
               split, tags = {}, {}
@@ -690,9 +693,9 @@ jobs:
               require("tcpSocket" not in probe and "grpc" not in probe, "ambiguous startup probe")
               expected_probe = {"initialDelaySeconds": 0, "failureThreshold": 24,
                                 "timeoutSeconds": 5, "periodSeconds": 10}
-              require(all(type(probe.get(key, 0 if key == "initialDelaySeconds" else None)) is int
-                          and probe.get(key, 0 if key == "initialDelaySeconds" else None) == value
-                          for key, value in expected_probe.items()), "startup timing contract mismatch")
+              require(all(type(probe.get(field, 0 if field == "initialDelaySeconds" else None)) is int
+                          and probe.get(field, 0 if field == "initialDelaySeconds" else None) == value
+                          for field, value in expected_probe.items()), "startup timing contract mismatch")
               return {
                   "revision": expected_revision, "image": expected_image,
                   "promote_argument": f"{expected_revision}=100",
@@ -817,7 +820,12 @@ jobs:
             if [ -n "${{ inputs.env_vars }}" ]; then
               gcloud_cmd+=("--update-env-vars=${{ inputs.env_vars }}")
             fi
-            if [ "${#SAME_PROJECT_SECRET_LINES[@]}" -gt 0 ]; then
+            if [ -n "$STAGED_HEALTH_PATH" ]; then
+              # Native SDK remote references construct aliases before candidate startup.
+              ALL_SECRET_LINES=("${SAME_PROJECT_SECRET_LINES[@]}" "${CROSS_PROJECT_SECRET_LINES[@]}")
+              { IFS=,; SECRET_LIST="${ALL_SECRET_LINES[*]}"; }
+              gcloud_cmd+=("--update-secrets=${SECRET_LIST}")
+            elif [ "${#SAME_PROJECT_SECRET_LINES[@]}" -gt 0 ]; then
               { IFS=,; SECRET_LIST="${SAME_PROJECT_SECRET_LINES[*]}"; }
               gcloud_cmd+=("--update-secrets=${SECRET_LIST}")
             fi
@@ -858,12 +866,8 @@ jobs:
           "${gcloud_cmd[@]}"
 
           # Patch cross-project secrets via service YAML replace (alias mapping)
-          if [ "${#CROSS_PROJECT_SECRET_LINES[@]}" -gt 0 ]; then
+          if [ "${#CROSS_PROJECT_SECRET_LINES[@]}" -gt 0 ] && [ -z "$STAGED_HEALTH_PATH" ]; then
             echo "::notice::Base rollout succeeded, exporting fresh service YAML for cross-project alias reconcile"
-
-            if [ -n "$STAGED_HEALTH_PATH" ]; then
-              gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format=json > "$STAGE_DIR/alias-origin.json"
-            fi
 
             if ! gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format=export > /tmp/service.yaml; then
               echo "::error::Failed to export service YAML for $SERVICE"
@@ -873,10 +877,6 @@ jobs:
             if [ ! -s /tmp/service.yaml ]; then
               echo "::error::Exported service YAML is empty"
               exit 1
-            fi
-
-            if [ -n "$STAGED_HEALTH_PATH" ]; then
-              cp /tmp/service.yaml "$STAGE_DIR/alias-export.yaml"
             fi
 
             write_xproj_patcher
@@ -895,46 +895,6 @@ jobs:
                 exit 1
               fi
             done
-
-            if [ -n "$STAGED_HEALTH_PATH" ]; then
-              STAGE_CANDIDATE="${SERVICE}-${STAGE_SUFFIX}-final"
-              [ "${#STAGE_CANDIDATE}" -le 63 ] || exit 1
-              gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format=json > "$STAGE_DIR/before-alias.json"
-              python3 - "$STAGE_CANDIDATE" "$STAGE_DIR" "${SERVICE}-${STAGE_SUFFIX}-base" <<'STAGE_ALIAS_PY'
-          import json, sys, yaml
-          from pathlib import Path
-          directory = Path(sys.argv[2])
-          sys.path.insert(0, str(directory))
-          from policy import serving_state, require
-          rollback = json.loads((directory / 'rollback.json').read_text())
-          live = json.loads((directory / 'before-alias.json').read_text())
-          origin = json.loads((directory / 'alias-origin.json').read_text())
-          exported = yaml.safe_load((directory / 'alias-export.yaml').read_text())
-          current = serving_state(live)
-          require(current == rollback, 'traffic changed before alias reconciliation')
-          for document in (origin, live):
-              require(document['status'].get('latestCreatedRevisionName') == sys.argv[3]
-                      and document['status'].get('latestReadyRevisionName') == sys.argv[3],
-                      'base revision superseded before alias reconciliation')
-              require(document['spec']['template'].get('metadata', {}).get('name') == sys.argv[3],
-                      'foreign template before alias reconciliation')
-          require(origin.get('metadata') == live.get('metadata')
-                  and origin.get('spec') == live.get('spec'),
-                  'service configuration changed during alias export')
-          require(exported.get('spec') == origin.get('spec'),
-                  'export does not match pinned base configuration')
-          with open('/tmp/service.yaml') as stream:
-              service = yaml.safe_load(stream)
-          service['spec']['template'].setdefault('metadata', {})['name'] = sys.argv[1]
-          service['spec']['traffic'] = [
-              {'revisionName': revision, 'percent': percent}
-              for revision, percent in rollback['split'].items()
-          ] + [{'revisionName': revision, 'tag': tag, 'percent': 0}
-               for tag, revision in rollback['tags'].items()]
-          with open('/tmp/service.yaml', 'w') as stream:
-              yaml.safe_dump(service, stream, sort_keys=False)
-          STAGE_ALIAS_PY
-            fi
 
             if ! gcloud run services replace /tmp/service.yaml --region="$REGION" --project="$PROJECT_ID"; then
               echo "::error::Failed to apply patched service YAML for $SERVICE"
@@ -957,6 +917,9 @@ jobs:
           # BEGIN stage-promote
           if [ -n "$STAGED_HEALTH_PATH" ]; then
             gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format=json > "$STAGE_DIR/current.json"
+            if [ "${#CROSS_PROJECT_SECRET_LINES[@]}" -gt 0 ]; then
+              verify_xproj_service "$STAGE_DIR/current.json" "${CROSS_PROJECT_SECRET_LINES[@]}"
+            fi
             gcloud run revisions describe "$STAGE_CANDIDATE" --region="$REGION" --project="$PROJECT_ID" --format=json > "$STAGE_DIR/revision.json"
             python3 "$STAGE_DIR/policy.py" --before "$STAGE_DIR/before.json" \
               --current "$STAGE_DIR/current.json" --revision "$STAGE_DIR/revision.json" \
@@ -964,7 +927,7 @@ jobs:
               --health-path "$STAGED_HEALTH_PATH" > "$STAGE_DIR/plan.json"
             # Preserve the exact rollback target in the run summary, never secret-bearing JSON.
             python3 - "$STAGE_DIR/plan.json" "$GITHUB_STEP_SUMMARY" <<'STAGE_SUMMARY_PY'
-          import json, sys
+          import json, os, sys
           with open(sys.argv[1]) as stream:
               plan = json.load(stream)
           with open(sys.argv[2], 'a') as stream:
@@ -980,7 +943,7 @@ jobs:
               --to-revisions="${STAGE_CANDIDATE}=100"
             gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format=json > "$STAGE_DIR/after.json"
             python3 - "$STAGE_DIR" "$STAGE_CANDIDATE" <<'STAGE_VERIFY_PY'
-          import json, sys
+          import json, os, sys
           from pathlib import Path
           directory = Path(sys.argv[1])
           sys.path.insert(0, str(directory))
