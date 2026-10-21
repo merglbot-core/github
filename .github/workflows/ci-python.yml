@@ -234,14 +234,19 @@ jobs:
         run: |
           set -euo pipefail
           # pull_request checks out the merge commit; HEAD^1 is the base it was
-          # merged onto, so HEAD^1..HEAD is exactly the PR's change. Private repos
-          # need no extra fetch (persist-credentials is off). A missing parent
-          # resolves to scanning, never to skipping.
+          # merged onto, so HEAD^1..HEAD is exactly the PR's change. Nothing is
+          # fetched after checkout, so persist-credentials: false is fine in
+          # private callers. A missing parent resolves to scanning, never to
+          # skipping. The job runs only on pull_request; any other event (should
+          # the job condition ever widen) also scans, because there HEAD^1..HEAD
+          # is only the last commit.
           scan=true
           # Compare the configured Dockerfile as an exact, normalised path (a leading
           # ./ is dropped) so a custom location is never treated as a regex.
           dockerfile_path="${DOCKERFILE#./}"
-          if changed="$(git diff --name-only HEAD^1 HEAD 2>/dev/null)"; then
+          if [[ "${GITHUB_EVENT_NAME}" != "pull_request" ]]; then
+            echo "::notice::event ${GITHUB_EVENT_NAME} is not pull_request; scanning"
+          elif changed="$(git diff --name-only HEAD^1 HEAD 2>/dev/null)"; then
             if ! grep -E -q '(^|/)(Dockerfile[^/]*|requirements[^/]*\.(txt|in))$' <<< "${changed}" \
               && ! grep -F -x -q -- "${dockerfile_path}" <<< "${changed}"; then
               scan=false
