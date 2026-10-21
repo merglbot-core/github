@@ -293,3 +293,10 @@ uploaded. Pass that artifact as `artifact_name`, and upload it with `include-hid
 `.well-known/` survives. Without it the job exits 2 ("cannot conclude"). Callers that build in a single
 job run the gate CLI as a step instead (github#762). `frontend-artifact-gate-tests.yml` exercises
 the upload, download and gate path on every change.
+
+## ci-python.yml: docker-image-scan
+
+`docker-image-scan: true` adds an `Image scan` job: in pull requests that change a `Dockerfile` or a
+`requirements*.txt|.in` file it builds the image locally (never pushed) and scans it with Trivy
+(HIGH/CRITICAL, ignore-unfixed). A filesystem scan cannot see the base image OS packages (github#775).
+The required `Python CI` job is unchanged; an unreadable base commit resolves to scanning.
