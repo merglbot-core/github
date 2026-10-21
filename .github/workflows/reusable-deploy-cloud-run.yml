@@ -118,8 +118,8 @@ jobs:
           # No runner sleep: GitHub waits before allocating this job's runner.
           encoded=$(python3 -c 'import os,urllib.parse; print(urllib.parse.quote(os.environ["DEBOUNCE_ENVIRONMENT"], safe=""))')
           gh api "repos/$GITHUB_REPOSITORY/environments/$encoded" > "$RUNNER_TEMP/debounce-environment.json"
-          python3 - "$RUNNER_TEMP/debounce-environment.json" "$GITHUB_EVENT_PATH" <<'DEBOUNCE_PY'
-          import json, os, sys
+          python3 - "$RUNNER_TEMP/debounce-environment.json" "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/debounce-trigger-head" <<'DEBOUNCE_PY'
+          import json, os, re, sys
           with open(sys.argv[1]) as stream:
               environment = json.load(stream)
           timers = [rule.get('wait_timer') for rule in environment.get('protection_rules', [])
@@ -132,11 +132,18 @@ jobs:
           if not (os.environ.get('GITHUB_EVENT_NAME') == 'workflow_run'
                   and run.get('event') == 'push' and run.get('conclusion') == 'success'
                   and run.get('head_branch') == 'main' and run.get('name') == 'ci'
-                  and run.get('head_sha') == os.environ['GITHUB_SHA']
+                  and isinstance(run.get('head_sha'), str)
+                  and re.fullmatch(r'[0-9a-f]{40}', run['head_sha'])
                   and run.get('head_repository', {}).get('full_name') == os.environ['GITHUB_REPOSITORY']
                   and type(run.get('id')) is int):
               raise SystemExit('Debounced rollout requires this repository current green main push CI run')
+          print(run['head_sha'])
           DEBOUNCE_PY
+          # workflow_run's GITHUB_SHA can already be a newer main commit.
+          # A valid but superseded successful trigger is an intentional skip.
+          if [[ "$(cat "$RUNNER_TEMP/debounce-trigger-head")" != "$GITHUB_SHA" ]]; then
+            exit 0
+          fi
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" > "$RUNNER_TEMP/debounce-own-run.json"
           python3 - "$RUNNER_TEMP/debounce-own-run.json" <<'DEBOUNCE_AGE_PY'
           import datetime, json, os, sys

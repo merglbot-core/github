@@ -30,10 +30,10 @@ else:
 
 class DebounceAdmissionTests(unittest.TestCase):
     def execute(self, *, timer=10, age=650, head=SHA, ci_status='completed',
-                ci_conclusion='success', repository='org/repo', event='workflow_run'):
+                ci_conclusion='success', repository='org/repo', event='workflow_run', trigger_head=SHA):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            run = {'id': 99, 'name': 'ci', 'event': 'push', 'head_branch': 'main', 'head_sha': SHA,
+            run = {'id': 99, 'name': 'ci', 'event': 'push', 'head_branch': 'main', 'head_sha': trigger_head,
                    'conclusion': 'success', 'status': 'completed', 'head_repository': {'full_name': repository}}
             (root / 'event.json').write_text(json.dumps({'workflow_run': run}))
             run.update(status=ci_status, conclusion=ci_conclusion)
@@ -64,6 +64,17 @@ class DebounceAdmissionTests(unittest.TestCase):
         result, verdict = self.execute(head='b' * 40)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(verdict, 'eligible=false')
+
+    def test_superseded_trigger_skips_before_live_head_admission(self):
+        result, verdict = self.execute(trigger_head='b' * 40)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(verdict, 'eligible=false')
+
+    def test_malformed_trigger_is_refused_not_treated_as_superseded(self):
+        for value in ('not-a-sha', '', None):
+            result, verdict = self.execute(trigger_head=value)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(verdict, 'eligible=false')
 
     def test_bypassed_or_shortened_wait_refused(self):
         for options in ({'age': 599}, {'age': -20}, {'timer': 0}, {'timer': 5}, {'timer': 11}):
