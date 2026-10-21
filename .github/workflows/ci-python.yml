@@ -77,6 +77,23 @@ on:
         default: 1
         required: false
 
+      docker-image-scan:
+        description: >-
+          github#775: build the image and scan it with Trivy (HIGH/CRITICAL,
+          ignore-unfixed) in pull requests that change a Dockerfile or a
+          requirements file. Off by default; a filesystem scan cannot see the
+          OS packages of the base image, so without this a vulnerable base only
+          surfaces as a blocked deploy.
+        type: boolean
+        default: false
+        required: false
+
+      dockerfile:
+        description: 'Dockerfile for docker-image-scan, relative to the repository root'
+        type: string
+        default: 'Dockerfile'
+        required: false
+
       timeout-minutes:
         description: >-
           Job timeout in minutes. 30 (default) is the previous fixed limit; raise
@@ -194,3 +211,58 @@ jobs:
         run: ${{ inputs.test-command }}
         env:
           PYTHONPATH: ${{ inputs.working-directory }}
+
+  image-scan:
+    name: Image scan
+    # Separate job so the required `Python CI` check keeps its name and timing.
+    if: ${{ inputs.docker-image-scan && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Decide whether the image inputs changed
+        id: decide
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+        run: |
+          set -euo pipefail
+          # Two single commits are enough for a tree diff; no history is fetched.
+          # An unreadable base resolves to scanning, never to skipping.
+          scan=true
+          # Compare the configured Dockerfile as an exact, normalised path (a leading
+          # ./ is dropped) so a custom location is never treated as a regex.
+          dockerfile_path="${DOCKERFILE#./}"
+          if git fetch --quiet --depth=1 origin "${BASE_SHA}"; then
+            changed="$(git diff --name-only "${BASE_SHA}" HEAD)"
+            if ! grep -E -q '(^|/)(Dockerfile[^/]*|requirements[^/]*\.(txt|in))$' <<< "${changed}" \
+              && ! grep -F -x -q -- "${dockerfile_path}" <<< "${changed}"; then
+              scan=false
+            fi
+          fi
+          echo "scan=${scan}" >> "${GITHUB_OUTPUT}"
+          echo "image scan: ${scan}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Build image (local only, never pushed)
+        if: steps.decide.outputs.scan == 'true'
+        env:
+          DOCKERFILE: ${{ inputs.dockerfile }}
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 -f "${DOCKERFILE}" -t "pr-image-scan:${GITHUB_SHA}" .
+
+      - name: Scan image with Trivy (HIGH/CRITICAL)
+        if: steps.decide.outputs.scan == 'true'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.34.1
+        with:
+          version: 'v0.69.3'
+          scan-type: 'image'
+          image-ref: pr-image-scan:${{ github.sha }}
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'
+          ignore-unfixed: true
