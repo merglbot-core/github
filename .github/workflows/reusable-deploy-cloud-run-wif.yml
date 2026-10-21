@@ -131,6 +131,16 @@ on:
         required: false
         type: string
         default: ''
+      env_update:
+        description: 'Merge env_vars into the live service env with --update-env-vars instead of replacing it (github#709). ENVIRONMENT is then not injected and variables not listed keep their live value.'
+        required: false
+        type: boolean
+        default: false
+      secret_env:
+        description: 'Optional newline-separated NAME=SECRET[:VERSION] list merged with --update-secrets (github#709). SECRET is a Secret Manager id in the deploy project or projects/<number>/secrets/<id>; VERSION defaults to latest. References only, never values; blank and # lines are ignored.'
+        required: false
+        type: string
+        default: ''
       install_gcloud:
         description: 'Install gcloud via google-github-actions/setup-gcloud (false = use the runner-preinstalled SDK)'
         type: boolean
@@ -145,6 +155,9 @@ on:
         required: false
       GCP_PROJECT_ID:
         description: 'GCP Project ID'
+        required: false
+      NODE_AUTH_TOKEN:
+        description: 'Optional token exposed to docker build as the node_auth_token BuildKit secret, for a Dockerfile that installs private GitHub Packages (github#709). Pass the caller job github.token with packages: read; it never reaches the image or the logs.'
         required: false
 
 concurrency:
@@ -380,10 +393,18 @@ jobs:
           INPUT_DOCKERFILE: ${{ inputs.dockerfile }}
           INPUT_IMAGE_NAME: ${{ inputs.image_name }}
           IMAGE_TAG: ${{ github.sha }}
+          NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}
         run: |
           set -euo pipefail
           IMAGE_BASE="${ARTIFACT_LOCATION}-docker.pkg.dev/${ARTIFACT_PROJECT_ID}/${ARTIFACT_REPOSITORY}/${INPUT_IMAGE_NAME}"
-          build_image() { docker build -t "$1" -f "$INPUT_DOCKERFILE" .; }
+          # github#709: a caller-provided token is a BuildKit secret (never a build arg or layer).
+          build_image() {
+            if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+              docker build --secret id=node_auth_token,env=NODE_AUTH_TOKEN -t "$1" -f "$INPUT_DOCKERFILE" .
+            else
+              docker build -t "$1" -f "$INPUT_DOCKERFILE" .
+            fi
+          }
           # Provenance (github#909): this workflow does not sign its images, so an existing
           # tag carries no evidence of who pushed it and is never adopted; it is rebuilt and
           # pushed (an immutable repository refuses that, as before github#909).
@@ -728,6 +749,8 @@ jobs:
           INPUT_CPU: ${{ inputs.cpu }}
           INPUT_ALLOW_UNAUTHENTICATED: ${{ inputs.allow_unauthenticated }}
           INPUT_ENV_VARS: ${{ inputs.env_vars }}
+          INPUT_ENV_UPDATE: ${{ inputs.env_update }}
+          INPUT_SECRET_ENV: ${{ inputs.secret_env }}
         run: |
           set -euo pipefail
 
@@ -797,6 +820,48 @@ jobs:
             done
             ENV_VARS="${ENV_VARS},${INPUT_ENV_VARS}"
           fi
+          # github#709: env_update=true merges the listed variables into the live env
+          # (--update-env-vars) and injects no ENVIRONMENT, so unlisted variables survive.
+          if [ "${INPUT_ENV_UPDATE:-false}" = "true" ]; then
+            ENV_FLAGS=()
+            [ -z "${INPUT_ENV_VARS}" ] || ENV_FLAGS=("--update-env-vars=${INPUT_ENV_VARS}")
+          else
+            ENV_FLAGS=("--set-env-vars=${ENV_VARS}")
+          fi
+
+          # github#709: Secret Manager references, merged with --update-secrets so a
+          # secret that is not listed is never unmounted. References only, never values.
+          SECRET_FLAGS=()
+          if [ -n "${INPUT_SECRET_ENV:-}" ]; then
+            secret_entries=()
+            while IFS= read -r raw || [ -n "$raw" ]; do
+              line="${raw#"${raw%%[![:space:]]*}"}"
+              line="${line%"${line##*[![:space:]]}"}"
+              [ -n "$line" ] || continue
+              [[ "$line" == \#* ]] && continue
+              name="${line%%=*}"
+              ref="${line#*=}"
+              if [ "$name" = "$line" ] || ! [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+                echo "::error::secret_env entry is not NAME=SECRET[:VERSION]: '${name}'"
+                exit 1
+              fi
+              sm_ref="${ref%%:*}"
+              version="latest"
+              [ "$sm_ref" = "$ref" ] || version="${ref#*:}"
+              if ! [[ "$sm_ref" =~ ^[A-Za-z0-9_-]+$ || "$sm_ref" =~ ^projects/[0-9]+/secrets/[A-Za-z0-9_-]+$ ]]; then
+                echo "::error::secret_env ${name}: expected a secret id or projects/<number>/secrets/<id>"
+                exit 1
+              fi
+              if ! [[ "$version" =~ ^(latest|[0-9]+)$ ]]; then
+                echo "::error::secret_env ${name}: version must be latest or a number"
+                exit 1
+              fi
+              secret_entries+=("${name}=${sm_ref}:${version}")
+            done <<< "${INPUT_SECRET_ENV}"
+            if [ "${#secret_entries[@]}" -gt 0 ]; then
+              SECRET_FLAGS=("--update-secrets=$(IFS=,; printf '%s' "${secret_entries[*]}")")
+            fi
+          fi
 
           deploy_args=(
             "${INPUT_SERVICE_NAME}"
@@ -806,7 +871,8 @@ jobs:
             "--platform" "managed"
             "--min-instances" "${INPUT_MIN_INSTANCES}"
             "--max-instances" "${INPUT_MAX_INSTANCES}"
-            "--set-env-vars=${ENV_VARS}"
+            ${ENV_FLAGS[@]+"${ENV_FLAGS[@]}"}
+            ${SECRET_FLAGS[@]+"${SECRET_FLAGS[@]}"}
             "--quiet"
           )
 
