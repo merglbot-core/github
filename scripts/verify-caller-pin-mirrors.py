@@ -23,15 +23,44 @@ MIRROR = re.compile(r"merglbot-core/github(?:/[^@\s]*)?@([0-9a-f]{7,40})\b")
 USES_LINE = re.compile(r"^\s*-?\s*uses:\s")
 
 
+def running_pins(text: str) -> set[str]:
+    """SHAs that `jobs.<id>.uses` and `jobs.<id>.steps[].uses` actually execute.
+
+    Read from the parsed workflow, so a `uses:` string inside a description or
+    run block cannot pose as a running pin, and quoted values still count. If
+    the file does not parse, fall back to the line regex (never to "no pins").
+    """
+    try:
+        import yaml  # PyYAML; the hub CI and pre-push hook already use it
+
+        doc = yaml.safe_load(text) or {}
+    except Exception:  # noqa: BLE001 - unparsable workflow: use the regex
+        return set(USES.findall(text))
+    pins: set[str] = set()
+    jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    for job in (jobs or {}).values() if isinstance(jobs, dict) else []:
+        if not isinstance(job, dict):
+            continue
+        values = [job.get("uses")] + [st.get("uses") for st in job.get("steps") or [] if isinstance(st, dict)]
+        for value in values:
+            if isinstance(value, str):
+                m = re.match(r"\s*merglbot-core/github/[^@\s]+@([0-9a-f]{40})\s*$", value)
+                if m:
+                    pins.add(m.group(1))
+    return pins
+
+
 def stale_mirrors(text: str) -> list[tuple[int, str]]:
-    running = set(USES.findall(text))
+    running = running_pins(text)
     out = []
     for lineno, line in enumerate(text.splitlines(), 1):
         # A mirror can hide anywhere outside the uses: line itself: a comment, a
         # description block scalar, an echo in run: (review of #1043).
-        if USES_LINE.match(line):
-            # The pin itself is the source of truth; only a trailing comment on it
-            # can mirror (and drift from) another SHA.
+        pin = USES.match(line + "\n")
+        if USES_LINE.match(line) and pin and pin.group(1) in running:
+            # A running pin is the source of truth; only a trailing comment on it
+            # can mirror (and drift from) another SHA. A `uses:` text that runs
+            # nothing (e.g. inside a block scalar) is checked like any other line.
             line = line.split("#", 1)[1] if "#" in line else ""
         for sha in MIRROR.findall(line):
             if not any(r.startswith(sha) for r in running):

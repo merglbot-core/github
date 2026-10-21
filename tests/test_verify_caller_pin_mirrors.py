@@ -43,6 +43,18 @@ class CallerPinMirrors(unittest.TestCase):
         proc = run(f"jobs:\n  ci:\n    uses: merglbot-core/github/.github/workflows/ci-python.yml@{NEW}  # was merglbot-core/github@{OLD}\n")
         self.assertEqual(proc.returncode, 1, proc.stdout)
 
+    def test_uses_text_in_a_block_scalar_is_not_a_running_pin(self) -> None:
+        proc = run(f"on:\n  workflow_dispatch:\n    inputs:\n      x:\n        description: |\n          uses: merglbot-core/github/.github/workflows/ci-python.yml@{OLD}\n          pinned to merglbot-core/github@{OLD}\njobs:\n  ci:\n    uses: merglbot-core/github/.github/workflows/ci-python.yml@{NEW}\n")
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+
+    def test_lone_uses_text_in_a_block_scalar_fails(self) -> None:
+        proc = run(f"on:\n  workflow_dispatch:\n    inputs:\n      x:\n        description: |\n          uses: merglbot-core/github/.github/workflows/ci-python.yml@{OLD}\njobs:\n  ci:\n    uses: merglbot-core/github/.github/workflows/ci-python.yml@{NEW}\n")
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+
+    def test_quoted_uses_value_is_a_running_pin(self) -> None:
+        proc = run(f"# pinned to merglbot-core/github@{NEW}\njobs:\n  ci:\n    uses: 'merglbot-core/github/.github/workflows/ci-python.yml@{NEW}'\n")
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+
     def test_file_without_mirror_comment_passes(self) -> None:
         proc = run(f"jobs:\n  ci:\n    uses: merglbot-core/github/.github/workflows/ci-python.yml@{NEW}  # v1\n")
         self.assertEqual(proc.returncode, 0, proc.stdout)
