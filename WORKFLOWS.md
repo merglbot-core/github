@@ -1,5 +1,47 @@
 # Workflow Catalogue
 
+## Staged deployment and native debounce (github#962)
+
+The secrets-based `reusable-deploy-cloud-run.yml` provides two explicit caller
+inputs; existing callers keep the old deployment mode until their reviewed pins
+and inputs change. Source delivery alone does not activate either feature.
+
+- `debounce_environment`: a dedicated, owner-configured environment with exactly
+  one ten-minute wait timer. Keep the production/preview environment and its
+  existing protections on the deploy job. The timer job has only read permissions
+  and no cloud identity. GitHub performs the wait before allocating its runner;
+  there is no paid ten-minute shell sleep. The admission checks the live timer,
+  this workflow run's age, the triggering same-repository successful `ci` push
+  run, its current conclusion, and current `main`. A superseded head skips the
+  deploy; a missing timer, API error, or changed CI result refuses admission.
+  Manual dispatch is deliberately not inferred to be green CI in this mode.
+- `staged_health_path`: the reviewed HTTP startup endpoint, `/healthz` for the
+  admin and PM targets. The workflow captures the existing resolved traffic and
+  tags, stages a digest-pinned, named revision with `--no-traffic`, and preserves
+  that split when applying cross-project secret aliases. It validates the final
+  revision's service/project identity, observed generation, digest, successful
+  HTTP startup probe and unchanged traffic/ingress before promoting that exact
+  revision. The configured probe uses port 8080, period 10 seconds, timeout 5
+  seconds and 24 attempts. The hub helper is embedded from the same source;
+  tests reject drift between the embedded and standalone implementations.
+
+HTTP startup success proves the configured endpoint at startup, not full business
+acceptance. Cloud Run accepts HTTP success/redirect responses for this probe;
+caller review must establish that the chosen endpoint cannot redirect to a login
+or unrelated healthy page. Production business smoke checks remain necessary.
+The private admin ingress is not opened to test a tag URL. The deploy group is
+scoped by project, region and service and never cancels an executing deployment.
+External writers must respect that serialization; the pre-promotion readback is
+not a Cloud Run cross-client transaction lock.
+
+The summary records the exact pre-deploy revision split for rollback. On failure
+before promotion the old split is retained; a failed post-promotion readback is an
+incident requiring fresh traffic evidence before rollback, never a blind rewrite
+of a possible concurrent owner's change. This feature does not delete revisions,
+alter IAM, change the original acceptance windows, or prove the deploy-count and
+30-minute freshness targets. Timer activation and workflow merges retain their
+owner-only boundary. Consumer rollout and runtime acceptance remain under #962.
+
 This repository hosts all reusable and scheduled GitHub Actions workflows for the Merglbot platform.  
 Every consumer **must** follow [Rulebook v2](https://github.com/merglbot-public/docs/blob/main/RULEBOOK_V2.md), [PR Policy](https://github.com/merglbot-public/docs/blob/main/PR_POLICY.md), [Branch Protection](https://github.com/merglbot-public/docs/blob/main/BRANCH_PROTECTION.md), and [MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md](https://github.com/merglbot-public/docs/blob/main/MERGLBOT_GITHUB_ACTIONS_REUSABLE_WORKFLOWS.md).
 

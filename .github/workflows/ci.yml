@@ -36,6 +36,9 @@ jobs:
           python3 scripts/pr-assistant/verify-review-receipt.py --self-test
           python3 scripts/pr-assistant/pr-assistant-v4-evidence-canary.py self-test
           python3 scripts/pr-assistant/pr-assistant-v4-evidence-canary.py validate-config
+      - name: Install existing test dependencies before contract collection
+        # Full deploy-step tests use PyYAML, already declared by cost-monitoring.
+        run: python3 -m pip install -e 'platform/tools/cost-monitoring[dev]'
       - name: Run repo contract tests (unittest discover collects TestCase only)
         run: |
           set -euo pipefail
@@ -43,7 +46,6 @@ jobs:
       - name: Run cost-monitoring tests
         run: |
           set -euo pipefail
-          python3 -m pip install -e 'platform/tools/cost-monitoring[dev]'
           python3 -m pytest -q platform/tools/cost-monitoring/tests
       - name: Validate PR Assistant rollout manifest
         run: |

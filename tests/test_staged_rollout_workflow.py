@@ -1,0 +1,118 @@
+"""Execute the hub's actual staging blocks against an offline gcloud stub."""
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import textwrap
+import unittest
+
+from test_staged_rollout_policy import evidence, IMAGE, MODULE
+
+WORKFLOW = MODULE.parents[2] / '.github/workflows/reusable-deploy-cloud-run.yml'
+
+
+def block(name):
+    match = re.search(rf'^( *)# BEGIN {name}\n(.*?)^\1# END {name}$',
+                      WORKFLOW.read_text(), re.M | re.S)
+    if not match:
+        raise AssertionError(f'missing {name}')
+    return textwrap.dedent(match.group(2))
+
+
+STUB = '''#!{python}
+import json, os, pathlib, sys
+base = pathlib.Path(os.environ['FIXTURE'])
+args = sys.argv[1:]
+with (base / 'calls').open('a') as stream:
+    stream.write(json.dumps(args) + '\\n')
+if args[:3] == ['run', 'services', 'describe']:
+    count = base / 'count'
+    n = int(count.read_text()) if count.exists() else 0
+    count.write_text(str(n + 1))
+    print((base / ['before.json', 'current.json', 'after.json'][n]).read_text())
+elif args[:3] == ['run', 'revisions', 'describe']:
+    print((base / 'revision.json').read_text())
+elif args[:3] == ['run', 'services', 'update-traffic']:
+    if '--to-revisions=service-r123-1-base=100' not in args:
+        sys.exit(9)
+else:
+    sys.exit(8)
+'''
+
+
+class WorkflowStagingTests(unittest.TestCase):
+    def test_embedded_helper_is_exact_hub_source(self):
+        self.assertEqual(block('staged-policy-source'), MODULE.read_text())
+
+    def test_prepare_and_promote_have_valid_bash_syntax(self):
+        result = subprocess.run(['bash', '-n'], input=block('stage-prepare') + block('stage-promote'),
+                                text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def run_workflow(self, change=None):
+        before, current, revision = evidence()
+        name = 'service-r123-1-base'
+        current['status'].update(latestCreatedRevisionName=name, latestReadyRevisionName=name)
+        revision['metadata']['name'] = name
+        after = json.loads(json.dumps(current))
+        after['status']['traffic'] = [{'revisionName': name, 'percent': 100}]
+        if change:
+            change(current, revision)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for filename, doc in [('before', before), ('current', current), ('revision', revision), ('after', after)]:
+                (root / (filename + '.json')).write_text(json.dumps(doc))
+            stub = root / 'gcloud'
+            stub.write_text(STUB.format(python=sys.executable))
+            stub.chmod(0o755)
+            env = {**os.environ, 'PATH': str(root) + os.pathsep + str(Path(sys.executable).parent) + os.pathsep + os.environ['PATH'],
+                   'FIXTURE': directory, 'STAGED_HEALTH_PATH': '/healthz', 'STAGED_IMAGE': IMAGE,
+                   'DEBOUNCE_ENVIRONMENT': '',
+                   'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1', 'SERVICE': 'service',
+                   'REGION': 'europe-west1', 'PROJECT_ID': 'project',
+                   'GITHUB_STEP_SUMMARY': str(root / 'summary')}
+            # Only the actual workflow blocks execute; gcloud cannot reach the network.
+            script = 'set -euo pipefail\nSTAGE_DIR=""\ntrap \'[ -z "$STAGE_DIR" ] || rm -rf "$STAGE_DIR"\' EXIT\n'
+            result = subprocess.run(['bash', '-c', script + block('stage-prepare') + '\n' + block('stage-promote')],
+                                    env=env, text=True, capture_output=True, timeout=10)
+            calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
+            summary = (root / 'summary').read_text() if (root / 'summary').exists() else ''
+            return result, calls, summary
+
+    def test_exact_revision_promotes_and_readbacks(self):
+        result, calls, summary = self.run_workflow()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sum(c[:3] == ['run', 'services', 'update-traffic'] for c in calls), 1)
+        self.assertEqual(calls[-1][:3], ['run', 'services', 'describe'])
+        self.assertIn('service-old=100', summary)
+
+    def test_changed_traffic_never_promotes(self):
+        def change(service, revision):
+            service['status']['traffic'][0]['revisionName'] = 'service-foreign'
+        result, calls, _ = self.run_workflow(change)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(c[:3] == ['run', 'services', 'update-traffic'] for c in calls))
+
+    def test_failed_probe_never_promotes(self):
+        def change(service, revision):
+            revision['status']['conditions'][1]['status'] = 'False'
+        result, calls, _ = self.run_workflow(change)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(c[:3] == ['run', 'services', 'update-traffic'] for c in calls))
+
+    def test_mutating_deploy_is_staged_and_final_revision_is_pinned(self):
+        source = WORKFLOW.read_text()
+        self.assertIn('"--no-traffic" "--deploy-health-check"', source)
+        self.assertIn('"--revision-suffix=${STAGE_SUFFIX}-base"', source)
+        self.assertIn("service['spec']['template'].setdefault('metadata', {})['name'] = sys.argv[1]", source)
+        self.assertIn("require(current == rollback, 'traffic changed before alias reconciliation')", source)
+        self.assertLess(source.index('python3 "$STAGE_DIR/policy.py" --before'),
+                        source.index('"${gcloud_cmd[@]}"'))
+        self.assertNotIn('--to-latest', block('stage-promote'))
+
+
+if __name__ == '__main__':
+    unittest.main()
