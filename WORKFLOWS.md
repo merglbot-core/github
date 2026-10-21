@@ -303,10 +303,21 @@ jobs:
 
 ## reusable-deploy-cloud-run-wif.yml: env_vars
 
-`env_vars` takes the same comma-separated `NAME=value` list as the secrets-based variant. It is set together
-with `ENVIRONMENT` and **replaces** the service env, so pass the complete list. Plain values only: secret
-mounts are not part of this input (github#709). Callers that need Secret Manager mounts stay on the
-secrets-based variant until a reviewed `secrets` input exists.
+`env_vars` takes the same comma-separated `NAME=value` list as the secrets-based variant. By default it is
+set together with `ENVIRONMENT` and **replaces** the service env, so pass the complete list.
+
+Three opt-in additions (github#709) let a caller of the secrets-based variant move without changing its
+running revision:
+
+- `env_update: true` merges `env_vars` into the live env with `--update-env-vars`. `ENVIRONMENT` is not
+  injected, and a variable that is not listed keeps its live value.
+- `secret_env` is a newline-separated `NAME=SECRET[:VERSION]` list merged with `--update-secrets`. `SECRET`
+  is a Secret Manager id in the deploy project or `projects/<number>/secrets/<id>`. `VERSION` defaults to
+  `latest`. Blank and `#` lines are ignored. A secret that is not listed stays mounted. These are
+  references only, never values.
+- The optional secret `NODE_AUTH_TOKEN` reaches `docker build` as the `node_auth_token` BuildKit secret,
+  for a Dockerfile that installs private GitHub Packages. The caller passes its own `github.token` from a
+  job that grants `packages: read`. This workflow requests no new permission.
 ## reusable-frontend-artifact-gate.yml
 
 A `uses:` job gets a fresh checkout of the sources, so it can only gate a build that an earlier job
