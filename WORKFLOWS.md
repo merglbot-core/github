@@ -2,8 +2,8 @@
 
 ## Staged deployment and native debounce (github#962)
 
-The secrets-based `reusable-deploy-cloud-run.yml` provides two explicit caller
-inputs; existing callers keep the old deployment mode until their reviewed pins
+Both `reusable-deploy-cloud-run.yml` and the separate WIF variant
+`reusable-deploy-cloud-run-wif.yml` provide two explicit caller inputs; existing callers keep the old deployment mode until their reviewed pins
 and inputs change. Source delivery alone does not activate either feature.
 
 - `debounce_environment`: a dedicated, owner-configured environment with exactly
@@ -18,14 +18,20 @@ and inputs change. Source delivery alone does not activate either feature.
 - `staged_health_path`: the reviewed HTTP startup endpoint, `/healthz` for the
   admin and PM targets. The workflow captures the existing resolved traffic and
   tags, stages a digest-pinned, named revision with `--no-traffic`, and preserves
-  that split. All cross-project references are supplied through native SDK
+  that split. In the secrets-based variant, cross-project references are supplied through native SDK
   `--update-secrets` before startup; staged mode never patches service YAML
   after creating an incomplete candidate. It validates the final
   revision's service/project identity, observed generation, digest, successful
   HTTP startup probe and unchanged traffic/ingress before promoting that exact
-  revision. The configured probe uses port 8080, period 10 seconds, timeout 5
-  seconds and 24 attempts. The hub helper is embedded from the same source;
+  revision. The secrets-based probe uses port 8080; the WIF variant uses its explicit
+  `port` input, defaulting to 8080 when zero. Both use period 10 seconds,
+  timeout 5 seconds and 24 attempts. Invalid WIF probe ports fail before deploy. The hub helper is embedded from the same source;
   tests reject drift between the embedded and standalone implementations.
+
+The WIF variant retains its own identity resolution, artifact-project selection,
+immutable image build and Trivy checks. It does not switch to the secrets-based
+workflow or add secret mutation. Existing caller pins, environment timers and
+production activation require their separate protected delivery.
 
 Staging requires an existing service with resolved traffic and `RoutesReady=True`.
 A failed latest-created candidate does not prevent recovery when the existing
@@ -35,9 +41,11 @@ when originally bound to LATEST, and must retain that identity after promotion.
 
 The debounce contract assumes a workflow named `ci` and the branch `main`.
 Debounce requests only `contents: read` and `actions: read`, a subset of the
-existing deploy job permissions. Both deploy and release already required
+secrets-based deploy job permissions. Both deploy and release there already required
 `actions: read` before this feature (hub baseline `8ffa841`); enabling or disabling
-debounce does not raise that caller permission floor. GitHub validates nested job
+debounce does not raise that secrets-based caller permission floor. The WIF
+variant now requires `actions: read` in addition to its prior permissions;
+caller adoption must explicitly verify that permission before changing its pin. GitHub validates nested job
 permissions before evaluating their guards, so callers must retain the complete
 existing permission contract listed below even when debounce is disabled.
 The timer read uses `GET /repos/{owner}/{repo}/environments/{environment_name}`.
@@ -57,7 +65,13 @@ acceptance. Cloud Run accepts HTTP success/redirect responses for this probe;
 caller review must establish that the chosen endpoint cannot redirect to a login
 or unrelated healthy page. Production business smoke checks remain necessary.
 The private admin ingress is not opened to test a tag URL. The deploy group is
-scoped by project, region and service and never cancels an executing deployment.
+scoped by project, region and service for the secrets-based variant. WIF uses a
+conservative repository/region/service lock regardless of whether the project
+comes from an input or a secret: secrets cannot be resolved in workflow-level
+concurrency. Same-named services in different projects therefore serialize too.
+Neither variant cancels an executing deployment. During caller adoption, drain
+older runs and ensure a service has one writer using the selected variant/pin;
+GitHub concurrency does not coordinate different repositories or variant locks.
 External writers must respect that serialization; the pre-promotion readback is
 not a Cloud Run cross-client transaction lock.
 
