@@ -55,6 +55,11 @@ class CallerPinMirrors(unittest.TestCase):
         proc = run(f"# pinned to merglbot-core/github@{NEW}\njobs:\n  ci:\n    uses: 'merglbot-core/github/.github/workflows/ci-python.yml@{NEW}'\n")
         self.assertEqual(proc.returncode, 0, proc.stdout)
 
+    def test_unparsable_workflow_fails_closed(self) -> None:
+        proc = run(f"jobs:\n  ci:\n    uses: merglbot-core/github/.github/workflows/ci-python.yml@{NEW}\n   bad: [\n")
+        self.assertEqual(proc.returncode, 1, proc.stdout)
+        self.assertIn("does not parse", proc.stdout)
+
     def test_file_without_mirror_comment_passes(self) -> None:
         proc = run(f"jobs:\n  ci:\n    uses: merglbot-core/github/.github/workflows/ci-python.yml@{NEW}  # v1\n")
         self.assertEqual(proc.returncode, 0, proc.stdout)

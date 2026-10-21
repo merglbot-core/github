@@ -23,19 +23,23 @@ MIRROR = re.compile(r"merglbot-core/github(?:/[^@\s]*)?@([0-9a-f]{7,40})\b")
 USES_LINE = re.compile(r"^\s*-?\s*uses:\s")
 
 
+class UnparsableWorkflow(Exception):
+    """The workflow does not parse; its running pins cannot be determined."""
+
+
 def running_pins(text: str) -> set[str]:
     """SHAs that `jobs.<id>.uses` and `jobs.<id>.steps[].uses` actually execute.
 
     Read from the parsed workflow, so a `uses:` string inside a description or
-    run block cannot pose as a running pin, and quoted values still count. If
-    the file does not parse, fall back to the line regex (never to "no pins").
+    run block cannot pose as a running pin, and quoted values still count. A
+    workflow that does not parse is an error, never a guess (fail closed).
     """
-    try:
-        import yaml  # PyYAML; the hub CI and pre-push hook already use it
+    import yaml  # PyYAML; the hub CI and pre-push hook already use it
 
+    try:
         doc = yaml.safe_load(text) or {}
-    except Exception:  # noqa: BLE001 - unparsable workflow: use the regex
-        return set(USES.findall(text))
+    except yaml.YAMLError as exc:
+        raise UnparsableWorkflow(str(exc).splitlines()[0]) from None
     pins: set[str] = set()
     jobs = doc.get("jobs") if isinstance(doc, dict) else None
     for job in (jobs or {}).values() if isinstance(jobs, dict) else []:
@@ -76,7 +80,13 @@ def main(roots: list[str]) -> int:
             text = path.read_text(encoding="utf-8", errors="replace")
             if "merglbot-core/github" not in text:
                 continue
-            for lineno, sha in stale_mirrors(text):
+            try:
+                stale = stale_mirrors(text)
+            except UnparsableWorkflow as exc:
+                print(f"{path}: workflow does not parse ({exc}); pin mirrors cannot be checked")
+                bad += 1
+                continue
+            for lineno, sha in stale:
                 print(f"{path}:{lineno}: comment names merglbot-core/github@{sha}, which no uses: line in this file runs")
                 bad += 1
     return 1 if bad else 0
