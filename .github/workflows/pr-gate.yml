@@ -306,7 +306,7 @@ jobs:
           github-token: ${{ github.token }}
           script: |
             const branch = process.env.PR_BRANCH || '';
-            const allowedPrefixes = '${{ inputs.allowed-branch-prefixes }}'.split(',');
+            const allowedPrefixes = (process.env.ALLOWED_BRANCH_PREFIXES || '').split(',');
             
             const isValid = allowedPrefixes.some(prefix => branch.startsWith(prefix.trim()));
             
@@ -320,6 +320,7 @@ jobs:
             }
         env:
           PR_BRANCH: ${{ steps.pr-data.outputs.branch }}
+          ALLOWED_BRANCH_PREFIXES: ${{ inputs.allowed-branch-prefixes }}
       
       - name: Check PR size
         id: pr_size
@@ -347,6 +348,12 @@ jobs:
           PR_ADDITIONS: ${{ steps.pr-data.outputs.additions }}
           PR_DELETIONS: ${{ steps.pr-data.outputs.deletions }}
       
+      # Advisory by design, like branch naming and PR size: a merge commit is a
+      # warning, never a failure (update-branch under strict protection creates
+      # them legitimately). Its only red path used to be the REST read itself, so a
+      # GitHub API incident turned this step into an estate-wide PR blocker
+      # (github#767, 2026-08-17). The read is retried, paginated (the default page
+      # held only 30 commits) and, if it still fails, reported as a warning.
       - name: Check for merge commits
         id: pr_merge_commits
         if: ${{ !cancelled() }}
@@ -360,21 +367,40 @@ jobs:
               return;
             }
 
-            const { data: commits } = await github.rest.pulls.listCommits({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: prNumber
-            });
-            
+            let commits = null;
+            let lastError = null;
+            for (let attempt = 1; attempt <= 3 && commits === null; attempt++) {
+              try {
+                commits = await github.paginate(github.rest.pulls.listCommits, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prNumber,
+                  per_page: 100,
+                });
+              } catch (error) {
+                lastError = error;
+                if (attempt < 3) {
+                  await new Promise((resolve) => setTimeout(resolve, attempt * 5000));
+                }
+              }
+            }
+            if (commits === null) {
+              core.warning(
+                `Could not list PR commits after 3 attempts (HTTP ${lastError?.status ?? 'unknown'}); ` +
+                `the merge-commit check is advisory and was skipped.`
+              );
+              return;
+            }
+
             const mergeCommits = commits.filter(commit => commit.parents.length > 1);
-            
+
             if (mergeCommits.length > 0) {
               core.warning(
                 `⚠️ Found ${mergeCommits.length} merge commit(s) in PR.\n` +
                 `Use rebase or squash merge to maintain linear history.`
               );
             } else {
-              console.log(`✅ No merge commits found`);
+              console.log(`✅ No merge commits found (${commits.length} commits checked)`);
             }
         env:
           PR_NUMBER: ${{ steps.pr-data.outputs.number }}

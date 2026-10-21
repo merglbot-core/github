@@ -116,6 +116,11 @@ on:
       # skip the 20-40 s setup-gcloud step when no specific gcloud version or
       # extra component is needed (this workflow only runs GA `gcloud auth`,
       # `gcloud run` and `gcloud artifacts` commands). Default true keeps today's behaviour.
+      env_vars:
+        description: 'Optional comma-separated NAME=value list, set together with ENVIRONMENT (replaces the service env, like the secrets-based variant). Plain values only; secrets are not passed here.'
+        required: false
+        type: string
+        default: ''
       install_gcloud:
         description: 'Install gcloud via google-github-actions/setup-gcloud (false = use the runner-preinstalled SDK)'
         type: boolean
@@ -420,10 +425,34 @@ jobs:
           INPUT_MEMORY: ${{ inputs.memory }}
           INPUT_CPU: ${{ inputs.cpu }}
           INPUT_ALLOW_UNAUTHENTICATED: ${{ inputs.allow_unauthenticated }}
+          INPUT_ENV_VARS: ${{ inputs.env_vars }}
         run: |
           set -euo pipefail
 
           NORMALIZED_DEPLOY_ENVIRONMENT="$(printf '%s' "${INPUT_ENVIRONMENT}" | tr '[:upper:]' '[:lower:]')"
+
+          # github#709: callers of the secrets-based variant pass plain env vars; accept the same
+          # comma-separated NAME=value list. --set-env-vars REPLACES the service env, so the list
+          # must be complete. Names are validated; values may not contain a comma or newline.
+          ENV_VARS="ENVIRONMENT=${INPUT_ENVIRONMENT}"
+          if [ -n "${INPUT_ENV_VARS}" ]; then
+            if [[ "${INPUT_ENV_VARS}" == *$'\n'* ]]; then
+              echo "::error::env_vars must be one comma-separated line"
+              exit 1
+            fi
+            IFS=',' read -r -a ENV_PAIRS <<< "${INPUT_ENV_VARS}"
+            for pair in "${ENV_PAIRS[@]}"; do
+              if ! [[ "${pair}" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]]; then
+                echo "::error::env_vars entry is not NAME=value: '${pair%%=*}'"
+                exit 1
+              fi
+              if [ "${pair%%=*}" = "ENVIRONMENT" ]; then
+                echo "::error::env_vars must not set ENVIRONMENT; use the environment input"
+                exit 1
+              fi
+            done
+            ENV_VARS="${ENV_VARS},${INPUT_ENV_VARS}"
+          fi
 
           deploy_args=(
             "${INPUT_SERVICE_NAME}"
@@ -433,7 +462,7 @@ jobs:
             "--platform" "managed"
             "--min-instances" "${INPUT_MIN_INSTANCES}"
             "--max-instances" "${INPUT_MAX_INSTANCES}"
-            "--set-env-vars=ENVIRONMENT=${INPUT_ENVIRONMENT}"
+            "--set-env-vars=${ENV_VARS}"
             "--quiet"
           )
 
