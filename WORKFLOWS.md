@@ -167,3 +167,11 @@ jobs:
     needs: [runtime-changes]
     if: ${{ !cancelled() && needs.runtime-changes.outputs.runtime != 'false' }}
 ```
+
+## reusable-frontend-artifact-gate.yml
+
+A `uses:` job gets a fresh checkout of the sources, so it can only gate a build that an earlier job
+uploaded. Pass that artifact as `artifact_name`, and upload it with `include-hidden-files: true` so
+`.well-known/` survives. Without it the job exits 2 ("cannot conclude"). Callers that build in a single
+job run the gate CLI as a step instead (github#762). `frontend-artifact-gate-tests.yml` exercises
+the upload, download and gate path on every change.
