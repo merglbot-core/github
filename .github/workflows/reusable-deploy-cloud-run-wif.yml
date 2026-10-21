@@ -117,7 +117,7 @@ on:
       # extra component is needed (this workflow only runs GA `gcloud auth`,
       # `gcloud run` and `gcloud artifacts` commands). Default true keeps today's behaviour.
       env_vars:
-        description: 'Optional comma-separated KEY=value list, set together with ENVIRONMENT (replaces the service env, like the secrets-based variant). Plain values only; secrets are not passed here.'
+        description: 'Optional comma-separated NAME=value list, set together with ENVIRONMENT (replaces the service env, like the secrets-based variant). Plain values only; secrets are not passed here.'
         required: false
         type: string
         default: ''
@@ -432,7 +432,7 @@ jobs:
           NORMALIZED_DEPLOY_ENVIRONMENT="$(printf '%s' "${INPUT_ENVIRONMENT}" | tr '[:upper:]' '[:lower:]')"
 
           # github#709: callers of the secrets-based variant pass plain env vars; accept the same
-          # comma-separated KEY=value list. --set-env-vars REPLACES the service env, so the list
+          # comma-separated NAME=value list. --set-env-vars REPLACES the service env, so the list
           # must be complete. Names are validated; values may not contain a comma or newline.
           ENV_VARS="ENVIRONMENT=${INPUT_ENVIRONMENT}"
           if [ -n "${INPUT_ENV_VARS}" ]; then
@@ -443,7 +443,7 @@ jobs:
             IFS=',' read -r -a ENV_PAIRS <<< "${INPUT_ENV_VARS}"
             for pair in "${ENV_PAIRS[@]}"; do
               if ! [[ "${pair}" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]]; then
-                echo "::error::env_vars entry is not KEY=value: '${pair%%=*}'"
+                echo "::error::env_vars entry is not NAME=value: '${pair%%=*}'"
                 exit 1
               fi
               if [ "${pair%%=*}" = "ENVIRONMENT" ]; then
