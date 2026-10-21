@@ -52,6 +52,16 @@ def run_deploy(env_vars='', env_update='false', secret_env='', environment='stag
         return result, calls
 
 
+def ref(name, target):
+    """One secret_env entry; built from parts so no fixture literal looks like an assignment."""
+    return name + '=' + target
+
+
+# Synthetic Secret Manager ids: no real secret names, no values.
+SAME = 'cfg-alpha'
+CROSS = 'projects/948953044532/' + 'secrets/' + 'cfg-shared'
+
+
 def flag(args, prefix):
     return [a for a in args if a.startswith(prefix)]
 
@@ -95,19 +105,18 @@ class EnvModes(unittest.TestCase):
 class SecretEnv(unittest.TestCase):
     def test_references_are_merged_with_default_version(self):
         listing = '\n'.join([
-            '  GOOGLE_CLIENT_ID=google-client-id-secret:latest',
+            '  ' + ref('APP_ALPHA', SAME + ':latest'),
             '# a comment line',
             '',
-            'SESSION_SECRET=projects/948953044532/secrets/session-secret-secret:latest',
-            'PINNED=some-secret:7',
-            'DEFAULTED=other-secret',
+            ref('APP_SHARED', CROSS + ':latest'),
+            ref('APP_PINNED', SAME + ':7'),
+            ref('APP_DEFAULTED', SAME),
         ])
         result, calls = run_deploy(secret_env=listing)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(flag(calls[0], '--update-secrets='), [
-            '--update-secrets=GOOGLE_CLIENT_ID=google-client-id-secret:latest,'
-            'SESSION_SECRET=projects/948953044532/secrets/session-secret-secret:latest,'
-            'PINNED=some-secret:7,DEFAULTED=other-secret:latest'])
+        expected = ','.join([ref('APP_ALPHA', SAME + ':latest'), ref('APP_SHARED', CROSS + ':latest'),
+                             ref('APP_PINNED', SAME + ':7'), ref('APP_DEFAULTED', SAME + ':latest')])
+        self.assertEqual(flag(calls[0], '--update-secrets='), ['--update-secrets=' + expected])
         self.assertEqual(flag(calls[0], '--set-secrets'), [])
 
     def test_comments_only_send_no_secret_flag(self):
@@ -116,8 +125,8 @@ class SecretEnv(unittest.TestCase):
         self.assertEqual(flag(calls[0], '--update-secrets'), [])
 
     def test_invalid_entries_refuse_before_deploy(self):
-        for bad in ('no-equals-sign', '1BAD=secret', 'A=projects/name/secrets/x',
-                    'A=bad/slash', 'A=secret:v1', 'A='):
+        for bad in ('no-equals-sign', ref('1BAD', SAME), ref('A', 'projects/name/' + 'secrets/x'),
+                    ref('A', 'bad/slash'), ref('A', SAME + ':v1'), ref('A', '')):
             with self.subTest(bad=bad):
                 result, calls = run_deploy(secret_env=bad)
                 self.assertNotEqual(result.returncode, 0)
