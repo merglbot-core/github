@@ -105,7 +105,8 @@ class CompleteDeployStepTests(unittest.TestCase):
     def execute(self, *, cross_project=True, failure=''):
         workflow = yaml.safe_load(WORKFLOW.read_text())
         step = next(step for step in workflow['jobs']['deploy']['steps'] if step.get('id') == 'deploy')
-        script = step['run']
+        prepare = next(s for s in workflow['jobs']['deploy']['steps'] if s.get('id') == 'staged_policy')
+        script = prepare['run'] + '\n' + step['run']
         substitutions = {'steps.build.outputs.full_image': IMAGE, 'inputs.service_account': 'runner@project.invalid',
                          'inputs.allow_unauthenticated': 'false', 'inputs.env_vars': 'NODE_ENV=production'}
         for key, value in substitutions.items():
@@ -127,7 +128,7 @@ class CompleteDeployStepTests(unittest.TestCase):
             (root / 'gcloud').write_text(GCLOUD.replace('PYTHON', sys.executable, 1))
             (root / 'gcloud').chmod(0o755)
             env = {**os.environ, 'PATH': directory + os.pathsep + str(Path(sys.executable).parent) + os.pathsep + os.environ['PATH'],
-                   'FIXTURE': directory, 'FAILURE': failure, 'EXPECT_ALIAS': str(cross_project).lower(), 'STAGED_HEALTH_PATH': '/healthz',
+                   'FIXTURE': directory, 'STAGED_POLICY_FILE': str(root / 'policy-source.py'), 'FAILURE': failure, 'EXPECT_ALIAS': str(cross_project).lower(), 'STAGED_HEALTH_PATH': '/healthz',
                    'STAGED_IMAGE': IMAGE, 'DEBOUNCE_ENVIRONMENT': '',
                    'SERVICE': 'service', 'PROJECT_ID': 'project', 'REGION': 'europe-west1',
                    'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',

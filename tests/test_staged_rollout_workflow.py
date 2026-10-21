@@ -8,6 +8,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+import yaml
 
 from test_staged_rollout_policy import evidence, IMAGE, MODULE
 
@@ -44,6 +45,11 @@ else:
 
 
 class WorkflowStagingTests(unittest.TestCase):
+    def test_all_run_steps_fit_github_expression_length_limit(self):
+        for job in yaml.safe_load(WORKFLOW.read_text())['jobs'].values():
+            for step in job.get('steps', []):
+                self.assertLessEqual(len(step.get('run', '')), 21000, step.get('name'))
+
     def test_embedded_helper_is_exact_hub_source(self):
         self.assertEqual(block('staged-policy-source'), MODULE.read_text())
 
@@ -69,14 +75,15 @@ class WorkflowStagingTests(unittest.TestCase):
             stub.write_text(STUB.format(python=sys.executable))
             stub.chmod(0o755)
             env = {**os.environ, 'PATH': str(root) + os.pathsep + str(Path(sys.executable).parent) + os.pathsep + os.environ['PATH'],
-                   'FIXTURE': directory, 'STAGED_HEALTH_PATH': '/healthz', 'STAGED_IMAGE': IMAGE,
+                   'FIXTURE': directory, 'STAGED_POLICY_FILE': str(root / 'policy-source.py'), 'STAGED_HEALTH_PATH': '/healthz', 'STAGED_IMAGE': IMAGE,
                    'DEBOUNCE_ENVIRONMENT': '',
                    'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1', 'SERVICE': 'service',
                    'REGION': 'europe-west1', 'PROJECT_ID': 'project',
                    'GITHUB_STEP_SUMMARY': str(root / 'summary')}
             # Only the actual workflow blocks execute; gcloud cannot reach the network.
             script = 'set -euo pipefail\nSTAGE_DIR=""\nCROSS_PROJECT_SECRET_LINES=()\ntrap \'[ -z "$STAGE_DIR" ] || rm -rf "$STAGE_DIR"\' EXIT\n'
-            result = subprocess.run(['bash', '-c', script + block('stage-prepare') + '\n' + block('stage-promote')],
+            helper_step = next(s for s in yaml.safe_load(WORKFLOW.read_text())['jobs']['deploy']['steps'] if s.get('id') == 'staged_policy')['run']
+            result = subprocess.run(['bash', '-c', script + helper_step + '\n' + block('stage-prepare') + '\n' + block('stage-promote')],
                                     env=env, text=True, capture_output=True, timeout=10)
             calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
             summary = (root / 'summary').read_text() if (root / 'summary').exists() else ''

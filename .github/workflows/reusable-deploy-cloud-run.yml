@@ -446,153 +446,15 @@ jobs:
           cosign sign --yes "$IMAGE_REF"
           # END cosign-sign
       
-      - name: Deploy to Cloud Run
-        id: deploy
+      - name: Materialize pinned staging policy
+        id: staged_policy
+        if: ${{ inputs.staged_health_path != '' }}
         env:
-          SECRETS_INPUT: ${{ inputs.secrets }}
-          STAGED_HEALTH_PATH: ${{ inputs.staged_health_path }}
-          DEBOUNCE_ENVIRONMENT: ${{ inputs.debounce_environment }}
-          GH_TOKEN: ${{ github.token }}
-          STAGED_IMAGE: ${{ steps.build.outputs.full_image }}
+          STAGED_POLICY_FILE: ${{ runner.temp }}/merglbot-staged-policy.py
         run: |
           set -euo pipefail
-
-          STAGE_DIR=""
-          DEPLOYMENT_MODE="no-secrets"
-          CROSS_PROJECT_ALIAS_SUMMARY="none"
-          CROSS_PROJECT_ALIAS_COUNT=0
-          SAME_PROJECT_SECRET_LINES=()
-          CROSS_PROJECT_SECRET_LINES=()
-
-          trim() {
-            printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
-          }
-
-          cleanup_temp_files() {
-            if [ -n "$STAGE_DIR" ]; then rm -rf -- "$STAGE_DIR"; fi
-            rm -f /tmp/service.yaml /tmp/inject_xproj_secret.py /tmp/service.json 2>/dev/null || true
-          }
-
-          write_xproj_patcher() {
-            printf '%s\n' 'import yaml, sys' > /tmp/inject_xproj_secret.py
-            printf '%s\n' 'env_var, secret_resource, secret_version = sys.argv[1:4]' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' 'with open("/tmp/service.yaml") as f: svc = yaml.safe_load(f)' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' 'tmpl_meta = svc.setdefault("spec", {}).setdefault("template", {}).setdefault("metadata", {})' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' 'ann = tmpl_meta.setdefault("annotations", {})' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' 'k = "run.googleapis.com/secrets"' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' 'raw = str(ann.get(k, "") or "")' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' 'mp = {}' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' 'for ln in raw.replace("\n", ",").split(","):' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' '    ln = ln.strip()' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' '    if not ln or ":" not in ln: continue' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' '    a, b = ln.split(":", 1)' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' '    mp[a.strip()] = b.strip()' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' 'mp[env_var] = secret_resource' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' 'ann[k] = ",".join([f"{a}:{b}" for a,b in mp.items()])' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' 'containers = svc["spec"]["template"]["spec"]["containers"]' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' 'env_list = containers[0].get("env", [])' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' 'env_list = [e for e in env_list if e.get("name") != env_var]' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' 'env_list.append({"name": env_var, "valueFrom": {"secretKeyRef": {"name": env_var, "key": secret_version}}})' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' 'containers[0]["env"] = env_list' >> /tmp/inject_xproj_secret.py
-            printf '%s\n' 'with open("/tmp/service.yaml", "w") as f: yaml.safe_dump(svc, f, sort_keys=False)' >> /tmp/inject_xproj_secret.py
-          }
-
-          verify_xproj_service() {
-            local service_json="$1"
-            shift
-
-            python3 - "$service_json" "$@" <<'PY'
-          import json
-          import os
-          import sys
-
-          service_path = sys.argv[1]
-          entries = sys.argv[2:]
-
-          with open(service_path, encoding="utf-8") as f:
-              svc = json.load(f)
-
-          ann = (
-              svc.get("spec", {})
-                 .get("template", {})
-                 .get("metadata", {})
-                 .get("annotations", {})
-          )
-          raw = str(ann.get("run.googleapis.com/secrets", "") or "")
-          mapping = {}
-          for line in raw.replace("\n", ",").split(","):
-              line = line.strip()
-              if not line or ":" not in line:
-                  continue
-              alias, secret_ref = line.split(":", 1)
-              mapping[alias.strip()] = secret_ref.strip()
-
-          containers = (
-              svc.get("spec", {})
-                 .get("template", {})
-                 .get("spec", {})
-                 .get("containers", [])
-          )
-          env_index = {}
-          if containers:
-              for entry in containers[0].get("env", []):
-                  name = entry.get("name")
-                  if isinstance(name, str) and name:
-                      env_index[name] = entry
-
-          errors = []
-          for item in entries:
-              env_name, rest = item.split("=", 1)
-              if ":" in rest:
-                  secret_resource, secret_version = rest.rsplit(":", 1)
-              else:
-                  secret_resource, secret_version = rest, "latest"
-
-              env_alias = env_index.get(env_name, {}).get("valueFrom", {}).get("secretKeyRef", {}).get("name")
-              expected_alias = env_alias if os.environ.get("STAGED_HEALTH_PATH") else env_name
-              if not expected_alias or mapping.get(expected_alias) != secret_resource:
-                  errors.append(
-                      f"annotation mismatch for {env_name}: alias mapping is missing or points to an unexpected resource"
-                  )
-
-              env_entry = env_index.get(env_name)
-              if env_entry is None:
-                  errors.append(f"missing env entry for {env_name}")
-                  continue
-
-              secret_ref = (
-                  env_entry.get("valueFrom", {})
-                           .get("secretKeyRef", {})
-              )
-              if secret_ref.get("name") != expected_alias:
-                  errors.append(
-                      f"secretKeyRef.name mismatch for {env_name}: expected alias {env_name}, got {secret_ref.get('name')!r}"
-                  )
-              if str(secret_ref.get("key") or "latest") != secret_version:
-                  errors.append(
-                      f"secretKeyRef.key mismatch for {env_name}: expected {secret_version}, got {secret_ref.get('key')!r}"
-                  )
-
-          if errors:
-              for error in errors:
-                  print(error, file=sys.stderr)
-              raise SystemExit(1)
-          PY
-          }
-
-          trap cleanup_temp_files EXIT
-
-          # BEGIN stage-prepare
-          if [ -n "$STAGED_HEALTH_PATH" ]; then
-            [[ "$STAGED_HEALTH_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]] || exit 1
-            [[ "$STAGED_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || exit 1
-            [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]] || exit 1
-            STAGE_DIR=$(mktemp -d)
-            STAGE_SUFFIX="r${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            STAGE_CANDIDATE="${SERVICE}-${STAGE_SUFFIX}-base"
-            [ "${#STAGE_CANDIDATE}" -le 63 ] || exit 1
-            # The helper is embedded from the hub, never loaded from the caller checkout.
-            cat > "$STAGE_DIR/policy.py" <<'STAGED_POLICY_PY'
+          # Source is part of the reviewed hub, never the caller checkout.
+          cat > "$STAGED_POLICY_FILE" <<'STAGED_POLICY_PY'
           # BEGIN staged-policy-source
           #!/usr/bin/env python3
           """Fail-closed, offline traffic and revision checks for a staged Cloud Run rollout.
@@ -735,6 +597,154 @@ jobs:
               main()
           # END staged-policy-source
           STAGED_POLICY_PY
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        env:
+          SECRETS_INPUT: ${{ inputs.secrets }}
+          STAGED_HEALTH_PATH: ${{ inputs.staged_health_path }}
+          DEBOUNCE_ENVIRONMENT: ${{ inputs.debounce_environment }}
+          GH_TOKEN: ${{ github.token }}
+          STAGED_IMAGE: ${{ steps.build.outputs.full_image }}
+          STAGED_POLICY_FILE: ${{ runner.temp }}/merglbot-staged-policy.py
+        run: |
+          set -euo pipefail
+
+          STAGE_DIR=""
+          DEPLOYMENT_MODE="no-secrets"
+          CROSS_PROJECT_ALIAS_SUMMARY="none"
+          CROSS_PROJECT_ALIAS_COUNT=0
+          SAME_PROJECT_SECRET_LINES=()
+          CROSS_PROJECT_SECRET_LINES=()
+
+          trim() {
+            printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+          }
+
+          cleanup_temp_files() {
+            if [ -n "$STAGE_DIR" ]; then rm -rf -- "$STAGE_DIR"; fi
+            rm -f /tmp/service.yaml /tmp/inject_xproj_secret.py /tmp/service.json 2>/dev/null || true
+          }
+
+          write_xproj_patcher() {
+            printf '%s\n' 'import yaml, sys' > /tmp/inject_xproj_secret.py
+            printf '%s\n' 'env_var, secret_resource, secret_version = sys.argv[1:4]' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'with open("/tmp/service.yaml") as f: svc = yaml.safe_load(f)' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'tmpl_meta = svc.setdefault("spec", {}).setdefault("template", {}).setdefault("metadata", {})' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'ann = tmpl_meta.setdefault("annotations", {})' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'k = "run.googleapis.com/secrets"' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'raw = str(ann.get(k, "") or "")' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'mp = {}' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'for ln in raw.replace("\n", ",").split(","):' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' '    ln = ln.strip()' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' '    if not ln or ":" not in ln: continue' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' '    a, b = ln.split(":", 1)' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' '    mp[a.strip()] = b.strip()' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'mp[env_var] = secret_resource' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'ann[k] = ",".join([f"{a}:{b}" for a,b in mp.items()])' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'containers = svc["spec"]["template"]["spec"]["containers"]' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'env_list = containers[0].get("env", [])' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'env_list = [e for e in env_list if e.get("name") != env_var]' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'env_list.append({"name": env_var, "valueFrom": {"secretKeyRef": {"name": env_var, "key": secret_version}}})' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'containers[0]["env"] = env_list' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'with open("/tmp/service.yaml", "w") as f: yaml.safe_dump(svc, f, sort_keys=False)' >> /tmp/inject_xproj_secret.py
+          }
+
+          verify_xproj_service() {
+            local service_json="$1"
+            shift
+
+            python3 - "$service_json" "$@" <<'PY'
+          import json
+          import os
+          import sys
+
+          service_path = sys.argv[1]
+          entries = sys.argv[2:]
+
+          with open(service_path, encoding="utf-8") as f:
+              svc = json.load(f)
+
+          ann = (
+              svc.get("spec", {})
+                 .get("template", {})
+                 .get("metadata", {})
+                 .get("annotations", {})
+          )
+          raw = str(ann.get("run.googleapis.com/secrets", "") or "")
+          mapping = {}
+          for line in raw.replace("\n", ",").split(","):
+              line = line.strip()
+              if not line or ":" not in line:
+                  continue
+              alias, secret_ref = line.split(":", 1)
+              mapping[alias.strip()] = secret_ref.strip()
+
+          containers = (
+              svc.get("spec", {})
+                 .get("template", {})
+                 .get("spec", {})
+                 .get("containers", [])
+          )
+          env_index = {}
+          if containers:
+              for entry in containers[0].get("env", []):
+                  name = entry.get("name")
+                  if isinstance(name, str) and name:
+                      env_index[name] = entry
+
+          errors = []
+          for item in entries:
+              env_name, rest = item.split("=", 1)
+              if ":" in rest:
+                  secret_resource, secret_version = rest.rsplit(":", 1)
+              else:
+                  secret_resource, secret_version = rest, "latest"
+
+              env_alias = env_index.get(env_name, {}).get("valueFrom", {}).get("secretKeyRef", {}).get("name")
+              expected_alias = env_alias if os.environ.get("STAGED_HEALTH_PATH") else env_name
+              if not expected_alias or mapping.get(expected_alias) != secret_resource:
+                  errors.append(
+                      f"annotation mismatch for {env_name}: alias mapping is missing or points to an unexpected resource"
+                  )
+
+              env_entry = env_index.get(env_name)
+              if env_entry is None:
+                  errors.append(f"missing env entry for {env_name}")
+                  continue
+
+              secret_ref = (
+                  env_entry.get("valueFrom", {})
+                           .get("secretKeyRef", {})
+              )
+              if secret_ref.get("name") != expected_alias:
+                  errors.append(
+                      f"secretKeyRef.name mismatch for {env_name}: expected alias {env_name}, got {secret_ref.get('name')!r}"
+                  )
+              if str(secret_ref.get("key") or "latest") != secret_version:
+                  errors.append(
+                      f"secretKeyRef.key mismatch for {env_name}: expected {secret_version}, got {secret_ref.get('key')!r}"
+                  )
+
+          if errors:
+              for error in errors:
+                  print(error, file=sys.stderr)
+              raise SystemExit(1)
+          PY
+          }
+
+          trap cleanup_temp_files EXIT
+
+          # BEGIN stage-prepare
+          if [ -n "$STAGED_HEALTH_PATH" ]; then
+            [[ "$STAGED_HEALTH_PATH" =~ ^/[A-Za-z0-9_./-]+$ ]] || exit 1
+            [[ "$STAGED_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]] || exit 1
+            [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ && "$GITHUB_RUN_ATTEMPT" =~ ^[0-9]+$ ]] || exit 1
+            STAGE_DIR=$(mktemp -d)
+            STAGE_SUFFIX="r${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            STAGE_CANDIDATE="${SERVICE}-${STAGE_SUFFIX}-base"
+            [ "${#STAGE_CANDIDATE}" -le 63 ] || exit 1
+            cp "$STAGED_POLICY_FILE" "$STAGE_DIR/policy.py"
             gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format=json > "$STAGE_DIR/before.json"
             python3 "$STAGE_DIR/policy.py" --before "$STAGE_DIR/before.json" --snapshot > "$STAGE_DIR/rollback.json"
             # No mutation until the existing, fully resolved rollback split is validated.
