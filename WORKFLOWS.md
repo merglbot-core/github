@@ -51,6 +51,13 @@ SARIF upload, so no `security-events: write` is inherited and PR Gate stays arou
 switch it on delete their `security-gitleaks.yml` and keep a weekly full-tree scan for pushes that
 never open a PR. GHAS Secret Protection push protection is untouched either way.
 
+The standalone `security-gitleaks.yml` reusable is still the only path that persists findings to
+code scanning (SARIF). Its job grants `actions: read` because `upload-sarif` reads the workflow run
+and an enumerative job `permissions:` block drops any grant the caller adds (github#805: uploads had
+silently failed since 4. 4. 2026 behind `continue-on-error`). The upload step now fails the check,
+and the PR comment fires only when the scan itself fails. Measured 20. 10. 2026: two callers left
+(`merglbot-public/docs`, `merglbot-denatura/acquisition-analysis`), both already grant `actions: read`.
+
 ### Optional steps (all default to `false`, so existing callers are unaffected)
 
 | input | default | what it adds |
