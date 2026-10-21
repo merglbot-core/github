@@ -614,6 +614,7 @@ jobs:
               parser.add_argument("--expected-revision")
               parser.add_argument("--expected-image")
               parser.add_argument("--health-path")
+              parser.add_argument("--health-port", type=int, default=8080)
               args = parser.parse_args()
               try:
                   if args.iam_policy:
@@ -629,7 +630,8 @@ jobs:
                   plan = promotion_plan(*(json.loads(p.read_text()) for p in
                                           (args.before, args.current, args.revision)),
                                         expected_revision=args.expected_revision,
-                                        expected_image=args.expected_image, health_path=args.health_path)
+                                        expected_image=args.expected_image, health_path=args.health_path,
+                                        port=args.health_port)
               except (Refused, ValueError, KeyError, TypeError, OSError) as error:
                   parser.exit(1, f"Staged rollout refused: {error}\n")
               print(json.dumps(plan, sort_keys=True))

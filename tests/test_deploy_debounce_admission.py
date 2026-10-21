@@ -29,6 +29,8 @@ else:
 
 
 class DebounceAdmissionTests(unittest.TestCase):
+    admission_block = staticmethod(block)
+
     def execute(self, *, timer=10, age=650, head=SHA, ci_status='completed',
                 ci_conclusion='success', repository='org/repo', event='workflow_run', trigger_head=SHA):
         with tempfile.TemporaryDirectory() as directory:
@@ -51,7 +53,7 @@ class DebounceAdmissionTests(unittest.TestCase):
                    'GITHUB_SHA': SHA, 'GITHUB_RUN_ID': '123', 'GITHUB_EVENT_NAME': event,
                    'GITHUB_EVENT_PATH': str(root / 'event.json'), 'GITHUB_OUTPUT': str(root / 'output'),
                    'DEBOUNCE_ENVIRONMENT': 'deploy-debounce'}
-            result = subprocess.run(['bash', '-c', 'set -euo pipefail\n' + block('deploy-debounce-admission')],
+            result = subprocess.run(['bash', '-c', 'set -euo pipefail\n' + self.admission_block('deploy-debounce-admission')],
                                     env=env, capture_output=True, text=True, timeout=10)
             return result, (root / 'output').read_text().splitlines()[-1]
 
@@ -98,7 +100,7 @@ class DebounceAdmissionTests(unittest.TestCase):
             self.assertEqual(verdict, 'eligible=false')
 
     def test_no_paid_sleep_in_admission(self):
-        self.assertNotRegex(block('deploy-debounce-admission'), r'(?m)^\s*sleep\s')
+        self.assertNotRegex(self.admission_block('deploy-debounce-admission'), r'(?m)^\s*sleep\s')
 
 
 if __name__ == '__main__':
