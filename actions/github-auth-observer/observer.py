@@ -106,6 +106,8 @@ def observe(source):
             "GH_HOST": "github.com",
             "GH_CONFIG_DIR": config,
             "GH_PROMPT_DISABLED": "1",
+            "GH_NO_UPDATE_NOTIFIER": "1",
+            "GH_TELEMETRY": "0",
             "GH_PAGER": "cat",
             "PATH": "/usr/bin:/bin",
             "LANG": "C.UTF-8",

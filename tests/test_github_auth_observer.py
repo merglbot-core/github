@@ -90,12 +90,16 @@ class AuthObserverTests(unittest.TestCase):
                         "GH_HOST",
                         "GH_CONFIG_DIR",
                         "GH_PROMPT_DISABLED",
+                        "GH_NO_UPDATE_NOTIFIER",
+                        "GH_TELEMETRY",
                         "GH_PAGER",
                         "PATH",
                         "LANG",
                     },
                 )
                 self.assertEqual(env["GH_TOKEN"], source["GH_TOKEN"])
+                self.assertEqual(env["GH_NO_UPDATE_NOTIFIER"], "1")
+                self.assertEqual(env["GH_TELEMETRY"], "0")
                 self.assertEqual(call.kwargs["timeout"], 15)
             config = env["GH_CONFIG_DIR"]
         self.assertFalse(Path(config).exists())

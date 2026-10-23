@@ -6,12 +6,15 @@ their own approved delivery; no new credential, App key, IAM or activation is
 introduced here. Refs merglbot-core/github#812.
 
 Run only in an approved trusted GitHub.com main-branch `push`, `schedule` or
-`workflow_dispatch` job on an Ubuntu runner with Python 3 and `/usr/bin/gh`.
+`workflow_dispatch` job on an Ubuntu 24.04 runner with Python 3.11 or newer and
+`/usr/bin/gh` (`datetime.UTC` requires Python 3.11).
 The caller must supply exactly the intended existing credential as `GH_TOKEN`
 in step environment. Ambient `GITHUB_TOKEN` is rejected. No credential is minted,
 rotated, hashed, printed, passed on argv or resolved from another source. The gh
 child gets an empty temporary configuration and a closed environment. Python runs
 in isolated mode so ambient Python import configuration cannot replace modules.
+The child explicitly disables gh update checks and telemetry, which would otherwise
+be an additional network surface outside the three diagnostic GET requests.
 
 At most three GET requests are made, without retries: `rate_limit`, `user`, and
 only after a 403 from `user`, `installation/repositories?per_page=1`. No search,
