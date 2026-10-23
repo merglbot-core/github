@@ -409,7 +409,7 @@ jobs:
       - name: Generate SLSA Provenance
         if: inputs.push || steps.build.outputs.digest != ''
         id: provenance
-        uses: merglbot-core/github/actions/container-provenance@e6b0b8864f92b1453278250ae773d331c7a81165
+        uses: merglbot-core/github/actions/container-provenance@c88ca5f059448527ea721b4f209d30a196036ed8
         with:
           candidate-digest: ${{ steps.build.outputs.digest }}
           platform-digest: ${{ steps.parity.outputs.platform_digest }}
