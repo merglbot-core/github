@@ -69,6 +69,17 @@ on:
         required: false
         type: string
         default: ''
+      build_args:
+        description: |
+          Optional newline-separated Docker build arguments (KEY=value), passed
+          identically to the local scan build and the published candidate build,
+          so the config-digest parity check still compares the same image.
+          Use it for non-secret build metadata such as SOURCE_SHA=<commit>
+          (merglbot-core/platform#1382). Never pass a credential: build
+          arguments are recorded in the image history and in the provenance.
+        required: false
+        type: string
+        default: ''
     secrets:
       wif_provider:
         description: 'GCP Workload Identity Federation Provider'
@@ -185,6 +196,7 @@ jobs:
           push: false
           tags: ${{ steps.refs.outputs.local_ref }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ inputs.build_args }}
           # Scope the cache per image. Unscoped, every image workflow in a repo
           # shares one cache manifest; when one merge triggers several image
           # builds at once they overwrite it, the candidate build below misses
@@ -293,6 +305,7 @@ jobs:
           push: ${{ inputs.push }}
           tags: ${{ steps.refs.outputs.candidate_ref }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ inputs.build_args }}
           cache-from: type=gha,scope=${{ inputs.image_name }}
           cache-to: type=gha,mode=max,scope=${{ inputs.image_name }}
           provenance: true
