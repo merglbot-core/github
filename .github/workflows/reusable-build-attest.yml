@@ -75,8 +75,8 @@ on:
           identically to the local scan build and the published candidate build,
           so the config-digest parity check still compares the same image.
           Use it for non-secret build metadata such as SOURCE_SHA=<commit>
-          (merglbot-core/platform#1382). Never pass a credential: build
-          arguments are recorded in the image history and in the provenance.
+          (merglbot-core/platform#1382). Never pass a credential here, because
+          build arguments are recorded in the image history and in the provenance.
         required: false
         type: string
         default: ''
