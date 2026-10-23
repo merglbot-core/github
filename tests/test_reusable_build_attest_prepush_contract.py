@@ -118,6 +118,13 @@ class ReusableBuildAttestPrePushContractTests(unittest.TestCase):
             self.assertIn("cache-to: type=gha,mode=max,scope=${{ inputs.image_name }}", block)
             self.assertNotRegex(block, r"cache-(from|to): type=gha(,mode=max)?\n")
 
+        # Build arguments change the image config, so the scanned local image
+        # and the published candidate must receive the same ones or parity
+        # fails (merglbot-core/platform#1382).
+        for block in (local_block, candidate_block):
+            self.assertEqual(block.count("build-args: ${{ inputs.build_args }}"), 1)
+            self.assertEqual(block.count("build-args:"), 1)
+
         parity_block = self.text[parity:promotion]
         self.assertIn("LOCAL_CONFIG_DIGEST", parity_block)
         self.assertIn("PUBLISHED_CONFIG_DIGEST", parity_block)
@@ -128,6 +135,15 @@ class ReusableBuildAttestPrePushContractTests(unittest.TestCase):
         self.assertIn("EXPECTED_CONFIG_DIGEST", promotion_block)
         self.assertIn("TAG_ROOT_DIGEST", promotion_block)
         self.assertIn('if [ "$TAG_ROOT_DIGEST" != "$CANDIDATE_DIGEST" ]', promotion_block)
+
+    def test_build_args_input_is_optional_and_empty_by_default(self) -> None:
+        start = self.text.index("\n    inputs:\n")
+        inputs = self.text[start:self.text.index("\n    secrets:\n", start)]
+        block = inputs[inputs.index("      build_args:"):]
+        self.assertIn("required: false", block)
+        self.assertIn("type: string", block)
+        self.assertIn("default: ''", block)
+        self.assertIn("Never pass a credential", block)
 
     def test_security_outputs_and_attestation_remain_wired(self) -> None:
         self.assertIn("security-events: write", self.text)
