@@ -37,7 +37,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    uses: merglbot-core/github/.github/workflows/pr-gate.yml@b2cb762590dcd24c0359e4d94394a00fec90fcc6
+    uses: merglbot-core/github/.github/workflows/pr-gate.yml@c88ca5f059448527ea721b4f209d30a196036ed8
     with:
       # ubuntu-slim (merglbot-core/github#913): 1 vCPU at 0.002 USD/min instead of 0.006;
       # pilot 23.-24. 9. 2026: 10/10 green runs, 13-21 s. Rollback: delete this input.
