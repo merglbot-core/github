@@ -384,7 +384,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Upload Trivy results
-        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee  # v4
         if: ${{ always() && hashFiles('trivy-results.sarif') != '' }}
         continue-on-error: true  # Don't fail if SARIF upload has permission issues
         with:
@@ -403,7 +403,7 @@ jobs:
 
       # Container Security: SBOM Generation
       - name: Generate SBOM
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26  # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c  # v0.24.3
         with:
           image: ${{ steps.build.outputs.full_image }}
           format: 'cyclonedx-json'
@@ -1043,7 +1043,7 @@ jobs:
 
     steps:
       - name: Download SBOM artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: sbom-${{ github.sha }}
 
