@@ -99,11 +99,16 @@ jobs:
           fi
       
       - name: Install Gitleaks CLI
+        # 8.22.1: 8.18.4/8.19.x emit SARIF endColumn 0 when a match ends on a
+        # read-chunk boundary, which upload-sarif rejects (github#1055). 8.23+
+        # widens generic-api-key and adds false positives in fail-on-detection
+        # callers, so stay on 8.22.x until a caller-wide finding check is done.
         run: |
           set -euo pipefail
           tmp_dir="$(mktemp -d)"
           trap 'rm -rf "$tmp_dir"' EXIT
-          wget -q -O "$tmp_dir/gitleaks.tgz" https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+          wget -q -O "$tmp_dir/gitleaks.tgz" https://github.com/gitleaks/gitleaks/releases/download/v8.22.1/gitleaks_8.22.1_linux_x64.tar.gz
+          echo "2f92ab3b8e08319ac30836c32b90818e01519c3a4982771e4f45a7f5607872f7  $tmp_dir/gitleaks.tgz" | sha256sum -c -
           tar -xzf "$tmp_dir/gitleaks.tgz" -C "$tmp_dir" gitleaks
           sudo mv "$tmp_dir/gitleaks" /usr/local/bin/
           gitleaks version
@@ -156,6 +161,20 @@ jobs:
 
           if [ "${findings_count}" -gt 20 ]; then
             echo "- … plus $((findings_count - 20)) more" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Drop invalid SARIF end positions
+        # A scanner bug must not fail the required check (github#1055): a region
+        # whose endColumn is below 1 keeps its start and loses only the end.
+        if: ${{ !cancelled() && hashFiles('gitleaks-report.sarif') != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          invalid="$(jq '[.runs[].results[]?.locations[]?.physicalLocation.region | select(. != null and (.endColumn // 1) < 1)] | length' gitleaks-report.sarif)"
+          if [ "$invalid" -gt 0 ]; then
+            echo "::warning::gitleaks SARIF had $invalid region(s) with endColumn < 1; end position dropped before upload"
+            jq '(.runs[].results[]?.locations[]?.physicalLocation.region | select(. != null and (.endColumn // 1) < 1)) |= del(.endColumn, .endLine)' gitleaks-report.sarif > gitleaks-report.fixed.sarif
+            mv gitleaks-report.fixed.sarif gitleaks-report.sarif
           fi
 
       - name: Upload gitleaks report (SARIF, redacted)
