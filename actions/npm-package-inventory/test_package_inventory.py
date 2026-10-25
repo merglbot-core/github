@@ -16,7 +16,7 @@ import tarfile
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from package_inventory import (catalogue, collect, InventoryGap, locked_versions, main,
                                LOCAL_VENDOR_LINKS, NpmReader, REGISTRY, SCOPES, sri, verify_archive)
@@ -136,6 +136,39 @@ class LocalVendorLinkTests(unittest.TestCase):
         del self.lock["packages"]["node_modules/" + self.allowed[0]]
         with self.assertRaisesRegex(InventoryGap, "^required_package_missing$"):
             self.pins()
+
+    def test_declared_vendor_binding_requires_its_link_row(self):
+        original = copy.deepcopy(self.lock)
+        for version in (2, 3):
+            for name, target in self.links.items():
+                for field in ("dependencies", "devDependencies", "optionalDependencies"):
+                    for keep_vendor_metadata in (False, True):
+                        with self.subTest(version=version, name=name, field=field,
+                                          keep_vendor_metadata=keep_vendor_metadata):
+                            self.lock = copy.deepcopy(original)
+                            self.lock["lockfileVersion"] = version
+                            packages = self.lock["packages"]
+                            del packages["node_modules/" + name]
+                            del packages[""]["dependencies"][name]
+                            packages[""].setdefault(field, {})[name] = "file:" + target
+                            if not keep_vendor_metadata:
+                                del packages[target]
+                            with self.assertRaisesRegex(
+                                    InventoryGap, "^invalid_local_vendor_link$"):
+                                self.pins()
+
+    def test_missing_declared_link_blocks_collection_before_reader_creation(self):
+        name = next(iter(self.links))
+        del self.lock["packages"]["node_modules/" + name]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "package-lock.json"
+            path.write_text(json.dumps(self.lock))
+            reader_factory = Mock(side_effect=AssertionError("unexpected_reader_creation"))
+            with self.assertRaisesRegex(InventoryGap, "^invalid_local_vendor_link$"):
+                collect("core", path, env={"GITHUB_ACTIONS": "true",
+                        "GITHUB_REPOSITORY": SCOPES["core"][0]},
+                        reader_factory=reader_factory)
+            reader_factory.assert_not_called()
 
     def test_report_separates_vendor_metadata_from_archive_and_identity_proof(self):
         metadata = {"versions": {"1.0.0": {"integrity": integrity(b"fixture")}}, "dist_tags": {}}

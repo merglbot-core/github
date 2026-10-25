@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "upstream_repository": "merglbot-core/platform",
-  "upstream_commit": "5dbd94e07d9e0c24e6a2f36c5d26e4fa2b55da5f",
+  "upstream_commit": "7ed34abef39277c311eaccc1d08d5bcac1fcc384",
   "upstream_directory": "services/github_access",
   "snapshot_files_sha256": {
-    "package_inventory.py": "3f188232484ed217857e29cc6b5c467be357e20257737b3b707d1fdec73e2ff1",
-    "test_package_inventory.py": "7a95ee53cabfe7cc71779e7a44b68e701c7b1d9fa7eafb6ba02f7a1a57be6a02"
+    "package_inventory.py": "e626711dc525e394c9952ad1ae76527ccd458dbb319744cd011aa3391182e6b7",
+    "test_package_inventory.py": "496369984f890b0cd692afa45e79bbe97c9fb1a7022c6867dd7556579a1676fd"
   },
   "runtime_download_of_helper_source": false,
   "workflow_activation_included": false

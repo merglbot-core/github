@@ -17,7 +17,7 @@ ACTION = Path(__file__).resolve().parents[1] / "actions/npm-package-inventory"
 class NpmInventoryActionTests(unittest.TestCase):
     def test_snapshot_provenance_and_actual_module_location(self):
         record = json.loads((ACTION / "UPSTREAM.json").read_text())
-        self.assertEqual(record["upstream_commit"], "5dbd94e07d9e0c24e6a2f36c5d26e4fa2b55da5f")
+        self.assertEqual(record["upstream_commit"], "7ed34abef39277c311eaccc1d08d5bcac1fcc384")
         for name, expected in record["snapshot_files_sha256"].items():
             self.assertEqual(hashlib.sha256((ACTION / name).read_bytes()).hexdigest(), expected)
         self.assertEqual(Path(sys.modules["package_inventory"].__file__).resolve(),

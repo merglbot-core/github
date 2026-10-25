@@ -136,6 +136,20 @@ def locked_versions(lock, allowed, *, local_links=None):
     local_links = {} if local_links is None else local_links
     require(type(local_links) is dict and not set(local_links) & set(allowed),
             "invalid_local_vendor_bindings")
+    if local_links:
+        root = lock["packages"].get("", {})
+        require(type(root) is dict, "invalid_local_vendor_link")
+        declared = set()
+        for field in ("dependencies", "devDependencies", "optionalDependencies"):
+            dependencies = root.get(field, {})
+            require(type(dependencies) is dict, "invalid_local_vendor_link")
+            declared.update(local_links.keys() & dependencies.keys())
+        # Iterating package rows alone cannot detect a declared missing link.
+        for name in sorted(declared):
+            path = "node_modules/" + name
+            row = lock["packages"].get(path)
+            require(type(row) is dict, "invalid_local_vendor_link")
+            validate_vendor_link(lock, path, row, name, local_links[name])
     for path, row in lock["packages"].items():
         require(type(path) is str and type(row) is dict, "invalid_lock_entry")
         if "node_modules/" not in path:
