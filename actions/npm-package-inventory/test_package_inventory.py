@@ -16,10 +16,10 @@ import tarfile
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from package_inventory import (catalogue, collect, InventoryGap, locked_versions, main,
-                               NpmReader, REGISTRY, SCOPES, sri, verify_archive)
+                               LOCAL_VENDOR_LINKS, NpmReader, REGISTRY, SCOPES, sri, verify_archive)
 
 
 NAME = "@merglbot-proteinaco/btf-viz"
@@ -66,6 +66,128 @@ class FakeReader:
         target.write_bytes(self.bytes[version])
         return [{"name": NAME, "version": version, "filename": target.name,
                  "size": target.stat().st_size, "integrity": integrity(self.bytes[version])}]
+
+
+class LocalVendorLinkTests(unittest.TestCase):
+    def setUp(self):
+        self.allowed = SCOPES["core"][1]
+        self.links = LOCAL_VENDOR_LINKS["core"]
+        self.lock = {"lockfileVersion": 3, "packages": {"": {"dependencies": {}}}}
+        packages = self.lock["packages"]
+        for name in self.allowed:
+            packages["node_modules/" + name] = {
+                "version": "1.0.0", "resolved": REGISTRY + "/download/fixture",
+                "integrity": integrity(b"fixture")}
+        for name, target in self.links.items():
+            packages[""]["dependencies"][name] = "file:" + target
+            packages["node_modules/" + name] = {"resolved": target, "link": True}
+            packages[target] = {"name": name, "version": "0.1.0"}
+
+    def pins(self):
+        return locked_versions(self.lock, self.allowed, local_links=self.links)
+
+    def test_current_admin_link_shape_preserves_both_registry_pins(self):
+        pins = self.pins()
+        self.assertEqual(set(pins), set(self.allowed))
+        self.assertTrue(all(value == {"1.0.0": integrity(b"fixture")} for value in pins.values()))
+        with self.assertRaisesRegex(InventoryGap, "^unmapped_private_package$"):
+            locked_versions(self.lock, self.allowed)
+
+    def test_changed_link_target_identity_or_declaration_fails_closed(self):
+        original = copy.deepcopy(self.lock)
+        name, target = next(iter(self.links.items()))
+        changes = (
+            lambda p: p["node_modules/" + name].update(link=False),
+            lambda p: p["node_modules/" + name].update(resolved="../outside"),
+            lambda p: p["node_modules/" + name].update(name="@other/alias"),
+            lambda p: p.pop(target),
+            lambda p: p[target].update(name="@other/alias"),
+            lambda p: p[target].update(version=True),
+            lambda p: p[target].update(resolved=REGISTRY + "/download/fixture"),
+            lambda p: p[target].update(integrity=integrity(b"fixture")),
+            lambda p: p[target].update(link=True),
+            lambda p: p[""]["dependencies"].pop(name),
+            lambda p: p[""]["dependencies"].update({name: "file:../outside"}),
+            lambda p: p[""].update(devDependencies={name: "^0.1.0"}),
+        )
+        for index, change in enumerate(changes):
+            self.lock = copy.deepcopy(original)
+            change(self.lock["packages"])
+            with self.subTest(change=index), self.assertRaisesRegex(
+                    InventoryGap, "^invalid_local_vendor_link$"):
+                self.pins()
+
+    def test_unknown_or_nested_private_link_is_never_silently_omitted(self):
+        name, target = next(iter(self.links.items()))
+        for path, reason in (("node_modules/@merglbot-core/unknown", "unmapped_private_package"),
+                             ("node_modules/parent/node_modules/" + name, "invalid_local_vendor_link")):
+            with self.subTest(path=path):
+                self.lock["packages"][path] = {"resolved": target, "link": True}
+                with self.assertRaisesRegex(InventoryGap, "^" + reason + "$"):
+                    self.pins()
+                del self.lock["packages"][path]
+
+    def test_known_registry_packages_cannot_be_reclassified_as_local(self):
+        name = self.allowed[0]
+        with self.assertRaisesRegex(InventoryGap, "^invalid_local_vendor_bindings$"):
+            locked_versions(self.lock, self.allowed, local_links={name: "vendor/fixture/package"})
+
+    def test_missing_registry_package_still_blocks_with_valid_vendor_links(self):
+        del self.lock["packages"]["node_modules/" + self.allowed[0]]
+        with self.assertRaisesRegex(InventoryGap, "^required_package_missing$"):
+            self.pins()
+
+    def test_declared_vendor_binding_requires_its_link_row(self):
+        original = copy.deepcopy(self.lock)
+        for version in (2, 3):
+            for name, target in self.links.items():
+                for field in ("dependencies", "devDependencies", "optionalDependencies"):
+                    for keep_vendor_metadata in (False, True):
+                        with self.subTest(version=version, name=name, field=field,
+                                          keep_vendor_metadata=keep_vendor_metadata):
+                            self.lock = copy.deepcopy(original)
+                            self.lock["lockfileVersion"] = version
+                            packages = self.lock["packages"]
+                            del packages["node_modules/" + name]
+                            del packages[""]["dependencies"][name]
+                            packages[""].setdefault(field, {})[name] = "file:" + target
+                            if not keep_vendor_metadata:
+                                del packages[target]
+                            with self.assertRaisesRegex(
+                                    InventoryGap, "^invalid_local_vendor_link$"):
+                                self.pins()
+
+    def test_missing_declared_link_blocks_collection_before_reader_creation(self):
+        name = next(iter(self.links))
+        del self.lock["packages"]["node_modules/" + name]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "package-lock.json"
+            path.write_text(json.dumps(self.lock))
+            reader_factory = Mock(side_effect=AssertionError("unexpected_reader_creation"))
+            with self.assertRaisesRegex(InventoryGap, "^invalid_local_vendor_link$"):
+                collect("core", path, env={"GITHUB_ACTIONS": "true",
+                        "GITHUB_REPOSITORY": SCOPES["core"][0]},
+                        reader_factory=reader_factory)
+            reader_factory.assert_not_called()
+
+    def test_report_separates_vendor_metadata_from_archive_and_identity_proof(self):
+        metadata = {"versions": {"1.0.0": {"integrity": integrity(b"fixture")}}, "dist_tags": {}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "package-lock.json"
+            path.write_text(json.dumps(self.lock))
+            with patch("package_inventory.catalogue", side_effect=lambda *args: copy.deepcopy(metadata)) as cat, \
+                 patch("package_inventory.verify_archive", return_value={"compressed_bytes": 7}), \
+                 patch("package_inventory.NpmReader") as reader:
+                result = collect("core", path, env={"GITHUB_ACTIONS": "true",
+                                 "GITHUB_REPOSITORY": SCOPES["core"][0]})
+        self.assertEqual({c.args[1] for c in cat.call_args_list}, set(self.allowed))
+        reader.return_value.assert_not_called()
+        self.assertEqual({x["name"] for x in result["local_vendor_links"]}, set(self.links))
+        self.assertTrue(all(not x["filesystem_content_verified"]
+                            and not x["registry_archive_bytes_measured"]
+                            for x in result["local_vendor_links"]))
+        self.assertFalse(result["effective_auth_identity_verified"])
+        self.assertFalse(result["all_catalogue_archive_bytes_complete"])
 
 
 class PackageInventoryTests(unittest.TestCase):

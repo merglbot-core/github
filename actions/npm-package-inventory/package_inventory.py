@@ -29,6 +29,15 @@ SCOPES = {
     "proteinaco": ("merglbot-proteinaco/proteinaco-web", (
         "@merglbot-proteinaco/btf-viz",)),
 }
+# These committed local packages are not npm registry downloads. New bindings
+# require source review; a caller cannot supply names or paths through inputs.
+LOCAL_VENDOR_LINKS = {
+    "core": {
+        "@merglbot-core/comments-client": "vendor/merglbot-comments/comments-client",
+        "@merglbot-core/comments-mui": "vendor/merglbot-comments/comments-mui",
+    },
+    "proteinaco": {},
+}
 VERSION = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
                      r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\Z")
 TAG = re.compile(r"[A-Za-z][A-Za-z0-9._-]{0,63}\Z")
@@ -95,10 +104,52 @@ def registry_reference(value):
     return normalized == "npm.pkg.github.com"
 
 
-def locked_versions(lock, allowed):
+def validate_vendor_link(lock, path, row, name, target):
+    """Validate lock metadata only; never execute or attest vendor file bytes."""
+    require(type(target) is str
+            and re.fullmatch(r"vendor/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+", target),
+            "invalid_local_vendor_link")
+    packages = lock["packages"]
+    local = packages.get(target)
+    root = packages.get("")
+    require(path == "node_modules/" + name
+            and row.get("link") is True and row.get("resolved") == target
+            and row.get("name", name) == name
+            and type(local) is dict and local.get("name") == name
+            and valid_version(local.get("version"))
+            and not local.get("link") and "resolved" not in local and "integrity" not in local
+            and type(root) is dict, "invalid_local_vendor_link")
+    declarations = []
+    for field in ("dependencies", "devDependencies", "optionalDependencies"):
+        value = root.get(field, {})
+        require(type(value) is dict, "invalid_local_vendor_link")
+        if name in value:
+            declarations.append(value[name])
+    require(bool(declarations) and all(value == "file:" + target for value in declarations),
+            "invalid_local_vendor_link")
+
+
+def locked_versions(lock, allowed, *, local_links=None):
     require(type(lock) is dict and lock.get("lockfileVersion") in (2, 3)
             and type(lock.get("packages")) is dict, "unsupported_lockfile")
     pins = {name: {} for name in allowed}
+    local_links = {} if local_links is None else local_links
+    require(type(local_links) is dict and not set(local_links) & set(allowed),
+            "invalid_local_vendor_bindings")
+    if local_links:
+        root = lock["packages"].get("", {})
+        require(type(root) is dict, "invalid_local_vendor_link")
+        declared = set()
+        for field in ("dependencies", "devDependencies", "optionalDependencies"):
+            dependencies = root.get(field, {})
+            require(type(dependencies) is dict, "invalid_local_vendor_link")
+            declared.update(local_links.keys() & dependencies.keys())
+        # Iterating package rows alone cannot detect a declared missing link.
+        for name in sorted(declared):
+            path = "node_modules/" + name
+            row = lock["packages"].get(path)
+            require(type(row) is dict, "invalid_local_vendor_link")
+            validate_vendor_link(lock, path, row, name, local_links[name])
     for path, row in lock["packages"].items():
         require(type(path) is str and type(row) is dict, "invalid_lock_entry")
         if "node_modules/" not in path:
@@ -108,6 +159,9 @@ def locked_versions(lock, allowed):
         private = (name.startswith("@merglbot-") or name in allowed
                    or registry_reference(resolved))
         if not private:
+            continue
+        if name in local_links:
+            validate_vendor_link(lock, path, row, name, local_links[name])
             continue
         require(name in allowed, "unmapped_private_package")
         require(row.get("name", name) == name and not row.get("link"),
@@ -295,11 +349,19 @@ def collect(scope, lock_path, *, env=None, reader_factory=NpmReader):
     require(env.get("GITHUB_ACTIONS") == "true"
             and env.get("GITHUB_REPOSITORY") == repository, "untrusted_caller_context")
     lock, lock_sha = read_lock(lock_path)
-    pins = locked_versions(lock, allowed)
+    local_links = LOCAL_VENDOR_LINKS[scope]
+    pins = locked_versions(lock, allowed, local_links=local_links)
+    local_evidence = [{"name": name, "path": target,
+                       "version": lock["packages"][target]["version"],
+                       "filesystem_content_verified": False,
+                       "registry_archive_bytes_measured": False}
+                      for name, target in sorted(local_links.items())
+                      if "node_modules/" + name in lock["packages"]]
     report = {"schema_version": 1, "repository": repository,
               "lockfile_sha256": lock_sha, "catalogue_complete": True,
               "locked_archives_complete": True, "all_catalogue_archive_bytes_complete": False,
-              "effective_auth_identity_verified": False, "packages": {}}
+              "effective_auth_identity_verified": False,
+              "local_vendor_links": local_evidence, "packages": {}}
     with tempfile.TemporaryDirectory(prefix="npm-inventory-") as directory:
         root = Path(directory)
         reader = reader_factory(root, project_context=Path(lock_path).resolve().parent)
