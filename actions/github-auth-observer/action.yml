@@ -1,0 +1,15 @@
+name: github-auth-observer
+description: Bounded read-only diagnosis of explicitly supplied GitHub authentication
+outputs:
+  report_path:
+    description: Private runner JSON observation path; not migration acceptance
+    value: ${{ steps.observe.outputs.report_path }}
+runs:
+  using: composite
+  steps:
+    - name: Observe explicit GitHub authentication
+      id: observe
+      shell: bash
+      env:
+        PROJECT39_AUTH_OBSERVER_PATH: ${{ github.action_path }}
+      run: bash "$PROJECT39_AUTH_OBSERVER_PATH/collect.sh"
