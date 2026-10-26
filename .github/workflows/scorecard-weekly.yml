@@ -1,0 +1,51 @@
+# OpenSSF Scorecard, weekly (rollout of merglbot-core/platform#1917, owner GO D-P-3130).
+# Deterministic supply-chain checks under the V6 gate. Read-only: results are
+# kept as a workflow artifact; nothing is published to the Scorecard API and
+# nothing is uploaded to code scanning.
+name: Scorecard (weekly)
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: scorecard-weekly
+  cancel-in-progress: false
+
+jobs:
+  scorecard:
+    name: Scorecard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      # Read-only scopes Scorecard's GraphQL queries need (commits, PRs, reviews,
+      # check runs, statuses); without them the run fails with
+      # "Resource not accessible by integration" (pilot, 17 Oct 2026).
+      contents: read
+      actions: read
+      pull-requests: read
+      issues: read
+      checks: read
+      statuses: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: scorecard-results.json
+          results_format: json
+          publish_results: false
+
+      - name: Upload results
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scorecard-results
+          path: scorecard-results.json
+          retention-days: 30
