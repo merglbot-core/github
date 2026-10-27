@@ -1,7 +1,8 @@
 # Project 39 npm package inventory
 
 Read-only input collection for the unresolved nonpersonal npm route. This action
-bundles the collector and functional tests from reviewed platform#2634, including platform#2628 vendor-link validation,
+bundles the collector and functional tests from reviewed platform#2662, including
+platform#2634 and platform#2628 vendor-link validation,
 the original platform#2300 collector and platform#2301 origin fix. Exact source
 hashes and the immutable source commit are recorded in UPSTREAM.json.
 It does not fetch code from the private platform repository at runtime.
@@ -41,9 +42,11 @@ prereleases omitted by npm's wildcard. It validates each locked archive's
 identity, actual compressed bytes and SHA-512 against lock and registry metadata.
 It rechecks the catalogue after downloads. Unknown private packages and
 incomplete captures fail explicitly. Current supported lockfiles also contain
-fixed local links to two declared comments packages. The canonical collector
-validates those links against its exact trusted source bindings; they are local
-vendored inputs, not additional registry package versions or archive downloads.
+fixed local comments links in core and the two Proteinaco UI packages under
+`packages/`. Every fixed binding, root declaration and link row is required;
+removing the entire local input still fails before npm starts. The canonical
+collector validates these exact trusted bindings as local source inputs, not
+additional registry package versions or archive downloads.
 Escaping, changed or undeclared lockfile link metadata still fails closed.
 A retained root declaration with a missing link row is rejected before npm
 reader creation, including dev and optional declarations.
@@ -82,3 +85,5 @@ temporary workspaces and do not reach a provider or read real auth config.
 Update snapshots only from a reviewed immutable source, preserving the canonical
 context, script, archive and privacy checks, then update hashes and obtain new
 exact-head V6 review. A file hash is provenance, not review authorization.
+
+This source snapshot does not repin a caller or authorize another inventory run.

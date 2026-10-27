@@ -190,6 +190,97 @@ class LocalVendorLinkTests(unittest.TestCase):
         self.assertFalse(result["all_catalogue_archive_bytes_complete"])
 
 
+class ProteinacoWorkspaceInventoryTests(unittest.TestCase):
+    def setUp(self):
+        self.links = {
+            "@merglbot-public/data-catalog-ui": "packages/data-catalog-ui",
+            "@merglbot-public/fb-creatives-ui": "packages/fb-creatives-ui",
+        }
+        self.lock = {"lockfileVersion": 3, "packages": {
+            "": {"dependencies": {
+                name: "file:" + target for name, target in self.links.items()}},
+            "node_modules/" + NAME: {
+                "version": "0.5.3", "resolved": REGISTRY + "/download/0.5.3",
+                "integrity": integrity(b"workspace-registry-fixture")},
+        }}
+        for name, target in self.links.items():
+            self.lock["packages"]["node_modules/" + name] = {
+                "resolved": target, "link": True}
+            self.lock["packages"][target] = {"name": name, "version": "0.1.0"}
+
+    def test_fixed_workspace_links_preserve_only_registry_pins(self):
+        self.assertEqual(locked_versions(self.lock, SCOPES["proteinaco"][1],
+                         local_links=LOCAL_VENDOR_LINKS["proteinaco"]),
+                         {NAME: {"0.5.3": integrity(b"workspace-registry-fixture")}})
+
+    def test_omitting_all_fixed_local_inputs_refuses_before_reader_creation(self):
+        for scope in ("core", "proteinaco"):
+            lock = {"lockfileVersion": 3, "packages": {"": {}}}
+            for name in SCOPES[scope][1]:
+                lock["packages"]["node_modules/" + name] = {
+                    "version": "1.0.0", "resolved": REGISTRY + "/download/fixture",
+                    "integrity": integrity(b"registry-only-fixture")}
+            with self.subTest(scope=scope), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "package-lock.json"
+                path.write_text(json.dumps(lock))
+                reader = Mock(side_effect=AssertionError("unexpected_reader_creation"))
+                with self.assertRaisesRegex(InventoryGap, "^invalid_local_vendor_link$"):
+                    collect(scope, path, env={"GITHUB_ACTIONS": "true",
+                            "GITHUB_REPOSITORY": SCOPES[scope][0]}, reader_factory=reader)
+                reader.assert_not_called()
+
+    def test_bad_workspace_metadata_never_creates_a_reader(self):
+        for name, target in self.links.items():
+            changes = (
+                lambda p: p.pop("node_modules/" + name),
+                lambda p: p.pop(target),
+                lambda p: p["node_modules/" + name].update(resolved="../outside"),
+                lambda p: p["node_modules/" + name].update(link=False),
+                lambda p: p[target].update(name="@other/alias"),
+                lambda p: p[target].update(integrity=integrity(b"not-an-archive")),
+                lambda p: p[""]["dependencies"].update({name: "file:../outside"}),
+            )
+            for index, change in enumerate(changes):
+                lock = copy.deepcopy(self.lock)
+                change(lock["packages"])
+                with self.subTest(name=name, change=index), tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "package-lock.json"
+                    path.write_text(json.dumps(lock))
+                    reader = Mock(side_effect=AssertionError("unexpected_reader_creation"))
+                    with self.assertRaisesRegex(InventoryGap, "^invalid_local_vendor_link$"):
+                        collect("proteinaco", path, env={"GITHUB_ACTIONS": "true",
+                                "GITHUB_REPOSITORY": SCOPES["proteinaco"][0]},
+                                reader_factory=reader)
+                    reader.assert_not_called()
+        unknown = copy.deepcopy(self.lock)
+        unknown["packages"]["node_modules/@merglbot-public/unknown"] = {
+            "resolved": "packages/unknown", "link": True}
+        with self.assertRaisesRegex(InventoryGap, "^unmapped_private_package$"):
+            locked_versions(unknown, SCOPES["proteinaco"][1],
+                            local_links=LOCAL_VENDOR_LINKS["proteinaco"])
+
+    def test_workspace_report_does_not_claim_registry_or_filesystem_evidence(self):
+        metadata = {"versions": {"0.5.3": {
+            "integrity": integrity(b"workspace-registry-fixture")}}, "dist_tags": {}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "package-lock.json"
+            path.write_text(json.dumps(self.lock))
+            with patch("package_inventory.catalogue", side_effect=lambda *args: copy.deepcopy(metadata)) as cat, \
+                 patch("package_inventory.verify_archive", return_value={"compressed_bytes": 7}) as archive_read, \
+                 patch("package_inventory.NpmReader") as reader:
+                report = collect("proteinaco", path, env={"GITHUB_ACTIONS": "true",
+                                 "GITHUB_REPOSITORY": SCOPES["proteinaco"][0]})
+        self.assertEqual([call.args[1] for call in cat.call_args_list], [NAME, NAME])
+        self.assertEqual([call.args[1] for call in archive_read.call_args_list], [NAME])
+        reader.return_value.assert_not_called()
+        self.assertEqual({row["name"] for row in report["local_vendor_links"]}, set(self.links))
+        self.assertTrue(all(not row["filesystem_content_verified"]
+                            and not row["registry_archive_bytes_measured"]
+                            for row in report["local_vendor_links"]))
+        self.assertFalse(report["effective_auth_identity_verified"])
+        self.assertFalse(report["all_catalogue_archive_bytes_complete"])
+
+
 class PackageInventoryTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -201,7 +292,13 @@ class PackageInventoryTests(unittest.TestCase):
                 "version": "0.5.3", "resolved": REGISTRY + "/download/0.5.3",
                 "integrity": self.reader.rows["0.5.3"]["dist.integrity"]}}}
         self.lock_path = self.root / "package-lock.json"
-        self.lock_path.write_text(json.dumps(self.lock))
+        caller_lock = copy.deepcopy(self.lock)
+        caller_lock["packages"][""]["dependencies"] = {}
+        for name, target in LOCAL_VENDOR_LINKS["proteinaco"].items():
+            caller_lock["packages"][""]["dependencies"][name] = "file:" + target
+            caller_lock["packages"]["node_modules/" + name] = {"resolved": target, "link": True}
+            caller_lock["packages"][target] = {"name": name, "version": "0.1.0"}
+        self.lock_path.write_text(json.dumps(caller_lock))
         self.env = {"GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": SCOPES["proteinaco"][0]}
 
     def run_collect(self, reader=None):

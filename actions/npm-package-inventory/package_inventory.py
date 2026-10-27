@@ -29,14 +29,18 @@ SCOPES = {
     "proteinaco": ("merglbot-proteinaco/proteinaco-web", (
         "@merglbot-proteinaco/btf-viz",)),
 }
-# These committed local packages are not npm registry downloads. New bindings
-# require source review; a caller cannot supply names or paths through inputs.
+# These committed local packages are required inputs of each trusted caller,
+# not npm registry downloads. Binding changes require source review; a caller
+# cannot supply names or paths through inputs.
 LOCAL_VENDOR_LINKS = {
     "core": {
         "@merglbot-core/comments-client": "vendor/merglbot-comments/comments-client",
         "@merglbot-core/comments-mui": "vendor/merglbot-comments/comments-mui",
     },
-    "proteinaco": {},
+    "proteinaco": {
+        "@merglbot-public/data-catalog-ui": "packages/data-catalog-ui",
+        "@merglbot-public/fb-creatives-ui": "packages/fb-creatives-ui",
+    },
 }
 VERSION = re.compile(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
                      r"(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\Z")
@@ -107,7 +111,8 @@ def registry_reference(value):
 def validate_vendor_link(lock, path, row, name, target):
     """Validate lock metadata only; never execute or attest vendor file bytes."""
     require(type(target) is str
-            and re.fullmatch(r"vendor/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+", target),
+            and re.fullmatch(r"(?:vendor/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+"
+                             r"|packages/[A-Za-z0-9_-]+)", target),
             "invalid_local_vendor_link")
     packages = lock["packages"]
     local = packages.get(target)
@@ -144,7 +149,9 @@ def locked_versions(lock, allowed, *, local_links=None):
             dependencies = root.get(field, {})
             require(type(dependencies) is dict, "invalid_local_vendor_link")
             declared.update(local_links.keys() & dependencies.keys())
-        # Iterating package rows alone cannot detect a declared missing link.
+        # A fixed caller binding cannot disappear together with its declaration
+        # and row; this map is a required input manifest, not optional recognition.
+        require(declared == set(local_links), "invalid_local_vendor_link")
         for name in sorted(declared):
             path = "node_modules/" + name
             row = lock["packages"].get(path)
@@ -355,8 +362,7 @@ def collect(scope, lock_path, *, env=None, reader_factory=NpmReader):
                        "version": lock["packages"][target]["version"],
                        "filesystem_content_verified": False,
                        "registry_archive_bytes_measured": False}
-                      for name, target in sorted(local_links.items())
-                      if "node_modules/" + name in lock["packages"]]
+                      for name, target in sorted(local_links.items())]
     report = {"schema_version": 1, "repository": repository,
               "lockfile_sha256": lock_sha, "catalogue_complete": True,
               "locked_archives_complete": True, "all_catalogue_archive_bytes_complete": False,
