@@ -114,13 +114,26 @@ def main(argv=None):
         print(json.dumps({'state': 'preflight_passed', 'binding': args.binding,
                           'host_mutations': 0, 'installation_authorized': False}))
         return 0
-    # Exclusive plan reservation, never reuse a consumed install directory.
+    # Reserve only after the lifecycle holds the lock and proves old idle.
     root = base / 'adoptions'
-    locking.no_symlink(root)
-    root.mkdir(mode=0o700, exist_ok=True)
     installation = root / args.binding
-    installation.mkdir(mode=0o700)
-    journal = journals.Journal(installation / 'journal.jsonl', args.binding)
+    journal = None
+
+    def emit(event):
+        nonlocal journal
+        if journal is None:
+            if event != {'phase': 'stop_intent'}:
+                raise ValueError('reservation_requires_stop_intent')
+            locking.no_symlink(root)
+            root.mkdir(mode=0o700, exist_ok=True)
+            installation.mkdir(mode=0o700)  # Consumed bindings remain exclusive.
+            journal = journals.Journal(installation / 'journal.jsonl', args.binding)
+            fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        journal.emit(event)
     state_read = lambda: read_bytes(state_path)
 
     def guard():
@@ -142,12 +155,13 @@ def main(argv=None):
             state_read=state_read,
             replace_files=lambda: native.install(tx, rows, str(home), installation,
                 guard=guard, state_read=state_read,
-                journal=lambda receipt: journal.emit({'phase': 'native_transaction', 'receipt': receipt})),
-            journal=journal.emit)
+                journal=lambda receipt: emit({'phase': 'native_transaction', 'receipt': receipt})),
+            journal=emit)
         print(json.dumps(result))
         return 0 if result['state'] == 'installed_loaded_verified' else 2
     finally:
-        journal.close()
+        if journal is not None:
+            journal.close()
 
 
 def recover_owner(args, recovery, home, tx, native, lifecycle, locking, journals, services):

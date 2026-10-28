@@ -82,8 +82,12 @@ closed for manual disposition. Neither successful installation nor recovery
 establishes a natural-run result or financial acceptance.
 
 Validation includes the repository CI entrypoint, synthetic owner CLI round trip
-(preflight/install/recovery with simulated launchd), and a separate macOS native
-transaction/rollback probe using temporary files only. The synthetic integration
+(preflight/install/recovery with simulated launchd), and a macOS native
+transaction/rollback integration test using the unmodified pinned dependency
+bytes vendored under `fixtures/native-9ac0ba9c`. It loads those bytes through
+`adoption_bundle.load`, drives the owner install and receipt-bound recovery on
+temporary files, and simulates only launchd. The portable loader test also runs
+on Linux; the native filesystem test explicitly skips there. The synthetic integration
 does not prove real launchd activation. Real activation/readback remains a
 separate owner step; do not execute this source against the host during review.
 
@@ -94,10 +98,15 @@ the loaded service and stopping it. Recovery accepts only an absent service or t
 admitted current program/arguments in idle state without a PID; another loaded
 identity or a busy observer is refused before bootout.
 
-An exclusive reservation left before a transaction receipt exists is consumed.
+Binding reservation occurs only after lock acquisition, invariant checks and
+old-service idle verification, immediately before `stop_intent`. Ordinary lock
+contention therefore creates no reservation, and the unchanged plan can proceed
+after contention ends. Once reserved, a binding remains consumed even if an
+I/O failure occurs before the transaction receipt exists.
 It is not safe to delete that directory or replay the same binding; preserve its
 journal and obtain a fresh, explicitly reviewed recovery/disposition packet.
-# Original caller compatibility
+
+## Original caller compatibility
 
 Adoption preflight and recovery admission now require the exact inspected legacy
 observer SHA256 `ebb204f546915a39c1238ffa14381a630370cb3808eb814cc0ed723ea23fbf68`
@@ -113,5 +122,5 @@ a real held flock: no-argument parsing succeeded, exit was zero, state was uncha
 and no subprocess was invoked. This is compatibility evidence, not production
 launchd evidence. The synthetic CLI glue fixture remains explicitly synthetic;
 its successful launchd simulation cannot establish legacy compatibility. The
-89-test offline suite includes rejection of the actual new required-objective
+offline suite includes rejection of the actual new required-objective
 source as a previous no-argument program and rejection of either byte or argv drift.

@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import hashlib
+import subprocess
+import sys
 
 spec = importlib.util.spec_from_file_location('cost934_bundle', Path(__file__).with_name('adoption_bundle.py'))
 m = importlib.util.module_from_spec(spec)
@@ -39,6 +41,14 @@ class BundleTests(unittest.TestCase):
         (self.directory / 'transaction.py').unlink()
         with self.assertRaises(FileNotFoundError):
             m.verified_sources(self.root)
+
+    def test_vendored_native_bytes_load_with_real_pins_offline(self):
+        root = Path(__file__).parent.resolve() / 'fixtures/native-9ac0ba9c'
+        self.assertEqual(set(m.verified_sources(root)), set(m.PINS))
+        code = "import runpy; m=runpy.run_path(%r); tx=m['load'](%r); assert callable(tx.install) and callable(tx.rollback); print('PINNED_LOAD_OK')" % (str(Path(__file__).with_name('adoption_bundle.py').resolve()), str(root))
+        result = subprocess.run([sys.executable, '-I', '-c', code], capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('PINNED_LOAD_OK', result.stdout)
 
     def test_unisolated_loader_refuses_before_import(self):
         if m.sys.flags.isolated:

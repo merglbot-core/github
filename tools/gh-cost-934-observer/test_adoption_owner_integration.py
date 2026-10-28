@@ -1,7 +1,8 @@
 """Owner CLI integration with temporary files and a simulated launchd/native port.
 
-The separate native temporary-file probe covers real native transactions. This
-suite covers glue and journals, and never claims actual launchd activation.
+The macOS scenario loads the vendored pinned native bytes and exercises real
+transactions and recovery receipts. All scenarios simulate launchd; none proves
+actual host activation.
 """
 import hashlib
 from contextlib import contextmanager
@@ -22,7 +23,7 @@ def module(name):
     obj=importlib.util.module_from_spec(spec);spec.loader.exec_module(obj);return obj
 
 
-def scenario(objective_drift=False):
+def scenario(objective_drift=False, lock_contention=False, real_native=False):
     owner=module('adoption_owner');plan=module('adoption_plan');contract=module('adoption_contract')
     with tempfile.TemporaryDirectory() as temp:
         home=Path(temp).resolve();base=home/'.merglbot/gh-cost-wave3';base.mkdir(parents=True)
@@ -59,6 +60,9 @@ def scenario(objective_drift=False):
                 invariant_check();Path(row['target']).write_bytes(Path(row['backup']).read_bytes())
             result={'state':'rollback_verified','rows':receipt['rows']};journal(result);return result
         tx=SimpleNamespace(snapshot=snapshot,install=install,rollback_preflight=rollback_preflight,rollback=rollback)
+        if real_native:
+            tx=module('adoption_bundle').load(Path(__file__).parent / 'fixtures/native-9ac0ba9c')
+            snapshot=tx.snapshot
         source=Path(__file__).with_name('acceptance_observer.py').read_bytes()
         manifest,binding,_=plan.prepare(home=str(home),objective=str(objective),
             objective_sha256=plan.digest(objective.read_bytes()),code_bytes=source,
@@ -68,8 +72,14 @@ def scenario(objective_drift=False):
         plan_path=home/'plan.json';plan_path.write_text(json.dumps(manifest))
         original_code=code.read_bytes();original_caller=caller.read_bytes();original_state=state.read_bytes()
         loaded=True;calls=[]
+        real_run=subprocess.run
         def run(argv,**kwargs):
             nonlocal loaded
+            if real_native and argv[0] in ('/usr/bin/xattr', '/bin/cp'):
+                # Only native file operations inside this synthetic home.
+                paths=argv[-1:] if argv[0]=='/usr/bin/xattr' else [a for a in argv[1:] if not a.startswith('-')]
+                assert paths and all(Path(a).is_relative_to(home) for a in paths)
+                return real_run(argv, **kwargs)
             assert argv[0]=='/bin/launchctl';calls.append(argv[1])
             if argv[1]=='bootout':loaded=False;return SimpleNamespace(returncode=0,stdout='',stderr='')
             if argv[1]=='bootstrap':loaded=True;return SimpleNamespace(returncode=0,stdout='',stderr='')
@@ -82,13 +92,15 @@ def scenario(objective_drift=False):
         real_helper=owner.helper
         def helper(name):
             if name=='adoption_bundle':return SimpleNamespace(load=lambda root:tx)
-            if name=='adoption_lifecycle' and objective_drift:
+            if name=='adoption_lifecycle' and (objective_drift or lock_contention):
                 result=real_helper(name)
                 original_install=result.install
                 def install_with_drift(**kwargs):
                     original_lock=kwargs['lock']
                     @contextmanager
                     def lock_with_drift():
+                        if lock_contention:
+                            raise BlockingIOError('synthetic held observer lock')
                         with original_lock():
                             objective.write_bytes(b'changed after preflight and first guard')
                             yield
@@ -106,18 +118,23 @@ def scenario(objective_drift=False):
         with patch.object(owner,'helper',side_effect=helper),patch.object(owner.Path,'home',return_value=home),patch.object(owner.os,'getuid',return_value=501),patch.object(owner.os,'geteuid',return_value=501),patch.object(owner.subprocess,'run',side_effect=run):
             assert owner.main(args)==0
             assert not (base/'adoptions').exists()
-            if objective_drift:
+            if objective_drift or lock_contention:
                 try:
                     owner.main(args+['--mode','install','POTVRZUJI'])
-                except ValueError as exc:
-                    assert str(exc)=='objective_pin_changed', str(exc)
+                except (ValueError, BlockingIOError) as exc:
+                    assert str(exc)==('synthetic held observer lock' if lock_contention else 'objective_pin_changed'), str(exc)
                 else:
                     raise AssertionError('objective drift was admitted')
                 assert code.read_bytes()==original_code and caller.read_bytes()==original_caller
                 assert state.read_bytes()==original_state and loaded
                 assert 'bootout' not in calls and 'bootstrap' not in calls
-                print('OBJECTIVE_LOCK_DRIFT_REFUSED_WITHOUT_SERVICE_MUTATION')
-                return
+                assert not (base/'adoptions'/binding).exists()
+                if lock_contention:
+                    # Same unchanged binding remains usable after transient contention.
+                    lock_contention=False
+                else:
+                    print('OBJECTIVE_LOCK_DRIFT_REFUSED_WITHOUT_SERVICE_MUTATION')
+                    return
             assert owner.main(args+['--mode','install','POTVRZUJI'])==0
             assert code.read_bytes()==source and state.read_bytes()==original_state
             journal_path=base/'adoptions'/binding/'journal.jsonl'
@@ -138,6 +155,17 @@ class OwnerIntegrationTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('OWNER_ENTRY_INTEGRATION_PASS',result.stdout)
 
+    def test_lock_contention_does_not_consume_binding_and_retry_succeeds(self):
+        result=subprocess.run([sys.executable,'-I',str(Path(__file__).resolve()),'--lock-contention'],capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('OWNER_ENTRY_INTEGRATION_PASS',result.stdout)
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'native ACL/xattr/fsync contract requires macOS')
+    def test_real_pinned_native_install_receipt_recovery_and_rollback(self):
+        result=subprocess.run([sys.executable,'-I',str(Path(__file__).resolve()),'--real-native'],capture_output=True,text=True,timeout=60)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('OWNER_ENTRY_INTEGRATION_PASS',result.stdout)
+
     def test_objective_drift_under_install_lock_refuses_before_stop(self):
         result=subprocess.run([sys.executable,'-I',str(Path(__file__).resolve()),'--objective-drift'],capture_output=True,text=True,timeout=30)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
@@ -147,4 +175,6 @@ class OwnerIntegrationTests(unittest.TestCase):
 if __name__=='__main__':
     if sys.argv[1:]==['--scenario']:scenario()
     elif sys.argv[1:]==['--objective-drift']:scenario(objective_drift=True)
+    elif sys.argv[1:]==['--lock-contention']:scenario(lock_contention=True)
+    elif sys.argv[1:]==['--real-native']:scenario(real_native=True)
     else:unittest.main()
