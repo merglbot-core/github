@@ -51,9 +51,94 @@ regressions.
 repository `unittest discover -s tests` CI command. It loads these exact test
 modules; there is no copied implementation or new workflow.
 
-Protected adoption remains separate: reviewed source delivery, exact installed
-preimages, current ownership, an inactive-stage preflight, preserved counters and
-STOP history, an admitted install/rollback and the eligible shared owner wave.
-No installer, launchd file, workflow or activation is part of this source change.
-An exit-zero phase is not financial proof; only the existing `PROVEN` audit with
-a nonempty evidence list can set completion.
+## Protected adoption adapter (D-P-3963)
+
+The adapter prepares and validates a canonical two-file plan for this existing
+observer and its caller. It pins the observer source from merge `cc77f82c`, the
+admitted objective digest, full native preimages and current state. All caller
+fields except the bounded ProgramArguments transition remain unchanged.
+
+`adoption_owner.py` runs with isolated Python. Its default `preflight` mode is
+non-installing but briefly holds the observer lock (an overlapping scheduled run may exit on contention); `install` and `rollback` require `POTVRZUJI` plus the exact admitted
+plan digest. These are process controls, not identity authentication. Use only
+through the existing owner-script emitter, after independent exact-head source
+review, admission and owner approval of the concrete manifest. No generated
+owner script or production manifest is included in this PR.
+
+Native replacement and rollback reuse the pinned docs transaction/copy-admission
+library from `9ac0ba9c`; its complete dependency bytes are verified before import.
+The adapter does not replace metadata rules or permit generated xattrs. It uses
+the observer's existing flock inode. The owner path stops the exact idle service,
+installs both files, and reloads under that lock. RunAtLoad must complete exactly
+once with exit zero while the lock prevents state writes/model launches. No PID
+alone is not proof. Unknown, drift, partial install or failed verification leaves
+the service stopped for explicit recovery; it is never silently accepted.
+
+Every install digest reserves an exclusive directory with a bounded durable
+hash-chain journal. Recovery requires a fresh recovery plan binding the original
+plan, exact journal bytes, native receipt and CURRENT state. It restores files
+only, not state/STOP/counters. Incomplete or ambiguous backup ownership fails
+closed for manual disposition. Neither successful installation nor recovery
+establishes a natural-run result or financial acceptance.
+
+Validation includes the repository CI entrypoint, synthetic owner CLI round trip
+(preflight/install/recovery with simulated launchd), and a macOS native
+transaction/rollback integration test using the unmodified pinned dependency
+bytes vendored under `fixtures/native-9ac0ba9c`. It loads those bytes through
+`adoption_bundle.load`, drives the owner install and receipt-bound recovery on
+temporary files, and simulates only launchd. The portable loader test also runs
+on Linux; the native filesystem test explicitly skips there. The synthetic integration
+does not prove real launchd activation. Real activation/readback remains a
+separate owner step; do not execute this source against the host during review.
+
+A newly bootstrapped job may report `(never exited)`; this is pending observation,
+not success or failure. Completion still requires one run with numeric exit zero.
+Both installation and recovery acquire the existing observer lock before checking
+the loaded service and stopping it. Recovery accepts only an absent service or the
+admitted current program/arguments in idle state without a PID; another loaded
+identity or a busy observer is refused before bootout. The stop operation itself
+re-reads the loaded service and checks its exact phase-specific arguments and idle
+state before issuing bootout. This is a fresh admission snapshot, not an atomic
+launchd compare-and-stop primitive; installation must still exclude other writers.
+
+Binding reservation occurs only after lock acquisition, invariant checks and
+old-service idle verification, immediately before `stop_intent`. Recovery likewise
+reserves its packet only on `recovery_stop_intent`, after the recovery lock, guard,
+idle/absence and state checks. Ordinary lock
+contention therefore creates no reservation, and the unchanged plan can proceed
+after contention ends. Once reserved, a binding remains consumed even if an
+I/O failure occurs before the transaction receipt exists.
+It is not safe to delete that directory or replay the same binding; preserve its
+journal and obtain a fresh, explicitly reviewed recovery/disposition packet.
+
+## Original caller compatibility
+
+Adoption preflight and recovery admission now require the exact inspected legacy
+observer SHA256 `ebb204f546915a39c1238ffa14381a630370cb3808eb814cc0ed723ea23fbf68`
+paired with its original two-element Python/program argv. A different original
+generation is refused with `previous_program_cli_and_contention_contract_unverified`
+before any service mutation; it needs a separately reviewed compatibility contract.
+In particular, the newer observer requiring `--objective` is not admitted with
+the old no-argument caller. Recovery checks the actual preserved backup bytes,
+not merely the current source or the manifest's assertion.
+
+The exact legacy bytes were tested against temporary state/audit/lock paths and
+a real held flock: no-argument parsing succeeded, exit was zero, state was unchanged
+and no subprocess was invoked. This is compatibility evidence, not production
+launchd evidence. The synthetic CLI glue fixture remains explicitly synthetic;
+its successful launchd simulation cannot establish legacy compatibility. The
+offline suite includes rejection of the actual new required-objective
+source as a previous no-argument program and rejection of either byte or argv drift.
+
+
+Failure cleanup in installation and recovery waits at most 30 seconds for the
+exact admitted service to become idle, then rechecks identity before bootout.
+A foreign service or a service that remains running is never forcibly stopped.
+If absence cannot be proven, the journal records
+`recovery_required_service_state_unknown` before the lock is released; the
+original error is retained and chained to the cleanup failure. That record is
+not rollback success or proof that the service stopped. A running service may
+remain loaded; subsequent recovery requires fresh owner admission and readback.
+Failure to write the journal is itself surfaced as the original error's cause,
+not a successful cleanup. Source regressions simulate launchd and do not prove
+production observer lock-contention behaviour or activation safety.
