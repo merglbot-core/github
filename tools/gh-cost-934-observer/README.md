@@ -97,3 +97,21 @@ identity or a busy observer is refused before bootout.
 An exclusive reservation left before a transaction receipt exists is consumed.
 It is not safe to delete that directory or replay the same binding; preserve its
 journal and obtain a fresh, explicitly reviewed recovery/disposition packet.
+# Original caller compatibility
+
+Adoption preflight and recovery admission now require the exact inspected legacy
+observer SHA256 `ebb204f546915a39c1238ffa14381a630370cb3808eb814cc0ed723ea23fbf68`
+paired with its original two-element Python/program argv. A different original
+generation is refused with `previous_program_cli_and_contention_contract_unverified`
+before any service mutation; it needs a separately reviewed compatibility contract.
+In particular, the newer observer requiring `--objective` is not admitted with
+the old no-argument caller. Recovery checks the actual preserved backup bytes,
+not merely the current source or the manifest's assertion.
+
+The exact legacy bytes were tested against temporary state/audit/lock paths and
+a real held flock: no-argument parsing succeeded, exit was zero, state was unchanged
+and no subprocess was invoked. This is compatibility evidence, not production
+launchd evidence. The synthetic CLI glue fixture remains explicitly synthetic;
+its successful launchd simulation cannot establish legacy compatibility. The
+89-test offline suite includes rejection of the actual new required-objective
+source as a previous no-argument program and rejection of either byte or argv drift.

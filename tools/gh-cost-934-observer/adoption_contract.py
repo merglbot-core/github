@@ -4,10 +4,28 @@ This module performs no filesystem writes, launchd calls or model runs. Passing
 it is necessary, never sufficient, for source admission or owner installation.
 """
 import json
+import hashlib
 import plistlib
 from pathlib import PurePosixPath
 
 LABEL = 'ai.merglbot.gh-cost-wave3-acceptance'
+PREVIOUS_NO_OBJECTIVE_SHA256 = 'ebb204f546915a39c1238ffa14381a630370cb3808eb814cc0ed723ea23fbf68'
+
+
+def validate_previous_program(code_bytes, argv, *, home):
+    """Admit only the inspected legacy CLI/lock contract, never arbitrary code.
+
+The legacy generation accepts no objective argument and exits zero on lock
+contention. A new generation requires separate source review of this contract.
+Do not run original code as a preflight probe on the production host.
+"""
+    expected = ['/opt/homebrew/bin/python3',
+                str(PurePosixPath(home) / '.merglbot/gh-cost-wave3/acceptance_observer.py')]
+    if argv != expected:
+        raise ValueError('previous_program_arguments_unverified')
+    if hashlib.sha256(code_bytes).hexdigest() != PREVIOUS_NO_OBJECTIVE_SHA256:
+        raise ValueError('previous_program_cli_and_contention_contract_unverified')
+    return {'previous_cli_contract': 'legacy_no_objective_lock_contention_exit_zero'}
 
 
 def validate_transition(before, after, state_bytes, *, home, objective):

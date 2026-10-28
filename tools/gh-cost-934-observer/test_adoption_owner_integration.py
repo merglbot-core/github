@@ -81,6 +81,11 @@ def scenario():
         real_helper=owner.helper
         def helper(name):
             if name=='adoption_bundle':return SimpleNamespace(load=lambda root:tx)
+            if name=='adoption_contract':
+                # This glue fixture is synthetic, not proof of the real legacy CLI.
+                result=real_helper(name)
+                result.PREVIOUS_NO_OBJECTIVE_SHA256=hashlib.sha256(original_code).hexdigest()
+                return result
             return real_helper(name)
         args=['--plan',str(plan_path),'--binding',binding,'--native-bundle',str(home/'unused')]
         with patch.object(owner,'helper',side_effect=helper),patch.object(owner.Path,'home',return_value=home),patch.object(owner.os,'getuid',return_value=501),patch.object(owner.os,'geteuid',return_value=501),patch.object(owner.subprocess,'run',side_effect=run):

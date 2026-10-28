@@ -2,6 +2,7 @@ import copy
 import json
 import plistlib
 import unittest
+from unittest.mock import patch
 
 import importlib.util
 from pathlib import Path
@@ -77,6 +78,20 @@ class AdoptionContractTests(unittest.TestCase):
         self.old['ProgramArguments'].append('--force')
         with self.assertRaisesRegex(ValueError, 'unexpected_previous_caller'):
             self.check()
+
+    def test_current_required_objective_program_cannot_be_previous_no_argument_caller(self):
+        source = Path(__file__).with_name('acceptance_observer.py').read_bytes()
+        with self.assertRaisesRegex(ValueError, 'previous_program_cli_and_contention_contract_unverified'):
+            contract.validate_previous_program(source, self.old['ProgramArguments'], home=self.home)
+
+    def test_previous_contract_requires_both_pinned_bytes_and_exact_argv(self):
+        fixture = b'synthetic reviewed legacy program'
+        with patch.object(contract, 'PREVIOUS_NO_OBJECTIVE_SHA256', contract.hashlib.sha256(fixture).hexdigest()):
+            contract.validate_previous_program(fixture, self.old['ProgramArguments'], home=self.home)
+            with self.assertRaisesRegex(ValueError, 'previous_program_arguments_unverified'):
+                contract.validate_previous_program(fixture, self.old['ProgramArguments'] + ['--objective', self.objective], home=self.home)
+            with self.assertRaisesRegex(ValueError, 'previous_program_cli_and_contention_contract_unverified'):
+                contract.validate_previous_program(fixture + b'changed', self.old['ProgramArguments'], home=self.home)
 
 
 if __name__ == '__main__':

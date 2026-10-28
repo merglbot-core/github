@@ -100,6 +100,8 @@ def main(argv=None):
     state_path = base / 'acceptance_observer_state.json'
     caller = home / 'Library/LaunchAgents/ai.merglbot.gh-cost-wave3-acceptance.plist'
     old_args = plistlib.loads(read_bytes(caller))['ProgramArguments']
+    contract.validate_previous_program(read_bytes(base / 'acceptance_observer.py'),
+                                      old_args, home=str(home))
     new_args = plistlib.loads(next(row['source_bytes'] for row in rows if row['target'] == str(caller)))['ProgramArguments']
     run = lambda command, timeout: subprocess.run(command, capture_output=True, text=True, timeout=timeout)
     service = services.Service(os.geteuid(), caller, old_args, new_args, run=run)
@@ -166,6 +168,10 @@ def recover_owner(args, recovery, home, tx, native, lifecycle, locking, journals
     caller = home / 'Library/LaunchAgents/ai.merglbot.gh-cost-wave3-acceptance.plist'
     old_caller_row = next(row for row in receipt['rows'] if row['target'] == str(caller))
     old_args = plistlib.loads(read_bytes(Path(old_caller_row['backup'])))['ProgramArguments']
+    old_code_row = next(row for row in receipt['rows']
+                        if row['target'] == str(base / 'acceptance_observer.py'))
+    helper('adoption_contract').validate_previous_program(
+        read_bytes(Path(old_code_row['backup'])), old_args, home=str(home))
     current_args = plistlib.loads(read_bytes(caller))['ProgramArguments']
     service = services.Service(os.geteuid(), caller, old_args, current_args,
         run=lambda command, timeout: subprocess.run(command, capture_output=True, text=True, timeout=timeout))
