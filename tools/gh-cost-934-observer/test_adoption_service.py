@@ -112,3 +112,36 @@ class ServiceTests(unittest.TestCase):
                 self.service(text).verify_current_idle_or_absent()
         missing = f'Could not find service "{m.LABEL}" in domain for user gui: 501\n'
         self.service('', 113, missing).verify_current_idle_or_absent()
+
+
+class CleanupServiceTests(unittest.TestCase):
+    service = ServiceTests.service
+    def test_still_running_at_timeout_is_never_booted_out(self):
+        service = self.service(fixture().replace('state = not running', 'state = running')
+                               .replace('\truns = 1', '\tpid = 123\n\truns = 1'))
+        sleeps = []
+        service.sleep = sleeps.append
+        with self.assertRaisesRegex(ValueError, 'cleanup_idle_unproven'):
+            service.stop_when_idle_and_verify_absent()
+        self.assertEqual(len(sleeps), 30)
+
+    def test_idle_after_wait_is_rechecked_then_stopped(self):
+        service = self.service('unused')
+        idle = m.parse_print(fixture(), 'gui/501')
+        running = {**idle, 'state': 'running', 'pid': 123}
+        rows = iter([running, idle, idle, None])
+        service.read = lambda: next(rows)
+        calls = []
+        service.run = lambda argv, timeout: (calls.append(argv) or SimpleNamespace(returncode=0))
+        service.stop_when_idle_and_verify_absent()
+        self.assertEqual(calls, [['/bin/launchctl', 'bootout', service.target]])
+
+    def test_foreign_identity_during_wait_is_refused(self):
+        service = self.service('unused')
+        running = m.parse_print(fixture(), 'gui/501')
+        running.update(state='running', pid=123)
+        foreign = m.parse_print(fixture().replace('/synthetic/code', '/foreign/code'), 'gui/501')
+        rows = iter([running, foreign])
+        service.read = lambda: next(rows)
+        with self.assertRaisesRegex(ValueError, 'loaded_caller_mismatch'):
+            service.stop_when_idle_and_verify_absent()

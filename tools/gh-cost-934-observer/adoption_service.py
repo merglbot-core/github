@@ -106,6 +106,23 @@ class Service:
                 raise ValueError('bootout_failed')
         self.verify_absent()
 
+    def stop_when_idle_and_verify_absent(self):
+        """Bounded cleanup; never boot out a running or foreign service."""
+        deadline = self.monotonic() + 30
+        for attempt in range(31):
+            row = self.read()
+            if row is None:
+                return
+            self.check_args(row, self.stop_args)
+            if row['state'] == 'not running' and 'pid' not in row:
+                # Recheck immediately before mutation, including after the wait.
+                self.stop_and_verify_absent()
+                return
+            if attempt == 30 or self.monotonic() >= deadline:
+                break
+            self.sleep(1)
+        raise ValueError('cleanup_idle_unproven')
+
     def bootstrap_new(self):
         self._bootstrap(self.new_args)
 

@@ -59,7 +59,7 @@ admitted objective digest, full native preimages and current state. All caller
 fields except the bounded ProgramArguments transition remain unchanged.
 
 `adoption_owner.py` runs with isolated Python. Its default `preflight` mode is
-read-only; `install` and `rollback` require `POTVRZUJI` plus the exact admitted
+non-installing but briefly holds the observer lock (an overlapping scheduled run may exit on contention); `install` and `rollback` require `POTVRZUJI` plus the exact admitted
 plan digest. These are process controls, not identity authentication. Use only
 through the existing owner-script emitter, after independent exact-head source
 review, admission and owner approval of the concrete manifest. No generated
@@ -129,3 +129,16 @@ launchd evidence. The synthetic CLI glue fixture remains explicitly synthetic;
 its successful launchd simulation cannot establish legacy compatibility. The
 offline suite includes rejection of the actual new required-objective
 source as a previous no-argument program and rejection of either byte or argv drift.
+
+
+Failure cleanup in installation and recovery waits at most 30 seconds for the
+exact admitted service to become idle, then rechecks identity before bootout.
+A foreign service or a service that remains running is never forcibly stopped.
+If absence cannot be proven, the journal records
+`recovery_required_service_state_unknown` before the lock is released; the
+original error is retained and chained to the cleanup failure. That record is
+not rollback success or proof that the service stopped. A running service may
+remain loaded; subsequent recovery requires fresh owner admission and readback.
+Failure to write the journal is itself surfaced as the original error's cause,
+not a successful cleanup. Source regressions simulate launchd and do not prove
+production observer lock-contention behaviour or activation safety.

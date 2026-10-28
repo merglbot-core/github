@@ -6,6 +6,26 @@ All service mutations belong to the separately reviewed owner entrypoint.
 """
 
 
+def cleanup_failure(service, journal, original, stopped_phase):
+    """Preserve the original failure and record an unconfirmed service state."""
+    try:
+        service.stop_when_idle_and_verify_absent()
+    except BaseException as cleanup_error:
+        try:
+            journal({'phase': 'recovery_required_service_state_unknown',
+                     'original_error_type': type(original).__name__,
+                     'cleanup_error_type': type(cleanup_error).__name__})
+        except BaseException as journal_error:
+            # Journaling failure is not success; retain the triggering failure.
+            raise original from journal_error
+        raise original from cleanup_error
+    try:
+        journal({'phase': stopped_phase})
+    except BaseException as journal_error:
+        raise original from journal_error
+    raise original
+
+
 def install(*, service, lock, guard, state_read, replace_files, journal):
     """Keep flock held until RunAtLoad finishes without consuming an attempt.
 
@@ -44,11 +64,8 @@ verify_bootstrap_completed must prove an actual completed invocation or fail.
             journal({'phase': 'installed_loaded_verified', 'transaction': receipt})
             return {'state': 'installed_loaded_verified', 'transaction': receipt,
                     'financial_acceptance': 'NOT_PROVEN', 'natural_run_verified': False}
-        except BaseException:
-            # Stop before releasing flock after any uncertain installation.
-            service.stop_and_verify_absent()
-            journal({'phase': 'recovery_required_service_stopped'})
-            raise
+        except BaseException as original:
+            cleanup_failure(service, journal, original, 'recovery_required_service_stopped')
 
 
 def recover(*, service, lock, guard, state_read, restore_files, journal):
@@ -88,7 +105,5 @@ The caller must bind the recovery receipt and a fresh recovery authorization.
                       'financial_acceptance': 'NOT_PROVEN'}
             journal(result)
             return result
-        except BaseException:
-            service.stop_and_verify_absent()
-            journal({'phase': 'recovery_failed_service_stopped'})
-            raise
+        except BaseException as original:
+            cleanup_failure(service, journal, original, 'recovery_failed_service_stopped')

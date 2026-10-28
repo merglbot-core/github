@@ -45,6 +45,7 @@ class LifecycleTests(unittest.TestCase):
             return self.receipt
         service = SimpleNamespace(verify_old_idle=lambda: self.events.append('old_idle'),
             stop_and_verify_absent=lambda: self.events.append('stop'),
+            stop_when_idle_and_verify_absent=lambda: self.events.append('stop'),
             verify_absent=lambda: self.events.append('absent'),
             bootstrap_new=bootstrap, verify_bootstrap_completed=completed)
         return m.install(service=service, lock=lock, guard=lambda: None,
@@ -103,6 +104,7 @@ class RecoveryTests(unittest.TestCase):
             self.events.append('bootstrap_previous')
         service = SimpleNamespace(verify_current_idle_or_absent=lambda: self.events.append('current_idle'),
             stop_and_verify_absent=lambda: self.events.append('stop'),
+            stop_when_idle_and_verify_absent=lambda: self.events.append('stop'),
             verify_absent=lambda: None, bootstrap_previous=bootstrap,
             verify_previous_bootstrap_completed=lambda: self.events.append('verified_previous'))
         return m.recover(service=service, lock=lock, guard=lambda: None,
@@ -156,3 +158,117 @@ class RecoveryAdmissionTests(unittest.TestCase):
                       state_read=lambda: b'state', restore_files=lambda: events.append('restore'),
                       journal=lambda row: events.append('journal'))
         self.assertEqual(events, [])
+
+
+class CleanupFailureTests(unittest.TestCase):
+    def test_install_and_recovery_preserve_original_and_journal_unknown(self):
+        for recovering in (False, True):
+            with self.subTest(recovering=recovering):
+                events = []
+                original = RuntimeError('bootstrap_completion_unproven')
+                cleanup = ValueError('cleanup_idle_unproven')
+                @contextmanager
+                def lock():
+                    events.append('lock')
+                    try:
+                        yield
+                    finally:
+                        events.append('unlock')
+                def fail():
+                    raise original
+                def cleanup_fail():
+                    self.assertNotIn('unlock', events)
+                    raise cleanup
+                service = SimpleNamespace(
+                    verify_old_idle=lambda: None, verify_current_idle_or_absent=lambda: None,
+                    stop_and_verify_absent=lambda: None, verify_absent=lambda: None,
+                    bootstrap_new=lambda: None, bootstrap_previous=lambda: None,
+                    verify_bootstrap_completed=fail, verify_previous_bootstrap_completed=fail,
+                    stop_when_idle_and_verify_absent=cleanup_fail)
+                rows = []
+                def journal(row):
+                    self.assertNotIn('unlock', events)
+                    rows.append(row)
+                kwargs = dict(service=service, lock=lock, guard=lambda: None,
+                              state_read=lambda: b'unchanged STOP', journal=journal)
+                with self.assertRaises(RuntimeError) as raised:
+                    if recovering:
+                        m.recover(**kwargs, restore_files=lambda: {'state': 'rollback_verified'})
+                    else:
+                        m.install(**kwargs, replace_files=lambda: {'state': 'installed_verified'})
+                self.assertIs(raised.exception, original)
+                self.assertIs(raised.exception.__cause__, cleanup)
+                self.assertEqual(rows[-1]['phase'], 'recovery_required_service_state_unknown')
+                self.assertEqual(events[-1], 'unlock')
+
+    def test_journal_failure_does_not_replace_original(self):
+        original = RuntimeError('original')
+        def broken_journal(row):
+            raise OSError('journal unavailable')
+        with self.assertRaises(RuntimeError) as raised:
+            m.cleanup_failure(SimpleNamespace(stop_when_idle_and_verify_absent=lambda: None),
+                              broken_journal, original, 'stopped')
+        self.assertIs(raised.exception, original)
+        self.assertIsInstance(raised.exception.__cause__, OSError)
+
+
+class RealServiceCleanupTests(unittest.TestCase):
+    def test_running_bootstrap_timeout_through_real_service_install_and_recover(self):
+        service_spec = importlib.util.spec_from_file_location(
+            'cleanup_service', Path(__file__).with_name('adoption_service.py'))
+        services = importlib.util.module_from_spec(service_spec)
+        service_spec.loader.exec_module(services)
+        for recovering in (False, True):
+            with self.subTest(recovering=recovering):
+                old = ['/synthetic/python', '/synthetic/old']
+                new = ['/synthetic/python', '/synthetic/new']
+                live = {'loaded': True, 'running': False,
+                        'args': new if recovering else old, 'bootouts': 0, 'locked': False}
+                rows = []
+                @contextmanager
+                def lock():
+                    live['locked'] = True
+                    try:
+                        yield
+                    finally:
+                        live['locked'] = False
+                def run(argv, timeout):
+                    op = argv[1]
+                    if op == 'bootout':
+                        self.assertTrue(live['locked'])
+                        self.assertFalse(live['running'])
+                        live['loaded'] = False
+                        live['bootouts'] += 1
+                    elif op == 'bootstrap':
+                        live.update(loaded=True, running=True, args=old if recovering else new)
+                    elif op == 'print':
+                        if not live['loaded']:
+                            return SimpleNamespace(returncode=113, stdout='', stderr=
+                                f'Could not find service "{services.LABEL}" in domain for user gui: 501\n')
+                        args = live['args']
+                        text = f'gui/501/{services.LABEL} = {{\n\tpath = /synthetic/caller.plist\n'
+                        text += '\tstate = ' + ('running' if live['running'] else 'not running') + '\n'
+                        text += '\tprogram = ' + args[0] + '\n\targuments = {\n'
+                        text += ''.join('\t\t' + a + '\n' for a in args) + '\t}\n\truns = 1\n'
+                        text += '\tpid = 123\n' if live['running'] else '\tlast exit code = 0\n'
+                        return SimpleNamespace(returncode=0, stdout=text + '}\n', stderr='')
+                    else:
+                        raise AssertionError(op)
+                    return SimpleNamespace(returncode=0, stdout='', stderr='')
+                service = services.Service(501, '/synthetic/caller.plist', old, new,
+                    run=run, monotonic=lambda: 0, sleep=lambda seconds: None)
+                def journal(row):
+                    self.assertTrue(live['locked'])
+                    rows.append(row)
+                kwargs = dict(service=service, lock=lock, guard=lambda: None,
+                              state_read=lambda: b'STOP unchanged', journal=journal)
+                with self.assertRaisesRegex(ValueError, 'bootstrap_completion_unproven') as raised:
+                    if recovering:
+                        m.recover(**kwargs, restore_files=lambda: {'state': 'rollback_verified'})
+                    else:
+                        m.install(**kwargs, replace_files=lambda: {'state': 'installed_verified'})
+                self.assertEqual(str(raised.exception.__cause__), 'cleanup_idle_unproven')
+                self.assertEqual(rows[-1]['phase'], 'recovery_required_service_state_unknown')
+                self.assertEqual(live['bootouts'], 1)
+                self.assertTrue(live['loaded'] and live['running'])
+                self.assertFalse(live['locked'])
