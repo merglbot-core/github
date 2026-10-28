@@ -41,9 +41,9 @@ verify_bootstrap_completed must prove an actual completed invocation or fail.
         if state_read() != state:
             raise ValueError('state_changed_before_stop')
         journal({'phase': 'stop_intent'})
-        service.stop_and_verify_absent()
-        journal({'phase': 'service_stopped'})
         try:
+            service.stop_and_verify_absent()
+            journal({'phase': 'service_stopped'})
             guard()
             service.verify_absent()
             if state_read() != state:
@@ -82,8 +82,9 @@ The caller must bind the recovery receipt and a fresh recovery authorization.
         if state_read() != current_state:
             raise ValueError('state_changed_before_recovery_stop')
         journal({'phase': 'recovery_stop_intent'})
-        service.stop_and_verify_absent()
         try:
+            service.stop_and_verify_absent()
+            journal({'phase': 'recovery_service_stopped'})
             guard()
             service.verify_absent()
             if state_read() != current_state:

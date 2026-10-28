@@ -272,3 +272,59 @@ class RealServiceCleanupTests(unittest.TestCase):
                 self.assertEqual(live['bootouts'], 1)
                 self.assertTrue(live['loaded'] and live['running'])
                 self.assertFalse(live['locked'])
+
+
+class InitialStopFailureTests(unittest.TestCase):
+    def test_initial_stop_and_poststop_journal_failures_use_cleanup_before_unlock(self):
+        for recovering in (False, True):
+            for failure_at in ('stop', 'journal'):
+                for cleanup_fails in (False, True):
+                    with self.subTest(recovering=recovering, failure_at=failure_at,
+                                      cleanup_fails=cleanup_fails):
+                        events, rows = [], []
+                        original = RuntimeError('initial_' + failure_at + '_failed')
+                        cleanup_error = ValueError('cleanup_state_unproven')
+                        stopped = 'recovery_service_stopped' if recovering else 'service_stopped'
+                        @contextmanager
+                        def lock():
+                            events.append('lock')
+                            try:
+                                yield
+                            finally:
+                                events.append('unlock')
+                        def stop():
+                            events.append('stop')
+                            if failure_at == 'stop':
+                                raise original
+                        def cleanup():
+                            self.assertNotIn('unlock', events)
+                            events.append('cleanup')
+                            if cleanup_fails:
+                                raise cleanup_error
+                        def journal(row):
+                            self.assertNotIn('unlock', events)
+                            if row['phase'] == stopped and failure_at == 'journal':
+                                raise original
+                            rows.append(row)
+                        def forbidden():
+                            self.fail('No file transaction or bootstrap after initial stop failure')
+                        service = SimpleNamespace(verify_old_idle=lambda: None,
+                            verify_current_idle_or_absent=lambda: None,
+                            stop_and_verify_absent=stop, stop_when_idle_and_verify_absent=cleanup,
+                            verify_absent=forbidden, bootstrap_new=forbidden,
+                            bootstrap_previous=forbidden)
+                        kwargs = dict(service=service, lock=lock, guard=lambda: None,
+                            state_read=lambda: b'unchanged', journal=journal)
+                        with self.assertRaises(RuntimeError) as raised:
+                            if recovering:
+                                m.recover(**kwargs, restore_files=forbidden)
+                            else:
+                                m.install(**kwargs, replace_files=forbidden)
+                        self.assertIs(raised.exception, original)
+                        self.assertEqual(events, ['lock', 'stop', 'cleanup', 'unlock'])
+                        expected = ('recovery_required_service_state_unknown' if cleanup_fails else
+                                    'recovery_failed_service_stopped' if recovering else
+                                    'recovery_required_service_stopped')
+                        self.assertEqual(rows[-1]['phase'], expected)
+                        if cleanup_fails:
+                            self.assertIs(raised.exception.__cause__, cleanup_error)
