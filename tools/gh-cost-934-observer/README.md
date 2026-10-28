@@ -86,3 +86,14 @@ Validation includes the repository CI entrypoint, synthetic owner CLI round trip
 transaction/rollback probe using temporary files only. The synthetic integration
 does not prove real launchd activation. Real activation/readback remains a
 separate owner step; do not execute this source against the host during review.
+
+A newly bootstrapped job may report `(never exited)`; this is pending observation,
+not success or failure. Completion still requires one run with numeric exit zero.
+Both installation and recovery acquire the existing observer lock before checking
+the loaded service and stopping it. Recovery accepts only an absent service or the
+admitted current program/arguments in idle state without a PID; another loaded
+identity or a busy observer is refused before bootout.
+
+An exclusive reservation left before a transaction receipt exists is consumed.
+It is not safe to delete that directory or replay the same binding; preserve its
+journal and obtain a fresh, explicitly reviewed recovery/disposition packet.

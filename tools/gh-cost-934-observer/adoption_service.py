@@ -40,6 +40,9 @@ def parse_print(text, domain):
         raise ValueError('incomplete_launchd_snapshot')
     for key in ('runs', 'pid', 'last exit code'):
         if key in result:
+            if key == 'last exit code' and result[key] == '(never exited)':
+                result[key] = None
+                continue
             if not re.fullmatch(r'-?\d+', result[key]):
                 raise ValueError('unparseable_launchd_number')
             result[key] = int(result[key])
@@ -76,6 +79,14 @@ class Service:
         if row['state'] != 'not running' or 'pid' in row:
             raise ValueError('old_service_not_idle')
 
+    def verify_current_idle_or_absent(self):
+        row = self.read()
+        if row is None:
+            return
+        self.check_args(row, self.new_args)
+        if row['state'] != 'not running' or 'pid' in row:
+            raise ValueError('current_service_not_idle')
+
     def verify_absent(self):
         if self.read() is not None:
             raise ValueError('service_still_loaded')
@@ -110,7 +121,8 @@ class Service:
             self.check_args(row, expected_args)
             if row.get('runs', 0) > 1:
                 raise ValueError('unexpected_multiple_bootstrap_runs')
-            if row['state'] == 'not running' and 'pid' not in row and row.get('runs') == 1:
+            if (row['state'] == 'not running' and 'pid' not in row
+                    and row.get('runs') == 1 and row.get('last exit code') is not None):
                 if row.get('last exit code') != 0:
                     raise ValueError('bootstrap_exit_not_zero')
                 return

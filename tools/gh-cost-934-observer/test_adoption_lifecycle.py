@@ -53,7 +53,7 @@ class LifecycleTests(unittest.TestCase):
 
     def test_loaded_verification_precedes_unlock_and_is_not_financial_success(self):
         result = self.run_install()
-        self.assertEqual(self.events, ['old_idle', 'stop', 'lock', 'absent', 'replace',
+        self.assertEqual(self.events, ['lock', 'old_idle', 'stop', 'absent', 'replace',
                                        'bootstrap', 'completed', 'unlock'])
         self.assertEqual(result['state'], 'installed_loaded_verified')
         self.assertEqual(result['financial_acceptance'], 'NOT_PROVEN')
@@ -101,7 +101,8 @@ class RecoveryTests(unittest.TestCase):
         def bootstrap():
             self.assertTrue(self.locked)
             self.events.append('bootstrap_previous')
-        service = SimpleNamespace(stop_and_verify_absent=lambda: self.events.append('stop'),
+        service = SimpleNamespace(verify_current_idle_or_absent=lambda: self.events.append('current_idle'),
+            stop_and_verify_absent=lambda: self.events.append('stop'),
             verify_absent=lambda: None, bootstrap_previous=bootstrap,
             verify_previous_bootstrap_completed=lambda: self.events.append('verified_previous'))
         return m.recover(service=service, lock=lock, guard=lambda: None,
@@ -110,7 +111,7 @@ class RecoveryTests(unittest.TestCase):
     def test_recovery_bootstraps_restored_caller_under_lock(self):
         result = self.run_recovery()
         self.assertEqual(result['state'], 'rollback_loaded_verified')
-        self.assertEqual(self.events, ['stop', 'bootstrap_previous', 'verified_previous', 'unlock'])
+        self.assertEqual(self.events, ['current_idle', 'stop', 'bootstrap_previous', 'verified_previous', 'unlock'])
         self.assertEqual(self.state, b'newest STOP attempts=3')
 
     def test_partial_recovery_never_starts_service(self):
@@ -123,3 +124,35 @@ class RecoveryTests(unittest.TestCase):
             self.run_recovery(change_state=True)
         self.assertEqual(self.state, b'even newer STOP attempts=4')
         self.assertEqual(self.events[-2:], ['stop', 'unlock'])
+
+class RecoveryAdmissionTests(unittest.TestCase):
+    def test_busy_or_foreign_service_never_booted_out(self):
+        for reason in ('current_service_not_idle', 'loaded_caller_mismatch'):
+            events = []
+            @contextmanager
+            def lock():
+                events.append('lock')
+                yield
+            def refuse():
+                raise ValueError(reason)
+            service = SimpleNamespace(verify_current_idle_or_absent=refuse,
+                                      stop_and_verify_absent=lambda: events.append('stop'))
+            with self.assertRaisesRegex(ValueError, reason):
+                m.recover(service=service, lock=lock, guard=lambda: None,
+                          state_read=lambda: b'state', restore_files=lambda: events.append('restore'),
+                          journal=lambda row: events.append('journal'))
+            self.assertEqual(events, ['lock'])
+
+    def test_lock_contention_prevents_service_mutation(self):
+        events = []
+        @contextmanager
+        def lock():
+            raise ValueError('observer_lock_busy')
+            yield
+        service = SimpleNamespace(verify_current_idle_or_absent=lambda: events.append('read'),
+                                  stop_and_verify_absent=lambda: events.append('stop'))
+        with self.assertRaisesRegex(ValueError, 'observer_lock_busy'):
+            m.recover(service=service, lock=lock, guard=lambda: None,
+                      state_read=lambda: b'state', restore_files=lambda: events.append('restore'),
+                      journal=lambda row: events.append('journal'))
+        self.assertEqual(events, [])

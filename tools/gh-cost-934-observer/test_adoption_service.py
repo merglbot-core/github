@@ -51,3 +51,28 @@ class ServiceTests(unittest.TestCase):
                      fixture().replace('\truns = 1', '\tstate = running\n\truns = 1')):
             with self.assertRaises(ValueError):
                 m.parse_print(text, 'gui/501')
+
+    def test_never_exited_is_pending_until_numeric_completion(self):
+        snapshots = iter([fixture(code='(never exited)'), fixture(code=0)])
+        service = self.service('unused')
+        service.read = lambda: m.parse_print(next(snapshots), 'gui/501')
+        service.verify_bootstrap_completed()
+        self.assertIsNone(m.parse_print(fixture(code='(never exited)'), 'gui/501')['last exit code'])
+        with self.assertRaisesRegex(ValueError, 'completion_unproven'):
+            self.service(fixture(code='(never exited)')).verify_bootstrap_completed()
+
+    def test_non_numeric_pid_runs_and_unknown_exit_remain_refused(self):
+        for text in [fixture(runs='(never exited)'), fixture(code='unknown'),
+                     fixture().replace('\truns = 1', '\tpid = unknown\n\truns = 1')]:
+            with self.assertRaisesRegex(ValueError, 'unparseable_launchd_number'):
+                m.parse_print(text, 'gui/501')
+
+    def test_recovery_requires_admitted_idle_service_or_proven_absence(self):
+        self.service(fixture()).verify_current_idle_or_absent()
+        for text in [fixture().replace('\tstate = not running', '\tstate = running'),
+                     fixture().replace('\truns = 1', '\tpid = 123\n\truns = 1'),
+                     fixture().replace('/synthetic/code', '/foreign/code')]:
+            with self.assertRaises(ValueError):
+                self.service(text).verify_current_idle_or_absent()
+        missing = f'Could not find service "{m.LABEL}" in domain for user gui: 501\n'
+        self.service('', 113, missing).verify_current_idle_or_absent()
