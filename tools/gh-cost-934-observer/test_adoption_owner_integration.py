@@ -23,7 +23,8 @@ def module(name):
     obj=importlib.util.module_from_spec(spec);spec.loader.exec_module(obj);return obj
 
 
-def scenario(objective_drift=False, lock_contention=False, real_native=False):
+def scenario(objective_drift=False, lock_contention=False, real_native=False,
+             recovery_lock_contention=False):
     owner=module('adoption_owner');plan=module('adoption_plan');contract=module('adoption_contract')
     with tempfile.TemporaryDirectory() as temp:
         home=Path(temp).resolve();base=home/'.merglbot/gh-cost-wave3';base.mkdir(parents=True)
@@ -92,6 +93,18 @@ def scenario(objective_drift=False, lock_contention=False, real_native=False):
         real_helper=owner.helper
         def helper(name):
             if name=='adoption_bundle':return SimpleNamespace(load=lambda root:tx)
+            if name=='adoption_lifecycle' and recovery_lock_contention:
+                result=real_helper(name)
+                original_recover=result.recover
+                def recover_with_contention(**kwargs):
+                    @contextmanager
+                    def held_lock():
+                        raise BlockingIOError('synthetic held recovery lock')
+                        yield
+                    kwargs['lock']=held_lock
+                    return original_recover(**kwargs)
+                result.recover=recover_with_contention
+                return result
             if name=='adoption_lifecycle' and (objective_drift or lock_contention):
                 result=real_helper(name)
                 original_install=result.install
@@ -143,7 +156,23 @@ def scenario(objective_drift=False, lock_contention=False, real_native=False):
                 'current_state_sha256':plan.digest(state.read_bytes())}
             recovery_path=home/'recovery.json';recovery_path.write_text(json.dumps(recovery))
             recovery_binding=plan.digest(plan.canonical(recovery))
-            assert owner.main(['--mode','rollback','--plan',str(recovery_path),'--binding',recovery_binding,'--native-bundle',str(home/'unused'),'POTVRZUJI'])==0
+            recovery_args=['--mode','rollback','--plan',str(recovery_path),'--binding',recovery_binding,'--native-bundle',str(home/'unused'),'POTVRZUJI']
+            if recovery_lock_contention:
+                calls_before=list(calls)
+                caller_before=caller.read_bytes()
+                journal_before=journal_path.read_bytes()
+                try:
+                    owner.main(recovery_args)
+                except BlockingIOError as exc:
+                    assert str(exc)=='synthetic held recovery lock'
+                else:
+                    raise AssertionError('recovery contention was admitted')
+                assert not (base/'adoptions'/binding/('recovery-'+recovery_binding)).exists()
+                assert calls==calls_before and loaded
+                assert code.read_bytes()==source and caller.read_bytes()==caller_before
+                assert state.read_bytes()==original_state and journal_path.read_bytes()==journal_before
+                recovery_lock_contention=False
+            assert owner.main(recovery_args)==0
             assert code.read_bytes()==original_code and caller.read_bytes()==original_caller
             assert state.read_bytes()==original_state
         print('OWNER_ENTRY_INTEGRATION_PASS synthetic_home simulated_launchd')
@@ -157,6 +186,11 @@ class OwnerIntegrationTests(unittest.TestCase):
 
     def test_lock_contention_does_not_consume_binding_and_retry_succeeds(self):
         result=subprocess.run([sys.executable,'-I',str(Path(__file__).resolve()),'--lock-contention'],capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('OWNER_ENTRY_INTEGRATION_PASS',result.stdout)
+
+    def test_recovery_contention_preserves_binding_and_same_packet_can_retry(self):
+        result=subprocess.run([sys.executable,'-I',str(Path(__file__).resolve()),'--recovery-lock-contention'],capture_output=True,text=True,timeout=30)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('OWNER_ENTRY_INTEGRATION_PASS',result.stdout)
 
@@ -176,5 +210,6 @@ if __name__=='__main__':
     if sys.argv[1:]==['--scenario']:scenario()
     elif sys.argv[1:]==['--objective-drift']:scenario(objective_drift=True)
     elif sys.argv[1:]==['--lock-contention']:scenario(lock_contention=True)
+    elif sys.argv[1:]==['--recovery-lock-contention']:scenario(recovery_lock_contention=True)
     elif sys.argv[1:]==['--real-native']:scenario(real_native=True)
     else:unittest.main()

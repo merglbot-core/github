@@ -194,8 +194,23 @@ def recover_owner(args, recovery, home, tx, native, lifecycle, locking, journals
         run=lambda command, timeout: subprocess.run(command, capture_output=True, text=True, timeout=timeout))
     locking.no_symlink(installation)
     recovery_dir = installation / ('recovery-' + args.binding)
-    recovery_dir.mkdir(mode=0o700)
-    journal = journals.Journal(recovery_dir / 'journal.jsonl', args.binding)
+    journal = None
+
+    def emit(event):
+        nonlocal journal
+        if journal is None:
+            if event != {'phase': 'recovery_stop_intent'}:
+                raise ValueError('reservation_requires_recovery_stop_intent')
+            locking.no_symlink(installation)
+            recovery_dir.mkdir(mode=0o700)
+            journal = journals.Journal(recovery_dir / 'journal.jsonl', args.binding)
+            fd = os.open(installation, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        journal.emit(event)
+
     recovery_bytes = read_bytes(args.plan)
 
     def guard():
@@ -219,12 +234,13 @@ def recover_owner(args, recovery, home, tx, native, lifecycle, locking, journals
             guard=guard, state_read=state_read,
             restore_files=lambda: native.rollback(tx, receipt, str(home), guard=guard,
                 state_read=state_read,
-                journal=lambda row: journal.emit({'phase': 'native_rollback', 'receipt': row})),
-            journal=journal.emit)
+                journal=lambda row: emit({'phase': 'native_rollback', 'receipt': row})),
+            journal=emit)
         print(json.dumps(result))
         return 0 if result['state'] == 'rollback_loaded_verified' else 2
     finally:
-        journal.close()
+        if journal is not None:
+            journal.close()
 
 
 if __name__ == '__main__':

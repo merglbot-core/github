@@ -17,6 +17,42 @@ def fixture(runs=1, code=0):
 
 
 class ServiceTests(unittest.TestCase):
+    def test_bootout_rechecks_identity_and_idle_after_prior_verification(self):
+        for changed in [fixture().replace('/synthetic/code', '/foreign/code'),
+                        fixture().replace('state = not running', 'state = running'),
+                        fixture().replace('\truns = 1', '\tpid = 123\n\truns = 1'),
+                        fixture().replace('/synthetic/caller.plist', '/foreign/caller.plist')]:
+            with self.subTest(snapshot=changed):
+                service=self.service('unused')
+                snapshots=iter([fixture(), changed])
+                service.read=lambda: m.parse_print(next(snapshots), 'gui/501')
+                service.verify_old_idle()
+                # self.service's runner rejects any non-read command.
+                with self.assertRaises(ValueError):
+                    service.stop_and_verify_absent()
+
+    def test_bootout_accepts_only_current_admitted_idle_generation(self):
+        calls=[]
+        service=self.service('unused')
+        snapshots=iter([m.parse_print(fixture(), 'gui/501'), None])
+        service.read=lambda: next(snapshots)
+        def run(argv, timeout):
+            calls.append(argv)
+            return SimpleNamespace(returncode=0)
+        service.run=run
+        service.stop_and_verify_absent()
+        self.assertEqual(calls,[['/bin/launchctl','bootout',service.target]])
+
+    def test_recovery_does_not_admit_old_generation_before_rollback(self):
+        service=self.service('unused')
+        service.new_args=['/synthetic/python','/synthetic/new-code']
+        new=fixture().replace('/synthetic/code','/synthetic/new-code')
+        snapshots=iter([m.parse_print(new,'gui/501'),m.parse_print(fixture(),'gui/501')])
+        service.read=lambda: next(snapshots)
+        service.verify_current_idle_or_absent()
+        with self.assertRaisesRegex(ValueError,'loaded_caller_mismatch'):
+            service.stop_and_verify_absent()
+
     def service(self, text, returncode=0, stderr=''):
         def run(args, timeout):
             self.assertEqual(args[1], 'print')  # Every test here is read-only.

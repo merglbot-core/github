@@ -58,6 +58,7 @@ class Service:
         self.target = self.domain + '/' + LABEL
         self.plist = str(plist)
         self.old_args, self.new_args = list(old_args), list(new_args)
+        self.stop_args = self.old_args
         self.run, self.monotonic, self.sleep = run, monotonic, sleep
 
     def read(self):
@@ -82,31 +83,42 @@ class Service:
     def verify_current_idle_or_absent(self):
         row = self.read()
         if row is None:
+            self.stop_args = self.new_args
             return
         self.check_args(row, self.new_args)
         if row['state'] != 'not running' or 'pid' in row:
             raise ValueError('current_service_not_idle')
+        self.stop_args = self.new_args
 
     def verify_absent(self):
         if self.read() is not None:
             raise ValueError('service_still_loaded')
 
     def stop_and_verify_absent(self):
-        if self.read() is not None:
+        row = self.read()
+        if row is not None:
+            # This fresh snapshot authorizes bootout, not an earlier idle check.
+            self.check_args(row, self.stop_args)
+            if row['state'] != 'not running' or 'pid' in row:
+                raise ValueError('bootout_service_not_idle')
             result = self.run(['/bin/launchctl', 'bootout', self.target], timeout=10)
             if result.returncode != 0:
                 raise ValueError('bootout_failed')
         self.verify_absent()
 
     def bootstrap_new(self):
+        self._bootstrap(self.new_args)
+
+    def _bootstrap(self, arguments):
         self.verify_absent()
+        self.stop_args = arguments
         result = self.run(['/bin/launchctl', 'bootstrap', self.domain, self.plist], timeout=10)
         if result.returncode != 0:
             raise ValueError('bootstrap_failed')
 
     def bootstrap_previous(self):
         # The native rollback has restored the same exact plist path.
-        self.bootstrap_new()
+        self._bootstrap(self.old_args)
 
     def verify_bootstrap_completed(self):
         self._verify_bootstrap_completed(self.new_args)

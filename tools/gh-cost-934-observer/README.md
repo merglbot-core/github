@@ -96,10 +96,15 @@ not success or failure. Completion still requires one run with numeric exit zero
 Both installation and recovery acquire the existing observer lock before checking
 the loaded service and stopping it. Recovery accepts only an absent service or the
 admitted current program/arguments in idle state without a PID; another loaded
-identity or a busy observer is refused before bootout.
+identity or a busy observer is refused before bootout. The stop operation itself
+re-reads the loaded service and checks its exact phase-specific arguments and idle
+state before issuing bootout. This is a fresh admission snapshot, not an atomic
+launchd compare-and-stop primitive; installation must still exclude other writers.
 
 Binding reservation occurs only after lock acquisition, invariant checks and
-old-service idle verification, immediately before `stop_intent`. Ordinary lock
+old-service idle verification, immediately before `stop_intent`. Recovery likewise
+reserves its packet only on `recovery_stop_intent`, after the recovery lock, guard,
+idle/absence and state checks. Ordinary lock
 contention therefore creates no reservation, and the unchanged plan can proceed
 after contention ends. Once reserved, a binding remains consumed even if an
 I/O failure occurs before the transaction receipt exists.
