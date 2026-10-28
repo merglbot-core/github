@@ -51,9 +51,38 @@ regressions.
 repository `unittest discover -s tests` CI command. It loads these exact test
 modules; there is no copied implementation or new workflow.
 
-Protected adoption remains separate: reviewed source delivery, exact installed
-preimages, current ownership, an inactive-stage preflight, preserved counters and
-STOP history, an admitted install/rollback and the eligible shared owner wave.
-No installer, launchd file, workflow or activation is part of this source change.
-An exit-zero phase is not financial proof; only the existing `PROVEN` audit with
-a nonempty evidence list can set completion.
+## Protected adoption adapter (D-P-3963)
+
+The adapter prepares and validates a canonical two-file plan for this existing
+observer and its caller. It pins the observer source from merge `cc77f82c`, the
+admitted objective digest, full native preimages and current state. All caller
+fields except the bounded ProgramArguments transition remain unchanged.
+
+`adoption_owner.py` runs with isolated Python. Its default `preflight` mode is
+read-only; `install` and `rollback` require `POTVRZUJI` plus the exact admitted
+plan digest. These are process controls, not identity authentication. Use only
+through the existing owner-script emitter, after independent exact-head source
+review, admission and owner approval of the concrete manifest. No generated
+owner script or production manifest is included in this PR.
+
+Native replacement and rollback reuse the pinned docs transaction/copy-admission
+library from `9ac0ba9c`; its complete dependency bytes are verified before import.
+The adapter does not replace metadata rules or permit generated xattrs. It uses
+the observer's existing flock inode. The owner path stops the exact idle service,
+installs both files, and reloads under that lock. RunAtLoad must complete exactly
+once with exit zero while the lock prevents state writes/model launches. No PID
+alone is not proof. Unknown, drift, partial install or failed verification leaves
+the service stopped for explicit recovery; it is never silently accepted.
+
+Every install digest reserves an exclusive directory with a bounded durable
+hash-chain journal. Recovery requires a fresh recovery plan binding the original
+plan, exact journal bytes, native receipt and CURRENT state. It restores files
+only, not state/STOP/counters. Incomplete or ambiguous backup ownership fails
+closed for manual disposition. Neither successful installation nor recovery
+establishes a natural-run result or financial acceptance.
+
+Validation includes the repository CI entrypoint, synthetic owner CLI round trip
+(preflight/install/recovery with simulated launchd), and a separate macOS native
+transaction/rollback probe using temporary files only. The synthetic integration
+does not prove real launchd activation. Real activation/readback remains a
+separate owner step; do not execute this source against the host during review.
