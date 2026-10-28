@@ -586,7 +586,7 @@ jobs:
 
       - name: Upload guardrail artifacts
         if: always() && steps.guardrail.outputs.outdir != '' && steps.guardrail.outputs.status != 'NOOP'
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: forecast-d1-readiness-${{ github.run_id }}
           path: |
@@ -596,7 +596,7 @@ jobs:
 
       - name: Upload Proteinaco guardrail artifacts
         if: always() && steps.guardrail_proteinaco.outputs.outdir != '' && steps.guardrail_proteinaco.outputs.status != 'NOOP'
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: forecast-d1-readiness-proteinaco-${{ github.run_id }}
           path: |
@@ -606,7 +606,7 @@ jobs:
 
       - name: Upload Autodoplnky guardrail artifacts
         if: always() && steps.guardrail_autodoplnky.outputs.outdir != '' && steps.guardrail_autodoplnky.outputs.status != 'NOOP'
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: forecast-d1-readiness-autodoplnky-${{ github.run_id }}
           path: |
@@ -948,7 +948,7 @@ jobs:
 
       - name: Upload stats artifacts
         if: always() && steps.stats.outputs.outdir != ''
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: forecast-d1-readiness-stats-${{ github.run_id }}
           path: ${{ steps.stats.outputs.outdir }}/
