@@ -124,6 +124,9 @@ def main(argv=None):
     state_read = lambda: read_bytes(state_path)
 
     def guard():
+        objective = manifest['objective']
+        if hashlib.sha256(read_bytes(Path(objective['path']))).hexdigest() != objective['sha256']:
+            raise ValueError('objective_pin_changed')
         if hashlib.sha256(state_read()).hexdigest() != manifest['preserve_state']['sha256']:
             raise ValueError('state_pin_changed')
         if read_bytes(args.plan) != raw_plan or hold_exists(home):

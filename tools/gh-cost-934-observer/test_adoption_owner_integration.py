@@ -4,6 +4,7 @@ The separate native temporary-file probe covers real native transactions. This
 suite covers glue and journals, and never claims actual launchd activation.
 """
 import hashlib
+from contextlib import contextmanager
 import importlib.util
 import json
 from pathlib import Path
@@ -21,7 +22,7 @@ def module(name):
     obj=importlib.util.module_from_spec(spec);spec.loader.exec_module(obj);return obj
 
 
-def scenario():
+def scenario(objective_drift=False):
     owner=module('adoption_owner');plan=module('adoption_plan');contract=module('adoption_contract')
     with tempfile.TemporaryDirectory() as temp:
         home=Path(temp).resolve();base=home/'.merglbot/gh-cost-wave3';base.mkdir(parents=True)
@@ -81,6 +82,20 @@ def scenario():
         real_helper=owner.helper
         def helper(name):
             if name=='adoption_bundle':return SimpleNamespace(load=lambda root:tx)
+            if name=='adoption_lifecycle' and objective_drift:
+                result=real_helper(name)
+                original_install=result.install
+                def install_with_drift(**kwargs):
+                    original_lock=kwargs['lock']
+                    @contextmanager
+                    def lock_with_drift():
+                        with original_lock():
+                            objective.write_bytes(b'changed after preflight and first guard')
+                            yield
+                    kwargs['lock']=lock_with_drift
+                    return original_install(**kwargs)
+                result.install=install_with_drift
+                return result
             if name=='adoption_contract':
                 # This glue fixture is synthetic, not proof of the real legacy CLI.
                 result=real_helper(name)
@@ -91,6 +106,18 @@ def scenario():
         with patch.object(owner,'helper',side_effect=helper),patch.object(owner.Path,'home',return_value=home),patch.object(owner.os,'getuid',return_value=501),patch.object(owner.os,'geteuid',return_value=501),patch.object(owner.subprocess,'run',side_effect=run):
             assert owner.main(args)==0
             assert not (base/'adoptions').exists()
+            if objective_drift:
+                try:
+                    owner.main(args+['--mode','install','POTVRZUJI'])
+                except ValueError as exc:
+                    assert str(exc)=='objective_pin_changed', str(exc)
+                else:
+                    raise AssertionError('objective drift was admitted')
+                assert code.read_bytes()==original_code and caller.read_bytes()==original_caller
+                assert state.read_bytes()==original_state and loaded
+                assert 'bootout' not in calls and 'bootstrap' not in calls
+                print('OBJECTIVE_LOCK_DRIFT_REFUSED_WITHOUT_SERVICE_MUTATION')
+                return
             assert owner.main(args+['--mode','install','POTVRZUJI'])==0
             assert code.read_bytes()==source and state.read_bytes()==original_state
             journal_path=base/'adoptions'/binding/'journal.jsonl'
@@ -111,7 +138,13 @@ class OwnerIntegrationTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertIn('OWNER_ENTRY_INTEGRATION_PASS',result.stdout)
 
+    def test_objective_drift_under_install_lock_refuses_before_stop(self):
+        result=subprocess.run([sys.executable,'-I',str(Path(__file__).resolve()),'--objective-drift'],capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertIn('OBJECTIVE_LOCK_DRIFT_REFUSED_WITHOUT_SERVICE_MUTATION',result.stdout)
+
 
 if __name__=='__main__':
     if sys.argv[1:]==['--scenario']:scenario()
+    elif sys.argv[1:]==['--objective-drift']:scenario(objective_drift=True)
     else:unittest.main()
