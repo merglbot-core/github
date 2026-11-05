@@ -57,3 +57,20 @@ unchanged under D-P-5243; no duplicate Copilot budget is created.
 
 Run the focused deterministic tests with:
 `python3 -m unittest discover -s tools/cost-budget-report -v`.
+
+## Installation packet adapter (D-P-6463)
+
+`install_adapter.py --packet <new-directory>` reads the three fixed consumer/renderer
+paths and creates an exclusive, private packet with exact candidates, original
+backup bytes, metadata/xattr hashes and a content binding. It never executes
+consumers or writes host targets. `--verify` re-derives the packet from the current
+reviewed source and current preimages; source, content, metadata, backup or candidate
+drift is refused. Symlink inputs are refused. The native macOS xattr reader is
+used where Python lacks that API.
+
+This is preparation for the owner installation transport, not an installer
+executor or an admission decision. No `apply` operation is exposed. The protected
+installation must separately preserve metadata/xattrs, take durable backups before
+replacement, refuse intervening changes, and roll back only matching postimages.
+Packet creation and tests do not establish production integration. No scheduler,
+collector, timer, consumer cleanup or notification is run.
