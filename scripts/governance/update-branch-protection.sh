@@ -34,7 +34,7 @@ Options:
   --repo ORG/REPO             Target a specific repository (repeatable).
   --org ORG                   Target all non-archived, non-fork repositories in an org (repeatable).
   --branch BRANCH             Target branch name. Default: repository default branch.
-  --check CONTEXT             Required status check context to enforce (repeatable).
+  --check CONTEXT             Replace desired contexts, retaining known publisher bindings (repeatable).
   --clear-bypass-allowances   Remove all PR review bypass allowances.
   --dry-run                   Write before/after/diff artifacts without applying the change.
   --apply                     Apply the change. Default mode is dry-run.
@@ -45,6 +45,7 @@ Notes:
   - The script preserves existing branch protection settings by default and only updates required checks plus optional bypass clearing.
   - The script requires existing branch protection on the target branch.
   - The script refuses to create empty required status checks.
+  - Publisher bindings are explicit; unknown publishers fail closed. V6 uses gate App 3518182.
   - Artifacts are written to tmp/agent/branch-protection/<date>/<timestamp>/ and may contain GitHub metadata (users/teams/apps).
 EOF
 }
@@ -113,30 +114,7 @@ normalize_required_status_checks() {
   local before_file="$1"
   local provided_checks_json="$2"
 
-  if [ "$provided_checks_json" != "[]" ]; then
-    jq -n \
-      --argjson strict "$(jq '.required_status_checks.strict // true' "$before_file")" \
-      --argjson contexts "$provided_checks_json" \
-      '{strict: $strict, contexts: $contexts}'
-    return 0
-  fi
-
-  jq '
-    if .required_status_checks == null then
-      null
-    else
-      {
-        strict: (.required_status_checks.strict // true),
-        contexts: (
-          if (.required_status_checks.contexts // []) | length > 0 then
-            .required_status_checks.contexts
-          else
-            [ .required_status_checks.checks[]?.context // empty ]
-          end
-        )
-      }
-    end
-  ' "$before_file"
+  python3 "${SCRIPT_DIR}/required-check-publishers.py" normalize "$before_file" "$provided_checks_json"
 }
 
 normalize_restrictions() {
@@ -269,13 +247,9 @@ normalize_protection_for_diff() {
       else
         {
           strict: (.required_status_checks.strict // true),
-          contexts: (
-            if (.required_status_checks.contexts? | type) == "array" then
-              .required_status_checks.contexts
-            else
-              [ .required_status_checks.checks[]?.context // empty ]
-            end | sort
-          )
+          checks: ([.required_status_checks.checks[]? | {context, app_id}] | sort_by(.context, .app_id)),
+          contexts: (((.required_status_checks.contexts // []) +
+            [.required_status_checks.checks[]?.context // empty]) | unique)
         }
       end;
 
@@ -363,12 +337,15 @@ apply_to_target() {
   fi
 
   local required_status_checks_json
-  required_status_checks_json="$(normalize_required_status_checks "$before_file" "$checks_json")"
-  if [ "$(printf '%s' "$required_status_checks_json" | jq -r 'if . == null then "null" else (.contexts | length | tostring) end')" = "null" ]; then
+  if ! required_status_checks_json="$(normalize_required_status_checks "$before_file" "$checks_json")"; then
+    err "${full_name}:${branch}: publisher binding qualification failed; no write performed"
+    return 1
+  fi
+  if [ "$(printf '%s' "$required_status_checks_json" | jq -r 'if . == null then "null" else (.checks | length | tostring) end')" = "null" ]; then
     err "${full_name}:${branch}: required status checks would become null; pass --check or configure checks first"
     return 1
   fi
-  if [ "$(printf '%s' "$required_status_checks_json" | jq -r '.contexts | length')" = "0" ]; then
+  if [ "$(printf '%s' "$required_status_checks_json" | jq -r '.checks | length')" = "0" ]; then
     err "${full_name}:${branch}: refusing to write empty required status checks"
     return 1
   fi
@@ -416,6 +393,7 @@ apply_to_target() {
   gh_api PUT "repos/${full_name}/branches/${encoded_branch}/protection" --input "$payload_file" >/dev/null || return 1
   get_existing_protection "$full_name" "$branch" > "$after_file" || return 1
   write_diff_artifact "$before_file" "$after_file" "$diff_file" || return 1
+  python3 "${SCRIPT_DIR}/required-check-publishers.py" verify "$payload_file" "$after_file" || return 1
   log "UPDATED ${full_name}:${branch} -> ${diff_file}"
 }
 
