@@ -1,0 +1,21 @@
+{
+  "scope": "github#982 source-only consumer wiring candidates",
+  "applied_to_host": false,
+  "activation_authorized": false,
+  "sources": {
+    "digest": {
+      "baseline_path": "/Users/milanmerglevsky/.merglbot/gh-cost-wave3/evidence/adopt1722-20261020/github982-digest-source-snapshot-20261105/autonomy-digest.sh.txt",
+      "baseline_sha256": "8e768209d1b7006b144effc8fa40d65dcd3f8e6faeabd96d018c41c8416bb426",
+      "candidate_sha256": "9e996a292e0661b6a8f5a3b12d96b94e8ef186f74d8e325e3f7f4ada0a434cb0",
+      "patch_sha256": "9afce7b130778e6c33c267b0045307d9c6abd76c0ee110453c9a1c9cb2374b48",
+      "anchor": "} > \"$F\""
+    },
+    "monthly": {
+      "baseline_path": "/Users/milanmerglevsky/.merglbot/gh-cost-wave3/evidence/financial-closed-month-20261102/render_report.py",
+      "baseline_sha256": "c62a6fe87cc5cac340a91ac9bd2fa82852424dd72702d067d1cc500ed57bef11",
+      "candidate_sha256": "5be8ff3abe429b0046d4a357228a9a06d99d8026a76f1c34d92d9dc1d80b4697",
+      "patch_sha256": "1f5fd3d0c19dd85dc2518767118c8e96bd7106f280c79bc023a69aa7083c3de7",
+      "anchor": "page();title('Pokra\u010dov\u00e1n\u00ed a evidence')"
+    }
+  }
+}
