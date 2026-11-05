@@ -48,7 +48,7 @@ class InstallAdapterTests(unittest.TestCase):
         self.assertTrue(self.verify()['preimages_match'])
         self.assertFalse(self.verify()['installation_authorized'])
         self.assertEqual(before, {k: v.read_bytes() for k, v in self.targets.items() if v.exists()})
-        self.assertEqual(m['records']['renderer']['rollback_action'], 'remove_only_matching_postimage')
+        self.assertEqual(m['records']['renderer']['rollback_action'], 'archive_only_matching_postimage')
         self.assertEqual((self.packet / 'digest.backup').read_bytes(), before['digest'])
         self.assertFalse(self.targets['renderer'].exists())
 
@@ -120,6 +120,40 @@ class InstallAdapterTests(unittest.TestCase):
         with patch.object(adapter, 'xattrs', return_value={'synthetic': 'a' * 64}):
             with self.assertRaises(ValueError):
                 self.verify()
+
+    def test_ctime_change_with_restored_mode_refused(self):
+        self.packet_ready()
+        target = self.targets['digest']
+        original = target.stat().st_mode & 0o777
+        target.chmod(original ^ 0o100)
+        target.chmod(original)
+        with self.assertRaises(ValueError):
+            self.verify()
+
+    def test_acl_drift_refused(self):
+        self.packet_ready()
+        with patch.object(adapter, 'acl_state', side_effect=ValueError('ACL-bearing')):
+            with self.assertRaisesRegex(ValueError, 'ACL-bearing'):
+                self.verify()
+
+    @unittest.skipUnless(hasattr(os, 'chflags'), 'native macOS flags required')
+    def test_native_flags_drift_refused(self):
+        self.packet_ready()
+        target = self.targets['digest']
+        original = target.stat().st_flags
+        try:
+            os.chflags(target, original ^ 0x8000)  # UF_HIDDEN, temporary test file only.
+            with self.assertRaises(ValueError):
+                self.verify()
+        finally:
+            os.chflags(target, original)
+
+    def test_native_flags_recorded(self):
+        manifest = self.packet_ready()
+        record = manifest['records']['digest']['preimage']
+        self.assertEqual(record['flags'], getattr(self.targets['digest'].stat(), 'st_flags', 0))
+        self.assertIn('ctime_ns', record)
+        self.assertIn('acl_state', record)
 
     def test_real_reviewed_patches_reconstruct_pinned_candidates(self):
         source = Path(__file__).parent

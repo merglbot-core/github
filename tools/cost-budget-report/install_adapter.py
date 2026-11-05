@@ -4,6 +4,9 @@ The owner installation transport must consume this packet after its own admissio
 A packet is not an authorization, a runtime receipt, or a transaction executor.
 """
 import argparse
+import ctypes
+import errno
+import sys
 import hashlib
 import json
 import os
@@ -28,7 +31,7 @@ def digest(raw):
 
 def stable_stat(value):
     return (value.st_dev, value.st_ino, value.st_mode, value.st_uid, value.st_gid,
-            value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+            value.st_size, value.st_mtime_ns, value.st_ctime_ns, getattr(value, "st_flags", 0))
 
 
 def xattrs(path):
@@ -38,6 +41,25 @@ def xattrs(path):
     names = subprocess.check_output(['/usr/bin/xattr', str(path)], timeout=10).decode().splitlines()
     return {name: digest(bytes.fromhex(subprocess.check_output(
         ['/usr/bin/xattr', '-px', name, str(path)], timeout=10).decode())) for name in sorted(names)}
+
+
+def acl_state(fd):
+    """Fail closed on native macOS ACLs; no mode-only security inference."""
+    if sys.platform != 'darwin':
+        return 'not_applicable_non_darwin'
+    library = ctypes.CDLL(None, use_errno=True)
+    library.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
+    library.acl_get_fd_np.restype = ctypes.c_void_p
+    library.acl_free.argtypes = [ctypes.c_void_p]
+    library.acl_free.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    acl = library.acl_get_fd_np(fd, 0x100)
+    error = ctypes.get_errno()
+    if acl:
+        library.acl_free(acl)
+    if acl or error != errno.ENOENT:
+        raise ValueError('ACL-bearing or unreadable native ACL refused')
+    return 'native_acl_absent'
 
 
 def snapshot(path, missing=False):
@@ -58,6 +80,7 @@ def snapshot(path, missing=False):
         before = os.fstat(fd)
         if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_BYTES:
             raise ValueError('nonregular or oversized input')
+        acl_before = acl_state(fd)
         raw = os.read(fd, MAX_BYTES + 1)
         after = os.fstat(fd)
         if stable_stat(before) != stable_stat(after) or len(raw) != before.st_size or stable_stat(path.stat()) != stable_stat(after):
@@ -65,11 +88,14 @@ def snapshot(path, missing=False):
         # Metadata is evidence, not a license to change it. The installer must
         # preserve it or refuse; this adapter does not restore or strip xattrs.
         attributes = xattrs(path)
-        if stable_stat(path.stat()) != stable_stat(after) or xattrs(path) != attributes:
+        if (stable_stat(path.stat()) != stable_stat(after) or xattrs(path) != attributes
+                or acl_state(fd) != acl_before):
             raise ValueError('metadata changed during read')
         return {'exists': True, 'sha256': digest(raw), 'size': len(raw),
                 'mode': stat.S_IMODE(after.st_mode), 'uid': after.st_uid,
                 'gid': after.st_gid, 'mtime_ns': after.st_mtime_ns,
+                'ctime_ns': after.st_ctime_ns, 'flags': getattr(after, 'st_flags', 0),
+                'acl_state': acl_before,
                 'device': after.st_dev, 'inode': after.st_ino,
                 'xattr_sha256': attributes}, raw
     finally:
@@ -134,7 +160,7 @@ def prepare(source=HERE, targets=None):
                         'postimage_sha256': digest(candidate),
                         'candidate': f'{key}.candidate',
                         'rollback': f'{key}.backup' if raw is not None else None,
-                        'rollback_action': 'restore_exact_backup' if raw is not None else 'remove_only_matching_postimage'}
+                        'rollback_action': 'restore_exact_backup' if raw is not None else 'archive_only_matching_postimage'}
         blobs[f'{key}.candidate'] = candidate
         if raw is not None:
             blobs[f'{key}.backup'] = raw

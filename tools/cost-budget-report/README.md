@@ -74,3 +74,9 @@ installation must separately preserve metadata/xattrs, take durable backups befo
 replacement, refuse intervening changes, and roll back only matching postimages.
 Packet creation and tests do not establish production integration. No scheduler,
 collector, timer, consumer cleanup or notification is run.
+
+The packet snapshot records ctime and native macOS flags and refuses present or
+unreadable native ACLs. Native ACL absence is checked on the open file descriptor
+before and after reading. Non-macOS test snapshots are explicitly marked as such
+and cannot substitute for native installation admission. Rollback of a newly
+created renderer must preserve it in an archive after verifying its postimage.
