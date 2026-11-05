@@ -71,6 +71,16 @@ class SnapshotAdapterTests(unittest.TestCase):
         listing[0]['request_url'] += '?page=1&per_page=100'
         self.normalize(listing=listing)
 
+    def test_invalid_amounts_fail_closed(self):
+        for field in ['budget_amount', 'consumed_amount']:
+            for value in ['abc', '', '1e1000000000', '1e-1000000000', '0e-1000000000', '9' * 129]:
+                listing, details = copy.deepcopy((self.listing, self.details))
+                details[0]['response'][field] = value
+                if field == 'budget_amount':
+                    listing[0]['response']['budgets'][0][field] = value
+                with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                    self.normalize(listing, details)
+
     def test_malformed_captures_raise_value_error(self):
         for key in ['request_url', 'exit_code', 'response']:
             details = copy.deepcopy(self.details)

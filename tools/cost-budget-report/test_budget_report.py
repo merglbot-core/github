@@ -106,7 +106,7 @@ class BudgetReportTests(unittest.TestCase):
 
     def test_rejects_duplicate_and_bad_amounts(self):
         self.assertNotIn("| actions |", self.output(rows=self.rows * 2))
-        for value in [True, None, "NaN", "Infinity", -1]:
+        for value in [True, None, "NaN", "Infinity", -1, "abc", "", "1e1000000000", "1e-1000000000", "0e-1000000000", "9" * 129]:
             row = {**self.rows[0], "consumed_amount": value}
             self.assertNotIn("| actions |", self.output(rows=[row]))
 

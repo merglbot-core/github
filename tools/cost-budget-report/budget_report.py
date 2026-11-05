@@ -22,9 +22,19 @@ def timestamp(value):
 def amount(value):
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         raise ValueError("invalid amount")
-    number = Decimal(str(value))
+    # Bound parsing and fixed-point output, including zero with a huge exponent.
+    text = str(value)
+    if len(text) > 128:
+        raise ValueError("amount representation too long")
+    try:
+        number = Decimal(text)
+    except InvalidOperation as exc:
+        raise ValueError("invalid amount") from exc
     if not number.is_finite() or number < 0:
         raise ValueError("invalid amount")
+    exponent = number.as_tuple().exponent
+    if not -30 <= exponent <= 30 or not -30 <= number.adjusted() <= 30:
+        raise ValueError("amount outside supported precision or range")
     return format(number, "f")
 
 
