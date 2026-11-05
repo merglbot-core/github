@@ -1,0 +1,16 @@
+--- monthly.baseline
++++ monthly.candidate
+@@ -58,0 +59,13 @@
++# Shared budget observation; no API request or financial-acceptance inference (#982).
++import importlib.util, os
++budget_root=pathlib.Path(os.environ.get('MERGLBOT_BUDGET_ROOT',str(pathlib.Path.home()/'.merglbot/gh-cost-wave3/budgets')))
++budget_renderer=pathlib.Path(os.environ.get('MERGLBOT_BUDGET_RENDERER',str(pathlib.Path.home()/'.merglbot/tools/cost-budget-report/budget_report.py')))
++try:
++ budget_spec=importlib.util.spec_from_file_location('cost_budget_report',budget_renderer)
++ budget_module=importlib.util.module_from_spec(budget_spec);budget_spec.loader.exec_module(budget_module)
++ budget_text=budget_module.render((budget_root/'latest.json').read_bytes(),json.loads((budget_root/'latest.provenance.json').read_bytes()),now=dt.datetime.now(dt.timezone.utc),max_age=dt.timedelta(hours=24))
++except (OSError,ValueError,ImportError,AttributeError,TypeError):
++ budget_text='DATA_GAP — rozpočtový snapshot nebo renderer není dostupný.'
++head('Rozpočtové pozorování GitHub API')
++for budget_line in budget_text.splitlines():
++ if budget_line: para(budget_line)
