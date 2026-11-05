@@ -3,6 +3,7 @@ import argparse
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 import hashlib
+import html
 import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -95,9 +96,25 @@ def render(raw, provenance, *, now, max_age=timedelta(hours=24)):
             "", "Částky jsou pozorování budget API, nikoli uzavřené vyúčtování ani důkaz čisté úspory.",
             "Nulové consumed_amount neprokazuje nulové náklady. Existující ochrany se nemění.",
             f"Zdroj: {cell(endpoint)}; SHA256: `{provenance['source_sha256']}`.", ""])
-    except (KeyError, TypeError, ValueError, InvalidOperation, OverflowError):
+    except (KeyError, TypeError, ValueError, InvalidOperation, OverflowError, RecursionError):
         # Never include malformed API values or external error text in the digest.
         return title + "\n\nDATA_GAP — chybějící, neúplný, zastaralý nebo neověřitelný snapshot.\n"
+
+
+def render_paragraphs(raw, provenance, *, now, max_age=timedelta(hours=24)):
+    """Plain text for HTML/PDF consumers which escape paragraphs themselves."""
+    lines = render(raw, provenance, now=now, max_age=max_age).splitlines()
+    result = []
+    labels = ('Scope', 'Produkt', 'Budget USD', 'API consumed USD', 'Tvrdý stop', 'Upozornění doloženo')
+    for line in lines:
+        if not line or line.startswith('## ') or line.startswith('| Scope |') or line.startswith('|---'):
+            continue
+        if line.startswith('| '):
+            cells = [html.unescape(c.strip()) for c in line.strip('|').split('|')]
+            result.append('; '.join(f'{label}: {value}' for label, value in zip(labels, cells)))
+        else:
+            result.append(html.unescape(line.replace('`', '')))
+    return result
 
 
 def main():

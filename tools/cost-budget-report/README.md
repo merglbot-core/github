@@ -27,7 +27,7 @@ Keep the last successful source observation separately; do not relabel it as
 current data. No financial savings acceptance is inferred from this section.
 
 `snapshot_adapter.normalize` consumes the existing reader's captured listing
-pages and detail responses (`response`, timezone-aware `observed_at`, integer
+pages and detail responses (`request_url`, `response`, timezone-aware `observed_at`, integer
 `exit_code`). It performs no API calls. It checks terminal pagination, stable
 counts, unique IDs, complete detail coverage and consistent configuration.
 Captures from different observations are refused; the default maximum spread
@@ -35,6 +35,11 @@ is five minutes. The oldest observation time is retained, not refreshed to
 the rendering time. Original captures remain the source of record; their
 canonical JSON hashes bind provenance without copying alert recipient names.
 This adapter must be invoked by the existing reader; it is not a new collector.
+The captured request URL must bind every listing page and detail to the declared
+API endpoint; foreign scopes, wrong pages and detail IDs are rejected. The reader
+must record the URL actually fetched, never retrofit it from the declared scope.
+Malformed captures raise ValueError. The monthly consumer uses render_paragraphs
+to pass plain text to its escaping HTML/PDF backend, rather than Markdown tables.
 
 ## Remaining delivery
 

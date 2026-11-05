@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-from budget_report import render
+from budget_report import render, render_paragraphs
 
 
 class BudgetReportTests(unittest.TestCase):
@@ -121,6 +121,15 @@ class BudgetReportTests(unittest.TestCase):
         p = {**self.provenance, "source_sha256": hashlib.sha256(raw).hexdigest()}
         self.assertIn("| actions |", render(raw, p, now=self.now, max_age=timedelta(hours=1)))
         self.assertNotIn("| actions |", render(raw, p, now=self.now + timedelta(microseconds=1), max_age=timedelta(hours=1)))
+
+    def test_plain_paragraphs_preserve_text_for_single_backend_escape(self):
+        self.rows[0]['product'] = '<name> & a|b'
+        raw = json.dumps({'rows': self.rows}).encode()
+        p = {**self.provenance, 'source_sha256': hashlib.sha256(raw).hexdigest()}
+        text = '\n'.join(render_paragraphs(raw, p, now=self.now))
+        self.assertIn('Produkt: <name> & a|b; Budget USD: 100', text)
+        self.assertNotIn('&lt;', text)
+        self.assertNotIn('|---', text)
 
 
 if __name__ == "__main__":

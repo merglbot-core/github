@@ -2,11 +2,20 @@
 from datetime import timedelta
 import hashlib
 import json
+import re
+from urllib.parse import urlsplit, parse_qs, quote
 
 from budget_report import amount, timestamp
 
 
 def normalize(listing_reads, detail_reads, *, source_endpoint, max_spread=timedelta(minutes=5)):
+    try:
+        return _normalize(listing_reads, detail_reads, source_endpoint=source_endpoint, max_spread=max_spread)
+    except (KeyError, TypeError, AttributeError, OverflowError, RecursionError) as exc:
+        raise ValueError("invalid captured budget observation") from exc
+
+
+def _normalize(listing_reads, detail_reads, *, source_endpoint, max_spread):
     """Each capture contains response, observed_at and exit_code from the existing reader.
 
     Refuse incomplete enumeration, inconsistent detail/configuration, and historical
@@ -15,6 +24,10 @@ def normalize(listing_reads, detail_reads, *, source_endpoint, max_spread=timede
     """
     if not listing_reads or max_spread.total_seconds() <= 0:
         raise ValueError("missing listing or invalid spread")
+    if not isinstance(source_endpoint, str) or not re.fullmatch(
+            r"https://api\.github\.com/(?:enterprises|organizations)/[A-Za-z0-9_.-]+/settings/billing/budgets",
+            source_endpoint):
+        raise ValueError("invalid budget source endpoint")
     captures = [*listing_reads, *detail_reads]
     observed = []
     for capture in captures:
@@ -25,6 +38,16 @@ def normalize(listing_reads, detail_reads, *, source_endpoint, max_spread=timede
         raise ValueError("captures belong to different observations")
     budgets, total = {}, None
     for index, capture in enumerate(listing_reads):
+        url = urlsplit(capture['request_url'])
+        endpoint = url._replace(query='').geturl()
+        query = parse_qs(url.query, keep_blank_values=True, strict_parsing=True) if url.query else {}
+        if endpoint != source_endpoint or set(query) - {'page', 'per_page'}:
+            raise ValueError("listing endpoint mismatch")
+        if query.get('page', ['1']) != [str(index + 1)]:
+            raise ValueError("listing page mismatch")
+        if 'per_page' in query and (len(query['per_page']) != 1 or not query['per_page'][0].isdigit()
+                                   or not 1 <= int(query['per_page'][0]) <= 100):
+            raise ValueError("invalid page size")
         page = capture["response"]
         count = page["total_count"]
         if type(count) is not int or count < 0 or (total is not None and total != count):
@@ -43,6 +66,8 @@ def normalize(listing_reads, detail_reads, *, source_endpoint, max_spread=timede
     for capture in detail_reads:
         detail = capture["response"]
         identity = detail["id"]
+        if not isinstance(identity, str) or not identity or capture['request_url'] != source_endpoint + '/' + quote(identity, safe=''):
+            raise ValueError("detail endpoint mismatch")
         if identity not in budgets or identity in seen:
             raise ValueError("foreign or repeated detail")
         seen.add(identity)

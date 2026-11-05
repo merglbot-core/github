@@ -18,6 +18,8 @@ class SnapshotAdapterTests(unittest.TestCase):
                          "response": {"budgets": [self.budget], "total_count": 1, "has_next_page": False}}]
         self.details = [{"observed_at": "2026-11-05T11:01:00Z", "exit_code": 0,
                          "response": {**self.budget, "consumed_amount": 0}}]
+        self.listing[0]['request_url'] = self.endpoint
+        self.details[0]['request_url'] = self.endpoint + '/synthetic'
 
     def normalize(self, listing=None, details=None):
         return normalize(self.listing if listing is None else listing,
@@ -53,6 +55,30 @@ class SnapshotAdapterTests(unittest.TestCase):
                 self.normalize(details=details)
         details = copy.deepcopy(self.details)
         details[0]["response"]["prevent_further_usage"] = True
+        with self.assertRaises(ValueError):
+            self.normalize(details=details)
+
+    def test_endpoint_and_page_binding(self):
+        for target in ['listing', 'details']:
+            for url in [self.endpoint.replace('/example/', '/other/'),
+                        self.endpoint + '?page=2', self.endpoint + '/foreign',
+                        self.endpoint + '#fragment', self.endpoint + '?token=synthetic']:
+                listing, details = copy.deepcopy((self.listing, self.details))
+                (listing if target == 'listing' else details)[0]['request_url'] = url
+                with self.subTest(target=target, url=url), self.assertRaises(ValueError):
+                    self.normalize(listing, details)
+        listing = copy.deepcopy(self.listing)
+        listing[0]['request_url'] += '?page=1&per_page=100'
+        self.normalize(listing=listing)
+
+    def test_malformed_captures_raise_value_error(self):
+        for key in ['request_url', 'exit_code', 'response']:
+            details = copy.deepcopy(self.details)
+            del details[0][key]
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                self.normalize(details=details)
+        details = copy.deepcopy(self.details)
+        details[0]['response']['id'] = []
         with self.assertRaises(ValueError):
             self.normalize(details=details)
 

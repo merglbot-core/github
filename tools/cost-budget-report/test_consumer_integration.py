@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 import datetime as dt
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
@@ -26,10 +27,13 @@ class ConsumerIntegrationTests(unittest.TestCase):
         shell = subprocess.run(["/bin/bash", "-c", added_block("digest")],
                                env={**os.environ, **environment}, capture_output=True, text=True, check=True)
         paragraphs = []
+        # Same escaping as the pinned monthly baseline's para/head backends.
+        def para(value):
+            paragraphs.append('<p>' + html.escape(value) + '</p>')
         with patch.dict(os.environ, environment):
             exec(compile(added_block("monthly"), "monthly-budget-integration", "exec"),
                  {"pathlib": __import__("pathlib"), "json": json, "dt": dt,
-                  "head": paragraphs.append, "para": paragraphs.append})
+                  "head": paragraphs.append, "para": para})
         return shell.stdout, "\n".join(paragraphs)
 
     def test_same_snapshot_reaches_both_consumers_without_mutation(self):
@@ -48,7 +52,9 @@ class ConsumerIntegrationTests(unittest.TestCase):
             digest, monthly = self.run_consumers(root)
             expected = "| enterprise | copilot | 50 | 3 | ne | ano |"
             self.assertIn(expected, digest)
-            self.assertIn(expected, monthly)
+            self.assertIn('Scope: enterprise; Produkt: copilot; Budget USD: 50; API consumed USD: 3; Tvrdý stop: ne; Upozornění doloženo: ano', monthly)
+            self.assertNotIn('|---', monthly)
+            self.assertNotIn('`', monthly)
             for text in [digest, monthly]:
                 self.assertIn(p["source_sha256"], text)
                 self.assertIn("API období nedoloženo", text)
