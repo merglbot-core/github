@@ -55,6 +55,8 @@ def _normalize(listing_reads, detail_reads, *, source_endpoint, max_spread):
         total = count
         if type(page["has_next_page"]) is not bool or page["has_next_page"] != (index < len(listing_reads) - 1):
             raise ValueError("incomplete or redundant pages")
+        if not isinstance(page["budgets"], list):
+            raise ValueError("invalid budgets list")
         for budget in page["budgets"]:
             identity = budget["id"]
             if not isinstance(identity, str) or not identity or identity in budgets:

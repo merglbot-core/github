@@ -122,6 +122,13 @@ class BudgetReportTests(unittest.TestCase):
         self.assertIn("| actions |", render(raw, p, now=self.now, max_age=timedelta(hours=1)))
         self.assertNotIn("| actions |", render(raw, p, now=self.now + timedelta(microseconds=1), max_age=timedelta(hours=1)))
 
+    def test_scope_named_scope_is_not_a_header(self):
+        self.rows[0]['budget_scope'] = 'Scope'
+        raw = json.dumps({'rows': self.rows}).encode()
+        p = {**self.provenance, 'source_sha256': hashlib.sha256(raw).hexdigest()}
+        text = '\n'.join(render_paragraphs(raw, p, now=self.now))
+        self.assertIn('Scope: Scope; Produkt: actions;', text)
+
     def test_plain_paragraphs_preserve_text_for_single_backend_escape(self):
         self.rows[0]['product'] = '<name> & a|b'
         raw = json.dumps({'rows': self.rows}).encode()

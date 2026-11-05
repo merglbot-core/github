@@ -35,6 +35,17 @@ class SnapshotAdapterTests(unittest.TestCase):
         self.assertNotIn("synthetic-recipient", raw.decode() + json.dumps(provenance))
         self.assertEqual(before, (self.listing, self.details))
 
+    def test_empty_listing_requires_a_list(self):
+        for value in [{}, '', None, 0, False]:
+            listing = copy.deepcopy(self.listing)
+            listing[0]['response'].update(budgets=value, total_count=0)
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                self.normalize(listing, [])
+        listing[0]['response']['budgets'] = []
+        raw, provenance = self.normalize(listing, [])
+        self.assertEqual(json.loads(raw)['rows'], [])
+        self.assertTrue(provenance['complete'])
+
     def test_refuses_missing_and_duplicate_detail(self):
         for details in [[], self.details * 2]:
             with self.assertRaises(ValueError):

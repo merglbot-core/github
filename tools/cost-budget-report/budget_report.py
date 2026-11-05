@@ -116,8 +116,12 @@ def render_paragraphs(raw, provenance, *, now, max_age=timedelta(hours=24)):
     lines = render(raw, provenance, now=now, max_age=max_age).splitlines()
     result = []
     labels = ('Scope', 'Produkt', 'Budget USD', 'API consumed USD', 'Tvrdý stop', 'Upozornění doloženo')
+    header_seen = False
     for line in lines:
-        if not line or line.startswith('## ') or line.startswith('| Scope |') or line.startswith('|---'):
+        if not header_seen and line.startswith('| Scope |'):
+            header_seen = True
+            continue
+        if not line or line.startswith('## ') or line.startswith('|---'):
             continue
         if line.startswith('| '):
             cells = [html.unescape(c.strip()) for c in line.strip('|').split('|')]
