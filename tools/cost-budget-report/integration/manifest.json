@@ -7,7 +7,7 @@
       "baseline_path": "/Users/milanmerglevsky/.merglbot/gh-cost-wave3/evidence/adopt1722-20261020/github982-digest-source-snapshot-20261105/autonomy-digest.sh.txt",
       "baseline_sha256": "8e768209d1b7006b144effc8fa40d65dcd3f8e6faeabd96d018c41c8416bb426",
       "candidate_sha256": "9e996a292e0661b6a8f5a3b12d96b94e8ef186f74d8e325e3f7f4ada0a434cb0",
-      "patch_sha256": "ed672c3ed6d62fecd1113416c1d7667298ff7f68e8d1f03de5b2d7abb7b4fa5e",
+      "patch_sha256": "9afce7b130778e6c33c267b0045307d9c6abd76c0ee110453c9a1c9cb2374b48",
       "anchor": "} > \"$F\""
     },
     "monthly": {

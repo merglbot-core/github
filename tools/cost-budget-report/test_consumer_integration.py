@@ -24,7 +24,11 @@ class ConsumerIntegrationTests(unittest.TestCase):
     def run_consumers(self, root, renderer=None):
         environment = {"MERGLBOT_BUDGET_ROOT": str(root),
                        "MERGLBOT_BUDGET_RENDERER": str(renderer or ROOT / "budget_report.py")}
-        shell = subprocess.run(["/bin/bash", "-c", added_block("digest")],
+        # Execute only the added block inside the baseline's redirected boundary.
+        # Never execute the original script's cleanup or notification code.
+        target = root / "digest-output.md"
+        environment["F"] = str(target)
+        shell = subprocess.run(["/bin/bash", "-c", '{\n' + added_block("digest") + '} > "$F"\n'],
                                env={**os.environ, **environment}, capture_output=True, text=True, check=True)
         paragraphs = []
         # Same escaping as the pinned monthly baseline's para/head backends.
@@ -34,7 +38,20 @@ class ConsumerIntegrationTests(unittest.TestCase):
             exec(compile(added_block("monthly"), "monthly-budget-integration", "exec"),
                  {"pathlib": __import__("pathlib"), "json": json, "dt": dt,
                   "head": paragraphs.append, "para": para})
-        return shell.stdout, "\n".join(paragraphs)
+        self.assertEqual(shell.stdout, "")
+        digest = target.read_text()
+        target.unlink()
+        return digest, "\n".join(paragraphs)
+
+    def test_digest_patch_is_bound_inside_redirect(self):
+        manifest = json.loads((ROOT / "integration/manifest.json").read_text())['sources']['digest']
+        raw = (ROOT / 'integration/digest.patch').read_bytes()
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), manifest['patch_sha256'])
+        lines = raw.decode().splitlines()
+        added = [i for i, line in enumerate(lines) if line.startswith('+') and not line.startswith('+++')]
+        boundary = lines.index(' } > "$F"')
+        self.assertTrue(added)
+        self.assertLess(max(added), boundary)
 
     def test_same_snapshot_reaches_both_consumers_without_mutation(self):
         with tempfile.TemporaryDirectory() as directory:
