@@ -1,0 +1,17 @@
+--- digest.baseline
++++ digest.candidate
+@@ -384,2 +384,14 @@
+   echo '```'
++  # GitHub budget API observation, shared with the monthly cost report (#982).
++  echo ""
++  budget_root="${MERGLBOT_BUDGET_ROOT:-$HOME/.merglbot/gh-cost-wave3/budgets}"
++  budget_renderer="${MERGLBOT_BUDGET_RENDERER:-$HOME/.merglbot/tools/cost-budget-report/budget_report.py}"
++  if [ -r "$budget_renderer" ]; then
++    python3 "$budget_renderer" --snapshot "$budget_root/latest.json" \
++      --provenance "$budget_root/latest.provenance.json" --max-age-hours 24 \
++      || echo 'DATA_GAP — rozpočtový renderer selhal.'
++  else
++    echo '## Rozpočty GitHubu — pozorování API'
++    echo 'DATA_GAP — rozpočtový renderer není nainstalovaný.'
++  fi
+ } > "$F"
