@@ -49,6 +49,10 @@ def validate_transition(before, after, state_bytes, *, home, objective):
     # Reject unsupported callers before any lock or service mutation.
     if old.get('RunAtLoad') is not True:
         raise ValueError('bootstrap_run_at_load_required')
+    # A persistent job can relaunch after the verified contention-only run.
+    # Only launchd's absent/default false or an explicit boolean false is admitted.
+    if 'KeepAlive' in old and old['KeepAlive'] is not False:
+        raise ValueError('bootstrap_keep_alive_refused')
     expected = dict(old)
     expected['ProgramArguments'] = [
         str(home / '.merglbot/mem-guard/capped-run'), '--max-gb', '2',

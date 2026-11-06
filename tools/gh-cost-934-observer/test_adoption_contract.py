@@ -54,6 +54,20 @@ class AdoptionContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'bootstrap_run_at_load_required'):
                     self.check()
 
+    def test_bootstrap_refuses_preserved_keep_alive_and_ambiguous_values(self):
+        for value in (True, {'SuccessfulExit': False}, {'NetworkState': True},
+                      {'PathState': {'/synthetic': True}}, {}, 0, 1, 'false'):
+            with self.subTest(value=value):
+                self.old['KeepAlive'] = value
+                self.new['KeepAlive'] = value
+                with self.assertRaisesRegex(ValueError, 'bootstrap_keep_alive_refused'):
+                    self.check()
+
+    def test_absent_keep_alive_uses_launchd_nonpersistent_default(self):
+        self.old.pop('KeepAlive')
+        self.new.pop('KeepAlive')
+        self.assertTrue(self.check()['caller_transition_verified'])
+
     def test_unrelated_caller_changes_are_rejected(self):
         for key, value in [('RunAtLoad', False), ('KeepAlive', True),
                            ('StartCalendarInterval', {'Hour': 3}),

@@ -142,3 +142,17 @@ remain loaded; subsequent recovery requires fresh owner admission and readback.
 Failure to write the journal is itself surfaced as the original error's cause,
 not a successful cleanup. Source regressions simulate launchd and do not prove
 production observer lock-contention behaviour or activation safety.
+
+### Single-bootstrap caller admission
+
+Before acquiring the observer lock or changing the service, adoption requires
+`RunAtLoad` to be exactly `true`. `KeepAlive` must be absent or exactly `false`;
+persistent jobs, conditional dictionaries and ambiguous non-boolean values are
+refused. Supporting persistent launchd jobs would require a separate reviewed
+lifecycle contract.
+
+`partial_service_stopped` and `refused_before_replacement` deliberately leave the
+service unloaded. Preserve the journal and obtain the separately authorized
+recovery packet; do not rerun the consumed installer or bootstrap the service
+manually. `recovery_required_service_state_unknown` is not proof of an unloaded
+service and requires fresh live readback before a recovery decision.
