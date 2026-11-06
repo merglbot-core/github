@@ -45,6 +45,10 @@ def validate_transition(before, after, state_bytes, *, home, objective):
         raise ValueError('foreign_service')
     if old.get('ProgramArguments') != ['/opt/homebrew/bin/python3', code]:
         raise ValueError('unexpected_previous_caller')
+    # Lifecycle verification requires the bootstrap invocation to complete.
+    # Reject unsupported callers before any lock or service mutation.
+    if old.get('RunAtLoad') is not True:
+        raise ValueError('bootstrap_run_at_load_required')
     expected = dict(old)
     expected['ProgramArguments'] = [
         str(home / '.merglbot/mem-guard/capped-run'), '--max-gb', '2',

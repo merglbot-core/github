@@ -42,6 +42,18 @@ class AdoptionContractTests(unittest.TestCase):
         self.assertFalse(result['installation_authorized'])
         self.assertFalse(result['launch_authorized'])
 
+    def test_bootstrap_requires_exact_true_even_when_caller_field_is_preserved(self):
+        for value in (None, False, 0, 1, 'true'):
+            with self.subTest(value=value):
+                if value is None:
+                    self.old.pop('RunAtLoad', None)
+                    self.new.pop('RunAtLoad', None)
+                else:
+                    self.old['RunAtLoad'] = value
+                    self.new['RunAtLoad'] = value
+                with self.assertRaisesRegex(ValueError, 'bootstrap_run_at_load_required'):
+                    self.check()
+
     def test_unrelated_caller_changes_are_rejected(self):
         for key, value in [('RunAtLoad', False), ('KeepAlive', True),
                            ('StartCalendarInterval', {'Hour': 3}),

@@ -20,7 +20,7 @@ class PreflightTests(unittest.TestCase):
         self.caller=self.home/'Library/LaunchAgents/ai.merglbot.gh-cost-wave3-acceptance.plist'
         self.objective=self.home/'private/objective.txt';self.source=b'synthetic source'
         self.data={self.code:b'old',self.state:b'{"stages":{},"halted":"STOP"}',self.objective:b'private fixture',
-            self.caller:plistlib.dumps({'Label':contract.LABEL,'ProgramArguments':['/opt/homebrew/bin/python3',str(self.code)]})}
+            self.caller:plistlib.dumps({'Label':contract.LABEL,'RunAtLoad':True,'ProgramArguments':['/opt/homebrew/bin/python3',str(self.code)]})}
         self.metadata={p:{'sha256':m.digest(self.data[p])} for p in (self.code,self.caller)}
         self.patch=patch.object(plan,'OBSERVER_SHA256',m.digest(self.source));self.patch.start();self.addCleanup(self.patch.stop)
         self.manifest,self.binding,_=plan.prepare(home=str(self.home),objective=str(self.objective),
