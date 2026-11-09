@@ -9,7 +9,7 @@ TOOL = Path(__file__).resolve().parents[1]/'tools/gh-cost-934-observer'
 
 def load_tests(loader, standard_tests, pattern):
     suite = unittest.TestSuite()
-    for name in ('test_duration_budget', 'test_existing_acceptance_semantics'):
+    for name in ('test_duration_budget', 'test_existing_acceptance_semantics', 'test_adoption_contract', 'test_adoption_transaction', 'test_adoption_native', 'test_adoption_bundle', 'test_adoption_plan', 'test_adoption_lifecycle', 'test_adoption_service', 'test_adoption_journal', 'test_adoption_preflight', 'test_adoption_owner', 'test_adoption_recovery', 'test_adoption_owner_integration'):
         spec = importlib.util.spec_from_file_location('financial934_'+name, TOOL/(name+'.py'))
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
