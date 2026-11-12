@@ -134,31 +134,34 @@ for full in "${repos[@]}"; do
     count_fail=$((count_fail+1)); continue
   fi
 
-  # Existing contexts (new 'contexts' array OR legacy 'checks[].context').
+  # Include both API representations: a context may occur only in checks[].
   mapfile -t existing < <(printf '%s' "$prot" | jq -r '
-    (.required_status_checks.contexts // []) as $c
-    | (if ($c|length)>0 then $c else [ .required_status_checks.checks[]?.context // empty ] end)[]')
+    ((.required_status_checks.contexts // []) +
+     [.required_status_checks.checks[]?.context // empty]) | unique[]')
 
-  for c in "${existing[@]:-}"; do
-    if [ "$c" = "$V6_CHECK" ]; then
-      log "OK   ${full}:${branch} (already requires v5)"; count_ok=$((count_ok+1)); continue 2
-    fi
-  done
+  # A name alone, an unbound App, or a foreign App is not the V6 contract.
+  if printf '%s' "$prot" | jq -e --arg context "$V6_CHECK" '
+    [.required_status_checks.checks[]? | select(.context == $context)] as $v6
+    | ($v6 | length) > 0 and all($v6[]; .app_id == 3518182)' >/dev/null; then
+    log "OK   ${full}:${branch} (already requires V6 with the gate App)"
+    count_ok=$((count_ok+1)); continue
+  fi
 
-  # Build the full desired set = existing ∪ v5, passed to the canonical setter.
+  # Build the full desired set = existing ∪ V6, passed to the canonical setter.
   setter_args=(--repo "$full" --branch "$branch")
   for c in "${existing[@]:-}"; do [ -n "$c" ] && setter_args+=(--check "$c"); done
   setter_args+=(--check "$V6_CHECK")
 
   if [ "$APPLY" = true ]; then
     if "$SETTER" "${setter_args[@]}" --apply --yes >/dev/null; then
-      log "ADDED ${full}:${branch} (v5 now required; ${#existing[@]} existing preserved)"; count_added=$((count_added+1))
+      log "ADDED ${full}:${branch} (V6 gate App required; ${#existing[@]} existing contexts retained)"; count_added=$((count_added+1))
     else
       err "${full}:${branch}: setter failed"; count_fail=$((count_fail+1))
     fi
   else
     if "$SETTER" "${setter_args[@]}" --dry-run >/dev/null; then
-      log "WOULD-ADD ${full}:${branch} (existing=${#existing[@]} + v5)"; count_added=$((count_added+1))
+      # WOULD-ADD is a machine marker consumed by v5-required-check-sync.yml.
+      log "WOULD-ADD ${full}:${branch} (existing=${#existing[@]} + V6 gate App)"; count_added=$((count_added+1))
     else
       err "${full}:${branch}: setter dry-run failed"; count_fail=$((count_fail+1))
     fi
