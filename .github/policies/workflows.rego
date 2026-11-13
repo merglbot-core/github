@@ -213,7 +213,7 @@ warn[msg] {
 }
 
 warn[msg] {
-  value := input.jobs[job_name].steps[_].with[key]
+  value := input.jobs[job_name].steps[_]["with"][key]
   secret_like_key(key)
   literal_value(value)
   msg := sprintf("Literal value for secret-like input %v in job '%v' (use ${{secrets.*}}; warn until review %v)", [key, job_name, review_date_gsa317])
@@ -232,7 +232,7 @@ trivy_step(step) {
 }
 
 trivy_fails_on_findings(step) {
-  sprintf("%v", [step.with["exit-code"]]) == "1"
+  sprintf("%v", [step["with"]["exit-code"]]) == "1"
 }
 
 trivy_after_build(job, t) {
