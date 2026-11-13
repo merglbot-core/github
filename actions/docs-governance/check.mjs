@@ -100,6 +100,13 @@ function classify(files, cfg) {
   return { impact, evidence };
 }
 
+// Changed paths are read verbatim (-z), so a filename may carry a newline or other control
+// character. Escape those before any path reaches stdout or the step summary: a raw newline
+// would let a PR filename start its own log line, e.g. a `::stop-commands::` workflow command.
+function displayPath(file) {
+  return file.replace(/[\x00-\x1f\x7f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
+}
+
 function emit(state, reason, ssotTargets, extra = []) {
   const lines = [
     "## docs-governance",
@@ -162,7 +169,7 @@ function main() {
   }
   if (evidence.length > 0) {
     emit("satisfied", "local_markdown_evidence", ssotTargets, [
-      "", `Evidence: ${evidence.slice(0, 5).join(", ")}`,
+      "", `Evidence: ${evidence.slice(0, 5).map(displayPath).join(", ")}`,
     ]);
     return;
   }
@@ -187,7 +194,7 @@ function main() {
   } else {
     emit("missing", "impact_without_docs_evidence", ssotTargets, [
       "",
-      `Impact paths (${impact.length}): ${impact.slice(0, 5).join(", ")}`,
+      `Impact paths (${impact.length}): ${impact.slice(0, 5).map(displayPath).join(", ")}`,
       ssotTargets.length
         ? `Owning SSOT docs: ${ssotTargets.join(", ")} — update them (or this repo's docs) and reference via \`MERGLBOT_DOCS_SYNC: merglbot-public/docs#<pr>\`.`
         : "Add same-PR markdown evidence, an SSOT sync marker, or the `docs-impact: none` label + reason.",

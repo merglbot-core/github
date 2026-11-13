@@ -44,7 +44,10 @@ run_case() { # name expected_state files... (|| separated pr body/labels via env
         DG_REPO="${DG_TEST_REPO:-merglbot-core/platform}" DG_ACTION_PATH="$ACTION" \
         node "$ACTION/check.mjs") || true
   state=$(grep -oE 'DOCS_GOVERNANCE_STATE: [a-z_]+' <<<"$out" | awk '{print $2}')
-  if [ "$state" = "$expected" ]; then pass=$((pass+1)); echo "PASS $name ($state)";
+  # no output line may start a GitHub Actions workflow command (a filename with a newline
+  # must be escaped before it is printed)
+  if grep -q '^::' <<<"$out"; then fail=$((fail+1)); echo "FAIL $name: output line starts with '::'";
+  elif [ "$state" = "$expected" ]; then pass=$((pass+1)); echo "PASS $name ($state)";
   else fail=$((fail+1)); echo "FAIL $name: expected $expected got $state"; fi
   cd "$HERE"
 }
@@ -69,6 +72,10 @@ run_case backslash_impact missing 'src/back\slash.ts'
 run_case leading_space_impact missing 'src/ lead.ts'
 # a trailing space is part of the name: "notes.md " is not markdown evidence
 run_case trailing_space_not_md missing 'docs/notes.md ' src/app.ts
+# a newline in a filename is classified by its real name and printed escaped, never as a
+# workflow command at the start of its own log line
+run_case newline_impact missing $'src/a\n::stop-commands::x.ts'
+run_case newline_md_evidence satisfied $'docs/a\n::warning::x.md' src/app.ts
 # a diff larger than the default 1 MiB buffer is still classified, not `unknown`
 DG_TEST_BULK=10000 run_case bulk_diff missing
 
