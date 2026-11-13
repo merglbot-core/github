@@ -87,10 +87,14 @@ jobs:
       
       - name: Determine version
         id: version
+        # The manual version reaches the shell as inert data and every resolved
+        # version is validated before later steps reuse it (github-security-auditor#223).
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -eo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
+          if [ -n "${INPUT_VERSION}" ]; then
+            VERSION="${INPUT_VERSION}"
           else
             # jq is already available in GitHub Actions Ubuntu runners
             # Parse semantic-release output more robustly with JSON output when available
@@ -116,6 +120,10 @@ jobs:
               echo "skip=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
+          fi
+          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(\+[0-9A-Za-z.]+)?$'; then
+            echo "::error::Invalid release version. Expected X.Y.Z with optional -prerelease or +build suffix"
+            exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"

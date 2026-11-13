@@ -145,7 +145,8 @@ jobs:
   create-issue:
     name: Create Tracking Issue
     needs: audit-settings
-    if: needs.audit-settings.outputs.has_issues == 'true' && inputs.create_issues != false
+    # Scheduled runs have no inputs, so they always file findings (github-security-auditor#315).
+    if: needs.audit-settings.outputs.has_issues == 'true' && (github.event_name == 'schedule' || inputs.create_issues)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

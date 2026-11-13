@@ -72,7 +72,7 @@ jobs:
           if ! gh api -X GET "repos/${{ github.repository }}/issues/comments" \
             --paginate \
             -f since="$SINCE_DATE" \
-            -q '.[] | select(.body | contains("Merglbot PR Assistant")) | {id: .id, issue_url: .issue_url, created_at: .created_at, user: .user.login}' \
+            -q '.[] | select(.performed_via_github_app.id == 3518182) | select(.body | contains("Merglbot PR Assistant")) | {id: .id, issue_url: .issue_url, created_at: .created_at, user: .user.login}' \
             2>/dev/null | jq -s '.' > /tmp/merglbot_comments.json; then
             echo "[]" > /tmp/merglbot_comments.json
           fi
@@ -174,6 +174,9 @@ jobs:
 
           REPO="${{ github.repository }}"
           SIGNATURE="Merglbot PR Assistant"
+          # Only comments published by the V6 gate App count as review verdicts
+          # (github-security-auditor#319).
+          GATE_APP_ID=3518182
 
           mkdir -p feedback
 
@@ -229,11 +232,11 @@ jobs:
 
             # Fetch PR comments and find the earliest Merglbot review comment timestamp
             COMMENTS_JSON="$({ gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate 2>/dev/null || echo '[]'; } | jq -s 'add // []' 2>/dev/null || echo '[]')"
-            REVIEW_AT=$(echo "$COMMENTS_JSON" | jq -r --arg sig "$SIGNATURE" 'map(select(.body | contains($sig))) | min_by(.created_at) | .created_at // empty')
+            REVIEW_AT=$(echo "$COMMENTS_JSON" | jq -r --arg sig "$SIGNATURE" --argjson app "$GATE_APP_ID" 'map(select(.performed_via_github_app.id == $app and (.body | contains($sig)))) | min_by(.created_at) | .created_at // empty')
             if [ -z "$REVIEW_AT" ]; then
               continue
             fi
-            REVIEW_BODY=$(echo "$COMMENTS_JSON" | jq -r --arg sig "$SIGNATURE" 'map(select(.body | contains($sig))) | min_by(.created_at) | .body // ""')
+            REVIEW_BODY=$(echo "$COMMENTS_JSON" | jq -r --arg sig "$SIGNATURE" --argjson app "$GATE_APP_ID" 'map(select(.performed_via_github_app.id == $app and (.body | contains($sig)))) | min_by(.created_at) | .body // ""')
 
             TOTAL=$((TOTAL + 1))
 

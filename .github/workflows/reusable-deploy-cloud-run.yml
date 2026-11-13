@@ -646,6 +646,8 @@ jobs:
         id: deploy
         env:
           SECRETS_INPUT: ${{ inputs.secrets }}
+          # Caller env_vars reach the shell as inert data (github-security-auditor#222).
+          ENV_VARS_INPUT: ${{ inputs.env_vars }}
           STAGED_HEALTH_PATH: ${{ inputs.staged_health_path }}
           DEBOUNCE_ENVIRONMENT: ${{ inputs.debounce_environment }}
           GH_TOKEN: ${{ github.token }}
@@ -672,8 +674,12 @@ jobs:
           }
 
           write_xproj_patcher() {
-            printf '%s\n' 'import yaml, sys' > /tmp/inject_xproj_secret.py
-            printf '%s\n' 'env_var, secret_resource, secret_version = sys.argv[1:4]' >> /tmp/inject_xproj_secret.py
+            # Values come from the environment, not argv, so they never appear in
+            # process listings (github-security-auditor#311).
+            printf '%s\n' 'import os, yaml' > /tmp/inject_xproj_secret.py
+            printf '%s\n' 'env_var = os.environ["XPROJ_ENV_NAME"]' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'secret_resource = os.environ["XPROJ_SECRET_RESOURCE"]' >> /tmp/inject_xproj_secret.py
+            printf '%s\n' 'secret_version = os.environ["XPROJ_SECRET_VERSION"]' >> /tmp/inject_xproj_secret.py
             printf '%s\n' 'with open("/tmp/service.yaml") as f: svc = yaml.safe_load(f)' >> /tmp/inject_xproj_secret.py
             printf '%s\n' 'tmpl_meta = svc.setdefault("spec", {}).setdefault("template", {}).setdefault("metadata", {})' >> /tmp/inject_xproj_secret.py
             printf '%s\n' 'ann = tmpl_meta.setdefault("annotations", {})' >> /tmp/inject_xproj_secret.py
@@ -696,16 +702,21 @@ jobs:
           }
 
           verify_xproj_service() {
-            local service_json="$1"
+            local service_json="$1" entries_file rc=0
             shift
 
-            python3 - "$service_json" "$@" <<'PY'
+            # Secret references go through a private 0600 temp file, not argv
+            # (github-security-auditor#311).
+            entries_file=$(mktemp)
+            printf '%s\n' "$@" > "$entries_file"
+            python3 - "$service_json" "$entries_file" <<'PY' || rc=$?
           import json
           import os
           import sys
 
           service_path = sys.argv[1]
-          entries = sys.argv[2:]
+          with open(sys.argv[2], encoding="utf-8") as f:
+              entries = [line for line in f.read().splitlines() if line]
 
           with open(service_path, encoding="utf-8") as f:
               svc = json.load(f)
@@ -776,6 +787,8 @@ jobs:
                   print(error, file=sys.stderr)
               raise SystemExit(1)
           PY
+            rm -f -- "$entries_file"
+            return "$rc"
           }
 
           trap cleanup_temp_files EXIT
@@ -863,11 +876,13 @@ jobs:
 
               entry="${env_name}=${secret_ref}:${secret_version}"
               if [[ "$secret_ref" == projects/* ]]; then
+                # Mask before any diagnostic and never echo the resource itself
+                # (github-security-auditor#311).
+                echo "::add-mask::$secret_ref"
                 if ! [[ "$secret_ref" =~ ^projects/[0-9]+/secrets/[A-Za-z0-9_-]+$ ]]; then
-                  echo "::error::Invalid cross-project secret reference for $env_name: $secret_ref (expected projects/<project-number>/secrets/<secret-id>)"
+                  echo "::error::Invalid cross-project secret reference for $env_name (code XPROJ_REF_INVALID; expected projects/<project-number>/secrets/<secret-id>)"
                   exit 1
                 fi
-                echo "::add-mask::$secret_ref"
                 CROSS_PROJECT_SECRET_LINES+=("$entry")
               else
                 SAME_PROJECT_SECRET_LINES+=("$entry")
@@ -877,8 +892,8 @@ jobs:
 
           if [ "${#CROSS_PROJECT_SECRET_LINES[@]}" -gt 0 ]; then
             DEPLOYMENT_MODE="cross-project-reconcile"
-            if [ -n "${{ inputs.env_vars }}" ]; then
-              gcloud_cmd+=("--update-env-vars=${{ inputs.env_vars }}")
+            if [ -n "$ENV_VARS_INPUT" ]; then
+              gcloud_cmd+=("--update-env-vars=${ENV_VARS_INPUT}")
             fi
             if [ -n "$STAGED_HEALTH_PATH" ]; then
               # Native SDK remote references construct aliases before candidate startup.
@@ -899,8 +914,8 @@ jobs:
             echo "::notice::Base rollout runs before YAML patch to avoid replaying stale service specs"
             echo "::notice::Cross-project aliases: $CROSS_PROJECT_ALIAS_SUMMARY"
           else
-            if [ -n "${{ inputs.env_vars }}" ]; then
-              gcloud_cmd+=("--set-env-vars=${{ inputs.env_vars }}")
+            if [ -n "$ENV_VARS_INPUT" ]; then
+              gcloud_cmd+=("--set-env-vars=${ENV_VARS_INPUT}")
             fi
             if [ "${#SAME_PROJECT_SECRET_LINES[@]}" -gt 0 ]; then
               { IFS=,; SECRET_LIST="${SAME_PROJECT_SECRET_LINES[*]}"; }
@@ -950,7 +965,8 @@ jobs:
                 SECRET_VERSION="latest"
               fi
 
-              if ! python3 /tmp/inject_xproj_secret.py "$ENV_NAME" "$SECRET_RESOURCE" "$SECRET_VERSION"; then
+              if ! XPROJ_ENV_NAME="$ENV_NAME" XPROJ_SECRET_RESOURCE="$SECRET_RESOURCE" XPROJ_SECRET_VERSION="$SECRET_VERSION" \
+                python3 /tmp/inject_xproj_secret.py; then
                 echo "::error::Failed to inject cross-project secret $ENV_NAME"
                 exit 1
               fi

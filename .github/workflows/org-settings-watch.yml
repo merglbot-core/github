@@ -44,48 +44,83 @@ jobs:
         id: drift
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Baseline values reach the shell as inert data (github-security-auditor#314).
+          ORGS: ${{ steps.baseline.outputs.orgs }}
+          ORG_COUNT: ${{ steps.baseline.outputs.org_count }}
+          EXPECTED_ACTIONS: ${{ steps.baseline.outputs.expected_actions }}
+          EXPECTED_PERMS: ${{ steps.baseline.outputs.expected_perms }}
+          EXPECTED_PUBLIC: ${{ steps.baseline.outputs.expected_public }}
         run: |
           set -euo pipefail
           
           DRIFT_FOUND=0
           DRIFT_DETAILS=""
+          # An unreadable setting is reported as an API error, never as drift and
+          # never as compliance (github-security-auditor#314). Warning only: this
+          # scheduled watch does not fail on it.
+          API_ERRORS=0
+          API_ERROR_DETAILS=""
+          
+          # Runs in the current shell (not a subshell) so the error counter
+          # survives. The body goes to $RESPONSE; on failure only the HTTP status
+          # is recorded, never the response body.
+          RESPONSE="$RUNNER_TEMP/org-settings-response.json"
+          fetch() {
+            local endpoint="$1" status
+            if gh api "$endpoint" >"$RESPONSE" 2>"$RUNNER_TEMP/gh-err"; then
+              return 0
+            fi
+            status=$(grep -oE 'HTTP [0-9]{3}' "$RUNNER_TEMP/gh-err" | head -n1 || true)
+            API_ERRORS=$((API_ERRORS + 1))
+            API_ERROR_DETAILS="${API_ERROR_DETAILS}\n- \`${endpoint}\`: ${status:-request failed}"
+            echo "::warning::Could not read ${endpoint} (${status:-request failed}); setting not evaluated"
+            return 1
+          }
           
           echo "## 🔍 Organization Settings Watch" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "**Date**: $(date -u +%Y-%m-%d)" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           
-          for org in ${{ steps.baseline.outputs.orgs }}; do
+          for org in $ORGS; do
             echo "Checking: $org"
             
             # Get current Actions permissions
-            ACTIONS=$(gh api "/orgs/${org}/actions/permissions" 2>/dev/null || echo '{}')
-            CURRENT_ACTIONS=$(echo "$ACTIONS" | jq -r '.allowed_actions // "unknown"')
+            if fetch "/orgs/${org}/actions/permissions"; then
+              CURRENT_ACTIONS=$(jq -r '.allowed_actions // "unknown"' "$RESPONSE")
+              if [ "$CURRENT_ACTIONS" != "$EXPECTED_ACTIONS" ]; then
+                DRIFT_FOUND=$((DRIFT_FOUND + 1))
+                DRIFT_DETAILS="${DRIFT_DETAILS}\n- **$org**: allowed_actions is '$CURRENT_ACTIONS' (expected: '$EXPECTED_ACTIONS')"
+              fi
+            fi
             
             # Get current workflow permissions
-            WORKFLOW=$(gh api "/orgs/${org}/actions/permissions/workflow" 2>/dev/null || echo '{}')
-            CURRENT_PERMS=$(echo "$WORKFLOW" | jq -r '.default_workflow_permissions // "unknown"')
+            if fetch "/orgs/${org}/actions/permissions/workflow"; then
+              CURRENT_PERMS=$(jq -r '.default_workflow_permissions // "unknown"' "$RESPONSE")
+              if [ "$CURRENT_PERMS" != "$EXPECTED_PERMS" ]; then
+                DRIFT_FOUND=$((DRIFT_FOUND + 1))
+                DRIFT_DETAILS="${DRIFT_DETAILS}\n- **$org**: workflow_permissions is '$CURRENT_PERMS' (expected: '$EXPECTED_PERMS')"
+              fi
+            fi
             
             # Get current org settings
-            ORG_SETTINGS=$(gh api "/orgs/${org}" 2>/dev/null || echo '{}')
-            CURRENT_PUBLIC=$(echo "$ORG_SETTINGS" | jq -r '.members_can_create_public_repositories // "unknown"')
-            
-            # Compare with expected
-            if [ "$CURRENT_ACTIONS" != "${{ steps.baseline.outputs.expected_actions }}" ]; then
-              DRIFT_FOUND=$((DRIFT_FOUND + 1))
-              DRIFT_DETAILS="${DRIFT_DETAILS}\n- **$org**: allowed_actions is '$CURRENT_ACTIONS' (expected: '${{ steps.baseline.outputs.expected_actions }}')"
-            fi
-            
-            if [ "$CURRENT_PERMS" != "${{ steps.baseline.outputs.expected_perms }}" ]; then
-              DRIFT_FOUND=$((DRIFT_FOUND + 1))
-              DRIFT_DETAILS="${DRIFT_DETAILS}\n- **$org**: workflow_permissions is '$CURRENT_PERMS' (expected: '${{ steps.baseline.outputs.expected_perms }}')"
-            fi
-            
-            if [ "$CURRENT_PUBLIC" = "true" ] && [ "${{ steps.baseline.outputs.expected_public }}" = "false" ]; then
-              DRIFT_FOUND=$((DRIFT_FOUND + 1))
-              DRIFT_DETAILS="${DRIFT_DETAILS}\n- **$org**: public_repos is enabled (should be disabled)"
+            if fetch "/orgs/${org}"; then
+              CURRENT_PUBLIC=$(jq -r '.members_can_create_public_repositories // "unknown"' "$RESPONSE")
+              if [ "$CURRENT_PUBLIC" = "true" ] && [ "$EXPECTED_PUBLIC" = "false" ]; then
+                DRIFT_FOUND=$((DRIFT_FOUND + 1))
+                DRIFT_DETAILS="${DRIFT_DETAILS}\n- **$org**: public_repos is enabled (should be disabled)"
+              fi
             fi
           done
+          
+          echo "api_errors=$API_ERRORS" >> "$GITHUB_OUTPUT"
+          if [ "$API_ERRORS" -gt 0 ]; then
+            echo "### ⚠️ Settings Not Evaluated" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**$API_ERRORS** reads failed; those settings were not compared and are not proof of compliance:" >> "$GITHUB_STEP_SUMMARY"
+            echo -e "$API_ERROR_DETAILS" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+          fi
           
           if [ $DRIFT_FOUND -gt 0 ]; then
             echo "### ⚠️ Configuration Drift Detected!" >> "$GITHUB_STEP_SUMMARY"
@@ -96,10 +131,14 @@ jobs:
             echo "drift_found=true" >> "$GITHUB_OUTPUT"
             echo "drift_count=$DRIFT_FOUND" >> "$GITHUB_OUTPUT"
             echo -e "$DRIFT_DETAILS" > /tmp/drift_details.txt
+          elif [ "$API_ERRORS" -gt 0 ]; then
+            echo "### ❔ No Drift Among Readable Settings" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "drift_found=false" >> "$GITHUB_OUTPUT"
           else
             echo "### ✅ No Configuration Drift" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "All ${{ steps.baseline.outputs.org_count }} organizations match the expected baseline configuration." >> "$GITHUB_STEP_SUMMARY"
+            echo "All ${ORG_COUNT} organizations match the expected baseline configuration." >> "$GITHUB_STEP_SUMMARY"
             echo "drift_found=false" >> "$GITHUB_OUTPUT"
           fi
 
