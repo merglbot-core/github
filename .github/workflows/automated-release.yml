@@ -121,10 +121,14 @@ jobs:
               exit 0
             fi
           fi
-          # Whole-string match: a multi-line value cannot pass and inject a second
-          # GITHUB_OUTPUT line (github-security-auditor#223).
-          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(\+[0-9A-Za-z.]+)?$ ]]; then
-            echo "::error::Invalid release version. Expected X.Y.Z with optional -prerelease or +build suffix"
+          # SemVer 2.0.0, the same grammar as scripts/release/determine-version.mjs,
+          # matched against the whole string: a multi-line value cannot pass and
+          # inject a second GITHUB_OUTPUT line (github-security-auditor#223).
+          NUM='(0|[1-9][0-9]*)'
+          PRE='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+          SEMVER="^${NUM}\.${NUM}\.${NUM}(-${PRE}(\.${PRE})*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$"
+          if ! [[ "$VERSION" =~ $SEMVER ]]; then
+            echo "::error::Invalid release version. Expected SemVer 2.0.0 (X.Y.Z with optional -prerelease and +build)"
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
