@@ -170,3 +170,92 @@ is_workflow_call_trigger {
   is_object(input.on)
   input.on.workflow_call
 }
+
+# ---------------------------------------------------------------------------
+# Warn-mode rules (github-security-auditor#317). Owner decision 13 Nov 2026
+# ("varianty bez brzdy"): new checks start as warnings and are reviewed on the
+# date below before any promotion to deny. Registered in
+# MERGLBOT_CAPABILITY_SWITCHES.md.
+review_date_gsa317 := "2026-12-15"
+
+# Warn: reusable workflow calls (jobs.<id>.uses) must be SHA-pinned unless local.
+warn[msg] {
+  job := input.jobs[job_name]
+  action := job.uses
+  is_string(action)
+  not startswith(action, "./")
+  not regex.match(`@[a-f0-9]{40}$`, action)
+  msg := sprintf("Job '%v' calls a reusable workflow that is not SHA-pinned: %v (warn until review %v)", [job_name, action, review_date_gsa317])
+}
+
+secret_like_key(key) {
+  regex.match(`(?i)(password|token|key|secret|api_key)`, key)
+}
+
+literal_value(value) {
+  is_string(value)
+  not regex.match(`\$\{\{`, value)
+}
+
+# Warn: literal secret-like values in workflow env, job env and step inputs.
+warn[msg] {
+  value := input.env[key]
+  secret_like_key(key)
+  literal_value(value)
+  msg := sprintf("Literal value for secret-like workflow env %v (use ${{secrets.*}}; warn until review %v)", [key, review_date_gsa317])
+}
+
+warn[msg] {
+  value := input.jobs[job_name].env[key]
+  secret_like_key(key)
+  literal_value(value)
+  msg := sprintf("Literal value for secret-like env %v in job '%v' (use ${{secrets.*}}; warn until review %v)", [key, job_name, review_date_gsa317])
+}
+
+warn[msg] {
+  value := input.jobs[job_name].steps[_].with[key]
+  secret_like_key(key)
+  literal_value(value)
+  msg := sprintf("Literal value for secret-like input %v in job '%v' (use ${{secrets.*}}; warn until review %v)", [key, job_name, review_date_gsa317])
+}
+
+step_builds_docker(step) {
+  regex.match(`(?i)\bdocker\s+(build|push)\b`, step.run)
+}
+
+step_builds_docker(step) {
+  startswith(step.uses, "docker/build-push-action")
+}
+
+trivy_step(step) {
+  startswith(step.uses, "aquasecurity/trivy-action")
+}
+
+trivy_fails_on_findings(step) {
+  sprintf("%v", [step.with["exit-code"]]) == "1"
+}
+
+trivy_after_build(job, t) {
+  some b
+  step_builds_docker(job.steps[b])
+  b < t
+}
+
+# Warn: a Trivy scan that cannot fail the job, or runs before the image exists.
+warn[msg] {
+  job := input.jobs[job_name]
+  job_builds_docker(job)
+  some t
+  trivy_step(job.steps[t])
+  not trivy_fails_on_findings(job.steps[t])
+  msg := sprintf("Job '%v' runs Trivy without exit-code '1', so findings cannot fail it (warn until review %v)", [job_name, review_date_gsa317])
+}
+
+warn[msg] {
+  job := input.jobs[job_name]
+  job_builds_docker(job)
+  some t
+  trivy_step(job.steps[t])
+  not trivy_after_build(job, t)
+  msg := sprintf("Job '%v' runs Trivy before any image build step (warn until review %v)", [job_name, review_date_gsa317])
+}

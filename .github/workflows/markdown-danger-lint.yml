@@ -22,38 +22,56 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Detect modified Markdown files
-        id: files
-        shell: bash
-        run: |
-          set -euo pipefail
-          base_sha="${{ github.event.pull_request.base.sha }}"
-          git diff --name-only "$base_sha"...HEAD -- '*.md' > changed_md.txt || true
-          echo "Changed MD files:"; cat changed_md.txt || true
-          count=$(wc -l < changed_md.txt 2>/dev/null || echo "0")
-          echo "count=$count" >> "$GITHUB_OUTPUT"
-
       - name: Fail on dangerous --force --all pattern
-        if: steps.files.outputs.count != '0'
         shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          fail=0
-          # Use numeric comparison and quoted variables
-          count=$(wc -l < changed_md.txt 2>/dev/null || echo 0)
-          if [ "$count" -gt 0 ]; then
+          # List changed Markdown files. A failed diff (shallow history) is retried
+          # once after fetching the base commit; if it still fails the lint warns
+          # instead of passing silently (github-security-auditor#318).
+          list_changed_markdown() {
+            local out="$1"
+            if git diff --name-only "${BASE_SHA}...HEAD" -- '*.md' > "$out" 2>/dev/null; then
+              return 0
+            fi
+            git fetch --no-tags --quiet origin "${BASE_SHA}" 2>/dev/null || true
+            if git diff --name-only "${BASE_SHA}" HEAD -- '*.md' > "$out" 2>/dev/null; then
+              return 0
+            fi
+            : > "$out"
+            echo "::warning title=Markdown danger lint incomplete::Could not diff against ${BASE_SHA}; changed Markdown files were not scanned."
+            return 0
+          }
+          # A line is suppressed only when the warning word precedes the command.
+          # A warning word that only follows the command is reported as a warning
+          # (not a failure) so existing agent PRs are not stopped; a line without
+          # any warning word fails as before (github-security-auditor#318).
+          DANGER='git[[:space:]]+push.*(--all.*--force|--force.*--all|--all.*-f\b|-f\b.*--all)'
+          CAUTION='never|do not|nepoužívej|nepouzivej|nepoužij'
+          scan_markdown() {
+            local list="$1" f hit text fail=0
             while IFS= read -r f; do
               [ -z "$f" ] && continue
-              # Quote variable to prevent command injection
-              # Detect multiple dangerous patterns including short flags (-f)
-              if grep -nEi 'git\s+push.*(--all.*--force|--force.*--all|--all.*-f\b|-f\b.*--all)' "$f" | \
-                 grep -viE 'never|do not|nepoužívej|nepouzivej|nepoužij'; then
-                echo "❌ Dangerous pattern found in $f (git push with --force + --all). Use branch-only force push and include warnings."
-                fail=1
-              fi
-            done < changed_md.txt
-          fi
-          if [ "$fail" -ne 0 ]; then
+              [ -f "$f" ] || continue
+              while IFS= read -r hit; do
+                text="${hit#*:}"
+                if grep -qiE "(${CAUTION}).*git[[:space:]]+push" <<< "$text"; then
+                  continue
+                elif grep -qiE "${CAUTION}" <<< "$text"; then
+                  echo "::warning file=${f},line=${hit%%:*}::git push --force --all with the warning only after the command; put the warning first."
+                else
+                  echo "Dangerous pattern in ${f}:${hit%%:*} (git push with --force + --all)."
+                  fail=1
+                fi
+              done < <(grep -nEi -- "${DANGER}" "$f" || true)
+            done < "$list"
+            return "$fail"
+          }
+          list_changed_markdown changed_md.txt
+          echo "Changed MD files:"; cat changed_md.txt
+          if ! scan_markdown changed_md.txt; then
             echo "::error title=Unsafe git command detected::Found 'git push --force --all' in changed Markdown files."
             exit 1
           fi

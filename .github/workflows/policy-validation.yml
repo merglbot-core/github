@@ -28,6 +28,20 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The verdict uses the policy from the PR base, so a PR cannot weaken the
+      # policy it is judged by (github-security-auditor#225). The check stays
+      # non-required; the PR's own policy is evaluated for information only.
+      - name: Checkout base policy
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base-policy
+          sparse-checkout: .github/policies
+          persist-credentials: false
       
       - name: Install Conftest
         run: |
@@ -38,10 +52,19 @@ jobs:
           sudo mv conftest /usr/local/bin/
           conftest --version
       
+      - name: Verify policy unit tests
+        run: conftest verify --policy .github/policies --no-color
+
       - name: Validate all workflows
         id: validate
         run: |
           set -euo pipefail
+          
+          POLICY_DIR=.github/policies
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] && [ -d base-policy/.github/policies ]; then
+            POLICY_DIR=base-policy/.github/policies
+            echo "Verdict policy: PR base commit"
+          fi
           
           echo "🔍 Validating workflows against policies..."
           echo ""
@@ -56,7 +79,7 @@ jobs:
             echo "Checking: $workflow"
             
             if conftest test "$workflow" \
-              --policy .github/policies \
+              --policy "$POLICY_DIR" \
               --output table \
               --no-color 2>&1 | tee /tmp/conftest-output.txt; then
               echo "  ✅ PASS"
@@ -97,6 +120,18 @@ jobs:
           - Container scanning (Trivy)
           
           EOF
+          
+          # Information only: the PR's own policy, when it differs from the base.
+          if [ "$POLICY_DIR" != ".github/policies" ] && ! diff -rq "$POLICY_DIR" .github/policies > /dev/null; then
+            echo "### PR policy (information only, not the verdict)" >> "$GITHUB_STEP_SUMMARY"
+            for workflow in .github/workflows/*.yml .github/workflows/*.yaml; do
+              [ -f "$workflow" ] || continue
+              if ! conftest test "$workflow" --policy .github/policies --output table --no-color > /tmp/conftest-pr.txt 2>&1 \
+                 || grep -q "WARN" /tmp/conftest-pr.txt; then
+                { echo "- $workflow"; echo '```'; cat /tmp/conftest-pr.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+              fi
+            done
+          fi
           
           if [ $FAILED -gt 0 ]; then
             echo "❌ Policy validation failed for $FAILED workflow(s)"
