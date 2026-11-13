@@ -20,6 +20,7 @@ const TEST_MARKERS = ["/test/", "/tests/", "/__tests__/", ".test.", ".spec."];
 const SSOT_SYNC_RE = /MERGLBOT_DOCS_SYNC:\s*merglbot-public\/docs#(\d+)/;
 const WAIVER_LABEL = "docs-impact: none";
 const WAIVER_REASON_RE = /DOCS_IMPACT_NONE_REASON:\s*(\S.*)/;
+const DIFF_MAX_BUFFER = 64 * 1024 * 1024; // 64 MiB of NUL-separated changed paths
 
 function loadSnapshot() {
   // Bundled snapshot of merglbot-public/docs ssot-map.yaml (synced by workflow).
@@ -45,8 +46,16 @@ function changedFiles(event) {
   const head = event.pull_request?.head?.sha;
   if (!base || !head) return null;
   const tryDiff = () => {
-    const out = execFileSync("git", ["diff", "--name-only", `${base}...HEAD`], { encoding: "utf8" });
-    return out.split("\n").map((l) => l.trim()).filter(Boolean);
+    // -z: NUL-separated, verbatim paths. Without it git C-quotes non-ASCII / tab / quote /
+    // backslash names under core.quotePath ("src/\303\251.ts"), which then miss the
+    // prefix and extension checks in classify(). Paths are never trimmed: whitespace is
+    // part of a filename. A large maxBuffer keeps a huge diff from throwing (which would
+    // otherwise fall through to the fail-open `unknown` state).
+    const out = execFileSync("git", ["diff", "--name-only", "-z", `${base}...HEAD`], {
+      encoding: "utf8",
+      maxBuffer: DIFF_MAX_BUFFER,
+    });
+    return out.split("\0").filter((l) => l !== "");
   };
   try {
     return tryDiff(); // base already present (full clone / local)
