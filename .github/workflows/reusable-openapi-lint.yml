@@ -193,24 +193,29 @@ jobs:
 
       - name: Check spec file exists
         id: check_spec
+        # Inputs reach the shell as inert data (github-security-auditor#313).
+        env:
+          SPEC_PATH: ${{ inputs.spec_path }}
         run: |
-          if [[ -f "${{ inputs.spec_path }}" ]]; then
+          if [[ -f "$SPEC_PATH" ]]; then
             echo "exists=true" >> $GITHUB_OUTPUT
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "⚠️ OpenAPI spec not found at: ${{ inputs.spec_path }}" >> $GITHUB_STEP_SUMMARY
+            echo "⚠️ OpenAPI spec not found at: ${SPEC_PATH}" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Run Spectral Lint
         id: spectral
         if: steps.check_spec.outputs.exists == 'true'
+        env:
+          SPEC_PATH: ${{ inputs.spec_path }}
         run: |
           echo "## OpenAPI Lint Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Run spectral and capture output
           set +e
-          OUTPUT=$(spectral lint "${{ inputs.spec_path }}" \
+          OUTPUT=$(spectral lint "$SPEC_PATH" \
             --ruleset .spectral-merglbot.yml \
             --format stylish 2>&1)
           EXIT_CODE=$?
@@ -251,6 +256,8 @@ jobs:
 
       - name: Validate JSON Schema
         if: steps.check_spec.outputs.exists == 'true'
+        env:
+          SPEC_PATH: ${{ inputs.spec_path }}
         run: |
           # Install ajv for JSON Schema validation
           npm install -g ajv-cli@5.0.0
@@ -259,7 +266,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Basic YAML syntax check
-          if python3 -c "import yaml; yaml.safe_load(open('${{ inputs.spec_path }}'))"; then
+          if python3 -c "import os, yaml; yaml.safe_load(open(os.environ['SPEC_PATH']))"; then
             echo "✅ Valid YAML syntax" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ Invalid YAML syntax" >> $GITHUB_STEP_SUMMARY
@@ -268,6 +275,9 @@ jobs:
 
       - name: Check for breaking changes
         if: steps.check_spec.outputs.exists == 'true' && github.event_name == 'pull_request'
+        env:
+          SPEC_PATH: ${{ inputs.spec_path }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           # Install oasdiff for breaking change detection
           npm install -g oasdiff@1.5.0 || true
@@ -277,12 +287,12 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           
           # Get base branch spec
-          git fetch origin ${{ github.base_ref }} --depth=1 || true
+          git fetch origin "$BASE_REF" --depth=1 || true
           
-          if git show origin/${{ github.base_ref }}:${{ inputs.spec_path }} > base-spec.yml 2>/dev/null; then
+          if git show "origin/${BASE_REF}:${SPEC_PATH}" > base-spec.yml 2>/dev/null; then
             # Compare specs
             if command -v oasdiff &> /dev/null; then
-              BREAKING=$(oasdiff breaking base-spec.yml ${{ inputs.spec_path }} 2>&1 || echo "")
+              BREAKING=$(oasdiff breaking base-spec.yml "$SPEC_PATH" 2>&1 || echo "")
               
               if [[ -n "$BREAKING" ]]; then
                 echo "⚠️ **Potential breaking changes detected:**" >> $GITHUB_STEP_SUMMARY

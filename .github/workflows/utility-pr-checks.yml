@@ -107,7 +107,7 @@ jobs:
           github-token: ${{ github.token }}
           script: |
             const branch = process.env.PR_BRANCH || '';
-            const allowedPrefixes = '${{ inputs.allowed-branch-prefixes }}'.split(',');
+            const allowedPrefixes = (process.env.ALLOWED_PREFIXES || '').split(',');
             
             const isValid = allowedPrefixes.some(prefix => branch.startsWith(prefix.trim()));
             
@@ -121,6 +121,8 @@ jobs:
             }
         env:
           PR_BRANCH: ${{ steps.pr-data.outputs.branch }}
+          # Caller input reaches the script as inert data (github-security-auditor#313).
+          ALLOWED_PREFIXES: ${{ inputs.allowed-branch-prefixes }}
       
       - name: Check PR size
         if: inputs.max-pr-size > 0

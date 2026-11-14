@@ -141,6 +141,7 @@ class CompleteDeployStepTests(unittest.TestCase):
                    'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1',
                    'GITHUB_ENV': str(root / 'env'), 'GITHUB_OUTPUT': str(root / 'output'),
                    'GITHUB_STEP_SUMMARY': str(root / 'summary'),
+                   'ENV_VARS_INPUT': 'NODE_ENV=production',
                    'SECRETS_INPUT': 'FAKE_SECRET=projects/123/secrets/fixture:1' if cross_project else ''}
             result = subprocess.run([BASH, '-c', script], env=env, capture_output=True, text=True, timeout=15)
             calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]

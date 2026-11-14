@@ -57,9 +57,12 @@ jobs:
       - name: Validate config path
         id: config
         shell: bash
+        # Inputs reach the shell as inert data (github-security-auditor#313).
+        env:
+          INPUT_CONFIG_PATH: ${{ inputs.config-path }}
         run: |
           set -euo pipefail
-          config_path="${{ inputs.config-path }}"
+          config_path="${INPUT_CONFIG_PATH}"
           if [ -z "$config_path" ]; then
             echo "path=" >> "$GITHUB_OUTPUT"
             exit 0
@@ -115,18 +118,22 @@ jobs:
       
       - name: Run Gitleaks
         id: scan
+        # Inputs reach the shell as inert data (github-security-auditor#313).
+        env:
+          CONFIG_PATH: ${{ steps.config.outputs.path }}
+          FAIL_ON_DETECTION: ${{ inputs.fail-on-detection }}
         run: |
           set -euo pipefail
-          config_arg=""
-          if [ -n "${{ steps.config.outputs.path }}" ]; then
-            config_arg="--config=${{ steps.config.outputs.path }}"
+          config_args=()
+          if [ -n "${CONFIG_PATH}" ]; then
+            config_args=("--config=${CONFIG_PATH}")
           fi
           
           # Run gitleaks and generate SARIF report
-          if [ "${{ inputs.fail-on-detection }}" = "true" ]; then
-            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --redact --no-git
+          if [ "${FAIL_ON_DETECTION}" = "true" ]; then
+            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif ${config_args[@]+"${config_args[@]}"} --redact --no-git
           else
-            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif $config_arg --redact --no-git || true
+            gitleaks detect --source=. --report-path=gitleaks-report.sarif --report-format=sarif ${config_args[@]+"${config_args[@]}"} --redact --no-git || true
           fi
 
       - name: Summarize findings (redacted)
