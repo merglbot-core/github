@@ -574,9 +574,15 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    # Writes only the step summary; no token scopes needed (github-security-auditor#313).
+    permissions: {}
     
     steps:
       - name: Generate Summary
+        # Inputs reach the shell as inert data (github-security-auditor#313).
+        env:
+          INPUT_REGISTRY: ${{ inputs.registry }}
+          INPUT_IMAGE_NAME: ${{ inputs.image_name }}
         run: |
           echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -587,8 +593,8 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Image Details" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Registry:** \`${{ inputs.registry }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image:** \`${{ inputs.image_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry:** \`${INPUT_REGISTRY}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** \`${INPUT_IMAGE_NAME}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Tag:** \`${{ needs.build.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Digest:** \`${{ needs.build.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Scan Passed:** \`${{ needs.build.outputs.scan_passed }}\`" >> $GITHUB_STEP_SUMMARY

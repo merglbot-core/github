@@ -25,10 +25,10 @@ on:
         type: boolean
         default: false
 
+# Least privilege: no job authenticates to a cloud provider, and only the two
+# jobs that file issues get issues: write (github-security-auditor#316).
 permissions:
   contents: read
-  id-token: write  # Required for OIDC/WIF authentication
-  issues: write    # Required for creating tracking issues
   
 concurrency:
   group: security-audit-${{ github.ref }}
@@ -126,6 +126,9 @@ jobs:
     needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -181,7 +184,8 @@ jobs:
           retention-days: 90  # Keep for one quarter
           
       - name: Create secret rotation tasks
-        if: steps.gitleaks.outputs.secrets_found == 'true' && inputs.create_issues != false
+        # Scheduled runs have no inputs, so they always file findings (github-security-auditor#315).
+        if: steps.gitleaks.outputs.secrets_found == 'true' && (github.event_name == 'schedule' || inputs.create_issues)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -376,6 +380,9 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -403,7 +410,8 @@ jobs:
           
 # Removed "Send notifications" step due to missing script.
       - name: Create tracking issue
-        if: inputs.create_issues != false
+        # Scheduled runs have no inputs, so they always file the report (github-security-auditor#315).
+        if: github.event_name == 'schedule' || inputs.create_issues
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

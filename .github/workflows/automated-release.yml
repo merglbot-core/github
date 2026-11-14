@@ -87,10 +87,14 @@ jobs:
       
       - name: Determine version
         id: version
+        # The manual version reaches the shell as inert data and every resolved
+        # version is validated before later steps reuse it (github-security-auditor#223).
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -eo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            VERSION="${{ inputs.version }}"
+          if [ -n "${INPUT_VERSION}" ]; then
+            VERSION="${INPUT_VERSION}"
           else
             # jq is already available in GitHub Actions Ubuntu runners
             # Parse semantic-release output more robustly with JSON output when available
@@ -117,12 +121,24 @@ jobs:
               exit 0
             fi
           fi
+          # SemVer 2.0.0, the same grammar as scripts/release/determine-version.mjs,
+          # matched against the whole string: a multi-line value cannot pass and
+          # inject a second GITHUB_OUTPUT line (github-security-auditor#223).
+          NUM='(0|[1-9][0-9]*)'
+          PRE='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+          SEMVER="^${NUM}\.${NUM}\.${NUM}(-${PRE}(\.${PRE})*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$"
+          if ! [[ "$VERSION" =~ $SEMVER ]]; then
+            echo "::error::Invalid release version. Expected SemVer 2.0.0 (X.Y.Z with optional -prerelease and +build)"
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
       
       - name: Generate changelog
         id: changelog
         if: steps.version.outputs.skip != 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -eo pipefail
           # Generate changelog for the version
@@ -135,7 +151,7 @@ jobs:
           else
             RANGE="${PREV_TAG}..HEAD"
             COMMITS=$(git log "$RANGE" --pretty=format:"* %s (%h)" --no-merges)
-            COMPARE_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...v${{ steps.version.outputs.version }}"
+            COMPARE_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...v${RELEASE_VERSION}"
           fi
 
           COMMIT_COUNT=$(git rev-list "$RANGE" --count)
@@ -143,7 +159,7 @@ jobs:
           FILES_CHANGED=$(git diff "$RANGE" --stat | tail -1)
           
           cat > CHANGELOG_TEMP.md << EOF
-          # Release v${{ steps.version.outputs.version }}
+          # Release v${RELEASE_VERSION}
           
           ## 🚀 What's Changed
           EOF
@@ -171,9 +187,11 @@ jobs:
       - name: Create Git tag
         id: tag
         if: steps.version.outputs.skip != 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -eo pipefail
-          VERSION="v${{ steps.version.outputs.version }}"
+          VERSION="v${RELEASE_VERSION}"
           
           # Check if tag already exists (idempotent)
           if git tag -l "$VERSION" | grep -q "$VERSION"; then
@@ -193,9 +211,10 @@ jobs:
         if: steps.version.outputs.skip != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -eo pipefail
-          VERSION="v${{ steps.version.outputs.version }}"
+          VERSION="v${RELEASE_VERSION}"
           RELEASE_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${VERSION}"
           
           # Check if release already exists (idempotent)
@@ -248,6 +267,8 @@ jobs:
       
       - name: Update GITHUB_STEP_SUMMARY
         if: always()
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -eo pipefail
           RELEASE_OUTCOME="${{ steps.release_state.outputs.release_outcome }}"
@@ -259,11 +280,11 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           elif [ "$RELEASE_OUTCOME" = "release_already_exists" ]; then
             {
-              echo "### ℹ️ Release v${{ steps.version.outputs.version }} Already Exists"
+              echo "### ℹ️ Release v${RELEASE_VERSION} Already Exists"
               echo "This run was an idempotent no-op: the tag and GitHub release were already present."
             } >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "### 🎉 Release v${{ steps.version.outputs.version }} Created" >> "$GITHUB_STEP_SUMMARY"
+            echo "### 🎉 Release v${RELEASE_VERSION} Created" >> "$GITHUB_STEP_SUMMARY"
           fi
 
           if [ "$RELEASE_OUTCOME" != "release_skipped_no_version" ]; then
