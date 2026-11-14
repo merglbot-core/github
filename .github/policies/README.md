@@ -23,6 +23,26 @@ This directory contains OPA (Open Policy Agent) policies for validating GitHub A
 4. **Pull Request Target Guards**: `pull_request_target` must have `if:` conditions
    - Prevents code injection from untrusted forks
 
+### Warn-mode rules (review by 2026-12-15)
+
+Added for github-security-auditor#317 as warnings, not denials. The owner
+decision of 13 Nov 2026 accepted warn mode with a review date; promotion to
+`deny` is a separate reviewed change. They are registered in
+`MERGLBOT_CAPABILITY_SWITCHES.md`.
+
+- Reusable workflow calls (`jobs.<id>.uses`) must be SHA-pinned unless local (`./`).
+- Literal secret-like values in workflow `env`, job `env` and step `with`.
+- A Trivy action step must run after the image build and use `exit-code: '1'`.
+
+Unit tests live in `workflows_test.rego` (`conftest verify --policy .github/policies`).
+
+### Verdict policy
+
+On pull requests, Policy Validation judges the workflows with the policy from
+the PR **base** commit, so a PR cannot weaken the policy that judges it
+(github-security-auditor#225). The PR's own policy is evaluated for
+information only and appears in the step summary when it differs.
+
 ### Compliance Policies (SOC2)
 
 1. **Production Approvals**: Production deploys should target protected environments with required reviewers
