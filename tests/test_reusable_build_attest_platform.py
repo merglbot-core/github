@@ -215,7 +215,9 @@ class PlatformProvenanceTests(unittest.TestCase):
         block = source.split('      - name: Set up Python for provenance\n', 1)[1].split('\n  attest:\n', 1)[0]
         self.assertEqual(block.count("if: inputs.push || steps.build.outputs.digest != ''"), 3)
         self.assertIn("python-version: '3.11'", block)
-        self.assertIn('actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97', block)
+        # Bind the full-SHA pin invariant, not one release: Dependabot bumps the
+        # SHA (github#1080), and a literal digest here turned every bump red.
+        self.assertRegex(block, r'uses: actions/setup-python@[0-9a-f]{40}(?:\s|$)')
         upload = block.split('      - name: Upload SLSA Provenance\n', 1)[1]
         self.assertIn('${{ steps.provenance.outputs.provenance_path }}', upload)
         self.assertIn('${{ steps.provenance.outputs.platform_provenance_path }}', upload)
