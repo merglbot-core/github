@@ -159,7 +159,8 @@ class InstallAdapterTests(unittest.TestCase):
         source = Path(__file__).parent
         manifest = json.loads((source / 'integration/manifest.json').read_text())
         for key, contract in manifest['sources'].items():
-            baseline = Path(contract['baseline_path'])
+            archive = os.environ.get('COST_BUDGET_TEST_BASELINES')
+            baseline = Path(archive) / key if archive else Path(contract['baseline_path'])
             if not baseline.is_file():
                 self.skipTest('external historical baseline unavailable in isolated CI')
             candidate = adapter.patch_exact(baseline.read_bytes(), (source / f'integration/{key}.patch').read_bytes(), contract)
