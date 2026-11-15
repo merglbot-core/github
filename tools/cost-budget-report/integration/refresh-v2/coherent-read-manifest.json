@@ -1,0 +1,17 @@
+{
+  "scope": "source-only D8988; read side only; no activation or refresh wiring yet",
+  "sources": {
+    "digest": {
+      "source_path": "/Users/milanmerglevsky/.merglbot/gh-cost-wave3/evidence/adopt1722-20261020/autonomy-digest.snapshot-20261115T1844.sh",
+      "baseline_sha256": "9e996a292e0661b6a8f5a3b12d96b94e8ef186f74d8e325e3f7f4ada0a434cb0",
+      "candidate_sha256": "9620012f37078afe7ea25274d0a2e3e314c8049350fa36c58e504e7c3d573933",
+      "patch_sha256": "e10ff91f1dc06fd25784778e760a306bc0fc5351512f660532f3e627bffeb55e"
+    },
+    "monthly": {
+      "source_path": "/Users/milanmerglevsky/.merglbot/gh-cost-wave3/evidence/financial-closed-month-20261102/render_report.py",
+      "baseline_sha256": "5be8ff3abe429b0046d4a357228a9a06d99d8026a76f1c34d92d9dc1d80b4697",
+      "candidate_sha256": "ba0e34b4247ddf9448b289d36344871b028e2f697afee052f45a710a883dd197",
+      "patch_sha256": "a0f4b3d796f6ff1c5f912e79a6b71c463c971b83d2964e94c0ddc67c38a56a32"
+    }
+  }
+}

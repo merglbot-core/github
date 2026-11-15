@@ -1,0 +1,12 @@
+--- monthly.before
++++ monthly.after
+@@ -63,7 +63,8 @@
+ try:
+  budget_spec=importlib.util.spec_from_file_location('cost_budget_report',budget_renderer)
+  budget_module=importlib.util.module_from_spec(budget_spec);budget_spec.loader.exec_module(budget_module)
+- budget_paragraphs=budget_module.render_paragraphs((budget_root/'latest.json').read_bytes(),json.loads((budget_root/'latest.provenance.json').read_bytes()),now=dt.datetime.now(dt.timezone.utc),max_age=dt.timedelta(hours=24))
++ budget_raw,budget_provenance=budget_module.read_current(budget_root)
++ budget_paragraphs=budget_module.render_paragraphs(budget_raw,budget_provenance,now=dt.datetime.now(dt.timezone.utc),max_age=dt.timedelta(hours=24))
+ except (OSError,ValueError,ImportError,AttributeError,TypeError,RecursionError):
+  budget_paragraphs=['DATA_GAP — rozpočtový snapshot nebo renderer není dostupný.']
+ head('Rozpočtové pozorování GitHub API')

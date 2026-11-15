@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation
 import hashlib
 import html
 import json
+import importlib.util
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit
@@ -131,15 +132,33 @@ def render_paragraphs(raw, provenance, *, now, max_age=timedelta(hours=24)):
     return result
 
 
+def read_current(root):
+    """Read both files through one pinned directory; no network or writes."""
+    helper = Path(__file__).with_name('pair_io.py')
+    spec = importlib.util.spec_from_file_location('_cost_budget_pair_io', helper)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    raw, provenance = module.read_pair(root)
+    return raw, json.loads(provenance)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--snapshot", required=True)
-    parser.add_argument("--provenance", required=True)
+    parser.add_argument("--root")
+    parser.add_argument("--snapshot")
+    parser.add_argument("--provenance")
     parser.add_argument("--max-age-hours", required=True, type=float)
     args = parser.parse_args()
+    if bool(args.root) == bool(args.snapshot or args.provenance):
+        parser.error('choose --root or both --snapshot and --provenance')
+    if not args.root and not (args.snapshot and args.provenance):
+        parser.error('both snapshot and provenance are required')
     try:
-        raw = Path(args.snapshot).read_bytes()
-        provenance = json.loads(Path(args.provenance).read_bytes())
+        if args.root:
+            raw, provenance = read_current(args.root)
+        else:
+            raw = Path(args.snapshot).read_bytes()
+            provenance = json.loads(Path(args.provenance).read_bytes())
         text = render(raw, provenance, now=datetime.now(timezone.utc),
                       max_age=timedelta(hours=args.max_age_hours))
     except (OSError, ValueError, OverflowError):

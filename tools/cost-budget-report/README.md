@@ -104,3 +104,54 @@ For historical install-patch tests after host installation, set
 `COST_BUDGET_TEST_BASELINES` to a directory containing `digest` and `monthly`
 archived preimages. The original baseline, patch and candidate SHA checks remain
 mandatory; installed targets and archived backups must not be rewritten for tests.
+
+## Recurring refresh candidate (D-P-8988, source only)
+
+`refresh_cli.py` is disabled unless explicitly enabled by a separately admitted
+caller. It does not create a timer or service. The existing digest is the proposed
+caller; `integration/refresh-v2/` contains exact hash-bound deltas from installed
+consumer source snapshots. Historical installation manifests are unchanged.
+The financial acceptance observer's finite stages and consumed attempts are not
+repurposed for recurring collection.
+
+The candidate uses the existing bounded `budget_reader.capture` and normalizer.
+It reserves a durable attempt before its first GET, counts quota plus budget GETs
+inside a 100-request ceiling, and retains the shared reserve of 2000. Transport
+bounds each response to 1 MiB and each child to at most 30 seconds; the transaction
+also enforces a total response bound and a 120-second soft deadline. The proposed
+caller wraps the entire invocation in existing capped-run at 2 GiB / 150 seconds
+with orphan cleanup. No claim of physical-memory containment is made for an
+unwrapped direct Python call.
+
+`pair_io` reads both files through one open directory descriptor. `pair_stage`
+creates a private fsynced immutable generation. `pair_exchange` uses native Darwin
+RENAME_SWAP with no sequential fallback. The displaced generation is retained
+unchanged under `.budget-generation-<attempt>` for readers and recovery. The
+append-only locked journal binds prior/new byte hashes and private capture evidence.
+Any unresolved attempt, partial journal, drift or ambiguous exchange stays held;
+there is no automatic retry, rollback, cleanup or attempt reset. Only verified
+publication permits a subsequent attempt. Private captures contain source values
+and remain mode 0600; the consumers receive only the normalized pair.
+
+Existing valid inputs are reused without GET. The refresh threshold is explicit
+and has no activation default. Runtime approval must choose a threshold that keeps
+the 24-hour consumer freshness contract valid between daily and monthly reads;
+source tests use synthetic thresholds, not a new production cadence. The patch is
+OFF unless MERGLBOT_BUDGET_REFRESH_ENABLED=1 and an explicit threshold is configured.
+Unknown periods, old observation timestamps and incomplete financial acceptance
+are never rewritten as current or successful.
+
+Before runtime delivery: verify all source/admission pins, current consumer
+preimages, helper installation layout, the separate journal directory and exclusion
+namespace, explicit threshold, capped-run version and exact caller command.
+Prepare an owner installation manifest with backup and conditional rollback;
+never execute a consumed install attempt. Native metadata/ACL admission and source
+review remain installer responsibilities, not substitutes provided by this module.
+A data recovery decision must inspect both retained generations and journal state
+before any archive or rollback; no blanket replay permission is implied.
+
+Validation covers fake GETs, no-GET reuse/disabled mode, quota refusal, timeout,
+output exhaustion, invalid state transitions, drift, partial journal, interrupted
+post-exchange execution, native exchange of temporary directories, retained-reader
+behavior, and both renderer forms. Tests never execute the original digest cleanup
+or notification, the live monthly report, or the real GET transport.
