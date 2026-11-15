@@ -31,9 +31,16 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.11"
+
+      # Several workflow-contract tests (test_wif_staged_rollout, test_staged_rollout_*,
+      # test_required_check_publishers, ...) parse real workflow YAML. Without PyYAML the
+      # JSON stand-in from test_gh_cost_adoption_helpers leaks into them and 53 tests error
+      # with JSONDecodeError (red since 1 Nov 2026 on every PR touching these paths).
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check --no-input 'PyYAML==6.0.3'
 
       - name: Run tests
         run: python -m unittest discover -s tests -p 'test_*.py'
