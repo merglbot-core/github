@@ -8,6 +8,21 @@ from urllib.parse import urlsplit, parse_qs, quote
 from budget_report import amount, timestamp
 
 
+def products(value):
+    """Accept documented list/detail product shapes without splitting budget totals."""
+    singular = value.get('budget_product_sku')
+    plural = value.get('budget_product_skus')
+    if plural is not None:
+        if not isinstance(plural, list) or not plural or any(not isinstance(x, str) or not x for x in plural):
+            raise ValueError('invalid budget products')
+        if len(set(plural)) != len(plural) or (singular is not None and plural != [singular]):
+            raise ValueError('ambiguous budget products')
+        return tuple(sorted(plural))
+    if not isinstance(singular, str) or not singular:
+        raise ValueError('missing budget product')
+    return (singular,)
+
+
 def normalize(listing_reads, detail_reads, *, source_endpoint, max_spread=timedelta(minutes=5)):
     try:
         return _normalize(listing_reads, detail_reads, source_endpoint=source_endpoint, max_spread=max_spread)
@@ -74,14 +89,16 @@ def _normalize(listing_reads, detail_reads, *, source_endpoint, max_spread):
             raise ValueError("foreign or repeated detail")
         seen.add(identity)
         listed = budgets[identity]
-        for field in ("budget_type", "budget_product_sku", "budget_scope", "budget_entity_name",
+        if products(detail) != products(listed):
+            raise ValueError("budget product changed during observation")
+        for field in ("budget_type", "budget_scope", "budget_entity_name",
                       "budget_amount", "prevent_further_usage", "exclude_cost_center_usage", "budget_alerting"):
-            if detail.get(field) != listed.get(field):
+            if field in listed and detail.get(field) != listed[field]:
                 raise ValueError("budget changed during observation")
         if type(detail["prevent_further_usage"]) is not bool:
             raise ValueError("unknown stop state")
         alert = detail.get("budget_alerting", {}).get("will_alert")
-        rows.append({"id": identity, "product": detail["budget_product_sku"],
+        rows.append({"id": identity, "product": ", ".join(products(detail)),
                      "budget_scope": detail["budget_scope"],
                      "budget_amount": amount(detail["budget_amount"]),
                      "consumed_amount": amount(detail["consumed_amount"]),

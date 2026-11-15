@@ -80,3 +80,27 @@ unreadable native ACLs. Native ACL absence is checked on the open file descripto
 before and after reading. Non-macOS test snapshots are explicitly marked as such
 and cannot substitute for native installation admission. Rollback of a newly
 created renderer must preserve it in an archive after verifying its postimage.
+
+## GET reader (source-only, D-P-8812)
+
+`budget_reader.capture(endpoint, get=..., remaining_requests=...)` captures bounded
+listing and detail GETs, then calls the existing normalizer. An existing authorized
+caller must provide fresh shared-quota evidence and the transport; `gh_get` uses
+the guarded `gh api --method GET` transport and existing authentication. It never
+acquires credentials, retries, writes files, starts a service or changes budgets.
+The whole observation reserves at most 100 requests and leaves 2000 requests.
+Insufficient capacity or partial/changed pagination fails before publication.
+
+Returned source captures may contain recipient identities and must stay private;
+only normalized bytes and provenance are suitable for report consumers. API
+listing product arrays and detail product strings are compared as product sets.
+Missing consumption is refused, never replaced with zero. API schema reference:
+https://docs.github.com/en/enterprise-cloud@latest/rest/billing/budgets
+
+This source does not wire a producer into a timer or publish `latest.json`.
+Runtime invocation/publication is a separately authorized delivery obligation.
+
+For historical install-patch tests after host installation, set
+`COST_BUDGET_TEST_BASELINES` to a directory containing `digest` and `monthly`
+archived preimages. The original baseline, patch and candidate SHA checks remain
+mandatory; installed targets and archived backups must not be rewritten for tests.
