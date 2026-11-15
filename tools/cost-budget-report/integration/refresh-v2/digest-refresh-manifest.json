@@ -1,0 +1,8 @@
+{
+  "scope": "source-only D8988, disabled by default, no installation",
+  "baseline_sha256": "9e996a292e0661b6a8f5a3b12d96b94e8ef186f74d8e325e3f7f4ada0a434cb0",
+  "candidate_sha256": "8a5bd9e6bac06ff26367545f038604c88b81d94af2e3ee4c4dc479b1081847ac",
+  "patch_sha256": "8f95fe1dcd40c8b2463e6cab34ba1ea2602d4250dda26c5f3a67b266ca565a25",
+  "activation_authorized": false,
+  "threshold_approved": false
+}
