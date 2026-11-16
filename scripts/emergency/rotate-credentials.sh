@@ -37,10 +37,34 @@ function resolve_gcp_project() {
     printf '%s\n' "$project"
 }
 
+# Make sure a previous version is ENABLED again and verify it by reading its state back.
+# Returns 0 when it was still ENABLED, 2 when it was re-enabled and verified, and 1 when the
+# state could not be confirmed (the outcome is printed and logged as unresolved).
+function restore_previous_version() {
+    local version="$1" secret_name="$2" project="$3" state=""
+    state=$(gcloud secrets versions describe "$version" --secret="$secret_name" \
+        --project="$project" --format="value(state)") || state=""
+    if [ "$state" = "ENABLED" ]; then
+        return 0
+    fi
+    if gcloud secrets versions enable "$version" --secret="$secret_name" \
+        --project="$project" >/dev/null; then
+        state=$(gcloud secrets versions describe "$version" --secret="$secret_name" \
+            --project="$project" --format="value(state)") || state=""
+        if [ "$state" = "ENABLED" ]; then
+            return 2
+        fi
+    fi
+    echo -e "${RED}  ❌ RECOVERY UNRESOLVED: previous version ${version##*/} state is ${state:-unknown}; re-enable it manually and verify its state${NC}" >&2
+    log_incident "ERROR: Previous version ${version##*/} of secret: $secret_name may be disabled (state ${state:-unknown}); manual recovery required"
+    return 1
+}
+
 # Rotation order (recoverable): prepare the new value, add it as a new version, verify the
 # new version is ENABLED, and only then disable the previous version. Any failure before the
-# disable leaves the previous version untouched; an interruption after the disable
-# re-enables it. The secret value is never echoed and lives only in a 0700 temp directory.
+# disable leaves the previous version untouched; an interruption or an ambiguous disable error
+# restores the previous version and verifies it. The secret value is never echoed and lives
+# only in a 0700 temp directory.
 function rotate_gcp_secret() {
     local secret_name="$1"
     echo -e "${YELLOW}Rotating GCP secret: $secret_name${NC}"
@@ -122,17 +146,29 @@ function rotate_gcp_secret() {
     fi
 
     # From here on an interruption must not leave the secret without the previous version.
-    trap 'gcloud secrets versions enable "$current_version" --secret="$secret_name" --project="$project" >/dev/null 2>&1; echo -e "${YELLOW}  ↩️  Interrupted: re-enabled previous version${NC}" >&2; exit 130' INT TERM
+    trap 'restore_rc=0; restore_previous_version "$current_version" "$secret_name" "$project" || restore_rc=$?; if [ "$restore_rc" -ne 1 ]; then echo -e "${YELLOW}  ↩️  Interrupted: previous version verified ENABLED${NC}" >&2; fi; exit 130' INT TERM
     if gcloud secrets versions disable "$current_version" --secret="$secret_name" --project="$project"; then
         trap - INT TERM
         echo -e "${GREEN}  ✅ Disabled previous version ${current_version##*/}${NC}"
         log_incident "Disabled previous version ${current_version##*/} of secret: $secret_name"
-    else
-        trap - INT TERM
-        echo -e "${RED}  ❌ Failed to disable previous version; both versions stay enabled (no outage)${NC}"
-        log_incident "ERROR: Failed to disable previous version of secret: $secret_name (both enabled)"
-        return 1
+        return 0
     fi
+    # A nonzero exit does not prove the disable was not applied (for example a transport error
+    # after the server committed it). Read the real state and restore the previous version.
+    local restore_rc=0
+    restore_previous_version "$current_version" "$secret_name" "$project" || restore_rc=$?
+    trap - INT TERM
+    case "$restore_rc" in
+        0)
+            echo -e "${RED}  ❌ Failed to disable previous version; verified it is still ENABLED, both versions stay enabled (no outage)${NC}"
+            log_incident "ERROR: Failed to disable previous version of secret: $secret_name (previous verified ENABLED, both enabled)"
+            ;;
+        2)
+            echo -e "${YELLOW}  ↩️  Disable reported an error; previous version ${current_version##*/} re-enabled and verified, both versions enabled${NC}"
+            log_incident "ERROR: Failed to disable previous version of secret: $secret_name (previous re-enabled and verified, both enabled)"
+            ;;
+    esac
+    return 1
 }
 
 function rotate_github_token() {

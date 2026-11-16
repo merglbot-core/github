@@ -21,11 +21,21 @@ GCLOUD_STUB = textwrap.dedent("""\
       "secrets versions add")
         [ -n "${STUB_FAIL_ADD:-}" ] && exit 1
         printf '%s\\n' "projects/p/secrets/s/versions/2" ;;
-      "secrets versions describe") printf '%s\\n' "${STUB_STATE:-ENABLED}" ;;
+      "secrets versions describe")
+        case "$4" in
+          */versions/1)
+            [ -n "${STUB_FAIL_DESCRIBE_OLD:-}" ] && exit 1
+            if [ -s "$STUB_OLD_STATE_FILE" ]; then cat "$STUB_OLD_STATE_FILE"; else printf 'ENABLED\\n'; fi ;;
+          *) printf '%s\\n' "${STUB_STATE:-ENABLED}" ;;
+        esac ;;
       "secrets versions disable")
+        if [ -n "${STUB_DISABLE_COMMITS_THEN_FAILS:-}" ]; then printf 'DISABLED\\n' > "$STUB_OLD_STATE_FILE"; exit 1; fi
         [ -n "${STUB_FAIL_DISABLE:-}" ] && exit 1
+        printf 'DISABLED\\n' > "$STUB_OLD_STATE_FILE"
         if [ -n "${STUB_TERM_AFTER_DISABLE:-}" ]; then kill -TERM "$PPID"; fi ;;
-      "secrets versions enable") : ;;
+      "secrets versions enable")
+        [ -n "${STUB_FAIL_ENABLE:-}" ] && exit 1
+        printf 'ENABLED\\n' > "$STUB_OLD_STATE_FILE" ;;
     esac
     exit 0
     """)
@@ -56,6 +66,7 @@ class RotationOrderTests(unittest.TestCase):
                 "HOME": tmp,
                 "TMPDIR": tmp,
                 "STUB_LOG": str(log),
+                "STUB_OLD_STATE_FILE": str(Path(tmp) / "old_state"),
                 "INCIDENT_LOG": str(Path(tmp) / "incidents.md"),
                 "GCP_PROJECT": "merglbot-test-proj",
             }
@@ -99,14 +110,45 @@ class RotationOrderTests(unittest.TestCase):
     def test_failed_disable_keeps_new_version(self):
         result, calls, _ = self.run_rotation(STUB_FAIL_DISABLE="1")
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.verbs(calls), ["list", "add", "describe", "disable"])
-        self.assertIn("both versions stay enabled", result.stdout + result.stderr)
+        self.assertEqual(self.verbs(calls), ["list", "add", "describe", "disable", "describe"])
+        self.assertIn("verified it is still ENABLED, both versions stay enabled", result.stdout + result.stderr)
+
+    def test_disable_applied_but_reported_failure_reenables_previous(self):
+        # The server commits the disable, then the CLI exits nonzero (transport error).
+        result, calls, _ = self.run_rotation(STUB_DISABLE_COMMITS_THEN_FAILS="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.verbs(calls), ["list", "add", "describe", "disable", "describe", "enable", "describe"])
+        self.assertIn("secrets versions enable projects/p/secrets/s/versions/1", calls[-2])
+        self.assertIn("re-enabled and verified", result.stdout + result.stderr)
+        self.assertNotIn("both versions stay enabled (no outage)", result.stdout + result.stderr)
+
+    def test_disable_applied_and_reenable_fails_reports_unresolved(self):
+        result, calls, _ = self.run_rotation(STUB_DISABLE_COMMITS_THEN_FAILS="1", STUB_FAIL_ENABLE="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.verbs(calls), ["list", "add", "describe", "disable", "describe", "enable"])
+        self.assertIn("RECOVERY UNRESOLVED", result.stdout + result.stderr)
+        self.assertIn("state is DISABLED", result.stdout + result.stderr)
+
+    def test_unknown_state_after_failed_disable_attempts_recovery_and_reports_unresolved(self):
+        result, calls, _ = self.run_rotation(STUB_DISABLE_COMMITS_THEN_FAILS="1", STUB_FAIL_DESCRIBE_OLD="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.verbs(calls), ["list", "add", "describe", "disable", "describe", "enable", "describe"])
+        self.assertIn("RECOVERY UNRESOLVED", result.stdout + result.stderr)
+        self.assertIn("state is unknown", result.stdout + result.stderr)
 
     def test_interrupt_after_disable_reenables_previous(self):
         result, calls, _ = self.run_rotation(STUB_TERM_AFTER_DISABLE="1")
         self.assertEqual(result.returncode, 130, result.stderr)
-        self.assertEqual(self.verbs(calls), ["list", "add", "describe", "disable", "enable"])
-        self.assertIn("secrets versions enable projects/p/secrets/s/versions/1", calls[-1])
+        self.assertEqual(self.verbs(calls), ["list", "add", "describe", "disable", "describe", "enable", "describe"])
+        self.assertIn("secrets versions enable projects/p/secrets/s/versions/1", calls[-2])
+        self.assertIn("previous version verified ENABLED", result.stderr)
+
+    def test_interrupt_with_failed_reenable_reports_unresolved(self):
+        result, calls, _ = self.run_rotation(STUB_TERM_AFTER_DISABLE="1", STUB_FAIL_ENABLE="1")
+        self.assertEqual(result.returncode, 130, result.stderr)
+        self.assertEqual(self.verbs(calls), ["list", "add", "describe", "disable", "describe", "enable"])
+        self.assertIn("RECOVERY UNRESOLVED", result.stderr)
+        self.assertNotIn("verified ENABLED", result.stderr)
 
     def test_no_enabled_version_adds_without_disable(self):
         result, calls, _ = self.run_rotation(STUB_CURRENT="")
