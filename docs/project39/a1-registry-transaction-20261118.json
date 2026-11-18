@@ -1,0 +1,37 @@
+{
+  "scope": "offline candidate, two pre-cutover metadata rows",
+  "input_proposal": "6586517ae4fa7a653dec20265e1f92b3bfa72f4d70b421d26260870f12cd5df6",
+  "registries": {
+    "adoption-matrix-20261012.json": {
+      "before": "408aa23d7c44c5e71dc7eedde6a54619ddea192c7dab50657d16f06f40702d22",
+      "after": "6f00b1a0a335678c4268b606f39700998285b7d9d4b3a8fee8a6064c8789ea67"
+    },
+    "a1-operation-adoption-crosswalk-20261012.json": {
+      "before": "b1c87682875d435988e859cb0b1b9eb3b325f61c0d41427e2d5d9c4cd6fc53fb",
+      "after": "641a91a6b9aeee046186b8b95e7999073a0d6ffa6d99efd29c089df4b72ea372"
+    },
+    "credential-retirement-candidate-20261006.json": {
+      "before": "71901f6cc5fbd2d1efb19bd7ca361463197fb78b00399615e3b5485e919836af",
+      "after": "701de23062414ee584111781f709ca5dfc172debc833cb5e13b2d7eeb47bbd36"
+    },
+    "whole-intent-resource-usage-manifest-20261012.json": {
+      "before": "f7dc12bb35a083ef21403bc53271e23604490164617e088ea9c9d5fc1d90e353",
+      "after": "5d158d2a7dc6cab6d09def22b1550de0c0fa6cf68eafde245e34e1516b5567f6"
+    },
+    "revalidation-20261015/actions-workflow-runtime-group-inventory.json": {
+      "before": "7b508393e83cbc879e73264126af9384b3a199724bc41aaac0914ebe34e21555",
+      "after": "63fe2847d1fe6dd6ead47e5898e3eb2856edecaa84e12ce61e34efbd6d19aabc"
+    },
+    "revalidation-20261015/operation-identity-permission-gap-map.json": {
+      "before": "41db01de154b3cc75e91d9f494e2eecef4f4834610b589f6a3f50d67c2ad0e79",
+      "after": "be0185bda6bf049f00efcd47dbc7af9bece1188a2b22b4dd652a6f2d61c311b5"
+    },
+    "revalidation-20261016/whole-intent-conditional-planning-forecast.json": {
+      "before": "f2c99e624ca59f068253631c916a33d2a9c5f24a68fa2f366fc9958db10de8d8",
+      "after": "e803f647c7c66a751d07e0baad2e52d3af8d3abbd6cf9d50e4750977a259d250"
+    }
+  },
+  "replay": "VERIFIED_ALL_SEVEN",
+  "second_replay": "ALREADY_AT_REVIEWED_OUTPUTS",
+  "canonical_writes": 0
+}
