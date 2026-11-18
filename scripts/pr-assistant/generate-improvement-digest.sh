@@ -82,7 +82,7 @@ COMMENT_METRICS_JSONL="${TMP_DIR}/comment-metrics.jsonl"
 touch "$REPO_METRICS_JSONL" "$COMMENT_METRICS_JSONL"
 
 extract_rule_codes_json() {
-  python3 - <<'PY'
+  python3 -c '
 import json
 import re
 import sys
@@ -90,31 +90,56 @@ import sys
 body = sys.stdin.read()
 codes = sorted(set(re.findall(r"MERGLBOT-[A-Z]+-[0-9]{3}", body)))
 print(json.dumps(codes))
-PY
+'
 }
 
 extract_verdict() {
   # Reads comment body on stdin; prints APPROVE / CHANGES_NEEDED / UNKNOWN
-  python3 - <<'PY'
+  python3 -c '
 import re
 import sys
 
 body = sys.stdin.read()
-m = re.search(r'(?im)^Verdict:\s*(.+)$', body)
+m = re.search(r"(?im)^Verdict:\s*(.+)$", body)
 if not m:
   print("UNKNOWN")
   raise SystemExit(0)
 v = m.group(1).strip()
-v = re.sub(r'_+', ' ', v)
-v = re.sub(r'[`*]+', '', v)
-v = re.sub(r'\s+', ' ', v).strip()
-if re.match(r'(?i)^changes\s+needed', v):
+v = re.sub(r"_+", " ", v)
+v = re.sub(r"[`*]+", "", v)
+v = re.sub(r"\s+", " ", v).strip()
+if re.match(r"(?i)^changes\s+needed", v):
   print("CHANGES_NEEDED")
-elif re.match(r'(?i)^approve', v):
+elif re.match(r"(?i)^approve", v):
   print("APPROVE")
 else:
   print("UNKNOWN")
-PY
+'
+}
+
+# Keep page boundaries until every response has been validated. With pipefail,
+# a later gh failure also invalidates any pages it already wrote.
+read_pages() {
+  local kind="$1" endpoint="$2"
+  shift 2
+  if ! gh api --method GET --paginate "$endpoint" "$@" </dev/null 2>/dev/null |
+    jq -ces --arg kind "$kind" '
+      def valid_row:
+        type == "object" and
+        (if $kind == "comments" then
+          (.body | type == "string") and (.id | type == "number" and . > 0 and floor == .) and
+          (if (.body | contains("Merglbot PR Assistant")) then
+            (.issue_url | type == "string" and test("/issues/[1-9][0-9]*$")) and
+            (.html_url | type == "string" and length > 0) and
+            (.created_at | type == "string" and length > 0)
+          else true end)
+        else (.content | type == "string") end);
+      if length > 0 and all(.[]; type == "array" and all(.[]; valid_row))
+      then add else error("invalid API pages") end
+    ' 2>/dev/null; then
+    echo "Incomplete $kind read for $endpoint; digest stopped." >&2
+    return 1
+  fi
 }
 
 echo "Generating digest (since: $SINCE_DATE) ..."
@@ -124,10 +149,11 @@ while IFS= read -r repo; do
   [ -z "$repo" ] && continue
 
   # Fetch issue comments since SINCE_DATE; filter only Merglbot review comments.
-  COMMENTS_JSON="$({ gh api -X GET "repos/${repo}/issues/comments" --paginate -f since="$SINCE_DATE" 2>/dev/null || echo '[]'; } | jq -s 'add // []' 2>/dev/null || echo '[]')"
-
-  MERGLBOT_COMMENTS="$(echo "$COMMENTS_JSON" | jq -c '[.[] | select(.body? | contains("Merglbot PR Assistant"))]')"
-  COUNT="$(echo "$MERGLBOT_COMMENTS" | jq 'length' 2>/dev/null || echo 0)"
+  # A concrete file makes jq/transport errors visible before entering the loop.
+  MATCHES="$TMP_DIR/review-comments.jsonl"
+  read_pages comments "repos/${repo}/issues/comments" -f since="$SINCE_DATE" |
+    jq -c '.[] | select(.body | contains("Merglbot PR Assistant"))' > "$MATCHES"
+  COUNT=$(wc -l < "$MATCHES")
 
   UP=0
   DOWN=0
@@ -153,17 +179,17 @@ while IFS= read -r repo; do
 
   # Process each comment (reactions + lightweight parsing).
   while IFS= read -r c; do
-    CID="$(echo "$c" | jq -r '.id')"
-    ISSUE_URL="$(echo "$c" | jq -r '.issue_url // empty')"
+    CID="$(printf '%s\n' "$c" | jq -r '.id')"
+    ISSUE_URL="$(printf '%s\n' "$c" | jq -r '.issue_url // empty')"
     PR_NUM="$(printf '%s' "$ISSUE_URL" | awk -F'/' '{print $NF}')"
-    HTML_URL="$(echo "$c" | jq -r '.html_url // empty')"
-    CREATED_AT="$(echo "$c" | jq -r '.created_at // empty')"
-    BODY="$(echo "$c" | jq -r '.body // ""')"
+    HTML_URL="$(printf '%s\n' "$c" | jq -r '.html_url // empty')"
+    CREATED_AT="$(printf '%s\n' "$c" | jq -r '.created_at // empty')"
+    BODY="$(printf '%s\n' "$c" | jq -r '.body // ""')"
 
     # Reactions
-    REACTIONS="$(gh api "repos/${repo}/issues/comments/${CID}/reactions" 2>/dev/null || echo '[]')"
-    PLUS_ONE="$(echo "$REACTIONS" | jq '[.[] | select(.content == "+1")] | length' 2>/dev/null || echo 0)"
-    MINUS_ONE="$(echo "$REACTIONS" | jq '[.[] | select(.content == "-1")] | length' 2>/dev/null || echo 0)"
+    REACTIONS="$(read_pages reactions "repos/${repo}/issues/comments/${CID}/reactions")"
+    PLUS_ONE="$(jq '[.[] | select(.content == "+1")] | length' <<< "$REACTIONS")"
+    MINUS_ONE="$(jq '[.[] | select(.content == "-1")] | length' <<< "$REACTIONS")"
 
     # Verdict + rules
     VERDICT="$(printf '%s' "$BODY" | extract_verdict)"
@@ -188,7 +214,7 @@ while IFS= read -r repo; do
       "CHANGES_NEEDED") CHANGES_NEEDED=$((CHANGES_NEEDED + 1)) ;;
       *) UNKNOWN=$((UNKNOWN + 1)) ;;
     esac
-  done < <(printf '%s' "$MERGLBOT_COMMENTS" | jq -c '.[]')
+  done < "$MATCHES"
 
   jq -n \
     --arg repo "$repo" \
@@ -208,12 +234,12 @@ while IFS= read -r repo; do
 done < "$TARGET_REPOS_FILE"
 
 # Aggregate across all repos
-ALL_REPOS="$(jq -s 'map(select(.repo != null))' "$REPO_METRICS_JSONL" 2>/dev/null || echo '[]')"
-ALL_COMMENTS="$(jq -s 'map(select(.repo != null))' "$COMMENT_METRICS_JSONL" 2>/dev/null || echo '[]')"
+ALL_REPOS="$(jq -s 'map(select(.repo != null))' "$REPO_METRICS_JSONL")"
+ALL_COMMENTS="$(jq -s 'map(select(.repo != null))' "$COMMENT_METRICS_JSONL")"
 
-TOTAL_REVIEWS="$(echo "$ALL_REPOS" | jq '[.[].total] | add // 0' 2>/dev/null || echo 0)"
-TOTAL_UP="$(echo "$ALL_REPOS" | jq '[.[].reactions.up] | add // 0' 2>/dev/null || echo 0)"
-TOTAL_DOWN="$(echo "$ALL_REPOS" | jq '[.[].reactions.down] | add // 0' 2>/dev/null || echo 0)"
+TOTAL_REVIEWS="$(printf '%s\n' "$ALL_REPOS" | jq '[.[].total] | add // 0')"
+TOTAL_UP="$(printf '%s\n' "$ALL_REPOS" | jq '[.[].reactions.up] | add // 0')"
+TOTAL_DOWN="$(printf '%s\n' "$ALL_REPOS" | jq '[.[].reactions.down] | add // 0')"
 TOTAL_FEEDBACK=$((TOTAL_UP + TOTAL_DOWN))
 if [ "$TOTAL_FEEDBACK" -gt 0 ]; then
   SATISFACTION="$(awk "BEGIN {printf \"%.1f\", $TOTAL_UP * 100 / $TOTAL_FEEDBACK}")"
@@ -221,7 +247,7 @@ else
   SATISFACTION="N/A"
 fi
 
-TOP_RULES="$(echo "$ALL_COMMENTS" | jq -r '
+TOP_RULES="$(printf '%s\n' "$ALL_COMMENTS" | jq -r '
   [.[].rule_codes[]?]
   | map(select(type=="string"))
   | sort
@@ -230,15 +256,17 @@ TOP_RULES="$(echo "$ALL_COMMENTS" | jq -r '
   | sort_by(-.count)
   | .[:20]
   | map("\(.count)\t\(.code)")[]
-' 2>/dev/null || true)"
+')"
 
-NEGATIVE_COMMENTS="$(echo "$ALL_COMMENTS" | jq -r '
+NEGATIVE_COMMENTS="$(printf '%s\n' "$ALL_COMMENTS" | jq -r '
   [.[] | select((.reactions.down // 0) > 0)]
   | sort_by(.created_at)
   | reverse
   | .[:25]
   | map("\(.repo)\tPR #\(.pr_number)\t\(.verdict)\t👍\(.reactions.up) 👎\(.reactions.down)\t\(.url)")[]
-' 2>/dev/null || true)"
+')"
+
+REPO_ROWS="$(printf '%s\n' "$ALL_REPOS" | jq -r '.[] | "| \(.repo) | \(.total) | \(.reactions.up) | \(.reactions.down) | \(.verdicts.approve) | \(.verdicts.changes_needed) | \(.verdicts.unknown) |"')"
 
 # Write markdown
 cat > "$OUTPUT" <<EOF
@@ -260,7 +288,7 @@ Window: last ${DAYS_BACK} day(s) (since $SINCE_DATE)
 
 | Repo | Reviews | 👍 | 👎 | Approve | Changes needed | Unknown |
 |------|---------|----|----|---------|----------------|---------|
-$(echo "$ALL_REPOS" | jq -r '.[] | "| \(.repo) | \(.total) | \(.reactions.up) | \(.reactions.down) | \(.verdicts.approve) | \(.verdicts.changes_needed) | \(.verdicts.unknown) |"')
+$REPO_ROWS
 
 ## Top MERGLBOT Rule Codes (frequency)
 
