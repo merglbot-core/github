@@ -48,7 +48,7 @@ def prepare_commit(parent, paths, date):
 def lookup(repo, branch):
     fields = "number,state,baseRefName,headRefName,headRefOid,isCrossRepository"
     raw = subprocess.check_output(["gh", "pr", "list", "--repo", repo, "--head", branch,
-                                   "--base", "main", "--state", "all", "--limit", "100", "--json", fields])
+                                   "--state", "all", "--limit", "100", "--json", fields])
     rows = json.loads(raw)
     if not isinstance(rows, list) or len(rows) >= 100:
         raise ValueError("Incomplete PR lookup")

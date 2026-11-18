@@ -21,15 +21,18 @@ args = sys.argv[1:]
 kind = args[:2]
 assert args[args.index('--repo')+1] == 'example/github'
 assert args[args.index('--head')+1] == os.environ['BRANCH']
-assert args[args.index('--base')+1] == 'main'
 state = Path(os.environ['STATE'])
 log = Path(os.environ['TRACE'])
 with log.open('a') as f: print(' '.join(kind), file=f)
 mode = os.environ['MODE']
 if kind == ['pr', 'list']:
     if mode == 'lookup_failed': sys.exit(2)
-    print(state.read_text() if state.exists() else '[]')
+    rows = json.loads(state.read_text()) if state.exists() else []
+    if '--base' in args:
+        rows = [r for r in rows if r['baseRefName'] == args[args.index('--base')+1]]
+    print(json.dumps(rows))
 elif kind == ['pr', 'create']:
+    assert args[args.index('--base')+1] == 'main'
     if mode == 'create_denied': sys.exit(1)
     assert not state.exists() or json.loads(state.read_text()) == []
     head = subprocess.check_output(['git','ls-remote','origin','refs/heads/'+os.environ['BRANCH']], text=True).split()[0]
@@ -130,3 +133,18 @@ class DigestPublication(unittest.TestCase):
         self.assertNotEqual(self.run_workflow(digest='changed').returncode, 0)
         self.assertEqual(self.git('rev-parse', BRANCH,cwd=self.origin), head)
         self.assertNotIn('pr create', self.trace.read_text())
+
+
+    def test_retargeted_pr_stops_before_push_or_create(self):
+        self.assertEqual(self.run_workflow().returncode, 0)
+        head = self.git('rev-parse', BRANCH, cwd=self.origin)
+        rows = json.loads(self.state.read_text())
+        for state in ('OPEN', 'CLOSED', 'MERGED'):
+            with self.subTest(state=state):
+                rows[0].update(state=state, baseRefName='release')
+                self.state.write_text(json.dumps(rows))
+                result = self.run_workflow(digest='changed')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Invalid digest PR metadata', result.stderr)
+                self.assertEqual(self.git('rev-parse', BRANCH, cwd=self.origin), head)
+                self.assertNotIn('pr create', self.trace.read_text())
