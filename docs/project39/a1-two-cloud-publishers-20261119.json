@@ -1,0 +1,54 @@
+{
+  "scope": "Two existing specialized App publishers, pre-cutover activity only; conditional on reviewed #1095 registry postimages.",
+  "predecessor": {
+    "repo": "merglbot-core/github",
+    "pr": 1095,
+    "head": "17445c06f20bda3d41fbae04da953c9d03e6bb0c",
+    "manifest_sha256": "8c3e58d0a88b63e736d252ebaffbece2c969294e8330286411453a32ac87876c"
+  },
+  "evidence_sha256": "aa103ffdb2cc3b9fbc04c5e6d852e84b6527aabdfdd0196d675f4720d52ea71b",
+  "evidence_url": "https://github.com/merglbot-core/github/issues/812#issuecomment-7008419308",
+  "counts": {
+    "before_active": 195,
+    "after_active": 197,
+    "before_unresolved": 97,
+    "after_unresolved": 95,
+    "other": 16
+  },
+  "forecast_source_pins": 47,
+  "shared_registry_writes": 0,
+  "rehearsal": [
+    "VERIFIED_ALL_SEVEN",
+    "ALREADY_AT_REVIEWED_OUTPUTS"
+  ],
+  "registries": {
+    "adoption-matrix-20261012.json": {
+      "before": "3fbee9977a8a2454d9a1c7cac919a1cc0b310a86350c96514e9a467e1b13bd62",
+      "after": "c5b884206c02011b566e752134015a756629dd8423e9ebc1d85225d63ec551a2"
+    },
+    "a1-operation-adoption-crosswalk-20261012.json": {
+      "before": "ec4c6e3aaf8e385e5b408676efe3960dddbd181739e0934e3baa2e75cf2c4daf",
+      "after": "c9e571fbcac0aeff4b1d6249780a7c521cefc51c31dabd87066bb9971cd919ba"
+    },
+    "credential-retirement-candidate-20261006.json": {
+      "before": "3e1807b2f7ed605b5d28d4436f3675ebaaed2553d1fa6a765babf7d7cfe95eb6",
+      "after": "2af0bc786f9552b524bbfb6098e6f2a98de02fd76aae32349d9c159a5c5e5e6a"
+    },
+    "whole-intent-resource-usage-manifest-20261012.json": {
+      "before": "47f9f823886e6e4ea723bf24fab68725375086338fac73542195df3921d6ab68",
+      "after": "3476c75f4ffe1b814b246e52b3e68b59add54d96b05787cda22f62ffed118506"
+    },
+    "revalidation-20261015/actions-workflow-runtime-group-inventory.json": {
+      "before": "e7fca3e45d32bf863e0da2670d0918ff081e4e85c8db2dc49960af361a67059d",
+      "after": "c8f79cad66f1cfb96a527d3b2123610ff11e833240909a7f44a678a8c2d3c524"
+    },
+    "revalidation-20261015/operation-identity-permission-gap-map.json": {
+      "before": "039f6a9c008aed0cbade3949a2ca3f09688acfd655b151e4ac93194f8ce49b25",
+      "after": "becace60236bf910df4887c046a342cc1863a4c0ea4d9d4b6f7945c9722186db"
+    },
+    "revalidation-20261016/whole-intent-conditional-planning-forecast.json": {
+      "before": "48a5eb96ea89d25dbab69ae1610e80da772f74a6fa1d369851d8288cf7ac15ff",
+      "after": "9600b0b9dc145237194059e0ffd1e3d528071e4dbf7bf4cead0ed3b85cdb41bc"
+    }
+  }
+}
