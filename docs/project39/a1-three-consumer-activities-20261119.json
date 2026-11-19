@@ -1,0 +1,115 @@
+{
+  "scope": "Only pre-cutover inventory activity; prerequisite #1094 merged and its seven outputs installed.",
+  "base_manifest_sha256": "f0381448f4500fc2af7549a447a997f99a8de4026e036836ee3fadbad2be7a67",
+  "counts": {
+    "rows": 308,
+    "active_before": 192,
+    "active_after": 195,
+    "unknown_before": 100,
+    "unknown_after": 97
+  },
+  "publisher": {
+    "class": "PRE_CUTOVER_CLOUD_CHECK_PUBLICATION",
+    "issue": "https://github.com/merglbot-core/github/issues/812#issuecomment-7006003141",
+    "sources": {
+      "cloud": {
+        "path": "revalidation-20261119/A1-v6-publication-cloud.json",
+        "sha256": "69f9ccee989cafd8d6ea70f1b6758075ba49ba31ae0218af246352bd0121882b"
+      },
+      "gh": {
+        "path": "revalidation-20261119/A1-v6-publication-gh.json",
+        "sha256": "ae5fdbf658a5e55da38764d539eee1736eaf9655e59cec67b009d4a17f84a8e0"
+      },
+      "revision": {
+        "path": "revalidation-20261119/A1-v6-publication-revision.json",
+        "sha256": "2c1e931dbd3d067d45c995ca5c8976cf30a67922bebd78f7aad019cc4b6d6516"
+      }
+    },
+    "publisher_app_id": 3518182,
+    "check_runs": [
+      135467935863,
+      135480359570
+    ],
+    "scope": "publication of these two checks only",
+    "installation_id_verified": false,
+    "post_retirement_acceptance": false
+  },
+  "additional_witnesses": {
+    "merglbot-platform-prd:bot-pr-backfill-caller": {
+      "artifact": "revalidation-20261119/A1-backfill-two-executions.json",
+      "sha256": "b2a9b83868f112c2dd71166ad67384c0ed37ef4ab5560857971821585cccb2d6",
+      "issue": "https://github.com/merglbot-core/github/issues/812#issuecomment-7007479134",
+      "post_retirement_acceptance": false,
+      "class": "PRE_CUTOVER_APP_DISCOVERY_SUMMARY",
+      "operation": "cloud-pr-dependency-backfill",
+      "execution_witnesses": [
+        {
+          "execution": "bot-pr-backfill-caller-b2qrh",
+          "start": "2026-11-18T05:45:08.309318Z",
+          "installations_observed": 15,
+          "bot_pr_count": 186
+        },
+        {
+          "execution": "bot-pr-backfill-caller-8zh77",
+          "start": "2026-11-19T05:45:08.305185Z",
+          "installations_observed": 15,
+          "bot_pr_count": 152
+        }
+      ],
+      "image": "europe-west1-docker.pkg.dev/merglbot-artifacts/platform/bot-pr-backfill-caller@sha256:362f304602a826aeaab003f5028a8faffeb63782544696e9ae56463cdec12525",
+      "build_run": 37463683587,
+      "source_commit": "8231f8d25a240566e610c17585398c613098ad23",
+      "exact_installation_principal_verified": false
+    },
+    ".codex-o2:gh": {
+      "artifact": "revalidation-20261119/A1-o2-gh-live-session-evidence.json",
+      "sha256": "417e8725c72d717650a9e48576a8ab880145359dd5b1e08d9780ef2589ba584d",
+      "issue": "https://github.com/merglbot-core/github/issues/812#issuecomment-7006685030",
+      "post_retirement_acceptance": false,
+      "class": "PRE_CUTOVER_LOGICAL_PROFILE_GH_READ",
+      "operation": "read GitHub PR metadata in existing o2 CLI session",
+      "observed_pr": "https://github.com/merglbot-core/github/pull/1094",
+      "observed_head": "b7802385add8e4f38a21434c21c750df2beda007",
+      "verified_scope": "logical profile activity",
+      "fresh_start_verified": false,
+      "credential_identity_verified": false,
+      "subagent_verified": false
+    }
+  },
+  "registries": {
+    "adoption-matrix-20261012.json": {
+      "before": "8afa9aa3308194102fe89e31cfecdc99d0ded34b99e83731bf2a4d8db716ab80",
+      "after": "3fbee9977a8a2454d9a1c7cac919a1cc0b310a86350c96514e9a467e1b13bd62"
+    },
+    "a1-operation-adoption-crosswalk-20261012.json": {
+      "before": "848876822e9fbd63c52363fe98b4ec558e298cbf9da095ab090edf2f6f4b2ac5",
+      "after": "ec4c6e3aaf8e385e5b408676efe3960dddbd181739e0934e3baa2e75cf2c4daf"
+    },
+    "credential-retirement-candidate-20261006.json": {
+      "before": "a9b8b8e29ddf6a5fa765db297f4ade7024aae81462d6e9be07c015dc36f93abf",
+      "after": "3e1807b2f7ed605b5d28d4436f3675ebaaed2553d1fa6a765babf7d7cfe95eb6"
+    },
+    "whole-intent-resource-usage-manifest-20261012.json": {
+      "before": "8e8df67844be88706926ae60a1d617b91b44a49795e7dddd3b465b0dd0e7ce05",
+      "after": "47f9f823886e6e4ea723bf24fab68725375086338fac73542195df3921d6ab68"
+    },
+    "revalidation-20261015/actions-workflow-runtime-group-inventory.json": {
+      "before": "910b1b9c3294b959e020d530965f1c3fa589dd2f418401c1f9523d4d47c84b47",
+      "after": "e7fca3e45d32bf863e0da2670d0918ff081e4e85c8db2dc49960af361a67059d"
+    },
+    "revalidation-20261015/operation-identity-permission-gap-map.json": {
+      "before": "6fd89287a7f2525738cd5dd3bf8cd01b2d3c86b89c2266822846fa4740fc40de",
+      "after": "039f6a9c008aed0cbade3949a2ca3f09688acfd655b151e4ac93194f8ce49b25"
+    },
+    "revalidation-20261016/whole-intent-conditional-planning-forecast.json": {
+      "before": "d90334f4393f571299f3004416445c161351801402056c5390cf7dd484e1259e",
+      "after": "48a5eb96ea89d25dbab69ae1610e80da772f74a6fa1d369851d8288cf7ac15ff"
+    }
+  },
+  "forecast_source_pins": 47,
+  "canonical_writes": 0,
+  "replay": [
+    "VERIFIED_ALL_SEVEN",
+    "ALREADY_AT_REVIEWED_OUTPUTS"
+  ]
+}
