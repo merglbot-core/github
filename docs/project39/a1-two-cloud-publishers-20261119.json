@@ -1,13 +1,15 @@
 {
-  "scope": "Two existing specialized App publishers, pre-cutover activity only; conditional on reviewed #1095 registry postimages.",
+  "scope": "Pre-cutover publication activity of two existing Cloud Run services.",
   "predecessor": {
     "repo": "merglbot-core/github",
     "pr": 1095,
     "head": "17445c06f20bda3d41fbae04da953c9d03e6bb0c",
-    "manifest_sha256": "8c3e58d0a88b63e736d252ebaffbece2c969294e8330286411453a32ac87876c"
+    "manifest_sha256": "8c3e58d0a88b63e736d252ebaffbece2c969294e8330286411453a32ac87876c",
+    "merge_commit": "97aea64439a6281a9a2b976a103d5c349aaffcd9",
+    "path": "docs/project39/a1-three-consumer-activities-20261119.json"
   },
-  "evidence_sha256": "aa103ffdb2cc3b9fbc04c5e6d852e84b6527aabdfdd0196d675f4720d52ea71b",
-  "evidence_url": "https://github.com/merglbot-core/github/issues/812#issuecomment-7008419308",
+  "evidence_sha256": "728c2a0317bb9848cd2bf61b0d5e98f6c6b700508ae4d42e40a1885acc7bd0b6",
+  "evidence_url": "https://github.com/merglbot-core/github/issues/812#issuecomment-7010763233",
   "counts": {
     "before_active": 195,
     "after_active": 197,
@@ -24,31 +26,127 @@
   "registries": {
     "adoption-matrix-20261012.json": {
       "before": "3fbee9977a8a2454d9a1c7cac919a1cc0b310a86350c96514e9a467e1b13bd62",
-      "after": "c5b884206c02011b566e752134015a756629dd8423e9ebc1d85225d63ec551a2"
+      "after": "da8f0c6de6f1cb806d95a000e6e788126c917396c4c6833efc1218d407d33937"
     },
     "a1-operation-adoption-crosswalk-20261012.json": {
       "before": "ec4c6e3aaf8e385e5b408676efe3960dddbd181739e0934e3baa2e75cf2c4daf",
-      "after": "c9e571fbcac0aeff4b1d6249780a7c521cefc51c31dabd87066bb9971cd919ba"
+      "after": "b65ca3dd6a5124745cebb13fe9b1aa22c2cf75b103735815147b9c7d3a1a9f9d"
     },
     "credential-retirement-candidate-20261006.json": {
       "before": "3e1807b2f7ed605b5d28d4436f3675ebaaed2553d1fa6a765babf7d7cfe95eb6",
-      "after": "2af0bc786f9552b524bbfb6098e6f2a98de02fd76aae32349d9c159a5c5e5e6a"
+      "after": "f1b981edf7ff561f858e0e06fd28e6d36bef16ade09ceb253a539044c400d226"
     },
     "whole-intent-resource-usage-manifest-20261012.json": {
       "before": "47f9f823886e6e4ea723bf24fab68725375086338fac73542195df3921d6ab68",
-      "after": "3476c75f4ffe1b814b246e52b3e68b59add54d96b05787cda22f62ffed118506"
+      "after": "2180e05c8528022f86d95746f110d34f7d43506e047f6334f540290fa6b8d4c1"
     },
     "revalidation-20261015/actions-workflow-runtime-group-inventory.json": {
       "before": "e7fca3e45d32bf863e0da2670d0918ff081e4e85c8db2dc49960af361a67059d",
-      "after": "c8f79cad66f1cfb96a527d3b2123610ff11e833240909a7f44a678a8c2d3c524"
+      "after": "c5eb7143df08d7e8960e7f75bfb5ab432548e90808b8629521193ef51821dbf4"
     },
     "revalidation-20261015/operation-identity-permission-gap-map.json": {
       "before": "039f6a9c008aed0cbade3949a2ca3f09688acfd655b151e4ac93194f8ce49b25",
-      "after": "becace60236bf910df4887c046a342cc1863a4c0ea4d9d4b6f7945c9722186db"
+      "after": "90450f7c8af58df23ff33340862f0ae9221410bf12353da21e2ed6ad8d5173de"
     },
     "revalidation-20261016/whole-intent-conditional-planning-forecast.json": {
       "before": "48a5eb96ea89d25dbab69ae1610e80da772f74a6fa1d369851d8288cf7ac15ff",
-      "after": "9600b0b9dc145237194059e0ffd1e3d528071e4dbf7bf4cead0ed3b85cdb41bc"
+      "after": "9ad4b00cf40f54267a203027275612569f463ee180d09dd2f75f653899647e9a"
     }
-  }
+  },
+  "evidence": {
+    "scope": "Four distinct pre-cutover GitHub check publications, matched to service-specific Cloud Run log events. No evidence of PAT retirement.",
+    "cloud_service_witnesses": {
+      "pr-assistant-v4-webhook": [
+        {
+          "revision": "pr-assistant-v4-webhook-v6a-20261119091602-2098",
+          "service_version": "4701946d92b01be1247b928697394f657d9a9f37",
+          "log_insert_id": "6afec764000f227f8aa478e6",
+          "observed_prague": "2026-11-19T10:54:44.991871+01:00",
+          "repo": "merglbot-core/platform",
+          "head_sha": "930e15a923c8d576fddab9a350fa1c486eab4b7e",
+          "check_run_id": 133056622758,
+          "conclusion": "failure",
+          "summary_sha256": "8f8e88f707891b93a14634fb44a7edb1d057558b59bf947d1d86c83890a1ebb4",
+          "exact_match": true,
+          "native_id": 133056622758,
+          "native_head": "930e15a923c8d576fddab9a350fa1c486eab4b7e",
+          "native_conclusion": "failure",
+          "native_sha256": "8f8e88f707891b93a14634fb44a7edb1d057558b59bf947d1d86c83890a1ebb4",
+          "native_app": 3518182,
+          "native_name": "Merglbot PR Assistant v6",
+          "url": "https://github.com/merglbot-core/platform/runs/133056622758"
+        },
+        {
+          "revision": "pr-assistant-v4-webhook-v6a-20261118114256-2097",
+          "service_version": "786fdb165918d2119d179059dfe35efa6ecce7e5",
+          "log_insert_id": "6afeb53b0005ddbea0141548",
+          "observed_prague": "2026-11-19T09:37:15.384446+01:00",
+          "repo": "merglbot-core/platform",
+          "head_sha": "b0f79f9fb5edda16fd5f588145e89b15d42dc4c9",
+          "check_run_id": 135385223563,
+          "conclusion": "neutral",
+          "summary_sha256": "8ae56312498f752b3799eb10e50e75b2a4ab714eb5d1af2dcba01e369434167b",
+          "exact_match": true,
+          "native_id": 135385223563,
+          "native_head": "b0f79f9fb5edda16fd5f588145e89b15d42dc4c9",
+          "native_conclusion": "neutral",
+          "native_sha256": "8ae56312498f752b3799eb10e50e75b2a4ab714eb5d1af2dcba01e369434167b",
+          "native_app": 3518182,
+          "native_name": "Merglbot PR Assistant v6",
+          "url": "https://github.com/merglbot-core/platform/runs/135385223563"
+        }
+      ],
+      "pr-assistant-v4-worker": [
+        {
+          "revision": "pr-assistant-v4-worker-v6a-20261119091602-2098",
+          "service_version": "4701946d92b01be1247b928697394f657d9a9f37",
+          "log_insert_id": "6afedbda0005a0075ac46f28",
+          "observed_prague": "2026-11-19T12:22:02.368647+01:00",
+          "repo": "merglbot-core/platform",
+          "head_sha": "256b60d50e6b1cb6c1c30f17495ab5aff35ccb7e",
+          "check_run_id": 135525733690,
+          "conclusion": "failure",
+          "summary_sha256": "cca6b9c36f7c3156cbe7a65ed72c82e9ebfb7eefeed06d61fa9c4aaee37f7e19",
+          "exact_match": true,
+          "native_id": 135525733690,
+          "native_head": "256b60d50e6b1cb6c1c30f17495ab5aff35ccb7e",
+          "native_conclusion": "failure",
+          "native_sha256": "cca6b9c36f7c3156cbe7a65ed72c82e9ebfb7eefeed06d61fa9c4aaee37f7e19",
+          "native_app": 3518182,
+          "native_name": "Merglbot PR Assistant v6",
+          "url": "https://github.com/merglbot-core/platform/runs/135525733690"
+        },
+        {
+          "revision": "pr-assistant-v4-worker-v6a-20261119091602-2098",
+          "service_version": "4701946d92b01be1247b928697394f657d9a9f37",
+          "log_insert_id": "6afecae800064ca2742555e7",
+          "observed_prague": "2026-11-19T11:09:44.412834+01:00",
+          "repo": "merglbot-core/platform",
+          "head_sha": "32f4dde986dfbe597447ed51227f2fe936752208",
+          "check_run_id": 135487465412,
+          "conclusion": "failure",
+          "summary_sha256": "e866ba6f808a2399ed562f55bc7ad8ff9be5781a0e887b861959dd0cf0d0af1a",
+          "exact_match": true,
+          "native_id": 135487465412,
+          "native_head": "32f4dde986dfbe597447ed51227f2fe936752208",
+          "native_conclusion": "failure",
+          "native_sha256": "e866ba6f808a2399ed562f55bc7ad8ff9be5781a0e887b861959dd0cf0d0af1a",
+          "native_app": 3518182,
+          "native_name": "Merglbot PR Assistant v6",
+          "url": "https://github.com/merglbot-core/platform/runs/135487465412"
+        }
+      ]
+    }
+  },
+  "attribution": {
+    "predecessor_publisher_check_ids": [
+      135467935863,
+      135480359570
+    ],
+    "shared_check_ids": [],
+    "replaced_check_id": 135480359570,
+    "replacement_webhook_check_id": 135385223563,
+    "scope": "Each check ID belongs to exactly one of these three inventory evidence sets. Activity only."
+  },
+  "rehearsal_scope": "Temporary copy of seven verified predecessor outputs. The second result describes idempotence only. Deployment and the successor registry transaction are pending."
 }
