@@ -50,5 +50,47 @@
   },
   "replay": "VERIFIED_ALL_SEVEN",
   "second_replay": "ALREADY_AT_REVIEWED_OUTPUTS",
-  "canonical_writes": 0
+  "canonical_writes": 0,
+  "activity_basis": {
+    "stage": "pre_cutover",
+    "executions_by_job_and_local_date": {
+      "github-security-auditor": {
+        "2026-11-18": {
+          "execution": "github-security-auditor-bbmvr",
+          "observed_at_prague": "2026-11-18T06:26:28.431354+01:00",
+          "mode": "dry-run",
+          "repositories_reported_scanned": 107,
+          "installations_reported": 11
+        },
+        "2026-11-19": {
+          "execution": "github-security-auditor-8fbmt",
+          "observed_at_prague": "2026-11-19T06:26:14.332702+01:00",
+          "mode": "dry-run",
+          "repositories_reported_scanned": 107,
+          "installations_reported": 11
+        }
+      },
+      "docs-keeper": {
+        "2026-11-18": {
+          "execution": "docs-keeper-j58ld",
+          "observed_at_prague": "2026-11-18T06:57:51.480517+01:00",
+          "mode": "report",
+          "repository_scan_attempts": 101,
+          "observed_http_errors_in_stderr_sample": 1,
+          "successful_repository_scans": null
+        },
+        "2026-11-19": {
+          "execution": "docs-keeper-7xqx4",
+          "observed_at_prague": "2026-11-19T06:57:47.030236+01:00",
+          "mode": "report",
+          "repository_scan_attempts": 101,
+          "observed_http_errors_in_stderr_sample": 1,
+          "successful_repository_scans": null
+        }
+      }
+    },
+    "docs_keeper_stderr_sample_sha256": "2e216cbb3028c13f091e0ef2b7d828c9890bdfd1dda2c9c4e5747fc92a0216cc",
+    "coverage_followup": "https://github.com/merglbot-core/platform/issues/1633#issuecomment-7006018405",
+    "successful_scan_count_required_for_coverage": true
+  }
 }
