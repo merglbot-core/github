@@ -1,0 +1,96 @@
+{
+  "scope": "Pre-cutover GitHub scan activity of two existing Cloud Run jobs in the shared A1 inventory transaction",
+  "issue": "https://github.com/merglbot-core/github/issues/812#issuecomment-7005315947",
+  "input_proposal": "2028c63d28ee57bc481a6e95754da3f37f48a65d37333f52ccfaba63c54f5811",
+  "evidence_sha256": "72b47f8e449867c10aab71c2a17a9c03638bd804b48fa6783e055ac000cd44a4",
+  "registry_counts": {
+    "rows": 308,
+    "observed_active": {
+      "before": 190,
+      "after": 192
+    },
+    "activity_unresolved": {
+      "before": 102,
+      "after": 100
+    }
+  },
+  "limitations": [
+    "docs-keeper reported 101 attempts and a scan error on each of the two runs.",
+    "Job summaries do not prove caller token identity, refresh, retirement or adoption."
+  ],
+  "registries": {
+    "adoption-matrix-20261012.json": {
+      "before": "6f00b1a0a335678c4268b606f39700998285b7d9d4b3a8fee8a6064c8789ea67",
+      "after": "8afa9aa3308194102fe89e31cfecdc99d0ded34b99e83731bf2a4d8db716ab80"
+    },
+    "a1-operation-adoption-crosswalk-20261012.json": {
+      "before": "641a91a6b9aeee046186b8b95e7999073a0d6ffa6d99efd29c089df4b72ea372",
+      "after": "848876822e9fbd63c52363fe98b4ec558e298cbf9da095ab090edf2f6f4b2ac5"
+    },
+    "credential-retirement-candidate-20261006.json": {
+      "before": "701de23062414ee584111781f709ca5dfc172debc833cb5e13b2d7eeb47bbd36",
+      "after": "a9b8b8e29ddf6a5fa765db297f4ade7024aae81462d6e9be07c015dc36f93abf"
+    },
+    "whole-intent-resource-usage-manifest-20261012.json": {
+      "before": "5d158d2a7dc6cab6d09def22b1550de0c0fa6cf68eafde245e34e1516b5567f6",
+      "after": "8e8df67844be88706926ae60a1d617b91b44a49795e7dddd3b465b0dd0e7ce05"
+    },
+    "revalidation-20261015/actions-workflow-runtime-group-inventory.json": {
+      "before": "63fe2847d1fe6dd6ead47e5898e3eb2856edecaa84e12ce61e34efbd6d19aabc",
+      "after": "910b1b9c3294b959e020d530965f1c3fa589dd2f418401c1f9523d4d47c84b47"
+    },
+    "revalidation-20261015/operation-identity-permission-gap-map.json": {
+      "before": "be0185bda6bf049f00efcd47dbc7af9bece1188a2b22b4dd652a6f2d61c311b5",
+      "after": "6fd89287a7f2525738cd5dd3bf8cd01b2d3c86b89c2266822846fa4740fc40de"
+    },
+    "revalidation-20261016/whole-intent-conditional-planning-forecast.json": {
+      "before": "e803f647c7c66a751d07e0baad2e52d3af8d3abbd6cf9d50e4750977a259d250",
+      "after": "d90334f4393f571299f3004416445c161351801402056c5390cf7dd484e1259e"
+    }
+  },
+  "replay": "VERIFIED_ALL_SEVEN",
+  "second_replay": "ALREADY_AT_REVIEWED_OUTPUTS",
+  "canonical_writes": 0,
+  "activity_basis": {
+    "stage": "pre_cutover",
+    "executions_by_job_and_local_date": {
+      "github-security-auditor": {
+        "2026-11-18": {
+          "execution": "github-security-auditor-bbmvr",
+          "observed_at_prague": "2026-11-18T06:26:28.431354+01:00",
+          "mode": "dry-run",
+          "repositories_reported_scanned": 107,
+          "installations_reported": 11
+        },
+        "2026-11-19": {
+          "execution": "github-security-auditor-8fbmt",
+          "observed_at_prague": "2026-11-19T06:26:14.332702+01:00",
+          "mode": "dry-run",
+          "repositories_reported_scanned": 107,
+          "installations_reported": 11
+        }
+      },
+      "docs-keeper": {
+        "2026-11-18": {
+          "execution": "docs-keeper-j58ld",
+          "observed_at_prague": "2026-11-18T06:57:51.480517+01:00",
+          "mode": "report",
+          "repository_scan_attempts": 101,
+          "observed_http_errors_in_stderr_sample": 1,
+          "successful_repository_scans": null
+        },
+        "2026-11-19": {
+          "execution": "docs-keeper-7xqx4",
+          "observed_at_prague": "2026-11-19T06:57:47.030236+01:00",
+          "mode": "report",
+          "repository_scan_attempts": 101,
+          "observed_http_errors_in_stderr_sample": 1,
+          "successful_repository_scans": null
+        }
+      }
+    },
+    "docs_keeper_stderr_sample_sha256": "2e216cbb3028c13f091e0ef2b7d828c9890bdfd1dda2c9c4e5747fc92a0216cc",
+    "coverage_followup": "https://github.com/merglbot-core/platform/issues/1633#issuecomment-7006018405",
+    "successful_scan_count_required_for_coverage": true
+  }
+}
