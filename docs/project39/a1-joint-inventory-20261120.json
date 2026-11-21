@@ -1,0 +1,200 @@
+{
+  "scope": "Pre-cutover inventory only",
+  "predecessor": {
+    "pr": 1096,
+    "merge": "c2859f25cf3b4a697f5ffd6f3f62fb7f4208a72e",
+    "manifest_sha256": "052db5e80beb5c62a82b53e96a97715d602b2760b33dc840a1c3dfa93fc81504"
+  },
+  "decision_ids": [
+    "D-P-11398",
+    "D-P-11426",
+    "D-P-11447",
+    "D-P-11481"
+  ],
+  "catalogue": {
+    "merge": "e63790989d265d90aa3b6d9a2bdee84f453407d3",
+    "blob": "59b30cd8d991d7c1a2b3b18f0d9817198cdef708",
+    "file_sha256": "969b8a4756ab42a9b897a9488e2ed22f5e898848f26544e4641845cfa9f99f4d",
+    "source_only": true,
+    "runtime": false,
+    "reviewed_source_delivery_verified": true
+  },
+  "new_activity_bindings": [
+    "LaunchAgents:ai.merglbot.v6-efficiency-1693-observer",
+    ".codex-o2:github_mcp"
+  ],
+  "new_physical_callers": [
+    "Actions:merglbot-proteinaco/business-analytics:.github/workflows/dataform-daily-run.yml:native-workflow",
+    "Actions:merglbot-proteinaco/business-analytics:.github/workflows/dataform-marketing-run.yml:native-workflow",
+    "Actions:merglbot-proteinaco/business-analytics:.github/workflows/dataform-marketing-abra-run.yml:native-workflow",
+    "Actions:merglbot-proteinaco/pricing-analysis:.github/workflows/dataform-daily-run.yml:native-workflow"
+  ],
+  "conditional_external_dependencies": [
+    {
+      "repository": "LIVEROCERANO/cerbot",
+      "path": ".github/workflows/landing-arm.yml",
+      "observed_job": 135656626324,
+      "outcome": "armed",
+      "owner_at_setup": "JanFrehar",
+      "current_value_equality": "unknown",
+      "in_milan_retirement_scope": false
+    },
+    {
+      "repository": "LIVEROCERANO/invoicebot",
+      "path": ".github/workflows/landing-arm.yml",
+      "observed_job": 135502718614,
+      "outcome": "skipped/table:foreign",
+      "owner_at_setup": "JanFrehar",
+      "current_value_equality": "unknown",
+      "in_milan_retirement_scope": false
+    }
+  ],
+  "finops_observation_only": [
+    "LaunchAgents:ai.merglbot.ci-finops-watchdog",
+    "LaunchAgents:ai.merglbot.ci-finops-autopilot"
+  ],
+  "forecast_source_pins": 47,
+  "A5_evidence_only": {
+    "path": "revalidation-20261119/A5-validation-scope-reconciliation.json",
+    "sha256": "79003c57e589b874c882af38348e2b4c5d21455d7ac8a857165fc2a2ca28969a"
+  },
+  "activity_counts": {
+    "canonical_candidate_activity_unresolved": 93,
+    "observed_active_canonical_consumer": 203,
+    "verified_non_github_source_disposition": 3,
+    "unclosed_scope_obligation": 6,
+    "resolved_alias": 4,
+    "configured_dormant_candidate_usage_unresolved": 3
+  },
+  "evidence_sha256": {
+    "A1-next-batch-observer-o2-appendix.json": "df5bb98e2a73ff42d5582635299778ce06f22ffe7f117ac10b986c6619e611c3",
+    "A1-observer-natural-and-budget.json": "51e3530af8795eb567da317f70486d2f3957cb5e4b01e0813b48b28db8c1ace4",
+    "A1-o2-mcp-live-session-evidence.json": "1c84068dc34e72784c750cfdf91f9fe26e595f1bc76f1e3734c6e3d2444a132f",
+    "A1-finops-two-local-jobs-natural-day.json": "309442db2543d061129a200db6dfa4f212dd2ddca62a4243be5134479a4d1001",
+    "A1-next-retirement-landing-arm-proposal.json": "cf56ebb5b585655b3487a35b39f31869075fc917ffbdea2fe018c47e01352fdd",
+    "A1-landing-owner-attribution-appendix.json": "f26eaef08c9aca26a4f7530889d5bafd3189a20547c58f1943fef601570ec798",
+    "A1-2288-landed-caller-bindings.json": "16bd4c813873721fc4eb4dc7bc68f54376e26e950cb533aae0868796a8411b01",
+    "A1-proteinaco-four-dataform-Actions-witnesses.json": "9260c2df537893aa67e8e55b7ca4d29d94d1f4211cfa1607d8dcb6923a42c0b8",
+    "A5-validation-scope-reconciliation.json": "79003c57e589b874c882af38348e2b4c5d21455d7ac8a857165fc2a2ca28969a"
+  },
+  "registries": {
+    "adoption-matrix-20261012.json": {
+      "before": "da8f0c6de6f1cb806d95a000e6e788126c917396c4c6833efc1218d407d33937",
+      "after": "3aa1e710a99102089b70b256fa53b045fe4aa9d2ef9bcf3d4471a000502548cd"
+    },
+    "a1-operation-adoption-crosswalk-20261012.json": {
+      "before": "b65ca3dd6a5124745cebb13fe9b1aa22c2cf75b103735815147b9c7d3a1a9f9d",
+      "after": "7579aa3b73b3ab4b9f2a4bb485a223a574846d3a7ce33d1faf2a2c7dcb9f492f"
+    },
+    "credential-retirement-candidate-20261006.json": {
+      "before": "f1b981edf7ff561f858e0e06fd28e6d36bef16ade09ceb253a539044c400d226",
+      "after": "7d5694e5e3edab50c1d19f8ffec63fdf6a43662d0d40f8f6a5d1c40ac3248682"
+    },
+    "whole-intent-resource-usage-manifest-20261012.json": {
+      "before": "2180e05c8528022f86d95746f110d34f7d43506e047f6334f540290fa6b8d4c1",
+      "after": "1565a485c7a0cf146b0a154719a3e79e38a8e5b44bec8b385d3e6807498763b4"
+    },
+    "revalidation-20261015/actions-workflow-runtime-group-inventory.json": {
+      "before": "c5eb7143df08d7e8960e7f75bfb5ab432548e90808b8629521193ef51821dbf4",
+      "after": "b65bf55369e6f4f8adf879ada0c2596cbef632cff37c66fae3bd4e97f2af32e4"
+    },
+    "revalidation-20261015/operation-identity-permission-gap-map.json": {
+      "before": "90450f7c8af58df23ff33340862f0ae9221410bf12353da21e2ed6ad8d5173de",
+      "after": "c7c6e532444089bfe262918fe57afe2fb99804181d5208b6dc49683408746e4f"
+    },
+    "revalidation-20261016/whole-intent-conditional-planning-forecast.json": {
+      "before": "9ad4b00cf40f54267a203027275612569f463ee180d09dd2f75f653899647e9a",
+      "after": "b40019d2c0effc0cbe9eb632183f7c54bbbde46b317b7f3194977855563ed9d0"
+    }
+  },
+  "production_changes": 0,
+  "shared_registry_writes": 0,
+  "scratch_rehearsal": {
+    "exact_inputs": 7,
+    "expected_outputs": 7,
+    "second_call": "already applied",
+    "mixed_or_drifted_preimage": "refused",
+    "failure_after_three_writes": "original bytes restored"
+  },
+  "predecessor_activity_counts": {
+    "discovery": 308,
+    "observed_active_before_cutover": 197,
+    "unresolved_activity": 95,
+    "other": 16
+  },
+  "candidate_counts": {
+    "discovery": 312,
+    "observed_active_before_cutover": 203,
+    "unresolved_activity": 93,
+    "other": 16,
+    "operation_groups": 89,
+    "distinct_workflow_definitions": 200
+  },
+  "checkout_evidence": [
+    {
+      "repository": "merglbot-proteinaco/pricing-analysis",
+      "path": ".github/workflows/dataform-daily-run.yml",
+      "commit": "55a223e6ba69dcb3cbacd093f9dcc8b6b4e8d47e",
+      "blob": "2088685ac1ed024b6cb215fba5931bdc9f3ceea0",
+      "run": 44466321942,
+      "job_url": "https://github.com/merglbot-proteinaco/pricing-analysis/actions/runs/44466321942/job/135364856079",
+      "workflow_conclusion": "failure",
+      "checkout_input_names": []
+    },
+    {
+      "repository": "merglbot-proteinaco/business-analytics",
+      "path": ".github/workflows/dataform-daily-run.yml",
+      "commit": "fc17887e5b2319a76b801f760243ba89b3f6b2aa",
+      "blob": "30fa78c4288055f3b663750227a823e11602bf9c",
+      "run": 44542224752,
+      "job_url": "https://github.com/merglbot-proteinaco/business-analytics/actions/runs/44542224752/job/135623300545",
+      "workflow_conclusion": "success",
+      "checkout_input_names": []
+    },
+    {
+      "repository": "merglbot-proteinaco/business-analytics",
+      "path": ".github/workflows/dataform-marketing-run.yml",
+      "commit": "22bbb3b3bc3e8f50dcad35f159552dedc86dc384",
+      "blob": "db19407960e1eac6183a4a4380ae60effb86f37d",
+      "run": 44547925822,
+      "job_url": "https://github.com/merglbot-proteinaco/business-analytics/actions/runs/44547925822/job/135643445510",
+      "workflow_conclusion": "success",
+      "checkout_input_names": []
+    },
+    {
+      "repository": "merglbot-proteinaco/business-analytics",
+      "path": ".github/workflows/dataform-marketing-abra-run.yml",
+      "commit": "22bbb3b3bc3e8f50dcad35f159552dedc86dc384",
+      "blob": "0a7e77981265843bb942b4c1e1116b7ba64aa3c5",
+      "run": 44547928758,
+      "job_url": "https://github.com/merglbot-proteinaco/business-analytics/actions/runs/44547928758/job/135643458755",
+      "workflow_conclusion": "success",
+      "checkout_input_names": [
+        "persist-credentials"
+      ]
+    }
+  ],
+  "checkout_scope": "Checkout and WIF passed in all four recorded jobs. Pricing analysis failed later at Run Dataform. Effective GitHub principal, migration, quota and cost remain unverified.",
+  "scheduler_evidence": {
+    "day_prague": "2026-11-18",
+    "autopilot_pause_returns": 144,
+    "watchdog_successful_wakes": 1437,
+    "github_activity_promotions": 0
+  },
+  "review_links": {
+    "catalogue": "https://github.com/merglbot-public/docs/pull/2288",
+    "observed_activity": [
+      "https://github.com/merglbot-core/github/issues/812#issuecomment-7015205499",
+      "https://github.com/merglbot-core/github/issues/812#issuecomment-7015460487"
+    ],
+    "finops": "https://github.com/merglbot-core/github/issues/812#issuecomment-7014273770",
+    "conditional_external_dependencies": "https://github.com/merglbot-core/github/issues/813#issuecomment-7013957152"
+  },
+  "acceptance": {
+    "runtime_adoptions": 0,
+    "new_grants": 0,
+    "credential_retirements": 0,
+    "A5_scope_of_previous_evidence": 308,
+    "whole_intent_cost": "UNKNOWN"
+  }
+}
