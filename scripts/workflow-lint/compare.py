@@ -29,7 +29,7 @@ def blocking_findings(report):
             # Keep file, logical route, and matched content. Line numbers and
             # byte offsets change when unrelated text is inserted earlier.
             locations.append(json.dumps([
-                symbolic["key"]["Local"]["verbatim_path"], symbolic["route"]["route"],
+                symbolic["key"]["Local"]["verbatim_path"], [{"Index": "*"} if "Index" in part else part for part in symbolic["route"]["route"]],
                 loc["concrete"]["feature"], symbolic["annotation"],
             ], ensure_ascii=False, sort_keys=True))
         if not locations:
@@ -60,6 +60,8 @@ def scan_revision(revision, directory, severity, changed_paths, *, check_syntax)
             continue
         mode, kind, oid = meta.split()
         if mode not in {b"100644", b"100755"} or kind != b"blob":
+            if not check_syntax:
+                continue
             raise ValueError("Expected a regular workflow file")
         dest = directory / path
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -79,7 +81,22 @@ def scan_revision(revision, directory, severity, changed_paths, *, check_syntax)
             "--no-exit-codes", "--format", "json-v1"]
     if severity != "unknown":
         args.extend(["--min-severity", severity])
-    return json.loads(subprocess.check_output([*args, *paths], cwd=directory, stderr=subprocess.PIPE))
+    findings = []
+    for path in paths:
+        result = subprocess.run([*args, path], cwd=directory, capture_output=True)
+        if result.returncode:
+            # A repaired workflow can have an unparseable merge-base version.
+            # Only accept the pinned scanner's input-parse error for that file.
+            if (not check_syntax and result.returncode == 3
+                    and b"failed to parse input:" in result.stderr
+                    and b"error: no inputs collected" in result.stderr):
+                continue
+            result.check_returncode()
+        report = json.loads(result.stdout)
+        if not isinstance(report, list):
+            raise ValueError("Expected a zizmor json-v1 report")
+        findings.extend(report)
+    return findings
 
 
 def main(base_sha, severity):
@@ -87,7 +104,7 @@ def main(base_sha, severity):
         raise ValueError("Unexpected zizmor severity")
     base = subprocess.check_output(["git", "merge-base", base_sha, "HEAD"], text=True).strip()
     changed_paths = set(subprocess.check_output([
-        "git", "diff", "--name-only", "--no-renames", "-z", base, "HEAD", "--", ".github/workflows/",
+        "git", "diff", "--name-only", "--diff-filter=ACMT", "--no-renames", "-z", base, "HEAD", "--", ".github/workflows/",
     ]).split(b"\0"))
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

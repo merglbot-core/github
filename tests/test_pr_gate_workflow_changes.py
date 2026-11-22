@@ -39,6 +39,14 @@ class WorkflowChangesTest(unittest.TestCase):
         )
         return process.returncode, output.read_text().strip()
 
+    def test_helper_requires_successful_trusted_checkout(self):
+        workflow = WORKFLOW.read_text()
+        checkout = workflow.split("id: trusted_hub_checkout", 1)
+        self.assertIn("uses: actions/checkout@", checkout[0].splitlines()[-2])
+        self.assertIn("path: .docs-governance-hub", checkout[1].split("      - name:", 1)[0])
+        lint = workflow.split("id: workflow_lint\n", 1)[1].split("      - name:", 1)[0]
+        self.assertIn("steps.trusted_hub_checkout.outcome == 'success'", lint)
+
     def test_change_scope(self):
         (self.repo / "notes.md").write_text("notes\n")
         self.git("add", "notes.md")

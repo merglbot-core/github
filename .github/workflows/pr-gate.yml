@@ -166,7 +166,7 @@ on:
       # SARIF / code-scanning upload: it would need `security-events: write` on this
       # job, which none of the current callers grants.
       workflow-lint:
-        description: 'Run actionlint + zizmor (offline) over .github/workflows as a step of this job'
+        description: 'Run actionlint + zizmor (offline) on changed workflow files; block only new High injection and permissions findings'
         type: boolean
         default: false
         required: false
@@ -424,6 +424,7 @@ jobs:
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
           echo "docs-governance code pinned to $repo@$ref"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: trusted_hub_checkout
         if: ${{ !cancelled() }}
         with:
           repository: ${{ steps.hubref.outputs.repo }}
@@ -650,7 +651,7 @@ jobs:
 
       - name: Workflow lint (actionlint + zizmor)
         id: workflow_lint
-        if: ${{ !cancelled() && steps.workflow_lint_install.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.trusted_hub_checkout.outcome == 'success' && steps.workflow_lint_install.outcome == 'success' }}
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
