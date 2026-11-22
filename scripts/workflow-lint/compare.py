@@ -18,7 +18,7 @@ def step_correspondence(old, new):
     mapping = {}
     used = set()
 
-    def pair_unique(key):
+    def pair_steps(key, *, allow_duplicates=False):
         def positions(steps, excluded):
             result = {}
             for i, step in enumerate(steps):
@@ -31,22 +31,31 @@ def step_correspondence(old, new):
         before = positions(old, used)
         after = positions(new, mapping)
         for value in before.keys() & after.keys():
-            if len(before[value]) == len(after[value]) == 1:
-                base, head = before[value][0], after[value][0]
-                if compatible(base, head):
-                    mapping[head] = base
-                    used.add(base)
+            if not allow_duplicates and (len(before[value]) != 1 or len(after[value]) != 1):
+                continue
+            for base in before[value]:
+                for head in after[value]:
+                    if head not in mapping and compatible(base, head):
+                        mapping[head] = base
+                        used.add(base)
+                        break
 
     def compatible(base, head):
         left, right = old[base], new[head]
         if left.get("id") and right.get("id") and left["id"] != right["id"]:
             return False
+        for step in (left, right):
+            if "implicit-runner" in step:
+                runner = step["implicit-runner"]
+                labels = runner if isinstance(runner, list) else [runner]
+                if not labels or any(not isinstance(label, str) or "${{" in label for label in labels):
+                    return False
         ignored = {"id", "name", "run"}
         return ({k: v for k, v in left.items() if k not in ignored}
                 == {k: v for k, v in right.items() if k not in ignored})
 
-    pair_unique(lambda step: step.get("id"))
-    pair_unique(lambda step: step.get("name"))
+    pair_steps(lambda step: step.get("id"))
+    pair_steps(lambda step: step.get("name"))
     # Anonymous steps at equal positions retain identity across edits. A
     # reorder cannot transfer an issue to a different anonymous position.
     if len(old) == len(new):
@@ -58,22 +67,57 @@ def step_correspondence(old, new):
         # Pair independently of unrelated changed siblings. Display names
         # and an added or removed ID do not change the step's executable data.
         def executable(step):
-            return json.dumps({k: v for k, v in step.items() if k not in {"name", "id"}},
-                              sort_keys=True)
-        pair_unique(executable)
+            fields = {k: v for k, v in step.items() if k not in {"name", "id"}}
+            if "run" in fields:
+                fields["run"] = command_identity(fields["run"])
+            return json.dumps(fields, sort_keys=True)
+        named = set(mapping)
+        pair_steps(executable, allow_duplicates=True)
+        # Retain anonymous matches only when their order is consistent in
+        # both revisions. Discard both sides of an ambiguous crossing.
+        matches = sorted((head, base) for head, base in mapping.items() if head not in named)
+        highest = -1
+        for head, base in matches:
+            if base < highest:
+                mapping.pop(head, None)
+            highest = max(highest, base)
+        lowest = len(old)
+        for head, base in reversed(matches):
+            if base > lowest:
+                mapping.pop(head, None)
+            lowest = min(lowest, base)
     return mapping
 
 
-def job_steps(path):
+def read_workflow(path):
     # Both supported GitHub-hosted images include Mike Farah's yq. The
     # expression is constant; the workflow is read only as YAML data.
     output = subprocess.check_output([
-        "yq", "eval", "-o=json", ".jobs | with_entries(.value = (.value.steps // []))", str(path),
+        "yq", "eval", "-o=json", ".", str(path),
     ])
     return json.loads(output)
 
 
-def injection_feature(feature, fragment):
+def job_steps(path):
+    workflow = read_workflow(path)
+    defaults = workflow.get("defaults", {}).get("run", {})
+    jobs = {}
+    for name, job in workflow["jobs"].items():
+        inherited = {**defaults, **job.get("defaults", {}).get("run", {})}
+        steps = []
+        for step in job.get("steps", []):
+            if "run" in step:
+                step = {**inherited, **step}
+                if "shell" not in step and "runs-on" in job:
+                    step["implicit-runner"] = job["runs-on"]
+                    if "container" in job:
+                        step["implicit-container"] = job["container"]
+            steps.append(step)
+        jobs[name] = steps
+    return jobs
+
+
+def command_identity(feature):
     # A scanner subfeature identifies the expression, not the command that
     # consumes it. Keep the complete source, except for an unambiguous
     # literal echo prelude. Never interpret escapes, quoting or shell syntax.
@@ -83,7 +127,7 @@ def injection_feature(feature, fragment):
         r"(?:echo [a-zA-Z0-9_ .-]+(?:;[ \t]+|\n))+"
         r'((?:echo|printf) "\$\{\{ [a-zA-Z0-9_.]+ \}\}")',
         feature)
-    return [fragment, simple.group(1) if simple else feature]
+    return simple.group(1) if simple else feature
 
 
 def blocking_findings(report, renames=None, step_maps=None):
@@ -108,7 +152,7 @@ def blocking_findings(report, renames=None, step_maps=None):
             fragment = (kind.get("Subfeature", {}).get("fragment") if isinstance(kind, dict) else None)
             feature = loc["concrete"]["feature"]
             if fragment is not None and rule == "template-injection":
-                feature = injection_feature(feature, fragment)
+                feature = [fragment, command_identity(feature)]
             if step_maps is not None and len(route) >= 4 and route[2] == {"Key": "steps"}:
                 step_index = route[3]["Index"]
                 base_index = step_maps.get((path, route[1]["Key"]), {}).get(step_index)
@@ -124,6 +168,26 @@ def blocking_findings(report, renames=None, step_maps=None):
 
 def introduced(base_report, head_report, renames=None, step_maps=None):
     return blocking_findings(head_report, step_maps=step_maps) - blocking_findings(base_report, renames)
+
+
+def normalize_permission_features(report, path):
+    workflow = None
+    for item in report:
+        if item["ident"] != "excessive-permissions" or item["determinations"]["severity"] != "High":
+            continue
+        for loc in item["locations"]:
+            symbolic = loc["symbolic"]
+            if symbolic["kind"] != "Primary":
+                continue
+            route = symbolic["route"]["route"]
+            if {"Key": "permissions"} not in route:
+                continue
+            if workflow is None:
+                workflow = read_workflow(path)
+            value = workflow
+            for part in route:
+                value = value[part["Key"] if "Key" in part else part["Index"]]
+            loc["concrete"]["feature"] = {"permission_value": value}
 
 
 def scan_revision(revision, directory, severity, changed_paths, *, check_syntax):
@@ -179,6 +243,7 @@ def scan_revision(revision, directory, severity, changed_paths, *, check_syntax)
         report = json.loads(result.stdout)
         if not isinstance(report, list):
             raise ValueError("Expected a zizmor json-v1 report")
+        normalize_permission_features(report, directory / path)
         findings.extend(report)
     return findings
 
