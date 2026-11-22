@@ -38,6 +38,36 @@ class ComparisonTest(unittest.TestCase):
                          {"template-injection", "excessive-permissions"})
         self.assertEqual(sum(compare.introduced(report, report + shifted).values()), 2)
 
+    def test_matched_expression_and_step_context(self):
+        fixture = Path(__file__).parent / "fixtures/workflow-lint/zizmor-1.30.1.json"
+        original = next(x for x in json.loads(fixture.read_text())
+                        if x["ident"] == "template-injection")
+        edited = copy.deepcopy(original)
+        for loc in edited["locations"]:
+            feature = loc["concrete"]["feature"]
+            if "echo " in feature:
+                loc["concrete"]["feature"] = feature.replace("echo ", "echo harmless; echo ")
+        self.assertFalse(compare.introduced([original], [edited]))
+        for loc in edited["locations"]:
+            if loc["symbolic"]["kind"] == "Hidden":
+                loc["concrete"]["feature"] = loc["concrete"]["feature"].replace(
+                    "name: Static input", "name: Another step")
+        self.assertTrue(compare.introduced([original], [edited]))
+
+    def test_rename_keeps_findings_but_new_file_does_not(self):
+        old = b".github/workflows/ci.yml"
+        new = b".github/workflows/renamed.yml"
+        added = b".github/workflows/new.yml"
+        changes = b"\0".join([b"R100", old, new, b"A", added, b""])
+        base, head, renames = compare.workflow_paths(changes)
+        self.assertEqual(base, {old})
+        self.assertEqual(head, {new, added})
+        original = finding()
+        renamed = copy.deepcopy(original)
+        renamed["locations"][0]["symbolic"]["key"]["Local"]["verbatim_path"] = new.decode()
+        self.assertFalse(compare.introduced([original], [renamed], renames))
+        self.assertTrue(compare.introduced([], [renamed], renames))
+
     def test_baseline_parse_error_is_local_to_one_workflow(self):
         paths = [b".github/workflows/bad.yml", b".github/workflows/valid.yml"]
         entries = b"".join(b"100644 blob abc\t" + name + b"\0" for name in paths)
