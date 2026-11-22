@@ -17,10 +17,26 @@ def step_correspondence(old, new):
     old_ids = {step["id"]: i for i, step in enumerate(old) if step.get("id")}
     mapping = {i: old_ids[step["id"]] for i, step in enumerate(new)
                if step.get("id") in old_ids}
+    # A unique display name can identify a reordered step. It is optional
+    # evidence: a name-only change still falls back to step correspondence.
+    def named_positions(steps):
+        positions = {}
+        for i, step in enumerate(steps):
+            if not step.get("id") and step.get("name"):
+                positions.setdefault(step["name"], []).append(i)
+        return positions
+
+    old_names, new_names = named_positions(old), named_positions(new)
+    for name in old_names.keys() & new_names.keys():
+        if len(old_names[name]) == len(new_names[name]) == 1:
+            head, base = new_names[name][0], old_names[name][0]
+            mapping[head] = base
+
+    matched_old = set(mapping.values())
     older = [(i, {k: v for k, v in step.items() if k != "name"})
-             for i, step in enumerate(old) if not step.get("id")]
+             for i, step in enumerate(old) if not step.get("id") and i not in matched_old]
     newer = [(i, {k: v for k, v in step.items() if k != "name"})
-             for i, step in enumerate(new) if not step.get("id")]
+             for i, step in enumerate(new) if not step.get("id") and i not in mapping]
     if len(older) == len(newer):
         for (base_idx, base_step), (head_idx, head_step) in zip(older, newer):
             # Distinguish changed execution contexts even at the same index.
@@ -54,11 +70,11 @@ def step_correspondence(old, new):
 
 
 def job_steps(path):
-    # Psych is Ruby's standard YAML parser. Only deserialize ordinary YAML data.
-    script = ('doc = Psych.safe_load(File.read(ARGV.fetch(0))); '
-              'puts JSON.generate(doc.fetch("jobs").transform_values { |j| j.fetch("steps", []) })')
-    output = subprocess.check_output(["ruby", "--disable-gems", "-rpsych", "-rjson",
-                                      "-e", script, str(path)])
+    # Both supported GitHub-hosted images include Mike Farah's yq. The
+    # expression is constant; the workflow is read only as YAML data.
+    output = subprocess.check_output([
+        "yq", "eval", "-o=json", ".jobs | with_entries(.value = (.value.steps // []))", str(path),
+    ])
     return json.loads(output)
 
 

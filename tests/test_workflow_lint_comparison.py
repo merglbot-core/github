@@ -75,11 +75,27 @@ class ComparisonTest(unittest.TestCase):
         self.assertEqual(compare.step_correspondence(base, new), {2: 0, 1: 1})
         self.assertEqual(compare.step_correspondence([{"run": "x"}], [{"run": "x"}] * 2), {})
 
+    def test_unique_names_follow_reordered_steps_and_tolerate_display_edits(self):
+        base = [{"name": "first", "run": "x"}, {"name": "second", "run": "y"}]
+        reordered = [{"name": "second", "run": "x"}, {"name": "first", "run": "y"}]
+        self.assertEqual(compare.step_correspondence(base, reordered), {0: 1, 1: 0})
+        renamed = [{"name": "display only", "run": "x"}, base[1]]
+        self.assertEqual(compare.step_correspondence(base, renamed), {0: 0, 1: 1})
+
     def test_job_steps_reads_yaml_as_data(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "ci.yml"
             path.write_text("jobs:\n  ci:\n    steps:\n      - id: stable\n        run: example\n")
             self.assertEqual(compare.job_steps(path), {"ci": [{"id": "stable", "run": "example"}]})
+
+    def test_job_steps_preserve_string_ids_and_resolve_aliases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ci.yml"
+            path.write_text("jobs:\n  yes:\n    steps:\n      - &sample {id: on, run: demo}\n"
+                            "  no:\n    steps: [*sample]\n  delegate:\n    uses: org/repo/path@ref\n")
+            steps = compare.job_steps(path)
+            self.assertEqual(steps, {"yes": [{"id": "on", "run": "demo"}],
+                                     "no": [{"id": "on", "run": "demo"}], "delegate": []})
 
     def test_rename_keeps_findings_but_new_file_does_not(self):
         old = b".github/workflows/ci.yml"
