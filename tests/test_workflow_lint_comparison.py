@@ -55,6 +55,23 @@ class ComparisonTest(unittest.TestCase):
                     "name: Static input", "name: Another step")
         self.assertFalse(compare.introduced([original], [edited]))
 
+    def test_same_step_and_expression_in_a_changed_command_is_new(self):
+        fixture = Path(__file__).parent / "fixtures/workflow-lint/zizmor-1.30.1.json"
+        old = next(x for x in json.loads(fixture.read_text()) if x["ident"] == "template-injection")
+        new = copy.deepcopy(old)
+        primary = next(loc for loc in new["locations"] if loc["symbolic"]["kind"] == "Primary")
+        primary["concrete"]["feature"] = primary["concrete"]["feature"].replace("echo ", "printf ")
+        self.assertTrue(compare.introduced([old], [new], step_maps={(
+            ".github/workflows/ci.yml", "ci"): {0: 0}}))
+
+    def test_compound_or_quoted_command_changes_keep_full_feature(self):
+        command = 'echo "${{ github.event.pull_request.title }}"'
+        fragment = {"Raw": "github.event.pull_request.title"}
+        for prefix in ('cd subdir; ', 'echo "a;b"; ', "echo hello && ", "set -e; "):
+            with self.subTest(prefix=prefix):
+                self.assertNotEqual(compare.injection_feature(prefix + command, fragment),
+                                    compare.injection_feature(command, fragment))
+
     def test_anonymous_steps_keep_distinct_occurrences(self):
         old = [{"run": "old"}, {"run": "safe"}]
         new = [{"run": "safe"}, {"run": "old"}]
@@ -81,6 +98,20 @@ class ComparisonTest(unittest.TestCase):
         self.assertEqual(compare.step_correspondence(base, reordered), {0: 1, 1: 0})
         renamed = [{"name": "display only", "run": "x"}, base[1]]
         self.assertEqual(compare.step_correspondence(base, renamed), {0: 0, 1: 1})
+
+    def test_edit_and_insert_do_not_orphan_unchanged_sibling(self):
+        old = [{"run": "first"}, {"run": "second"}]
+        new = [old[0], {"run": "edited"}, {"run": "added"}]
+        self.assertEqual(compare.step_correspondence(old, new), {0: 0})
+        new[0] = {"id": "new_id", **old[0]}
+        self.assertEqual(compare.step_correspondence(old, new), {0: 0})
+
+    def test_execution_context_is_required_even_for_named_steps(self):
+        for identity in ({"id": "build"}, {"name": "Build"}, {}):
+            with self.subTest(identity=identity):
+                old = [{**identity, "shell": "bash", "run": "same"}]
+                new = [{**identity, "shell": "pwsh", "run": "same"}]
+                self.assertEqual(compare.step_correspondence(old, new), {})
 
     def test_job_steps_reads_yaml_as_data(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -3,6 +3,7 @@ from collections import Counter
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -14,58 +15,52 @@ BLOCKING_RULES = frozenset({"template-injection", "excessive-permissions"})
 
 def step_correspondence(old, new):
     """Map candidate indices to baseline indices within a single job."""
-    old_ids = {step["id"]: i for i, step in enumerate(old) if step.get("id")}
-    mapping = {i: old_ids[step["id"]] for i, step in enumerate(new)
-               if step.get("id") in old_ids}
-    # A unique display name can identify a reordered step. It is optional
-    # evidence: a name-only change still falls back to step correspondence.
-    def named_positions(steps):
-        positions = {}
-        for i, step in enumerate(steps):
-            if not step.get("id") and step.get("name"):
-                positions.setdefault(step["name"], []).append(i)
-        return positions
+    mapping = {}
+    used = set()
 
-    old_names, new_names = named_positions(old), named_positions(new)
-    for name in old_names.keys() & new_names.keys():
-        if len(old_names[name]) == len(new_names[name]) == 1:
-            head, base = new_names[name][0], old_names[name][0]
-            mapping[head] = base
+    def pair_unique(key):
+        def positions(steps, excluded):
+            result = {}
+            for i, step in enumerate(steps):
+                if i not in excluded:
+                    value = key(step)
+                    if value is not None:
+                        result.setdefault(value, []).append(i)
+            return result
 
-    matched_old = set(mapping.values())
-    older = [(i, {k: v for k, v in step.items() if k != "name"})
-             for i, step in enumerate(old) if not step.get("id") and i not in matched_old]
-    newer = [(i, {k: v for k, v in step.items() if k != "name"})
-             for i, step in enumerate(new) if not step.get("id") and i not in mapping]
-    if len(older) == len(newer):
-        for (base_idx, base_step), (head_idx, head_step) in zip(older, newer):
-            # Distinguish changed execution contexts even at the same index.
-            if ({k: v for k, v in base_step.items() if k != "run"} ==
-                    {k: v for k, v in head_step.items() if k != "run"}):
-                mapping[head_idx] = base_idx
-        return mapping
-    # Insertions and deletions: only accept unchanged anonymous steps when
-    # their position in the ordered subsequence is unambiguous in both directions.
-    short, long = (older, newer) if len(older) < len(newer) else (newer, older)
-    def match(items, candidates):
-        candidates = iter(candidates)
-        pairs = {}
-        for idx, step in items:
-            for other_idx, candidate in candidates:
-                if step == candidate:
-                    pairs[idx] = other_idx
-                    break
-            else:
-                return {}
-        return pairs
-    forward = match(short, long)
-    backward = match(reversed(short), reversed(long))
-    for idx, other in forward.items():
-        if backward.get(idx) == other:
-            if len(older) < len(newer):
-                mapping[other] = idx
-            else:
-                mapping[idx] = other
+        before = positions(old, used)
+        after = positions(new, mapping)
+        for value in before.keys() & after.keys():
+            if len(before[value]) == len(after[value]) == 1:
+                base, head = before[value][0], after[value][0]
+                if compatible(base, head):
+                    mapping[head] = base
+                    used.add(base)
+
+    def compatible(base, head):
+        left, right = old[base], new[head]
+        if left.get("id") and right.get("id") and left["id"] != right["id"]:
+            return False
+        ignored = {"id", "name", "run"}
+        return ({k: v for k, v in left.items() if k not in ignored}
+                == {k: v for k, v in right.items() if k not in ignored})
+
+    pair_unique(lambda step: step.get("id"))
+    pair_unique(lambda step: step.get("name"))
+    # Anonymous steps at equal positions retain identity across edits. A
+    # reorder cannot transfer an issue to a different anonymous position.
+    if len(old) == len(new):
+        for i in range(len(new)):
+            if i not in mapping and i not in used and compatible(i, i):
+                mapping[i] = i
+                used.add(i)
+    else:
+        # Pair independently of unrelated changed siblings. Display names
+        # and an added or removed ID do not change the step's executable data.
+        def executable(step):
+            return json.dumps({k: v for k, v in step.items() if k not in {"name", "id"}},
+                              sort_keys=True)
+        pair_unique(executable)
     return mapping
 
 
@@ -76,6 +71,19 @@ def job_steps(path):
         "yq", "eval", "-o=json", ".jobs | with_entries(.value = (.value.steps // []))", str(path),
     ])
     return json.loads(output)
+
+
+def injection_feature(feature, fragment):
+    # A scanner subfeature identifies the expression, not the command that
+    # consumes it. Keep the complete source, except for an unambiguous
+    # literal echo prelude. Never interpret escapes, quoting or shell syntax.
+    # Restrict the remainder to one simple echo/printf expression command;
+    # otherwise keep the entire scanner feature, including its quoting.
+    simple = re.fullmatch(
+        r"(?:echo [a-zA-Z0-9_ .-]+(?:;[ \t]+|\n))+"
+        r'((?:echo|printf) "\$\{\{ [a-zA-Z0-9_.]+ \}\}")',
+        feature)
+    return [fragment, simple.group(1) if simple else feature]
 
 
 def blocking_findings(report, renames=None, step_maps=None):
@@ -98,7 +106,9 @@ def blocking_findings(report, renames=None, step_maps=None):
             route = list(symbolic["route"]["route"])
             kind = symbolic.get("feature_kind")
             fragment = (kind.get("Subfeature", {}).get("fragment") if isinstance(kind, dict) else None)
-            feature = fragment if fragment is not None else loc["concrete"]["feature"]
+            feature = loc["concrete"]["feature"]
+            if fragment is not None and rule == "template-injection":
+                feature = injection_feature(feature, fragment)
             if step_maps is not None and len(route) >= 4 and route[2] == {"Key": "steps"}:
                 step_index = route[3]["Index"]
                 base_index = step_maps.get((path, route[1]["Key"]), {}).get(step_index)
