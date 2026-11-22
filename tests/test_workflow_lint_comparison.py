@@ -33,7 +33,8 @@ class ComparisonTest(unittest.TestCase):
                 for part in loc["symbolic"]["route"]["route"]:
                     if "Index" in part:
                         part["Index"] += 1
-        self.assertFalse(compare.introduced(report, shifted))
+        self.assertFalse(compare.introduced(report, shifted, step_maps={(
+            ".github/workflows/ci.yml", "ci"): {1: 0}}))
         self.assertEqual({key[0] for key in compare.introduced([], report)},
                          {"template-injection", "excessive-permissions"})
         self.assertEqual(sum(compare.introduced(report, report + shifted).values()), 2)
@@ -52,7 +53,33 @@ class ComparisonTest(unittest.TestCase):
             if loc["symbolic"]["kind"] == "Hidden":
                 loc["concrete"]["feature"] = loc["concrete"]["feature"].replace(
                     "name: Static input", "name: Another step")
-        self.assertTrue(compare.introduced([original], [edited]))
+        self.assertFalse(compare.introduced([original], [edited]))
+
+    def test_anonymous_steps_keep_distinct_occurrences(self):
+        old = [{"run": "old"}, {"run": "safe"}]
+        new = [{"run": "safe"}, {"run": "old"}]
+        self.assertEqual(compare.step_correspondence(old, new), {0: 0, 1: 1})
+        fixture = Path(__file__).parent / "fixtures/workflow-lint/zizmor-1.30.1.json"
+        original = next(x for x in json.loads(fixture.read_text()) if x["ident"] == "template-injection")
+        moved = copy.deepcopy(original)
+        for loc in moved["locations"]:
+            for part in loc["symbolic"]["route"]["route"]:
+                if "Index" in part:
+                    part["Index"] = 1
+        maps = {(".github/workflows/ci.yml", "ci"): compare.step_correspondence(old, new)}
+        self.assertTrue(compare.introduced([original], [moved], step_maps=maps))
+
+    def test_step_correspondence_after_insert_rename_or_duplicate(self):
+        base = [{"id": "build", "run": "x"}, {"name": "display", "run": "y"}]
+        new = [{"run": "unrelated"}, {"name": "renamed", "run": "y"}, base[0]]
+        self.assertEqual(compare.step_correspondence(base, new), {2: 0, 1: 1})
+        self.assertEqual(compare.step_correspondence([{"run": "x"}], [{"run": "x"}] * 2), {})
+
+    def test_job_steps_reads_yaml_as_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ci.yml"
+            path.write_text("jobs:\n  ci:\n    steps:\n      - id: stable\n        run: example\n")
+            self.assertEqual(compare.job_steps(path), {"ci": [{"id": "stable", "run": "example"}]})
 
     def test_rename_keeps_findings_but_new_file_does_not(self):
         old = b".github/workflows/ci.yml"

@@ -12,32 +12,57 @@ import tempfile
 BLOCKING_RULES = frozenset({"template-injection", "excessive-permissions"})
 
 
-def location_identity(loc, locations):
-    symbolic = loc["symbolic"]
-    route = list(symbolic["route"]["route"])
-    feature = loc["concrete"]["feature"]
-    feature_kind = symbolic.get("feature_kind")
-    fragment = (feature_kind.get("Subfeature", {}).get("fragment")
-                if isinstance(feature_kind, dict) else None)
-    for i, part in enumerate(route):
-        if i == 0 or route[i - 1] != {"Key": "steps"} or "Index" not in part:
-            continue
-        for context in locations:
-            parent = context["symbolic"]
-            if (parent["kind"] != "Hidden" or parent["key"] != symbolic["key"]
-                    or parent["route"]["route"] != route[:i + 1]):
-                continue
-            # The scanner supplies the containing step including id, name, if,
-            # env and shell. Preserve the context on both sides of the scalar.
-            step = context["concrete"]["feature"]
-            if feature and step.count(feature) == 1:
-                before, after = step.split(feature)
-                route[i] = {"Step": [before, after]}
-            break
-    return route, fragment if fragment is not None else feature
+def step_correspondence(old, new):
+    """Map candidate indices to baseline indices within a single job."""
+    old_ids = {step["id"]: i for i, step in enumerate(old) if step.get("id")}
+    mapping = {i: old_ids[step["id"]] for i, step in enumerate(new)
+               if step.get("id") in old_ids}
+    older = [(i, {k: v for k, v in step.items() if k != "name"})
+             for i, step in enumerate(old) if not step.get("id")]
+    newer = [(i, {k: v for k, v in step.items() if k != "name"})
+             for i, step in enumerate(new) if not step.get("id")]
+    if len(older) == len(newer):
+        for (base_idx, base_step), (head_idx, head_step) in zip(older, newer):
+            # Distinguish changed execution contexts even at the same index.
+            if ({k: v for k, v in base_step.items() if k != "run"} ==
+                    {k: v for k, v in head_step.items() if k != "run"}):
+                mapping[head_idx] = base_idx
+        return mapping
+    # Insertions and deletions: only accept unchanged anonymous steps when
+    # their position in the ordered subsequence is unambiguous in both directions.
+    short, long = (older, newer) if len(older) < len(newer) else (newer, older)
+    def match(items, candidates):
+        candidates = iter(candidates)
+        pairs = {}
+        for idx, step in items:
+            for other_idx, candidate in candidates:
+                if step == candidate:
+                    pairs[idx] = other_idx
+                    break
+            else:
+                return {}
+        return pairs
+    forward = match(short, long)
+    backward = match(reversed(short), reversed(long))
+    for idx, other in forward.items():
+        if backward.get(idx) == other:
+            if len(older) < len(newer):
+                mapping[other] = idx
+            else:
+                mapping[idx] = other
+    return mapping
 
 
-def blocking_findings(report, renames=None):
+def job_steps(path):
+    # Psych is Ruby's standard YAML parser. Only deserialize ordinary YAML data.
+    script = ('doc = Psych.safe_load(File.read(ARGV.fetch(0))); '
+              'puts JSON.generate(doc.fetch("jobs").transform_values { |j| j.fetch("steps", []) })')
+    output = subprocess.check_output(["ruby", "--disable-gems", "-rpsych", "-rjson",
+                                      "-e", script, str(path)])
+    return json.loads(output)
+
+
+def blocking_findings(report, renames=None, step_maps=None):
     if not isinstance(report, list):
         raise ValueError("Expected a zizmor json-v1 report")
     findings = Counter()
@@ -54,7 +79,14 @@ def blocking_findings(report, renames=None):
             # Keep file, logical route, and matched content. Line numbers and
             # byte offsets change when unrelated text is inserted earlier.
             path = symbolic["key"]["Local"]["verbatim_path"]
-            route, feature = location_identity(loc, item["locations"])
+            route = list(symbolic["route"]["route"])
+            kind = symbolic.get("feature_kind")
+            fragment = (kind.get("Subfeature", {}).get("fragment") if isinstance(kind, dict) else None)
+            feature = fragment if fragment is not None else loc["concrete"]["feature"]
+            if step_maps is not None and len(route) >= 4 and route[2] == {"Key": "steps"}:
+                step_index = route[3]["Index"]
+                base_index = step_maps.get((path, route[1]["Key"]), {}).get(step_index)
+                route[3] = {"Index": base_index} if base_index is not None else {"New": step_index}
             locations.append(json.dumps([
                 (renames or {}).get(path, path), route, feature, symbolic["annotation"],
             ], ensure_ascii=False, sort_keys=True))
@@ -64,8 +96,8 @@ def blocking_findings(report, renames=None):
     return findings
 
 
-def introduced(base_report, head_report, renames=None):
-    return blocking_findings(head_report) - blocking_findings(base_report, renames)
+def introduced(base_report, head_report, renames=None, step_maps=None):
+    return blocking_findings(head_report, step_maps=step_maps) - blocking_findings(base_report, renames)
 
 
 def scan_revision(revision, directory, severity, changed_paths, *, check_syntax):
@@ -156,7 +188,25 @@ def main(base_sha, severity):
         root = Path(tmp)
         baseline = scan_revision(base, root / "base", severity, base_paths, check_syntax=False)
         candidate = scan_revision("HEAD", root / "head", severity, head_paths, check_syntax=True)
-    new = introduced(baseline, candidate, renames)
+        step_maps = {}
+        baseline_step_paths = {
+            loc["symbolic"]["key"]["Local"]["verbatim_path"]
+            for item in baseline if item["ident"] in BLOCKING_RULES and item["determinations"]["severity"] == "High"
+            for loc in item["locations"] if loc["symbolic"]["kind"] == "Primary"
+            and {"Key": "steps"} in loc["symbolic"]["route"]["route"]
+        }
+        for name in base_paths:
+            previous = os.fsdecode(name)
+            current = renames.get(previous, previous)
+            old_path, new_path = root / "base" / previous, root / "head" / current
+            if not (old_path.is_file() and new_path.is_file()):
+                continue
+            if previous not in baseline_step_paths:
+                continue
+            old_jobs = job_steps(old_path)
+            for job, steps in job_steps(new_path).items():
+                step_maps[current, job] = step_correspondence(old_jobs.get(job, []), steps)
+        new = introduced(baseline, candidate, renames, step_maps)
     print(f"Workflow lint: {len(candidate)} findings at selected severity, "
           f"{sum(new.values())} new blocking findings")
     if new:

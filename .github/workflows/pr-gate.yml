@@ -656,8 +656,18 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           ZIZMOR_MIN_SEVERITY: ${{ inputs['zizmor-min-severity'] }}
+          CALLED_WORKFLOW_REPO: ${{ job.workflow_repository }}
+          CALLED_WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
           set -euo pipefail
+          if [[ "$CALLED_WORKFLOW_REPO" != "merglbot-core/github" || ! "$CALLED_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "::error::Cannot verify the called hub workflow identity"
+            exit 1
+          fi
+          if [[ "$(git -C .docs-governance-hub rev-parse HEAD)" != "$CALLED_WORKFLOW_SHA" ]]; then
+            echo "::error::Hub checkout differs from the called workflow revision"
+            exit 1
+          fi
           python3 -I .docs-governance-hub/scripts/workflow-lint/compare.py "$BASE_SHA" "$ZIZMOR_MIN_SEVERITY" | tee -a "$GITHUB_STEP_SUMMARY"
 
       # --- optional terraform fmt (S3, EPIC platform#1722) ---------------------

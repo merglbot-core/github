@@ -47,6 +47,22 @@ class WorkflowChangesTest(unittest.TestCase):
         lint = workflow.split("id: workflow_lint\n", 1)[1].split("      - name:", 1)[0]
         self.assertIn("steps.trusted_hub_checkout.outcome == 'success'", lint)
 
+    def test_lint_refuses_missing_foreign_or_mismatched_called_workflow(self):
+        lint = WORKFLOW.read_text().split("id: workflow_lint\n", 1)[1].split("      - name:", 1)[0]
+        guard = textwrap.dedent(lint.split("        run: |\n", 1)[1].split("          python3", 1)[0])
+        (self.repo / ".docs-governance-hub").mkdir()
+        self.git("init", "-q", ".docs-governance-hub")
+        self.git("-C", ".docs-governance-hub", "commit", "--allow-empty", "-qm", "hub")
+        head = self.git("-C", ".docs-governance-hub", "rev-parse", "HEAD")
+        for repo, sha, expected in [("", "", 1), ("other/repo", head, 1),
+                                    ("merglbot-core/github", "0" * 40, 1),
+                                    ("merglbot-core/github", head, 0)]:
+            with self.subTest(repo=repo, sha=sha):
+                result = subprocess.run(["bash", "-c", guard], cwd=self.repo, capture_output=True,
+                                        env={**os.environ, "CALLED_WORKFLOW_REPO": repo,
+                                             "CALLED_WORKFLOW_SHA": sha, "GITHUB_SHA": head})
+                self.assertEqual(result.returncode, expected)
+
     def test_change_scope(self):
         (self.repo / "notes.md").write_text("notes\n")
         self.git("add", "notes.md")
