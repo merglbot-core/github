@@ -33,15 +33,22 @@ def step_correspondence(old, new):
         for value in before.keys() & after.keys():
             if not allow_duplicates and (len(before[value]) != 1 or len(after[value]) != 1):
                 continue
-            for base, head in zip(before[value], after[value]):
-                if compatible(base, head):
-                    mapping[head] = base
-                    used.add(base)
+            for base in before[value]:
+                for head in after[value]:
+                    if head not in mapping and compatible(base, head):
+                        mapping[head] = base
+                        used.add(base)
+                        break
 
     def compatible(base, head):
         left, right = old[base], new[head]
         if left.get("id") and right.get("id") and left["id"] != right["id"]:
             return False
+        for step in (left, right):
+            if "implicit-runner" in step:
+                runner = step["implicit-runner"]
+                if not isinstance(runner, str) or "${{" in runner:
+                    return False
         ignored = {"id", "name", "run"}
         return ({k: v for k, v in left.items() if k not in ignored}
                 == {k: v for k, v in right.items() if k not in ignored})
@@ -59,8 +66,10 @@ def step_correspondence(old, new):
         # Pair independently of unrelated changed siblings. Display names
         # and an added or removed ID do not change the step's executable data.
         def executable(step):
-            return json.dumps({k: v for k, v in step.items() if k not in {"name", "id"}},
-                              sort_keys=True)
+            fields = {k: v for k, v in step.items() if k not in {"name", "id"}}
+            if "run" in fields:
+                fields["run"] = command_identity(fields["run"])
+            return json.dumps(fields, sort_keys=True)
         pair_steps(executable, allow_duplicates=True)
     return mapping
 
@@ -76,12 +85,18 @@ def job_steps(path):
     jobs = {}
     for name, job in workflow["jobs"].items():
         inherited = {**defaults, **job.get("defaults", {}).get("run", {})}
-        jobs[name] = [{**inherited, **step} if "run" in step else step
-                      for step in job.get("steps", [])]
+        steps = []
+        for step in job.get("steps", []):
+            if "run" in step:
+                step = {**inherited, **step}
+                if "shell" not in step and "runs-on" in job:
+                    step["implicit-runner"] = job["runs-on"]
+            steps.append(step)
+        jobs[name] = steps
     return jobs
 
 
-def injection_feature(feature, fragment):
+def command_identity(feature):
     # A scanner subfeature identifies the expression, not the command that
     # consumes it. Keep the complete source, except for an unambiguous
     # literal echo prelude. Never interpret escapes, quoting or shell syntax.
@@ -91,7 +106,7 @@ def injection_feature(feature, fragment):
         r"(?:echo [a-zA-Z0-9_ .-]+(?:;[ \t]+|\n))+"
         r'((?:echo|printf) "\$\{\{ [a-zA-Z0-9_.]+ \}\}")',
         feature)
-    return [fragment, simple.group(1) if simple else feature]
+    return simple.group(1) if simple else feature
 
 
 def blocking_findings(report, renames=None, step_maps=None):
@@ -116,7 +131,7 @@ def blocking_findings(report, renames=None, step_maps=None):
             fragment = (kind.get("Subfeature", {}).get("fragment") if isinstance(kind, dict) else None)
             feature = loc["concrete"]["feature"]
             if fragment is not None and rule == "template-injection":
-                feature = injection_feature(feature, fragment)
+                feature = [fragment, command_identity(feature)]
             if step_maps is not None and len(route) >= 4 and route[2] == {"Key": "steps"}:
                 step_index = route[3]["Index"]
                 base_index = step_maps.get((path, route[1]["Key"]), {}).get(step_index)

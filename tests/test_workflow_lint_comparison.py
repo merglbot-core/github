@@ -66,11 +66,10 @@ class ComparisonTest(unittest.TestCase):
 
     def test_compound_or_quoted_command_changes_keep_full_feature(self):
         command = 'echo "${{ github.event.pull_request.title }}"'
-        fragment = {"Raw": "github.event.pull_request.title"}
         for prefix in ('cd subdir; ', 'echo "a;b"; ', "echo hello && ", "set -e; "):
             with self.subTest(prefix=prefix):
-                self.assertNotEqual(compare.injection_feature(prefix + command, fragment),
-                                    compare.injection_feature(command, fragment))
+                self.assertNotEqual(compare.command_identity(prefix + command),
+                                    compare.command_identity(command))
 
     def test_anonymous_steps_keep_distinct_occurrences(self):
         old = [{"run": "old"}, {"run": "safe"}]
@@ -112,6 +111,36 @@ class ComparisonTest(unittest.TestCase):
                 old = [{**identity, "shell": "bash", "run": "same"}]
                 new = [{**identity, "shell": "pwsh", "run": "same"}]
                 self.assertEqual(compare.step_correspondence(old, new), {})
+
+    def test_implicit_runner_changes_or_expressions_do_not_inherit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ci.yml"
+            def steps(runner):
+                path.write_text("jobs:\n  a:\n    runs-on: '" + runner +
+                                "'\n    steps: [{run: demo}, {run: demo, shell: bash}]\n")
+                return compare.job_steps(path)["a"]
+            ubuntu = steps("ubuntu-latest")
+            self.assertEqual(compare.step_correspondence(ubuntu, ubuntu), {0: 0, 1: 1})
+            self.assertEqual(compare.step_correspondence(ubuntu, steps("windows-latest")), {1: 1})
+            dynamic = steps("${{ matrix.runner }}")
+            self.assertEqual(compare.step_correspondence(dynamic, dynamic), {1: 1})
+
+    def test_prelude_and_sibling_insertion_keep_baseline_route(self):
+        report = json.loads((Path(__file__).parent / "fixtures/workflow-lint/zizmor-1.30.1.json").read_text())
+        old = next(x for x in report if x["ident"] == "template-injection")
+        new = copy.deepcopy(old)
+        loc = next(x for x in new["locations"] if x["symbolic"]["kind"] == "Primary")
+        command = loc["concrete"]["feature"]
+        changed = "echo harmless; " + command
+        loc["concrete"]["feature"] = changed
+        loc["symbolic"]["route"]["route"][3]["Index"] = 1
+        matched = compare.step_correspondence([{"run": command}], [{"run": "other"}, {"run": changed}])
+        self.assertEqual(matched, {1: 0})
+        self.assertFalse(compare.introduced([old], [new], step_maps={(".github/workflows/ci.yml", "ci"): matched}))
+
+    def test_incompatible_duplicate_does_not_consume_baseline(self):
+        self.assertEqual(compare.step_correspondence([{"id": "a", "run": "demo"}],
+                         [{"id": "b", "run": "demo"}, {"run": "demo"}]), {1: 0})
 
     def test_job_steps_reads_yaml_as_data(self):
         with tempfile.TemporaryDirectory() as tmp:
