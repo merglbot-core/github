@@ -85,6 +85,45 @@ class ComparisonTest(unittest.TestCase):
         maps = {(".github/workflows/ci.yml", "ci"): compare.step_correspondence(old, new)}
         self.assertTrue(compare.introduced([original], [moved], step_maps=maps))
 
+    def test_reorder_with_appended_step_does_not_inherit(self):
+        old = [{"run": "a"}, {"run": "b"}, {"run": "c"}]
+        new = [old[1], old[0], old[2], {"run": "d"}]
+        self.assertEqual(compare.step_correspondence(old, new), {2: 2})
+
+    def test_container_changes_implicit_shell(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ci.yml"
+            job = {"runs-on": "ubuntu-latest", "steps": [{"run": "demo"}]}
+            path.write_text(json.dumps({"jobs": {"a": job}}))
+            old = compare.job_steps(path)["a"]
+            job["container"] = "alpine"
+            path.write_text(json.dumps({"jobs": {"a": job}}))
+            self.assertEqual(compare.step_correspondence(old, compare.job_steps(path)["a"]), {})
+
+    def test_static_and_dynamic_runner_lists(self):
+        def steps(labels):
+            return [{"implicit-runner": labels, "run": "demo"}]
+        old = steps(["self-hosted", "linux"])
+        self.assertEqual(compare.step_correspondence(old, old), {0: 0})
+        self.assertEqual(compare.step_correspondence(old, steps(["windows"])), {})
+        dynamic = steps(["self-hosted", "${{ matrix.os }}"])
+        self.assertEqual(compare.step_correspondence(dynamic, dynamic), {})
+
+    def test_permission_key_uses_parsed_value(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ci.yml"
+            def report(line):
+                path.write_text(line)
+                item = finding("excessive-permissions")
+                loc = item["locations"][0]
+                loc["symbolic"]["route"]["route"] = [{"Key": "permissions"}]
+                loc["concrete"]["feature"] = line
+                compare.normalize_permission_features([item], path)
+                return [item]
+            base = report("permissions: write-all")
+            self.assertFalse(compare.introduced(base, report("permissions:  'write-all'")))
+            self.assertTrue(compare.introduced(base, report("permissions: {contents: write}")))
+
     def test_step_correspondence_after_insert_rename_or_duplicate(self):
         base = [{"id": "build", "run": "x"}, {"name": "display", "run": "y"}]
         new = [{"run": "unrelated"}, {"name": "renamed", "run": "y"}, base[0]]

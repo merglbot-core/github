@@ -47,7 +47,8 @@ def step_correspondence(old, new):
         for step in (left, right):
             if "implicit-runner" in step:
                 runner = step["implicit-runner"]
-                if not isinstance(runner, str) or "${{" in runner:
+                labels = runner if isinstance(runner, list) else [runner]
+                if not labels or any(not isinstance(label, str) or "${{" in label for label in labels):
                     return False
         ignored = {"id", "name", "run"}
         return ({k: v for k, v in left.items() if k not in ignored}
@@ -70,17 +71,35 @@ def step_correspondence(old, new):
             if "run" in fields:
                 fields["run"] = command_identity(fields["run"])
             return json.dumps(fields, sort_keys=True)
+        named = set(mapping)
         pair_steps(executable, allow_duplicates=True)
+        # Retain anonymous matches only when their order is consistent in
+        # both revisions. Discard both sides of an ambiguous crossing.
+        matches = sorted((head, base) for head, base in mapping.items() if head not in named)
+        highest = -1
+        for head, base in matches:
+            if base < highest:
+                mapping.pop(head, None)
+            highest = max(highest, base)
+        lowest = len(old)
+        for head, base in reversed(matches):
+            if base > lowest:
+                mapping.pop(head, None)
+            lowest = min(lowest, base)
     return mapping
 
 
-def job_steps(path):
+def read_workflow(path):
     # Both supported GitHub-hosted images include Mike Farah's yq. The
     # expression is constant; the workflow is read only as YAML data.
     output = subprocess.check_output([
         "yq", "eval", "-o=json", ".", str(path),
     ])
-    workflow = json.loads(output)
+    return json.loads(output)
+
+
+def job_steps(path):
+    workflow = read_workflow(path)
     defaults = workflow.get("defaults", {}).get("run", {})
     jobs = {}
     for name, job in workflow["jobs"].items():
@@ -91,6 +110,8 @@ def job_steps(path):
                 step = {**inherited, **step}
                 if "shell" not in step and "runs-on" in job:
                     step["implicit-runner"] = job["runs-on"]
+                    if "container" in job:
+                        step["implicit-container"] = job["container"]
             steps.append(step)
         jobs[name] = steps
     return jobs
@@ -149,6 +170,26 @@ def introduced(base_report, head_report, renames=None, step_maps=None):
     return blocking_findings(head_report, step_maps=step_maps) - blocking_findings(base_report, renames)
 
 
+def normalize_permission_features(report, path):
+    workflow = None
+    for item in report:
+        if item["ident"] != "excessive-permissions" or item["determinations"]["severity"] != "High":
+            continue
+        for loc in item["locations"]:
+            symbolic = loc["symbolic"]
+            if symbolic["kind"] != "Primary":
+                continue
+            route = symbolic["route"]["route"]
+            if {"Key": "permissions"} not in route:
+                continue
+            if workflow is None:
+                workflow = read_workflow(path)
+            value = workflow
+            for part in route:
+                value = value[part["Key"] if "Key" in part else part["Index"]]
+            loc["concrete"]["feature"] = {"permission_value": value}
+
+
 def scan_revision(revision, directory, severity, changed_paths, *, check_syntax):
     # Materialize only regular workflow blobs. Neither revision supplies executable
     # helpers, scanner configuration, symlinks, or a Git working directory.
@@ -202,6 +243,7 @@ def scan_revision(revision, directory, severity, changed_paths, *, check_syntax)
         report = json.loads(result.stdout)
         if not isinstance(report, list):
             raise ValueError("Expected a zizmor json-v1 report")
+        normalize_permission_features(report, directory / path)
         findings.extend(report)
     return findings
 
