@@ -161,8 +161,8 @@ on:
       # on every PR push (measured 30 Sep 2026: 5 repos had `actions` as their only
       # CodeQL language, project-management-app alone ~2 040 min/month). Both
       # binaries are installed into RUNNER_TEMP and pinned by release checksum like
-      # gitleaks above; zizmor runs `--offline`, so no token leaves the job. Findings
-      # fail the gate and are listed in the log and the job summary. There is no
+      # gitleaks above; zizmor runs `--offline`, so no token leaves the job. New high-severity injection or permissions findings block the gate.
+      # Other findings are advisory. There is no
       # SARIF / code-scanning upload: it would need `security-events: write` on this
       # job, which none of the current callers grants.
       workflow-lint:
@@ -431,6 +431,7 @@ jobs:
           path: .docs-governance-hub
           sparse-checkout: |
             actions/docs-governance
+            scripts/workflow-lint
             config/ssot-map.snapshot.json
       - name: docs-governance
         id: docs_governance
@@ -602,8 +603,29 @@ jobs:
 
       # --- optional workflow lint: actionlint + zizmor (github#961) ------------
       # Same install pattern as gitleaks: RUNNER_TEMP, no sudo, release checksum.
-      - name: Install actionlint and zizmor
+      - name: Detect workflow changes
+        id: workflow_changes
         if: ${{ !cancelled() && inputs['workflow-lint'] }}
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BASE_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "::error::Workflow lint requires a valid PR base SHA"
+            exit 1
+          fi
+          if git diff --quiet --no-ext-diff "${BASE_SHA}...HEAD" -- .github/workflows/; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            status=$?
+            if [[ "$status" != 1 ]]; then exit "$status"; fi
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install actionlint and zizmor
+        id: workflow_lint_install
+        if: ${{ !cancelled() && steps.workflow_changes.outputs.changed == 'true' }}
         env:
           ACTIONLINT_VERSION: '1.7.12'
           ACTIONLINT_SHA256: '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8'
@@ -628,36 +650,14 @@ jobs:
 
       - name: Workflow lint (actionlint + zizmor)
         id: workflow_lint
-        if: ${{ !cancelled() && inputs['workflow-lint'] }}
+        if: ${{ !cancelled() && steps.workflow_lint_install.outcome == 'success' }}
         shell: bash
         env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           ZIZMOR_MIN_SEVERITY: ${{ inputs['zizmor-min-severity'] }}
         run: |
-          set -uo pipefail
-          case "${ZIZMOR_MIN_SEVERITY}" in
-            unknown|informational|low|medium|high) ;;
-            *) echo "::error::zizmor-min-severity must be one of unknown, informational, low, medium, high"; exit 1 ;;
-          esac
-          rc=0
-          echo "::group::actionlint"
-          # actionlint lints .github/workflows/*.{yml,yaml} of the checked-out repo;
-          # ShellCheck and pyflakes are used only when present on the runner.
-          actionlint || rc=1
-          echo "::endgroup::"
-          echo "::group::zizmor"
-          zizmor --offline --no-progress --min-severity "${ZIZMOR_MIN_SEVERITY}" \
-            --format plain .github/workflows || rc=1
-          echo "::endgroup::"
-          {
-            echo "### Workflow lint (actionlint + zizmor)"
-            echo ""
-            if [ "${rc}" -eq 0 ]; then
-              echo "No findings (zizmor --min-severity ${ZIZMOR_MIN_SEVERITY})."
-            else
-              echo "**Findings** — see the *Workflow lint* step log (zizmor --min-severity ${ZIZMOR_MIN_SEVERITY})."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit "${rc}"
+          set -euo pipefail
+          python3 -I .docs-governance-hub/scripts/workflow-lint/compare.py "$BASE_SHA" "$ZIZMOR_MIN_SEVERITY" | tee -a "$GITHUB_STEP_SUMMARY"
 
       # --- optional terraform fmt (S3, EPIC platform#1722) ---------------------
       - name: Setup Terraform
@@ -692,6 +692,8 @@ jobs:
           GITLEAKS: ${{ steps.gitleaks.outcome }}
           MARKDOWN_DANGER_LINT: ${{ steps.markdown_danger_lint.outcome }}
           PR_TEXT_LENGTH: ${{ steps.pr_text_length.outcome }}
+          WORKFLOW_CHANGES: ${{ steps.workflow_changes.outcome }}
+          WORKFLOW_LINT_INSTALL: ${{ steps.workflow_lint_install.outcome }}
           WORKFLOW_LINT: ${{ steps.workflow_lint.outcome }}
           TERRAFORM_FMT: ${{ steps.terraform_fmt.outcome }}
         run: |
@@ -710,6 +712,8 @@ jobs:
             "gitleaks:${GITLEAKS}" \
             "markdown-danger-lint:${MARKDOWN_DANGER_LINT}" \
             "pr-text-length:${PR_TEXT_LENGTH}" \
+            "workflow-changes:${WORKFLOW_CHANGES}" \
+            "workflow-lint-install:${WORKFLOW_LINT_INSTALL}" \
             "workflow-lint:${WORKFLOW_LINT}" \
             "terraform-fmt:${TERRAFORM_FMT}"; do
             name="${pair%%:*}"
