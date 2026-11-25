@@ -603,6 +603,7 @@ jobs:
       # --- optional workflow lint: actionlint + zizmor (github#961) ------------
       # Same install pattern as gitleaks: RUNNER_TEMP, no sudo, release checksum.
       - name: Install actionlint and zizmor
+        id: workflow_lint_install
         if: ${{ !cancelled() && inputs['workflow-lint'] }}
         env:
           ACTIONLINT_VERSION: '1.7.12'
@@ -628,7 +629,7 @@ jobs:
 
       - name: Workflow lint (actionlint + zizmor)
         id: workflow_lint
-        if: ${{ !cancelled() && inputs['workflow-lint'] }}
+        if: ${{ !cancelled() && steps.workflow_lint_install.outcome == 'success' }}
         shell: bash
         env:
           ZIZMOR_MIN_SEVERITY: ${{ inputs['zizmor-min-severity'] }}
@@ -692,6 +693,7 @@ jobs:
           GITLEAKS: ${{ steps.gitleaks.outcome }}
           MARKDOWN_DANGER_LINT: ${{ steps.markdown_danger_lint.outcome }}
           PR_TEXT_LENGTH: ${{ steps.pr_text_length.outcome }}
+          WORKFLOW_LINT_INSTALL: ${{ steps.workflow_lint_install.outcome }}
           WORKFLOW_LINT: ${{ steps.workflow_lint.outcome }}
           TERRAFORM_FMT: ${{ steps.terraform_fmt.outcome }}
         run: |
@@ -710,6 +712,7 @@ jobs:
             "gitleaks:${GITLEAKS}" \
             "markdown-danger-lint:${MARKDOWN_DANGER_LINT}" \
             "pr-text-length:${PR_TEXT_LENGTH}" \
+            "workflow-lint-install:${WORKFLOW_LINT_INSTALL}" \
             "workflow-lint:${WORKFLOW_LINT}" \
             "terraform-fmt:${TERRAFORM_FMT}"; do
             name="${pair%%:*}"
