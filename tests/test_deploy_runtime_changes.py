@@ -79,7 +79,7 @@ class RuntimeChangesTests(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(content, encoding="utf-8")
         self.git("add", "-A")
-        self.git("commit", "-q", "--allow-empty", "-m", "c")
+        self.git("-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "c")
         return self.git("rev-parse", "HEAD")
 
     def guard(self, deploy: str, runs=(), jobs_by_id=None, routes=None, **env: str | None) -> dict:

@@ -192,7 +192,7 @@ and the PR comment fires only when the scan itself fails. Measured 20. 10. 2026:
 | `pr-text-max-title` | `100` | title limit in characters |
 | `pr-text-max-body` | `4000` | body limit in bytes |
 | `runs-on` | `ubuntu-slim` | `ubuntu-slim` (1 vCPU, 0.002 USD/min, 15-min job cap) or `ubuntu-24.04`; any other value falls back to `ubuntu-24.04` (github#913) |
-| `workflow-lint` | `false` | On PR changes to workflow files, run actionlint 1.7.12 and offline zizmor 1.30.1. Compare against the merge base. Newly introduced High `template-injection` and `excessive-permissions` findings block. Other diagnostics warn. Tool failures fail the check. Weekly CodeQL remains separate. |
+| `workflow-lint` | `false` | actionlint 1.7.12 + zizmor 1.30.1 (both pinned by release checksum, zizmor `--offline`) over `.github/workflows`; findings fail the gate and go to the log + job summary. A failed tool installation blocks the gate and skips the scan. No SARIF upload (it would need `security-events: write` on the job). Replaces the CodeQL default-setup `actions` language on repos with no other CodeQL language (github#961) |
 | `zizmor-min-severity` | `medium` | zizmor `--min-severity` threshold (`unknown`, `informational`, `low`, `medium`, `high`) |
 | `run-terraform-fmt` | `false` | `terraform fmt -check -recursive -diff` in `terraform-directory` (hashicorp/setup-terraform v4.0.1 pinned by SHA, wrapper off). `terraform validate` is deliberately not offered: `init` executes PR-chosen provider plugins and this job holds `pull-requests: write`; keep validate in a read-only caller job |
 | `terraform-directory` | `.` | repo-relative directory for the terraform fmt step; absolute paths and `..` are rejected |
