@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "scope": "recurring_refresh_dependency_repair",
+  "verify_existing": {
+    "attempt_journal.py": "cb7b0537a77552b4b080d25ec889ca41ad97032bd5d84cb5fce851956b861b17",
+    "bounded_transport.py": "94a4ebf80f3ab6a45a9bcef5206848dfab6bc4927af945aaaf2df2b286fe6ef9",
+    "budget_reader.py": "b49043b86e49f2aa1d6c77e8c7ad76bb0ea99b448b500bcb7e046e83d4bb4d60",
+    "budget_report.py": "f6f16ea9aad3a796f1e4f1806215631b9e31b8f2d273031af6dcbe9004321eca",
+    "pair_exchange.py": "a296184d2d8a734649d4707ce92eb998043cb7a67460619617f4ffd3e4404459",
+    "pair_io.py": "ad7aa8538ba93406890e18986e91c584eaabf0a381a3f52d3d778e299ada1418",
+    "pair_stage.py": "4f3c4cdb3a5321f8d916ad9c7ba9dcc4980558b323d9e37387765999f3f7fb81",
+    "refresh_cli.py": "4fffe86bf5faac98f29b342b77c0fc003b615214186367b2147c8497e030f253",
+    "refresh_policy.py": "031f731595990f364a9e622398909f28557fad906719c4fa396ae038e39eeb26",
+    "refresh_transaction.py": "d4c9bb5ff9eedd99dae04f505ea778f0fb8542f5d906d48c2985455dedee66e0"
+  },
+  "create_only": {
+    "snapshot_adapter.py": "ba8a66f70b8b2048131bcbdb8171316a7b9095620b9c55bb669b2cdfd327e11b"
+  }
+}
