@@ -364,34 +364,35 @@ function collect() {
       // Names are only a cheap hint when default setup is off. A configured
       // repository must prove the workflow actually invokes CodeQL and runs in
       // this repository; even codeql.yml may be unrelated or reusable-only.
-      const advancedFiles = configured ? []
-        : workflows.filter(w => ADVANCED_NAMES.test(w.name)).map(w => w.name);
+      const advancedFiles = [];
       let workflowUnknown = false;
-      if (configured) {
-        for (const w of workflows) {
-          if (!w || typeof w !== 'object' || Array.isArray(w)
-              || typeof w.name !== 'string' || !/^[A-Za-z0-9_.-]{1,255}$/.test(w.name)
-              || w.name.includes('..') || w.type && w.type !== 'file') {
-            report.errors.push(`${full}: malformed workflow directory entry`);
-            workflowUnknown = true;
-            continue;
-          }
-          if (!/\.ya?ml$/i.test(w.name)) continue;
-          try {
-            const body = workflowBody(full, w.name);
-            const structure = workflowStructure(body);
-            if (structure.triggers.length === 1 && structure.triggers[0] === 'workflow_call') continue;
-            const result = invokesCodeql(body, full);
-            if (result.found) advancedFiles.push(w.name);
-            if (result.unknown) {
-              report.errors.push(`${full}: unresolved workflow indirection in ${w.name}`);
-              workflowUnknown = true;
-            }
-          } catch (e) {
-            // Keep looking for proven conflicts in later files, but fail the coverage.
-            report.errors.push(`${full}: could not read ${w.name}: ${safeFailure(e)}`);
+      for (const w of workflows) {
+        if (!w || typeof w !== 'object' || Array.isArray(w) || typeof w.name !== 'string' || !w.name
+            || configured && (!/^[A-Za-z0-9_.-]{1,255}$/.test(w.name)
+              || w.name.includes('..') || w.type && w.type !== 'file')) {
+          report.errors.push(`${full}: malformed workflow directory entry`);
+          workflowUnknown = true;
+          continue;
+        }
+        if (!configured) {
+          if (ADVANCED_NAMES.test(w.name)) advancedFiles.push(w.name);
+          continue;
+        }
+        if (!/\.ya?ml$/i.test(w.name)) continue;
+        try {
+          const body = workflowBody(full, w.name);
+          const structure = workflowStructure(body);
+          if (structure.triggers.length === 1 && structure.triggers[0] === 'workflow_call') continue;
+          const result = invokesCodeql(body, full);
+          if (result.found) advancedFiles.push(w.name);
+          if (result.unknown) {
+            report.errors.push(`${full}: unresolved workflow indirection in ${w.name}`);
             workflowUnknown = true;
           }
+        } catch (e) {
+          // Keep looking for proven conflicts in later files, but fail the coverage.
+          report.errors.push(`${full}: could not read ${w.name}: ${safeFailure(e)}`);
+          workflowUnknown = true;
         }
       }
       if (workflowUnknown) { orgRow.unswept++; report.unswept.push(full); }

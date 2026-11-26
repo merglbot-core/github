@@ -45,7 +45,7 @@ if path.startswith('installation/repositories?'):
     repo_id = 18 if mode == 'mismatch' else 17
     repos = [{'id': repo_id, 'name': 'example', 'full_name': 'merglbot-core/example',
               'archived': False, 'disabled': False}]
-    if mode in ('partial', 'partial_conflict'):
+    if mode in ('partial', 'partial_conflict', 'malformed_second'):
         repos.append({'id': 18, 'name': 'second', 'full_name': 'merglbot-core/second',
                       'archived': False, 'disabled': False})
     print(json.dumps([{'total_count': len(repos), 'repositories': repos}]))
@@ -54,7 +54,7 @@ elif path == 'repos/merglbot-core/example/code-scanning/default-setup':
         print('HTTP 404 Resource not found', file=sys.stderr)
         sys.exit(1)
     state = 'unknown' if mode == 'unknown_state' else 'configured' if mode in ('reusable', 'unrelated', 'real_conflict',
-                                     'partial_conflict', 'unreadable_candidate',
+                                     'partial_conflict', 'malformed_second', 'unreadable_candidate',
                                      'commented_action', 'dual_trigger', 'reusable_caller',
                                      'nested_reusable', 'directory_object', 'mixed_case_action',
                                      'local_composite', 'direct_and_local',
@@ -79,7 +79,7 @@ elif path == 'repos/merglbot-core/example/contents/.github/workflows':
     print(json.dumps([{'name': 'codeql.yml'}] +
                      ([{'name': 'later.yml'}] if mode in
                       ('conflict_then_unreadable', 'unknown_before_conflict') else [])) if mode in
-          ('reusable', 'unrelated', 'real_conflict', 'partial_conflict',
+          ('reusable', 'unrelated', 'real_conflict', 'partial_conflict', 'malformed_second',
            'unreadable_candidate', 'commented_action', 'dual_trigger',
            'reusable_caller', 'nested_reusable', 'conflict_then_unreadable',
            'mixed_case_action', 'local_composite', 'direct_and_local',
@@ -160,8 +160,13 @@ elif path == 'repos/merglbot-core/example/contents/.github/workflows/later.yml':
     print('HTTP 403 not authorized', file=sys.stderr)
     sys.exit(1)
 elif path == 'repos/merglbot-core/second/code-scanning/default-setup':
+    if mode == 'malformed_second':
+        print(json.dumps({'state': 'not-configured', 'languages': []}))
+        sys.exit(0)
     print('HTTP 403 not authorized to read code scanning', file=sys.stderr)
     sys.exit(1)
+elif path == 'repos/merglbot-core/second/contents/.github/workflows' and mode == 'malformed_second':
+    print(json.dumps([None, {'name': 'codeql.yml'}]))
 elif path == 'user/orgs':
     print(json.dumps([[{'login': 'merglbot-core'}]]))
 elif path.startswith('orgs/merglbot-core/repos?'):
@@ -181,7 +186,7 @@ else:
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, quiet=True, json_report=True):
         scope = json.loads(self.scope.read_text())
         scope["organization"] = org
-        if fixture_mode in ("partial", "partial_conflict"):
+        if fixture_mode in ("partial", "partial_conflict", "malformed_second"):
             scope["repositories"].append({"id": 18, "name": "second"})
         self.scope.write_text(json.dumps(scope))
         env = os.environ.copy()
@@ -400,6 +405,19 @@ else:
         self.assertEqual(result.returncode, 1)
         report = json.loads(result.stdout)
         self.assertEqual(report["unswept"], ["merglbot-core/example"])
+
+    def test_malformed_entry_with_default_setup_off_preserves_other_conflicts(self):
+        result = self.run_scanner(fixture_mode="malformed_second")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads((self.output / "latest.json").read_text())
+        self.assertEqual(json.loads(result.stdout), report)
+        self.assertEqual(report["status"], "CONFLICT_PARTIAL")
+        self.assertEqual(report["unswept"], ["merglbot-core/second"])
+        self.assertEqual([c["repo"] for c in report["conflicts"]], ["merglbot-core/example"])
+        self.assertEqual(report["advanced_workflow"], 2)
+        history = (self.output / "history.jsonl").read_text().splitlines()
+        self.assertEqual(len(history), 1)
+        self.assertEqual(json.loads(history[0])["conflicts"], ["merglbot-core/example"])
 
     def test_statically_disabled_step_does_not_conflict(self):
         result = self.run_scanner(fixture_mode="disabled_step")
