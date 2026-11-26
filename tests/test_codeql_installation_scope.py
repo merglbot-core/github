@@ -177,7 +177,7 @@ else:
 """)
         gh.chmod(0o755)
 
-    def run_scanner(self, *, token=True, fixture_mode=None, org="merglbot-core", large_report=False):
+    def run_scanner(self, *, token=True, fixture_mode=None, org="merglbot-core", large_report=False, stdout=subprocess.PIPE):
         scope = json.loads(self.scope.read_text())
         scope["organization"] = org
         if fixture_mode in ("partial", "partial_conflict"):
@@ -198,7 +198,7 @@ else:
         return subprocess.run(
             ["node", str(SCRIPT), "--installation-scope", str(self.scope),
              "--output-dir", str(self.output), "--json", "--quiet"],
-            env=env, capture_output=True, text=True, timeout=15, check=False)
+            env=env, stdout=stdout, stderr=subprocess.PIPE, text=True, timeout=15, check=False)
 
     def test_piped_conflict_json_matches_durable_report(self):
         result = self.run_scanner(fixture_mode="real_conflict", large_report=True)
@@ -207,6 +207,14 @@ else:
         self.assertGreater(len(json.dumps(expected)), 128 * 1024)
         self.assertEqual(json.loads(result.stdout), expected)
         self.assertEqual(len((self.output / "history.jsonl").read_text().splitlines()), 1)
+
+    def test_closed_output_reader_preserves_conflict_status(self):
+        read_fd, write_fd = os.pipe()
+        os.close(read_fd)
+        with os.fdopen(write_fd, "wb") as pipe:
+            result = self.run_scanner(fixture_mode="real_conflict", stdout=pipe)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(json.loads((self.output / "latest.json").read_text())["status"], "CONFLICT")
 
     def calls_made(self):
         if not self.calls.exists():

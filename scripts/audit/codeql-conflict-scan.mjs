@@ -421,4 +421,8 @@ function finish() {
 }
 
 process.exitCode = collect();
+// The collector's status also describes the saved report when a reader closes early.
+process.stdout.on('error', error => {
+  if (error.code !== 'EPIPE') throw error;
+});
 finish();
