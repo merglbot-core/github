@@ -64,7 +64,10 @@ elif path == 'repos/merglbot-core/example/code-scanning/default-setup':
                                      'malformed_then_conflict', 'malformed_only',
                                      'reusable_conflict_then_unreadable',
                                      'conflict_then_unreadable') else 'not-configured'
-    print(json.dumps({'state': state, 'languages': ['javascript']}))
+    languages = ['javascript']
+    if os.environ.get('LARGE_REPORT') == '1':
+        languages += ['fixture-language-' + str(i) for i in range(7500)]
+    print(json.dumps({'state': state, 'languages': languages}))
 elif path == 'repos/merglbot-core/example/contents/.github/workflows':
     if mode == 'directory_object':
         print(json.dumps({'unexpected': True}))
@@ -174,7 +177,7 @@ else:
 """)
         gh.chmod(0o755)
 
-    def run_scanner(self, *, token=True, fixture_mode=None, org="merglbot-core"):
+    def run_scanner(self, *, token=True, fixture_mode=None, org="merglbot-core", large_report=False):
         scope = json.loads(self.scope.read_text())
         scope["organization"] = org
         if fixture_mode in ("partial", "partial_conflict"):
@@ -189,12 +192,21 @@ else:
             env["GH_TOKEN"] = "fixture-only"
         else:
             env.pop("GH_TOKEN", None)
+        env["LARGE_REPORT"] = "1" if large_report else "0"
         if fixture_mode:
             env["GH_FIXTURE_MODE"] = fixture_mode
         return subprocess.run(
             ["node", str(SCRIPT), "--installation-scope", str(self.scope),
              "--output-dir", str(self.output), "--json", "--quiet"],
             env=env, capture_output=True, text=True, timeout=15, check=False)
+
+    def test_piped_conflict_json_matches_durable_report(self):
+        result = self.run_scanner(fixture_mode="real_conflict", large_report=True)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        expected = json.loads((self.output / "latest.json").read_text())
+        self.assertGreater(len(json.dumps(expected)), 128 * 1024)
+        self.assertEqual(json.loads(result.stdout), expected)
+        self.assertEqual(len((self.output / "history.jsonl").read_text().splitlines()), 1)
 
     def calls_made(self):
         if not self.calls.exists():
