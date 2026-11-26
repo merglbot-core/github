@@ -441,6 +441,8 @@ try {
   process.exitCode = collect();
 } catch {
   report.status = report.conflicts.length ? 'CONFLICT_PARTIAL' : 'ERROR';
+  // The unexpected stop leaves the rest of the inventory unverified.
+  report.unswept.push('*');
   report.errors.push('collection stopped before all repositories could be verified');
   process.exitCode = 1;
 }

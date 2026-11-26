@@ -183,7 +183,7 @@ else:
         gh.chmod(0o755)
 
     def run_scanner(self, *, token=True, fixture_mode=None, org="merglbot-core", large_report=False,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, quiet=True, json_report=True):
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, quiet=True, json_report=True, preload=None):
         scope = json.loads(self.scope.read_text())
         scope["organization"] = org
         if fixture_mode in ("partial", "partial_conflict", "malformed_second"):
@@ -201,7 +201,10 @@ else:
         env["LARGE_REPORT"] = "1" if large_report else "0"
         if fixture_mode:
             env["GH_FIXTURE_MODE"] = fixture_mode
-        args = ["node", str(SCRIPT), "--installation-scope", str(self.scope), "--output-dir", str(self.output)]
+        args = ["node"]
+        if preload is not None:
+            args.extend(["--require", str(preload)])
+        args.extend([str(SCRIPT), "--installation-scope", str(self.scope), "--output-dir", str(self.output)])
         if json_report:
             args.append("--json")
         if quiet:
@@ -429,6 +432,26 @@ else:
         self.assertEqual(report["conflicts"][0]["repo"], "merglbot-core/example")
         self.assertEqual(report["conflicts"][0]["default_setup_languages"], [])
         self.assertEqual(len((self.output / "history.jsonl").read_text().splitlines()), 1)
+
+    def test_unexpected_stop_after_a_conflict_publishes_an_incomplete_report_once(self):
+        preload = self.root / "progress-write-failure.cjs"
+        preload.write_text("""
+const write = process.stderr.write.bind(process.stderr);
+process.stderr.write = (chunk, ...args) => {
+  if (String(chunk).startsWith('CONFLICT ')) throw new Error('fixture progress failure');
+  return write(chunk, ...args);
+};
+""")
+        result = self.run_scanner(fixture_mode="real_conflict", quiet=False, preload=preload)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report, json.loads((self.output / "latest.json").read_text()))
+        self.assertEqual(report["status"], "CONFLICT_PARTIAL")
+        self.assertEqual(report["unswept"], ["*"])
+        self.assertEqual([c["repo"] for c in report["conflicts"]], ["merglbot-core/example"])
+        history, = (self.output / "history.jsonl").read_text().splitlines()
+        self.assertEqual(json.loads(history)["conflicts"], ["merglbot-core/example"])
+        self.assertEqual(json.loads(history)["unswept"], 1)
 
     def test_invalid_org_login_preserves_coverage_of_known_organizations(self):
         env = dict(os.environ, HOME=str(self.root), PATH=f"{self.bin}:{os.environ['PATH']}",
