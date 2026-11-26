@@ -274,6 +274,17 @@ const report = {
   errors: [],
 };
 
+// Entries leave this set only when the caller finishes the iteration normally.
+// An exception in a repository leaves its name and the rest of the inventory available to the report.
+const pendingScopes = new Set();
+function* trackCoverage(items, scopeName) {
+  for (const item of items) pendingScopes.add(scopeName(item));
+  for (const item of items) {
+    yield item;
+    pendingScopes.delete(scopeName(item));
+  }
+}
+
 function collect() {
   let orgs, scopedRepositories;
   if (scopeFile) {
@@ -304,7 +315,7 @@ function collect() {
     if (onlyOrgs.length) orgs = orgs.filter(o => onlyOrgs.includes(o.toLowerCase()));
   }
 
-  for (const org of orgs) {
+  for (const org of trackCoverage(orgs, name => `${name}/*`)) {
     let repos;
     try {
       repos = scopedRepositories ?? ghJson(`orgs/${org}/repos?per_page=100&type=all`, { paginate: true })
@@ -315,9 +326,10 @@ function collect() {
       continue;
     }
     const orgRow = { repos: repos.length, default_setup: 0, advanced: 0, conflicts: 0, unswept: 0 };
+    report.orgs[org] = orgRow;
     report.repos_active += repos.length;
-
-    for (const r of repos) {
+    pendingScopes.delete(`${org}/*`);
+    for (const r of trackCoverage(repos, repo => typeof repo?.full_name === 'string' ? repo.full_name : `${org}/*`)) {
       const full = r.full_name;
       let setup = null;
       try {
@@ -413,7 +425,6 @@ function collect() {
       }
       if (!workflowUnknown) report.repos_swept++;
     }
-    report.orgs[org] = orgRow;
     log(`${org}: repos=${orgRow.repos} default_setup=${orgRow.default_setup} advanced=${orgRow.advanced} conflicts=${orgRow.conflicts} unswept=${orgRow.unswept}`);
   }
 
@@ -441,8 +452,14 @@ try {
   process.exitCode = collect();
 } catch {
   report.status = report.conflicts.length ? 'CONFLICT_PARTIAL' : 'ERROR';
-  // The unexpected stop leaves the rest of the inventory unverified.
-  report.unswept.push('*');
+  const incomplete = new Set(report.unswept);
+  for (const scope of pendingScopes) {
+    if (incomplete.has(scope)) continue;
+    incomplete.add(scope);
+    const [org, repo] = scope.split('/');
+    if (repo !== '*' && report.orgs[org]) report.orgs[org].unswept++;
+  }
+  report.unswept = [...incomplete];
   report.errors.push('collection stopped before all repositories could be verified');
   process.exitCode = 1;
 }

@@ -442,16 +442,18 @@ process.stderr.write = (chunk, ...args) => {
   return write(chunk, ...args);
 };
 """)
-        result = self.run_scanner(fixture_mode="real_conflict", quiet=False, preload=preload)
+        result = self.run_scanner(fixture_mode="partial_conflict", quiet=False, preload=preload)
         self.assertEqual(result.returncode, 1, result.stderr)
         report = json.loads(result.stdout)
         self.assertEqual(report, json.loads((self.output / "latest.json").read_text()))
         self.assertEqual(report["status"], "CONFLICT_PARTIAL")
-        self.assertEqual(report["unswept"], ["*"])
+        self.assertEqual(report["unswept"], ["merglbot-core/example", "merglbot-core/second"])
+        self.assertEqual(report["orgs"]["merglbot-core"]["unswept"], 2)
+        self.assertEqual(report["repos_swept"], 0)
         self.assertEqual([c["repo"] for c in report["conflicts"]], ["merglbot-core/example"])
         history, = (self.output / "history.jsonl").read_text().splitlines()
         self.assertEqual(json.loads(history)["conflicts"], ["merglbot-core/example"])
-        self.assertEqual(json.loads(history)["unswept"], 1)
+        self.assertEqual(json.loads(history)["unswept"], 2)
 
     def test_invalid_org_login_preserves_coverage_of_known_organizations(self):
         env = dict(os.environ, HOME=str(self.root), PATH=f"{self.bin}:{os.environ['PATH']}",
