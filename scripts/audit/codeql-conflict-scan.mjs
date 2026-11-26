@@ -289,7 +289,12 @@ function collect() {
     }
   } else {
     try {
-      orgs = ghJson('user/orgs', { paginate: true }).map(o => o.login);
+      const discovered = ghJson('user/orgs', { paginate: true });
+      orgs = discovered.map(org => org?.login).filter(login => typeof login === 'string' && login.trim());
+      if (orgs.length !== discovered.length) {
+        report.unswept.push('unknown organization');
+        report.errors.push('organization discovery contained an invalid login');
+      }
       if (!orgs.length) throw new Error('user/orgs returned an empty list');
     } catch (e) {
       report.status = 'ERROR';
@@ -343,6 +348,10 @@ function collect() {
         continue;
       }
       const configured = setup.state === 'configured';
+      const suppliedLanguages = setup.languages ?? [];
+      const validLanguages = Array.isArray(suppliedLanguages) && suppliedLanguages.every(value => typeof value === 'string');
+      const languages = validLanguages ? suppliedLanguages : [];
+      if (!validLanguages) report.errors.push(`${full}: default-setup languages unverified`);
       if (configured) { orgRow.default_setup++; report.default_setup_configured++; }
 
       // Advanced workflow: filename heuristic for every repo; content probe (one call
@@ -365,7 +374,7 @@ function collect() {
       // repository must prove the workflow actually invokes CodeQL and runs in
       // this repository; even codeql.yml may be unrelated or reusable-only.
       const advancedFiles = [];
-      let workflowUnknown = false;
+      let workflowUnknown = !validLanguages;
       for (const w of workflows) {
         if (!w || typeof w !== 'object' || Array.isArray(w) || typeof w.name !== 'string' || !w.name
             || configured && (!/^[A-Za-z0-9_.-]{1,255}$/.test(w.name)
@@ -399,8 +408,8 @@ function collect() {
       if (advancedFiles.length) { orgRow.advanced++; report.advanced_workflow++; }
       if (configured && advancedFiles.length) {
         orgRow.conflicts++;
-        report.conflicts.push({ repo: full, default_setup_languages: setup.languages || [], advanced_workflows: advancedFiles });
-        log(`CONFLICT ${full}: default-setup=${(setup.languages || []).join(',')} advanced=${advancedFiles.join(',')}`);
+        report.conflicts.push({ repo: full, default_setup_languages: languages, advanced_workflows: advancedFiles });
+        log(`CONFLICT ${full}: default-setup=${languages.join(',')} advanced=${advancedFiles.join(',')}`);
       }
       if (!workflowUnknown) report.repos_swept++;
     }
@@ -428,5 +437,11 @@ function finish() {
   else process.stdout.write(`codeql-conflict-scan ${report.status}: swept ${report.repos_swept}/${report.repos_active} active repos in ${Object.keys(report.orgs).length} orgs; default-setup=${report.default_setup_configured} advanced=${report.advanced_workflow} conflicts=${report.conflicts.length} unswept=${report.unswept.length} unreadable=${report.unreadable.length}\n`);
 }
 
-process.exitCode = collect();
+try {
+  process.exitCode = collect();
+} catch {
+  report.status = report.conflicts.length ? 'CONFLICT_PARTIAL' : 'ERROR';
+  report.errors.push('collection stopped before all repositories could be verified');
+  process.exitCode = 1;
+}
 finish();
