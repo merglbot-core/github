@@ -38,6 +38,7 @@ process.stderr.on('error', handleStreamError);
 const ADVANCED_NAMES = /^(codeql(-analysis)?|security-codeql)\.ya?ml$/i;
 const ANALYZE_ACTION = /^github\/codeql-action\/analyze@/i;
 const INIT_ACTION = /^github\/codeql-action\/init@/i;
+const REPOSITORY_NAME = /^[A-Za-z0-9_.-]{1,100}$/;
 
 const args = process.argv.slice(2);
 const wantJson = args.includes('--json');
@@ -116,7 +117,7 @@ function readInstallationScope(file) {
     if (!repo || typeof repo !== 'object' || Array.isArray(repo)
         || Object.keys(repo).sort().join(',') !== 'id,name'
         || !Number.isSafeInteger(repo.id) || repo.id <= 0
-        || typeof repo.name !== 'string' || !/^[A-Za-z0-9_.-]{1,100}$/.test(repo.name)
+        || typeof repo.name !== 'string' || !REPOSITORY_NAME.test(repo.name)
         || ids.has(repo.id) || names.has(repo.name.toLowerCase())) {
       throw new Error('invalid_installation_scope');
     }
@@ -319,18 +320,33 @@ function collect() {
     let repos;
     try {
       repos = scopedRepositories ?? ghJson(`orgs/${org}/repos?per_page=100&type=all`, { paginate: true })
-        .filter(r => !r.archived && !r.disabled);
+        .filter(r => !r?.archived && !r?.disabled);
     } catch (e) {
       report.orgs[org] = { repos: null, error: safeFailure(e) };
       report.unswept.push(`${org}/*`);
       continue;
     }
-    const orgRow = { repos: repos.length, default_setup: 0, advanced: 0, conflicts: 0, unswept: 0 };
+    const orgRow = { repos: 0, default_setup: 0, advanced: 0, conflicts: 0, unswept: 0 };
     report.orgs[org] = orgRow;
-    report.repos_active += repos.length;
+    const names = new Map();
+    const prefix = org.toLowerCase() + '/';
+    for (const [index, repo] of repos.entries()) {
+      const full = repo?.full_name;
+      if (typeof full === 'string' && full.toLowerCase().startsWith(prefix) &&
+          REPOSITORY_NAME.test(full.slice(prefix.length))) {
+        const key = full.toLowerCase();
+        if (!names.has(key)) names.set(key, full);
+      } else {
+        const entry = `${org}/[unidentified entry ${index + 1}]`;
+        report.unswept.push(entry);
+        report.errors.push(`${entry}: repository name unavailable`);
+        orgRow.unswept++;
+      }
+    }
+    orgRow.repos = names.size + orgRow.unswept;
+    report.repos_active += orgRow.repos;
     pendingScopes.delete(`${org}/*`);
-    for (const r of trackCoverage(repos, repo => typeof repo?.full_name === 'string' ? repo.full_name : `${org}/*`, orgRow)) {
-      const full = r.full_name;
+    for (const full of trackCoverage([...names.values()], name => name, orgRow)) {
       let setup = null;
       try {
         setup = ghJson(`repos/${full}/code-scanning/default-setup`);
@@ -461,7 +477,7 @@ try {
   for (const [scope, orgRow] of pendingScopes) {
     if (incomplete.has(scope)) continue;
     incomplete.add(scope);
-    if (orgRow && !scope.endsWith('/*')) orgRow.unswept++;
+    if (orgRow) orgRow.unswept++;
   }
   report.unswept = [...incomplete];
   report.errors.push('collection stopped before all repositories could be verified');

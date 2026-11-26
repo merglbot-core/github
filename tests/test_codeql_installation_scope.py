@@ -176,6 +176,8 @@ elif path.startswith('orgs/merglbot-core/repos?'):
     if mode == 'legacy_partial':
         repos.append({'id': 18, 'name': 'second', 'full_name': 'merglbot-core/second',
                       'archived': False, 'disabled': False})
+    if mode == 'legacy_unknown_names':
+        repos += [None, {'full_name': 42}, {'full_name': 'Merglbot-Core/Example'}]
     print(json.dumps([repos]))
 else:
     sys.exit(21)
@@ -300,6 +302,20 @@ else:
         self.assertEqual((report["status"], report["repos_swept"], report["repos_active"]),
                          ("DEGRADED", 1, 2))
         self.assertEqual(report["unswept"], ["merglbot-core/second"])
+
+    def test_scheduled_discovery_retains_each_unidentified_entry_and_scans_known_repos_once(self):
+        env = dict(os.environ, HOME=str(self.root), PATH=f"{self.bin}:{os.environ['PATH']}",
+                   GH_CALLS=str(self.calls), GH_PROOF=str(self.proof), GH_FIXTURE_MODE="legacy_unknown_names")
+        result = subprocess.run(["node", str(SCRIPT), "--json", "--quiet"], env=env,
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual((report["status"], report["repos_swept"], report["repos_active"]), ("DEGRADED", 1, 3))
+        self.assertEqual(report["unswept"], ["merglbot-core/[unidentified entry 2]",
+                                             "merglbot-core/[unidentified entry 3]"])
+        self.assertEqual(report["orgs"]["merglbot-core"]["unswept"], 2)
+        reads = [call[1] for call in self.calls_made() if call[1].endswith("/code-scanning/default-setup")]
+        self.assertEqual(reads, ["repos/merglbot-core/example/code-scanning/default-setup"])
 
     def test_mismatched_installation_stops_before_repository_reads(self):
         result = self.run_scanner(fixture_mode="mismatch")
