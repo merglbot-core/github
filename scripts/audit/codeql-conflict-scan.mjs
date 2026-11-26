@@ -274,11 +274,11 @@ const report = {
   errors: [],
 };
 
-// Entries leave this set only when the caller finishes the iteration normally.
+// Drop each scope only when the caller finishes its iteration normally.
 // An exception in a repository leaves its name and the rest of the inventory available to the report.
-const pendingScopes = new Set();
-function* trackCoverage(items, scopeName) {
-  for (const item of items) pendingScopes.add(scopeName(item));
+const pendingScopes = new Map();
+function* trackCoverage(items, scopeName, orgRow = null) {
+  for (const item of items) pendingScopes.set(scopeName(item), orgRow);
   for (const item of items) {
     yield item;
     pendingScopes.delete(scopeName(item));
@@ -329,7 +329,7 @@ function collect() {
     report.orgs[org] = orgRow;
     report.repos_active += repos.length;
     pendingScopes.delete(`${org}/*`);
-    for (const r of trackCoverage(repos, repo => typeof repo?.full_name === 'string' ? repo.full_name : `${org}/*`)) {
+    for (const r of trackCoverage(repos, repo => typeof repo?.full_name === 'string' ? repo.full_name : `${org}/*`, orgRow)) {
       const full = r.full_name;
       let setup = null;
       try {
@@ -425,7 +425,12 @@ function collect() {
       }
       if (!workflowUnknown) report.repos_swept++;
     }
-    log(`${org}: repos=${orgRow.repos} default_setup=${orgRow.default_setup} advanced=${orgRow.advanced} conflicts=${orgRow.conflicts} unswept=${orgRow.unswept}`);
+    try {
+      log(`${org}: repos=${orgRow.repos} default_setup=${orgRow.default_setup} advanced=${orgRow.advanced} conflicts=${orgRow.conflicts} unswept=${orgRow.unswept}`);
+    } catch {
+      // Coverage is complete for this organization even when the progress stream fails.
+      report.errors.push(`${org}: progress summary unavailable`);
+    }
   }
 
   if (report.conflicts.length) report.status = 'CONFLICT';
@@ -453,11 +458,10 @@ try {
 } catch {
   report.status = report.conflicts.length ? 'CONFLICT_PARTIAL' : 'ERROR';
   const incomplete = new Set(report.unswept);
-  for (const scope of pendingScopes) {
+  for (const [scope, orgRow] of pendingScopes) {
     if (incomplete.has(scope)) continue;
     incomplete.add(scope);
-    const [org, repo] = scope.split('/');
-    if (repo !== '*' && report.orgs[org]) report.orgs[org].unswept++;
+    if (orgRow && !scope.endsWith('/*')) orgRow.unswept++;
   }
   report.unswept = [...incomplete];
   report.errors.push('collection stopped before all repositories could be verified');
