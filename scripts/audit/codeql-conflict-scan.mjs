@@ -26,6 +26,13 @@ import { mkdirSync, writeFileSync, appendFileSync, readFileSync,
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve, dirname, basename } from 'node:path';
 
+// A reader may stop consuming either stream. The collector still records its own verdict.
+function handleStreamError(error) {
+  if (error.code !== 'EPIPE') throw error;
+}
+process.stdout.on('error', handleStreamError);
+process.stderr.on('error', handleStreamError);
+
 // Filenames from github#789's estate sweep + a content probe for anything else that
 // calls the CodeQL analyze action under a different name.
 const ADVANCED_NAMES = /^(codeql(-analysis)?|security-codeql)\.ya?ml$/i;
@@ -421,8 +428,4 @@ function finish() {
 }
 
 process.exitCode = collect();
-// The collector's status also describes the saved report when a reader closes early.
-process.stdout.on('error', error => {
-  if (error.code !== 'EPIPE') throw error;
-});
 finish();

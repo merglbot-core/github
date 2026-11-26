@@ -177,7 +177,8 @@ else:
 """)
         gh.chmod(0o755)
 
-    def run_scanner(self, *, token=True, fixture_mode=None, org="merglbot-core", large_report=False, stdout=subprocess.PIPE):
+    def run_scanner(self, *, token=True, fixture_mode=None, org="merglbot-core", large_report=False,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, quiet=True, json_report=True):
         scope = json.loads(self.scope.read_text())
         scope["organization"] = org
         if fixture_mode in ("partial", "partial_conflict"):
@@ -195,10 +196,12 @@ else:
         env["LARGE_REPORT"] = "1" if large_report else "0"
         if fixture_mode:
             env["GH_FIXTURE_MODE"] = fixture_mode
-        return subprocess.run(
-            ["node", str(SCRIPT), "--installation-scope", str(self.scope),
-             "--output-dir", str(self.output), "--json", "--quiet"],
-            env=env, stdout=stdout, stderr=subprocess.PIPE, text=True, timeout=15, check=False)
+        args = ["node", str(SCRIPT), "--installation-scope", str(self.scope), "--output-dir", str(self.output)]
+        if json_report:
+            args.append("--json")
+        if quiet:
+            args.append("--quiet")
+        return subprocess.run(args, env=env, stdout=stdout, stderr=stderr, text=True, timeout=15, check=False)
 
     def test_piped_conflict_json_matches_durable_report(self):
         result = self.run_scanner(fixture_mode="real_conflict", large_report=True)
@@ -212,9 +215,34 @@ else:
         read_fd, write_fd = os.pipe()
         os.close(read_fd)
         with os.fdopen(write_fd, "wb") as pipe:
-            result = self.run_scanner(fixture_mode="real_conflict", stdout=pipe)
+            result = self.run_scanner(fixture_mode="real_conflict", stdout=pipe, quiet=False)
         self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("CONFLICT", result.stderr)
+        self.assertNotIn("EPIPE", result.stderr)
         self.assertEqual(json.loads((self.output / "latest.json").read_text())["status"], "CONFLICT")
+
+    def test_closed_report_reader_preserves_clean_and_unavailable_status_in_quiet_mode(self):
+        for has_access, status, name in ((False, 1, "ERROR"), (True, 0, "OK")):
+            with self.subTest(status=status):
+                read_fd, write_fd = os.pipe()
+                os.close(read_fd)
+                with os.fdopen(write_fd, "wb") as pipe:
+                    result = self.run_scanner(token=has_access, stdout=pipe)
+                self.assertEqual(result.returncode, status, result.stderr)
+                self.assertEqual(result.stderr, "")
+                self.assertEqual(json.loads((self.output / "latest.json").read_text())["status"], name)
+                if not has_access:
+                    self.assertEqual(self.calls_made(), [])
+
+    def test_closed_progress_reader_preserves_the_text_report_and_conflict_status(self):
+        read_fd, write_fd = os.pipe()
+        os.close(read_fd)
+        with os.fdopen(write_fd, "wb") as pipe:
+            result = self.run_scanner(fixture_mode="real_conflict", stderr=pipe, quiet=False, json_report=False)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("codeql-conflict-scan CONFLICT:", result.stdout)
+        self.assertEqual(json.loads((self.output / "latest.json").read_text())["status"], "CONFLICT")
+        self.assertEqual(len((self.output / "history.jsonl").read_text().splitlines()), 1)
 
     def calls_made(self):
         if not self.calls.exists():
