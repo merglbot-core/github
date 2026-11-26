@@ -26,11 +26,19 @@ import { mkdirSync, writeFileSync, appendFileSync, readFileSync,
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve, dirname, basename } from 'node:path';
 
+// A reader may stop consuming either stream. The collector still records its own verdict.
+function handleStreamError(error) {
+  if (error.code !== 'EPIPE') throw error;
+}
+process.stdout.on('error', handleStreamError);
+process.stderr.on('error', handleStreamError);
+
 // Filenames from github#789's estate sweep + a content probe for anything else that
 // calls the CodeQL analyze action under a different name.
 const ADVANCED_NAMES = /^(codeql(-analysis)?|security-codeql)\.ya?ml$/i;
 const ANALYZE_ACTION = /^github\/codeql-action\/analyze@/i;
 const INIT_ACTION = /^github\/codeql-action\/init@/i;
+const REPOSITORY_NAME = /^[A-Za-z0-9_.-]{1,100}$/;
 
 const args = process.argv.slice(2);
 const wantJson = args.includes('--json');
@@ -109,7 +117,7 @@ function readInstallationScope(file) {
     if (!repo || typeof repo !== 'object' || Array.isArray(repo)
         || Object.keys(repo).sort().join(',') !== 'id,name'
         || !Number.isSafeInteger(repo.id) || repo.id <= 0
-        || typeof repo.name !== 'string' || !/^[A-Za-z0-9_.-]{1,100}$/.test(repo.name)
+        || typeof repo.name !== 'string' || !REPOSITORY_NAME.test(repo.name)
         || ids.has(repo.id) || names.has(repo.name.toLowerCase())) {
       throw new Error('invalid_installation_scope');
     }
@@ -267,105 +275,144 @@ const report = {
   errors: [],
 };
 
-let orgs, scopedRepositories;
-if (scopeFile) {
-  try {
-    const scope = readInstallationScope(scopeFile);
-    scopedRepositories = installationRepositories(scope);
-    orgs = [scope.organization];
-  } catch (error) {
-    report.status = 'ERROR';
-    report.errors.push(error?.message === 'installation_scope_mismatch'
-      ? 'installation_scope_mismatch' : 'installation_scope_unavailable');
-    finish(1);
+// Drop each scope only when the caller finishes its iteration normally.
+// An exception in a repository leaves its name and the rest of the inventory available to the report.
+const pendingScopes = new Map();
+function* trackCoverage(items, scopeName, orgRow = null) {
+  for (const item of items) pendingScopes.set(scopeName(item), orgRow);
+  for (const item of items) {
+    yield item;
+    pendingScopes.delete(scopeName(item));
   }
-} else {
-  try {
-    orgs = ghJson('user/orgs', { paginate: true }).map(o => o.login);
-    if (!orgs.length) throw new Error('user/orgs returned an empty list');
-  } catch (e) {
-    report.status = 'ERROR';
-    report.errors.push(`org discovery failed: ${String(e.message || e).split('\n')[0]}`);
-    finish(1);
-  }
-  if (onlyOrgs.length) orgs = orgs.filter(o => onlyOrgs.includes(o.toLowerCase()));
 }
 
-for (const org of orgs) {
-  let repos;
-  try {
-    repos = scopedRepositories ?? ghJson(`orgs/${org}/repos?per_page=100&type=all`, { paginate: true })
-      .filter(r => !r.archived && !r.disabled);
-  } catch (e) {
-    report.orgs[org] = { repos: null, error: safeFailure(e) };
-    report.unswept.push(`${org}/*`);
-    continue;
-  }
-  const orgRow = { repos: repos.length, default_setup: 0, advanced: 0, conflicts: 0, unswept: 0 };
-  report.repos_active += repos.length;
-
-  for (const r of repos) {
-    const full = r.full_name;
-    let setup = null;
+function collect() {
+  let orgs, scopedRepositories;
+  if (scopeFile) {
     try {
-      setup = ghJson(`repos/${full}/code-scanning/default-setup`);
-    } catch (e) {
-      const msg = String(e.stderr || e.message || e);
-      if (scopeFile && /HTTP 40[34]/.test(msg)) {
-        // A scoped token can see repository metadata while lacking this
-        // operation's permission. The 404/403 is ambiguous, not a clean no-op.
-        if (/not authorized to read code scanning/i.test(msg)) report.unreadable.push(full);
-        orgRow.unswept++; report.unswept.push(full);
-        report.errors.push(`${full}: default-setup unverified`);
-        continue;
-      }
-      // 404 = code scanning not available; 403 "Code Security must be enabled" = no code scanning
-      // at all on this repo. Neither can host a default setup, so neither can conflict: swept.
-      if (/HTTP 404/.test(msg) || /Code Security must be enabled/.test(msg)) setup = { state: 'not-configured', languages: [] };
-      else if (/not authorized to read code scanning/i.test(msg)) {
-        report.unreadable.push(full);
-        orgRow.unswept++; report.unswept.push(full);
-        continue;
-      }
-      else { orgRow.unswept++; report.unswept.push(full); report.errors.push(`${full}: default-setup ${safeFailure(e)}`); continue; }
+      const scope = readInstallationScope(scopeFile);
+      scopedRepositories = installationRepositories(scope);
+      orgs = [scope.organization];
+    } catch (error) {
+      report.status = 'ERROR';
+      report.errors.push(error?.message === 'installation_scope_mismatch'
+        ? 'installation_scope_mismatch' : 'installation_scope_unavailable');
+      return 1;
     }
-    if (!setup || !['configured', 'not-configured'].includes(setup.state)) {
-      orgRow.unswept++; report.unswept.push(full);
-      report.errors.push(`${full}: default-setup state unverified`);
+  } else {
+    try {
+      const discovered = ghJson('user/orgs', { paginate: true });
+      orgs = discovered.map(org => org?.login).filter(login => typeof login === 'string' && login.trim());
+      if (orgs.length !== discovered.length) {
+        report.unswept.push('unknown organization');
+        report.errors.push('organization discovery contained an invalid login');
+      }
+      if (!orgs.length) throw new Error('user/orgs returned an empty list');
+    } catch (e) {
+      report.status = 'ERROR';
+      report.errors.push(`org discovery failed: ${String(e.message || e).split('\n')[0]}`);
+      return 1;
+    }
+    if (onlyOrgs.length) orgs = orgs.filter(o => onlyOrgs.includes(o.toLowerCase()));
+  }
+
+  for (const org of trackCoverage(orgs, name => `${name}/*`)) {
+    let repos;
+    try {
+      repos = scopedRepositories ?? ghJson(`orgs/${org}/repos?per_page=100&type=all`, { paginate: true })
+        .filter(r => !r?.archived && !r?.disabled);
+    } catch (e) {
+      report.orgs[org] = { repos: null, error: safeFailure(e) };
+      report.unswept.push(`${org}/*`);
       continue;
     }
-    const configured = setup.state === 'configured';
-    if (configured) { orgRow.default_setup++; report.default_setup_configured++; }
-
-    // Advanced workflow: filename heuristic for every repo; content probe (one call
-    // per workflow file) only where default setup is configured — that is the only
-    // set in which a hit is a conflict, and it keeps the daily call count small.
-    let workflows = [];
-    try {
-      workflows = ghJson(`repos/${full}/contents/.github/workflows`);
-      if (!Array.isArray(workflows)) throw new Error('invalid_workflow_directory');
-    } catch (e) {
-      const msg = String(e.stderr || e.message || e);
-      if (scopeFile && /HTTP 404/.test(msg)) {
+    const orgRow = { repos: 0, default_setup: 0, advanced: 0, conflicts: 0, unswept: 0 };
+    report.orgs[org] = orgRow;
+    const names = new Map();
+    const prefix = org.toLowerCase() + '/';
+    for (const [index, repo] of repos.entries()) {
+      const full = repo?.full_name;
+      if (typeof full === 'string' && full.toLowerCase().startsWith(prefix) &&
+          REPOSITORY_NAME.test(full.slice(prefix.length))) {
+        const key = full.toLowerCase();
+        if (!names.has(key)) names.set(key, full);
+      } else {
+        const entry = `${org}/[unidentified entry ${index + 1}]`;
+        report.unswept.push(entry);
+        report.errors.push(`${entry}: repository name unavailable`);
+        orgRow.unswept++;
+      }
+    }
+    orgRow.repos = names.size + orgRow.unswept;
+    report.repos_active += orgRow.repos;
+    pendingScopes.delete(`${org}/*`);
+    for (const full of trackCoverage([...names.values()], name => name, orgRow)) {
+      let setup = null;
+      try {
+        setup = ghJson(`repos/${full}/code-scanning/default-setup`);
+      } catch (e) {
+        const msg = String(e.stderr || e.message || e);
+        if (scopeFile && /HTTP 40[34]/.test(msg)) {
+          // A scoped token can see repository metadata while lacking this
+          // operation's permission. The 404/403 is ambiguous, not a clean no-op.
+          if (/not authorized to read code scanning/i.test(msg)) report.unreadable.push(full);
+          orgRow.unswept++; report.unswept.push(full);
+          report.errors.push(`${full}: default-setup unverified`);
+          continue;
+        }
+        // 404 = code scanning not available; 403 "Code Security must be enabled" = no code scanning
+        // at all on this repo. Neither can host a default setup, so neither can conflict: swept.
+        if (/HTTP 404/.test(msg) || /Code Security must be enabled/.test(msg)) setup = { state: 'not-configured', languages: [] };
+        else if (/not authorized to read code scanning/i.test(msg)) {
+          report.unreadable.push(full);
+          orgRow.unswept++; report.unswept.push(full);
+          continue;
+        }
+        else { orgRow.unswept++; report.unswept.push(full); report.errors.push(`${full}: default-setup ${safeFailure(e)}`); continue; }
+      }
+      if (!setup || !['configured', 'not-configured'].includes(setup.state)) {
         orgRow.unswept++; report.unswept.push(full);
-        report.errors.push(`${full}: workflows unverified`);
+        report.errors.push(`${full}: default-setup state unverified`);
         continue;
       }
-      if (!/HTTP 404/.test(msg)) { orgRow.unswept++; report.unswept.push(full); report.errors.push(`${full}: workflows ${safeFailure(e)}`); continue; }
-    }
-    // Names are only a cheap hint when default setup is off. A configured
-    // repository must prove the workflow actually invokes CodeQL and runs in
-    // this repository; even codeql.yml may be unrelated or reusable-only.
-    const advancedFiles = configured ? []
-      : workflows.filter(w => ADVANCED_NAMES.test(w.name)).map(w => w.name);
-    let workflowUnknown = false;
-    if (configured) {
+      const configured = setup.state === 'configured';
+      const suppliedLanguages = setup.languages ?? [];
+      const validLanguages = Array.isArray(suppliedLanguages) && suppliedLanguages.every(value => typeof value === 'string');
+      const languages = validLanguages ? suppliedLanguages : [];
+      if (!validLanguages) report.errors.push(`${full}: default-setup languages unverified`);
+      if (configured) { orgRow.default_setup++; report.default_setup_configured++; }
+
+      // Advanced workflow: filename heuristic for every repo; content probe (one call
+      // per workflow file) only where default setup is configured — that is the only
+      // set in which a hit is a conflict, and it keeps the daily call count small.
+      let workflows = [];
+      try {
+        workflows = ghJson(`repos/${full}/contents/.github/workflows`);
+        if (!Array.isArray(workflows)) throw new Error('invalid_workflow_directory');
+      } catch (e) {
+        const msg = String(e.stderr || e.message || e);
+        if (scopeFile && /HTTP 404/.test(msg)) {
+          orgRow.unswept++; report.unswept.push(full);
+          report.errors.push(`${full}: workflows unverified`);
+          continue;
+        }
+        if (!/HTTP 404/.test(msg)) { orgRow.unswept++; report.unswept.push(full); report.errors.push(`${full}: workflows ${safeFailure(e)}`); continue; }
+      }
+      // Names are only a cheap hint when default setup is off. A configured
+      // repository must prove the workflow actually invokes CodeQL and runs in
+      // this repository; even codeql.yml may be unrelated or reusable-only.
+      const advancedFiles = [];
+      let workflowUnknown = !validLanguages;
       for (const w of workflows) {
-        if (!w || typeof w !== 'object' || Array.isArray(w)
-            || typeof w.name !== 'string' || !/^[A-Za-z0-9_.-]{1,255}$/.test(w.name)
-            || w.name.includes('..') || w.type && w.type !== 'file') {
+        if (!w || typeof w !== 'object' || Array.isArray(w) || typeof w.name !== 'string' || !w.name
+            || configured && (!/^[A-Za-z0-9_.-]{1,255}$/.test(w.name)
+              || w.name.includes('..') || w.type && w.type !== 'file')) {
           report.errors.push(`${full}: malformed workflow directory entry`);
           workflowUnknown = true;
+          continue;
+        }
+        if (!configured) {
+          if (ADVANCED_NAMES.test(w.name)) advancedFiles.push(w.name);
           continue;
         }
         if (!/\.ya?ml$/i.test(w.name)) continue;
@@ -385,30 +432,34 @@ for (const org of orgs) {
           workflowUnknown = true;
         }
       }
+      if (workflowUnknown) { orgRow.unswept++; report.unswept.push(full); }
+      if (advancedFiles.length) { orgRow.advanced++; report.advanced_workflow++; }
+      if (configured && advancedFiles.length) {
+        orgRow.conflicts++;
+        report.conflicts.push({ repo: full, default_setup_languages: languages, advanced_workflows: advancedFiles });
+        log(`CONFLICT ${full}: default-setup=${languages.join(',')} advanced=${advancedFiles.join(',')}`);
+      }
+      if (!workflowUnknown) report.repos_swept++;
     }
-    if (workflowUnknown) { orgRow.unswept++; report.unswept.push(full); }
-    if (advancedFiles.length) { orgRow.advanced++; report.advanced_workflow++; }
-    if (configured && advancedFiles.length) {
-      orgRow.conflicts++;
-      report.conflicts.push({ repo: full, default_setup_languages: setup.languages || [], advanced_workflows: advancedFiles });
-      log(`CONFLICT ${full}: default-setup=${(setup.languages || []).join(',')} advanced=${advancedFiles.join(',')}`);
+    try {
+      log(`${org}: repos=${orgRow.repos} default_setup=${orgRow.default_setup} advanced=${orgRow.advanced} conflicts=${orgRow.conflicts} unswept=${orgRow.unswept}`);
+    } catch {
+      // Coverage is complete for this organization even when the progress stream fails.
+      report.errors.push(`${org}: progress summary unavailable`);
     }
-    if (!workflowUnknown) report.repos_swept++;
   }
-  report.orgs[org] = orgRow;
-  log(`${org}: repos=${orgRow.repos} default_setup=${orgRow.default_setup} advanced=${orgRow.advanced} conflicts=${orgRow.conflicts} unswept=${orgRow.unswept}`);
+
+  if (report.conflicts.length) report.status = 'CONFLICT';
+  if (report.unswept.length) report.status = report.conflicts.length ? 'CONFLICT_PARTIAL' : 'DEGRADED';
+  if (report.repos_swept === 0 && !report.conflicts.length) {
+    report.status = 'ERROR'; report.errors.push('zero repos swept — silent zero is not a clean zero');
+  }
+
+  return report.status === 'ERROR' || report.unswept.length ? 1
+    : report.conflicts.length ? 2 : 0;
 }
 
-if (report.conflicts.length) report.status = 'CONFLICT';
-if (report.unswept.length) report.status = report.conflicts.length ? 'CONFLICT_PARTIAL' : 'DEGRADED';
-if (report.repos_swept === 0 && !report.conflicts.length) {
-  report.status = 'ERROR'; report.errors.push('zero repos swept — silent zero is not a clean zero');
-}
-
-finish(report.status === 'ERROR' || report.unswept.length ? 1
-  : report.conflicts.length ? 2 : 0);
-
-function finish(code) {
+function finish() {
   report.finished_at = new Date().toISOString();
   validateOutputIsolation();
   mkdirSync(OUT_DIR, { recursive: true });
@@ -416,5 +467,20 @@ function finish(code) {
   appendFileSync(HISTORY, JSON.stringify({ at: report.at, status: report.status, swept: report.repos_swept, active: report.repos_active, conflicts: report.conflicts.map(c => c.repo), unswept: report.unswept.length }) + '\n');
   if (wantJson) process.stdout.write(JSON.stringify(report) + '\n');
   else process.stdout.write(`codeql-conflict-scan ${report.status}: swept ${report.repos_swept}/${report.repos_active} active repos in ${Object.keys(report.orgs).length} orgs; default-setup=${report.default_setup_configured} advanced=${report.advanced_workflow} conflicts=${report.conflicts.length} unswept=${report.unswept.length} unreadable=${report.unreadable.length}\n`);
-  process.exit(code);
 }
+
+try {
+  process.exitCode = collect();
+} catch {
+  report.status = report.conflicts.length ? 'CONFLICT_PARTIAL' : 'ERROR';
+  const incomplete = new Set(report.unswept);
+  for (const [scope, orgRow] of pendingScopes) {
+    if (incomplete.has(scope)) continue;
+    incomplete.add(scope);
+    if (orgRow) orgRow.unswept++;
+  }
+  report.unswept = [...incomplete];
+  report.errors.push('collection stopped before all repositories could be verified');
+  process.exitCode = 1;
+}
+finish();
